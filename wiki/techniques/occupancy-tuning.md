@@ -1,0 +1,234 @@
+---
+id: technique-occupancy-tuning
+title: "Occupancy Tuning — Waves per SIMD vs ILP on CDNA"
+type: technique
+architectures:
+- gfx942
+- gfx950
+tags:
+- occupancy-tuning
+- vgpr
+- lds
+- agpr
+- wave64
+- vgpr-budgeting
+- software-pipelining
+confidence: source-reported
+reproducibility: snippet
+hardware_features:
+- vgpr
+- agpr
+- lds
+- wave64
+languages:
+- hip
+- triton
+related:
+- hw-wavefront
+- technique-vgpr-budgeting
+- technique-lds-double-buffering
+- technique-mfma-pipelining
+- pattern-low-occupancy
+- pattern-vgpr-pressure
+sources:
+- doc-rocm-hip-hw
+- blog-triton-optimizations
+- blog-gemm-optimization
+- doc-cdna3-isa
+- blog-4wave-fp8-gemm
+---
+
+# Occupancy Tuning — Waves per SIMD vs ILP on CDNA
+
+## What occupancy actually is on CDNA
+
+A CDNA Compute Unit (CU) is built from **4 SIMD16 units** (the "execution units",
+or EUs). Each SIMD time-slices a pool of resident **wave64** wavefronts, switching
+between them to hide memory and instruction latency. The hardware ceiling is
+**10 waves per SIMD → 40 waves per CU** (4 pools × 10). *Occupancy* is the number
+of resident waves you actually achieve, usually expressed as waves/SIMD or as a
+percentage of that 40-wave ceiling.
+
+You almost never hit 40. Achieved occupancy is the **minimum** over every
+per-wave / per-workgroup resource the wave consumes:
+
+```
+waves_per_simd = min(
+    10,                                            # hard slot limit
+    floor(ArchVGPR_file_per_simd / vgprs_per_wave),# ArchVGPR pressure
+    floor(AccVGPR_file_per_simd / agprs_per_wave), # AGPR pressure (MFMA accumulators)
+    lds_limited_waves,                             # see below
+    workgroup_slot_limit )                         # max workgroups/CU
+```
+
+The two knobs you almost always end up fighting are **VGPR count** and **LDS
+bytes per workgroup**. Both are reported by the compiler at build time, so you can
+predict occupancy before you ever run the kernel.
+
+## Reading your resource usage
+
+Ask the compiler. With `-Rpass-analysis=kernel-resource-usage` (or just
+`--save-temps` and grep the `.s`), Clang prints the VGPR/AGPR/SGPR/LDS footprint
+per kernel:
+
+```bash
+hipcc -O3 --offload-arch=gfx942 \
+      -Rpass-analysis=kernel-resource-usage \
+      -c gemm.hip -o gemm.o
+# ... remark: NumVgprs: 168   NumAgprs: 64   ScratchSize: 0
+#     LDSSize: 32768   ...
+```
+
+`rocprofv3`/`rocprof` will also report achieved `VALUUtilization` and an occupancy
+estimate per dispatch — compare the static prediction against the dynamic number
+to catch scratch spills.
+
+## VGPR-limited occupancy
+
+VGPRs are allocated per wave in **groups of 8 dwords**, and a wave can hold up to
+512 (256 ArchVGPR + 256 AGPR). Because the per-SIMD register file is fixed, the
+number of waves that fit scales **inversely** with the per-wave VGPR count: rounding
+your VGPR usage down across an allocation boundary lets one more wave move in.
+As a rule of thumb on gfx942, *halving* a kernel's VGPR footprint roughly *doubles*
+its VGPR-limited occupancy until you saturate the 10-wave slot cap.
+
+MFMA accumulators live in a **separate AGPR bank** (see
+[wavefront / register files](../hardware/wavefront.md)), so a large
+`v_mfma`-tiled GEMM is frequently **AGPR-bound**: the accumulator tile alone can
+pin occupancy regardless of how lean the ArchVGPR addressing code is. Shrinking
+the macro-tile (fewer accumulators) is the lever there — see
+[VGPR budgeting](vgpr-budgeting.md).
+
+If the compiler cannot fit your VGPRs at the requested occupancy it **spills to
+scratch** (`ScratchSize > 0`), which is global-memory traffic on the hot path —
+almost always worse than simply accepting lower occupancy. Treat any non-zero
+scratch as a bug to fix.
+
+## LDS-limited occupancy
+
+LDS is a **per-CU** resource shared by all resident workgroups: **64 kB/CU on
+gfx942**, **160 kB/CU on gfx950**. The number of concurrent workgroups is
+
+```
+workgroups_per_cu = floor(LDS_per_cu / LDS_bytes_per_workgroup)
+```
+
+Example (gfx942): a workgroup of 256 threads (= 4 wave64s) that statically
+allocates a 32 kB `__shared__` double-buffer fits only `floor(65536 / 32768) = 2`
+workgroups per CU → **8 waves/CU**, i.e. 20% of the 40-wave ceiling, *before*
+VGPRs are even considered. The same kernel rebuilt for gfx950 (160 kB) fits 4
+workgroups → 16 waves/CU. This is exactly why
+[LDS double-buffering](lds-double-buffering.md) trades occupancy for latency
+hiding — and why the larger gfx950 LDS relaxes that trade.
+
+## Forcing a target with `__launch_bounds__`
+
+HIP lets you cap block size and request a **minimum** waves-per-EU; the compiler
+then bounds register allocation to honor it (potentially spilling if impossible):
+
+```cpp
+// 256 threads/block (4 wave64s), ask the allocator to keep >=2 waves/EU resident.
+// Lower waves_per_eu  -> allocator may use MORE VGPRs (better ILP, fewer waves)
+// Higher waves_per_eu -> allocator caps VGPRs (more TLP, risk of spills)
+__global__ void __launch_bounds__(256, /*min_waves_per_eu=*/2)
+gemm_tile(const float* __restrict__ A,
+          const float* __restrict__ B,
+          float* __restrict__ C, int M, int N, int K)
+{
+    // ... MFMA macro-tile; accumulators in AGPRs ...
+}
+```
+
+Clang also exposes the finer-grained
+`__attribute__((amdgpu_waves_per_eu(min, max)))`. Setting `(min,min)` is the
+common idiom to pin a kernel to a specific occupancy point you found by sweeping.
+
+## The occupancy ↔ ILP trade-off
+
+More waves is **not** automatically faster. Two latency-hiding strategies compete
+for the same register file:
+
+- **TLP (high occupancy):** many small waves; the SIMD hides a stalled wave by
+  switching to another. Wins for **memory-bound, low-arithmetic** kernels
+  (elementwise, reductions, attention softmax tails) where there is little to do
+  per byte and you just need enough waves to cover HBM latency.
+- **ILP (low occupancy, fat registers):** few waves, each holding a large
+  register tile so independent FMAs/MFMAs are in flight simultaneously and data is
+  reused from registers instead of re-fetched. Wins for **compute-bound GEMM /
+  conv**, where a big accumulator tile maximizes matrix-core utilization.
+
+Well-tuned CDNA GEMMs frequently run **best at only 1–2 waves/SIMD**: the large
+MFMA accumulator tile that creates the ILP also burns the AGPRs that would
+otherwise raise occupancy. Pushing occupancy up there *shrinks the tile* and
+*lowers* throughput. The
+[ping-pong / 4-wave FP8 GEMM schedule](../kernels/fp8-gemm.md) is a deliberate
+low-occupancy design that pairs a small number of waves with software pipelining
+to keep the matrix cores saturated.
+
+A practical heuristic: find the *minimum* occupancy that fully hides your dominant
+latency (HBM for memory-bound, MFMA issue for compute-bound), then spend every
+remaining register on tile size / pipelining. Don't maximize occupancy as a goal
+in itself.
+
+## Tuning from Triton
+
+The Triton AMD backend exposes occupancy directly as the **`waves_per_eu`** knob
+(alongside `matrix_instr_nonkdim`, `num_stages`, and `kpack`). It is the same
+compiler hint as the HIP attribute — a *target*, not a guarantee:
+
+```python
+import triton
+import triton.language as tl
+
+@triton.autotune(
+    configs=[
+        triton.Config({'BLOCK_M': 256, 'BLOCK_N': 256, 'BLOCK_K': 64},
+                      num_warps=8, num_stages=2,
+                      kwargs={'waves_per_eu': 0}),   # 0 = let backend choose
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 64},
+                      num_warps=4, num_stages=2,
+                      kwargs={'waves_per_eu': 2}),    # push occupancy up
+        triton.Config({'BLOCK_M': 256, 'BLOCK_N': 128, 'BLOCK_K': 64},
+                      num_warps=8, num_stages=3,
+                      kwargs={'waves_per_eu': 1}),    # fat tile, low occupancy
+    ],
+    key=['M', 'N', 'K'],
+)
+@triton.jit
+def gemm_kernel(a_ptr, b_ptr, c_ptr, M, N, K, waves_per_eu: tl.constexpr,
+                BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr):
+    ...  # tl.dot(...) lowers to v_mfma_*
+```
+
+In practice you autotune `waves_per_eu` *jointly* with the block shape and
+`num_stages`, because raising occupancy and enlarging the pipeline both consume
+VGPRs and either can trip a scratch spill. AMD's Triton optimization guide
+recommends sweeping `waves_per_eu ∈ {0,1,2,3,4}` against your real problem sizes
+rather than guessing.
+
+## Checklist
+
+1. Build with `-Rpass-analysis=kernel-resource-usage`; record VGPR/AGPR/LDS.
+2. Confirm **ScratchSize == 0** — fix spills before chasing occupancy.
+3. Compute the static `waves_per_simd` ceiling from each resource; identify the
+   binding one (VGPR, AGPR, or LDS).
+4. Classify the kernel: memory-bound → raise occupancy; compute-bound → favor ILP
+   / bigger tile at low occupancy.
+5. Sweep `__launch_bounds__` / `waves_per_eu` and measure; keep the fastest point,
+   not the highest-occupancy point.
+
+## See also
+
+- [Wavefront & register files](../hardware/wavefront.md)
+- [VGPR budgeting](vgpr-budgeting.md)
+- [LDS double-buffering](lds-double-buffering.md)
+- [Pattern: low occupancy](../patterns/low-occupancy.md)
+- [Pattern: VGPR pressure](../patterns/vgpr-pressure.md)
+
+## Sources
+
+- [HIP Performance Guidelines (occupancy, launch bounds)](https://rocm.docs.amd.com/projects/HIP/en/latest/how-to/performance_guidelines.html)
+- [Triton kernel performance optimization on AMD](https://rocm.blogs.amd.com/software-tools-optimization/triton-kernel-optimization/README.html)
+- [GEMM kernel optimization on AMD GPUs](https://rocm.blogs.amd.com/artificial-intelligence/matrix-cores/README.html)
+- [AMD Instinct MI300 / CDNA3 ISA Reference Guide](https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/instruction-set-architectures/amd-instinct-mi300-cdna3-instruction-set-architecture.pdf)
+- [Optimizing an FP8 GEMM with a 4-wave ping-pong schedule](https://rocm.blogs.amd.com/artificial-intelligence/fp8-gemm/README.html)
