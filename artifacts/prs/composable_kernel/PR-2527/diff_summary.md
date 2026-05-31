@@ -1,0 +1,28 @@
+# Diff summary
+
+- **files changed:** 2 (diff was byte-capped; summary is partial)
+- **lines:** +1135 / -1041
+- **kernel-ish files:** 2
+
+## Files (by churn)
+
+- `example/ck_tile/01_fmha/hsaco/bwd_hd128_bf16_a32_rtna_pssk_group.cpp`  (+1040/-1034)
+- `example/ck_tile/01_fmha/codegen/ops/fmha_bwd.py`  (+95/-7)
+
+## Key added lines (kernel files)
+
+**`example/ck_tile/01_fmha/codegen/ops/fmha_bwd.py`**
+```
+unsigned int Hs_lsed;
+template<> struct FmhaBwdV3Name<fmha_bwd_dq_dk_dv_v3_traits_<192, FmhaBwdBf16,        0,       true,      0,     true,  
+template<> struct FmhaBwdV3Name<fmha_bwd_dq_dk_dv_v3_traits_<192, FmhaBwdBf16,        0,       true,      1,     true,  
+template<> struct FmhaBwdV3Name<fmha_bwd_dq_dk_dv_v3_traits_<192, FmhaBwdBf16,        0,       true,      2,     true,  
+```
+
+**`example/ck_tile/01_fmha/hsaco/bwd_hd128_bf16_a32_rtna_pssk_group.cpp`**
+```
+0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x93, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+0x50, 0x7B, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x50, 0x7B, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+0x50, 0x8D, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x50, 0xAD, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+0x50, 0xAD, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x70, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+```

@@ -138,9 +138,16 @@ Supporting files:
 | Script | Purpose |
 |---|---|
 | `scripts/harvest_prs.py` | Harvest merged PRs from tracked ROCm repos (gh GraphQL) |
+| `scripts/backfill_diffs.py` | Fetch real upstream diffs for top-ranked kernel PRs |
+| `scripts/enrich_facets.py` | Infer techniques/hardware_features/kernel_types from paths + diffs |
+| `scripts/link_prs.py` | Build the bidirectional PR↔wiki bridge (`implemented_by` / `related`) |
+| `scripts/summarize_diffs.py` | Write compact `diff_summary.md` per PR bundle |
 | `scripts/gen_source_anchors.py` | (Re)generate doc/blog/ref source anchor pages |
 | `scripts/generate-indices.py` | Regenerate `queries/*.md` from frontmatter |
-| `scripts/validate.py` | Validate frontmatter, vocabulary, and link integrity |
+| `scripts/validate.py` | Validate frontmatter, vocabulary, links, version-claims, freshness |
+
+CI (`.github/workflows/ci.yml`) gates every push on the validator, the query-tool
+smoke tests, and index freshness.
 
 ```bash
 pip install -r requirements.txt

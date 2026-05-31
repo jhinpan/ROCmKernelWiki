@@ -1,6 +1,6 @@
 ---
 id: hw-wmma
-title: "WMMA — RDNA Wave Matrix Multiply-Accumulate (RDNA4 / gfx1201)"
+title: WMMA — RDNA Wave Matrix Multiply-Accumulate (RDNA4 / gfx1201)
 type: hardware
 architectures:
 - gfx1201
@@ -24,10 +24,18 @@ sources:
 - doc-rocm-hip-hw
 aliases:
 - WMMA
-- "wave matrix multiply accumulate"
-- "wave matrix multiply-accumulate"
+- wave matrix multiply accumulate
+- wave matrix multiply-accumulate
+implemented_by:
+- pr-aiter-3236
+- pr-FlyDSL-250
+- pr-composable_kernel-2704
+- pr-composable_kernel-2528
+- pr-composable_kernel-2466
+- pr-FlyDSL-221
+- pr-composable_kernel-2319
+- pr-aiter-2969
 ---
-
 # WMMA — RDNA Wave Matrix Multiply-Accumulate (RDNA4 / gfx1201)
 
 ## Overview

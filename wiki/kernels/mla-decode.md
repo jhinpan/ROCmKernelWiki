@@ -1,6 +1,6 @@
 ---
 id: kernel-mla-decode
-title: "MLA Decode (DeepSeek Multi-Latent Attention) on MI300"
+title: MLA Decode (DeepSeek Multi-Latent Attention) on MI300
 type: kernel
 architectures:
 - gfx942
@@ -43,23 +43,31 @@ performance_claims:
 - gpu: MI300X
   dtype: bf16
   metric: kv-cache-bandwidth-utilization
-  value: "~80-90% of 5.3 TB/s HBM3 peak at large batch"
+  value: ~80-90% of 5.3 TB/s HBM3 peak at large batch
   source_id: doc-mi300x-datasheet
   confidence: inferred
 - gpu: MI300X
   dtype: bf16
   metric: arithmetic-intensity-vs-mha
-  value: "weight absorption raises AI ~128x (one latent KV shared across 128 heads)"
+  value: weight absorption raises AI ~128x (one latent KV shared across 128 heads)
   source_id: doc-flash-attention-2
   confidence: inferred
 - gpu: MI300X
   dtype: fp8
   metric: kv-cache-footprint
-  value: "576 elems/token/layer (512 latent + 64 rope) vs ~16k for dense MHA"
+  value: 576 elems/token/layer (512 latent + 64 rope) vs ~16k for dense MHA
   source_id: ref-aiter
   confidence: source-reported
+implemented_by:
+- pr-sglang-21511
+- pr-vllm-40871
+- pr-vllm-43543
+- pr-vllm-39616
+- pr-sglang-25463
+- pr-sglang-26134
+- pr-sglang-24933
+- pr-aiter-3072
 ---
-
 # MLA Decode (DeepSeek Multi-Latent Attention) on MI300
 
 ## Overview

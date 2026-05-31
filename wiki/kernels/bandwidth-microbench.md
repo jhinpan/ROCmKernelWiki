@@ -1,6 +1,6 @@
 ---
 id: kernel-bandwidth-microbench
-title: "HBM Bandwidth Microbenchmark (float4 non-temporal persistent read)"
+title: HBM Bandwidth Microbenchmark (float4 non-temporal persistent read)
 type: kernel
 architectures:
 - gfx942
@@ -48,12 +48,20 @@ performance_claims:
 - gpu: MI308X
   dtype: fp32
   metric: hbm-read-bandwidth
-  value: "4560 GB/s"
+  value: 4560 GB/s
   source_id: ref-gcnasm
-  utilization: "~86% of MI300-class 5.3 TB/s HBM3 peak"
+  utilization: ~86% of MI300-class 5.3 TB/s HBM3 peak
   confidence: source-reported
+implemented_by:
+- pr-Tensile-1521
+- pr-Tensile-1383
+- pr-Tensile-1185
+- pr-composable_kernel-3603
+- pr-aiter-3072
+- pr-aiter-2394
+- pr-Tensile-311
+- pr-Tensile-1406
 ---
-
 # HBM Bandwidth Microbenchmark (float4 non-temporal persistent read)
 
 ## Overview

@@ -26,8 +26,11 @@ merge_sha: e142104cfa64
 inclusion_reason: kernel path 'csrc/py_itfs_ck/attention_kernels.cu'; keyword 'attention'
 changed_paths:
 - csrc/py_itfs_ck/attention_kernels.cu
+related:
+- kernel-paged-attention
+- kernel-mla-decode
+- kernel-flash-attention-ck
 ---
-
 # fix naive attn api args
 
 **Repository:** [ROCm/aiter](https://github.com/ROCm/aiter) · **PR:** [#6](https://github.com/ROCm/aiter/pull/6) · **Merged:** 2024-12-05 · **Author:** @carlushuang

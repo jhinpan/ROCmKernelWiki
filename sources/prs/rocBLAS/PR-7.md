@@ -16,8 +16,8 @@ tags:
 techniques: []
 hardware_features: []
 kernel_types:
-- moe
 - gemm
+- moe
 languages:
 - hip
 - cpp
@@ -46,8 +46,12 @@ changed_paths:
 - src/include/rocblas-version.h.in
 - src/include/rocblas.h
 - src/library/CMakeLists.txt
+facet_source: inferred
+related:
+- kernel-grouped-gemm
+- technique-vgpr-budgeting
+- technique-stream-k
 ---
-
 # superbuild & cmake infrastructure for the library
 
 **Repository:** [ROCm/rocBLAS](https://github.com/ROCm/rocBLAS) · **PR:** [#7](https://github.com/ROCm/rocBLAS/pull/7) · **Merged:** 2016-02-26 · **Author:** @kknox

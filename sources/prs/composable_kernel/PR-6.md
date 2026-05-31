@@ -10,14 +10,18 @@ source_category: upstream-code
 architectures:
 - gfx942
 tags:
+- convolution
 - fp16
 - gemm
 - gfx942
+- mfma
 - rope
 techniques: []
 hardware_features:
 - fp16
+- mfma
 kernel_types:
+- convolution
 - gemm
 - rope
 languages:
@@ -51,8 +55,12 @@ changed_paths:
 - host/online_compile/hip_utility/exec_utils.cpp
 - host/online_compile/hip_utility/handlehip.cpp
 - host/online_compile/hip_utility/hip_build_utils.cpp
+facet_source: inferred
+related:
+- technique-split-k
+- technique-preshuffle-layout
+- technique-mfma-pipelining
 ---
-
 # Update master (#5)
 
 **Repository:** [ROCm/composable_kernel](https://github.com/ROCm/composable_kernel) · **PR:** [#6](https://github.com/ROCm/composable_kernel/pull/6) · **Merged:** 2021-08-06 · **Author:** @asroy

@@ -1,6 +1,6 @@
 ---
 id: technique-preshuffle-layout
-title: "Pre-shuffle Weight Layout for MFMA"
+title: Pre-shuffle Weight Layout for MFMA
 type: technique
 architectures:
 - gfx942
@@ -42,8 +42,16 @@ sources:
 - blog-matrix-cores-cdna
 - ref-matrix-calculator
 - doc-cdna3-isa
+implemented_by:
+- pr-composable_kernel-1838
+- pr-composable_kernel-933
+- pr-composable_kernel-2564
+- pr-composable_kernel-2096
+- pr-composable_kernel-1297
+- pr-composable_kernel-3193
+- pr-composable_kernel-2949
+- pr-composable_kernel-3237
 ---
-
 # Pre-shuffle Weight Layout for MFMA
 
 ## The problem: every MFMA wants a specific register layout

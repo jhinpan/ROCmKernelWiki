@@ -1,7 +1,10 @@
 ---
 id: hw-mxfp
-title: "MXFP — Block-Scaled FP8/FP6/FP4 Microscaling (CDNA4 gfx950)"
+title: MXFP — Block-Scaled FP8/FP6/FP4 Microscaling (CDNA4 gfx950)
 type: hardware
+version_sensitive:
+- vs-fp8-ocp-gfx950
+- vs-tf32-dropped-gfx950
 architectures:
 - gfx950
 tags:
@@ -35,13 +38,21 @@ sources:
 aliases:
 - MXFP
 - microscaling
-- "block-scaled FP8"
+- block-scaled FP8
 - MXFP4
 - MXFP6
 - f8f6f4
 - E8M0
+implemented_by:
+- pr-composable_kernel-3603
+- pr-composable_kernel-2297
+- pr-composable_kernel-3601
+- pr-composable_kernel-2152
+- pr-composable_kernel-2000
+- pr-vllm-42952
+- pr-composable_kernel-2665
+- pr-FlyDSL-191
 ---
-
 # MXFP — Block-Scaled FP8/FP6/FP4 Microscaling (CDNA4 gfx950)
 
 ## Overview

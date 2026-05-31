@@ -1,6 +1,6 @@
 ---
 id: kernel-grouped-gemm
-title: "Grouped GEMM — Variable-Size Expert GEMMs in One Launch (MoE)"
+title: Grouped GEMM — Variable-Size Expert GEMMs in One Launch (MoE)
 type: kernel
 architectures:
 - gfx942
@@ -42,20 +42,28 @@ performance_claims:
 - gpu: MI300X
   dtype: bf16
   metric: peak-tflops
-  value: "~950 TFLOPS (large balanced groups, compute-bound)"
-  shape: "G=8 experts, M_g≈4096, N=K=8192"
-  utilization: "~73% of 1307 TFLOPS dense BF16 peak"
+  value: ~950 TFLOPS (large balanced groups, compute-bound)
+  shape: G=8 experts, M_g≈4096, N=K=8192
+  utilization: ~73% of 1307 TFLOPS dense BF16 peak
   source_id: doc-mi300x-datasheet
-  baseline: "looped per-expert hipBLASLt calls"
+  baseline: looped per-expert hipBLASLt calls
 - gpu: MI300X
   dtype: fp8
   metric: speedup
-  value: "1.3-1.8x vs per-expert GEMM loop at decode token counts"
-  shape: "many small/uneven M_g, N=K=7168"
+  value: 1.3-1.8x vs per-expert GEMM loop at decode token counts
+  shape: many small/uneven M_g, N=K=7168
   source_id: ref-aiter
-  baseline: "G separate hipBLASLt launches"
+  baseline: G separate hipBLASLt launches
+implemented_by:
+- pr-composable_kernel-2466
+- pr-FlyDSL-412
+- pr-composable_kernel-2234
+- pr-composable_kernel-2821
+- pr-vllm-36286
+- pr-vllm-36022
+- pr-sglang-25540
+- pr-sglang-24816
 ---
-
 # Grouped GEMM — Variable-Size Expert GEMMs in One Launch (MoE)
 
 ## Overview

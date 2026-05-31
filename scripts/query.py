@@ -76,23 +76,86 @@ def load_frontmatter(path):
         return None, None
 
 
-def load_all_pages():
-    """Load frontmatter + body for every sources/*.md and wiki/*.md file."""
-    pages = []
-    for subdir in ["sources", "wiki"]:
+def load_all_pages(use_cache=True):
+    """Load frontmatter + body for every sources/*.md and wiki/*.md file.
+
+    Results are cached to a JSON index (.query_index.json) keyed by the max mtime
+    of the corpus, so repeat queries skip the multi-thousand-file parse. The cache
+    is rebuilt automatically when any page changes.
+    """
+    import json
+    cache_path = WIKI_ROOT / ".query_index.json"
+    md_files = []
+    for subdir in ("sources", "wiki"):
         base = WIKI_ROOT / subdir
-        if not base.exists():
+        if base.exists():
+            md_files.extend(base.rglob("*.md"))
+    if not md_files:
+        return []
+    latest = max(f.stat().st_mtime for f in md_files)
+    sig = f"{len(md_files)}:{latest:.3f}"
+
+    if use_cache and cache_path.exists():
+        try:
+            cached = json.loads(cache_path.read_text(encoding="utf-8"))
+            if cached.get("sig") == sig:
+                return cached["pages"]
+        except Exception:
+            pass
+
+    pages = []
+    for md in md_files:
+        fm, body = load_frontmatter(md)
+        if fm is None:
             continue
-        for md in base.rglob("*.md"):
-            fm, body = load_frontmatter(md)
-            if fm is None:
-                continue
-            pages.append({
-                "path": str(md.relative_to(WIKI_ROOT)),
-                "fm": fm,
-                "body": body or "",
-            })
+        pages.append({
+            "path": str(md.relative_to(WIKI_ROOT)),
+            "fm": fm,
+            "body": body or "",
+        })
+    if use_cache:
+        try:
+            cache_path.write_text(json.dumps({"sig": sig, "pages": pages}),
+                                  encoding="utf-8")
+        except Exception:
+            pass
     return pages
+
+
+# Common English + markup stopwords that should not drive ranking.
+STOPWORDS = {
+    "a", "an", "the", "to", "of", "for", "on", "in", "is", "are", "how", "do",
+    "does", "i", "my", "with", "and", "or", "what", "which", "when", "where",
+    "use", "using", "can", "vs", "from", "into", "this", "that", "it", "be",
+    "as", "at", "by", "if", "we", "you", "want", "need", "should", "make",
+}
+
+# Multiplicative priors: surface curated synthesis + runnable assets above raw PRs.
+PTYPE_PRIOR = {
+    "wiki-kernel": 1.7, "wiki-technique": 1.6, "wiki-hardware": 1.6,
+    "wiki-pattern": 1.6, "wiki-language": 1.5, "wiki-migration": 1.5,
+    "source-doc": 1.3, "source-ref": 1.3, "source-blog": 1.2,
+    "source-pr": 1.0,
+}
+
+
+def build_idf(pages):
+    """Document-frequency-based inverse weights over the searchable text of each
+    page, so a rare term like `cp.async` outweighs a ubiquitous one like `gemm`."""
+    import math
+    n = len(pages) or 1
+    df = {}
+    for p in pages:
+        fm = p["fm"]
+        text = (str(fm.get("title", "")) + " " +
+                " ".join(str(v) for k in ("tags", "techniques", "hardware_features",
+                                          "kernel_types", "languages", "aliases",
+                                          "symptoms") for v in (fm.get(k) or [])) +
+                " " + p["body"]).lower()
+        toks = set(re.findall(r"[a-z0-9_.+-]{2,}", text))
+        for t in toks:
+            df[t] = df.get(t, 0) + 1
+    return {t: math.log((n + 1) / (c + 1)) + 1.0 for t, c in df.items()}, n
 
 
 def detect_page_type(fm, path):
@@ -105,9 +168,27 @@ def detect_page_type(fm, path):
     return "unknown"
 
 
-def score_keyword_match(fm, body, keywords):
-    """Score a page by keyword matches in title, tags, and body (alias-aware)."""
-    score = 0
+def _page_signal_prior(fm, ptype):
+    """Combine page-type, runnable-asset, and low-signal priors into one factor."""
+    factor = PTYPE_PRIOR.get(ptype, 1.0)
+    # Reward pages backed by a runnable/benchmarked example.
+    repro = str(fm.get("reproducibility", ""))
+    if repro in ("runnable", "benchmarked"):
+        factor *= 1.25
+    # Damp low-signal PR placeholders: no inferred facets at all.
+    if ptype == "source-pr":
+        if not (fm.get("hardware_features") or fm.get("kernel_types")
+                or fm.get("techniques")):
+            factor *= 0.5
+    return factor
+
+
+def score_keyword_match(fm, body, keywords, idf=None, ptype="unknown"):
+    """Score a page by alias-aware, IDF-weighted keyword matches in title, tags,
+    and body, scaled by a page-type / runnable / signal prior.
+
+    title hit = 10, tag/facet hit = 5, body hits = up to 3 — each multiplied by the
+    keyword's IDF weight so rare, discriminative terms dominate over stopwords."""
     title_text = str(fm.get("title", "")).lower()
     tag_text = " ".join(
         str(v) for k in ("tags", "techniques", "hardware_features", "kernel_types",
@@ -115,19 +196,40 @@ def score_keyword_match(fm, body, keywords):
         for v in (fm.get(k) or [])
     ).lower()
     body_lower = body.lower()
+    raw = 0.0
     for kw in keywords:
-        best = 0
+        if kw.lower() in STOPWORDS:
+            continue
+        best = 0.0
         for variant in expand_keyword(kw):
             v_l = variant.lower()
-            vs = 0
+            w = (idf.get(v_l, 1.0) if idf else 1.0)
+            vs = 0.0
             if v_l in title_text:
                 vs += 10
             if v_l in tag_text:
                 vs += 5
             vs += min(body_lower.count(v_l), 3)
-            best = max(best, vs)
-        score += best
-    return score
+            best = max(best, vs * w)
+        raw += best
+    if raw <= 0:
+        return 0.0
+    return raw * _page_signal_prior(fm, ptype)
+
+
+def extract_snippet(body, keywords, width=160):
+    """Return a one-line context snippet around the first matched keyword."""
+    bl = body.lower()
+    for kw in keywords:
+        if kw.lower() in STOPWORDS:
+            continue
+        for variant in expand_keyword(kw):
+            i = bl.find(variant.lower())
+            if i >= 0:
+                start = max(0, i - width // 2)
+                seg = body[start:start + width].replace("\n", " ").strip()
+                return ("…" + seg + "…") if seg else ""
+    return ""
 
 
 def filter_pages(pages, args):
@@ -176,6 +278,9 @@ def filter_pages(pages, args):
             if str(fm.get("confidence", "")) != args.confidence:
                 continue
 
+        if getattr(args, "synthesis", False) and not ptype.startswith("wiki-"):
+            continue
+
         out.append(p)
     return out
 
@@ -187,13 +292,19 @@ def format_result(page, compact=False):
     pid = fm.get("id", "")
     ptype = page.get("_ptype", "?")
 
+    snip = page.get("_snippet")
     if compact:
-        return f"  [{ptype}] {pid}: {title}  ({path})"
+        line = f"  [{ptype}] {pid}: {title}  ({path})"
+        if snip:
+            line += f"\n        ↳ {snip}"
+        return line
 
     lines = [f"## {title}"]
     lines.append(f"- **id**: `{pid}`")
     lines.append(f"- **type**: `{ptype}`")
     lines.append(f"- **path**: `{path}`")
+    if snip:
+        lines.append(f"- **match**: {snip}")
     if "architectures" in fm:
         lines.append(f"- **architectures**: {fm['architectures']}")
     for k in ("confidence", "reproducibility"):
@@ -207,6 +318,8 @@ def format_result(page, compact=False):
         for claim in fm["performance_claims"][:2]:
             lines.append(f"- **perf**: {claim.get('value')} {claim.get('metric')} on "
                          f"{claim.get('gpu')} ({claim.get('dtype')}, {claim.get('shape')})")
+    if fm.get("implemented_by"):
+        lines.append(f"- **implemented_by (PRs)**: {fm['implemented_by'][:6]}")
     if "sources" in fm:
         lines.append(f"- **sources**: {fm['sources'][:5]}")
     return "\n".join(lines)
@@ -222,13 +335,16 @@ def main():
     parser.add_argument("--architecture", help="Filter by architecture (gfx942, gfx950, gfx1201, ...); alias-aware")
     parser.add_argument("--symptom", help="Filter by pattern symptom (bank-conflicts, low-occupancy, ...)")
     parser.add_argument("--confidence", help="Filter by confidence (verified, source-reported, inferred, experimental)")
+    parser.add_argument("--synthesis", action="store_true",
+                        help="Only curated wiki synthesis pages (skip raw PR sources)")
     parser.add_argument("--limit", type=int, default=10, help="Max results (default 10)")
     parser.add_argument("--compact", action="store_true", help="Compact one-line-per-result output")
     parser.add_argument("--paths-only", action="store_true", help="Output only file paths")
+    parser.add_argument("--no-cache", action="store_true", help="Bypass the JSON query index")
     args = parser.parse_args()
 
-    pages = load_all_pages()
-    pages = filter_pages(pages, args)
+    all_pages = load_all_pages(use_cache=not args.no_cache)
+    pages = filter_pages(all_pages, args)
 
     keywords = []
     for q in args.query:
@@ -236,8 +352,13 @@ def main():
             if tok:
                 keywords.append(tok)
     if keywords:
+        # IDF is computed over the full corpus so term rarity is global, not
+        # relative to the post-filter subset.
+        idf, _ = build_idf(all_pages)
         for p in pages:
-            p["_score"] = score_keyword_match(p["fm"], p["body"], keywords)
+            p["_score"] = score_keyword_match(
+                p["fm"], p["body"], keywords, idf=idf, ptype=p.get("_ptype", "unknown"))
+            p["_snippet"] = extract_snippet(p["body"], keywords)
         pages = [p for p in pages if p["_score"] > 0]
         pages.sort(key=lambda x: (-x["_score"], x["path"]))
     else:

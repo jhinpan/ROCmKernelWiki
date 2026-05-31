@@ -10,6 +10,7 @@ source_category: upstream-code
 architectures:
 - gfx90a
 tags:
+- attention
 - bf16
 - flash-attention
 - fp16
@@ -20,6 +21,7 @@ hardware_features:
 - bf16
 - fp16
 kernel_types:
+- attention
 - flash-attention
 - gemm
 languages:
@@ -51,8 +53,12 @@ changed_paths:
 - csrc/flash_attn_rocm/src/flash_bwd_runner_kloop_hdim64_bf16_noncausal_gfx90a.cpp
 - csrc/flash_attn_rocm/src/flash_bwd_runner_kloop_hdim64_fp16_causal_gfx90a.cpp
 - csrc/flash_attn_rocm/src/flash_bwd_runner_kloop_hdim64_fp16_noncausal_gfx90a.cpp
+facet_source: inferred
+related:
+- kernel-flash-attention-ck
+- technique-vgpr-budgeting
+- technique-lds-double-buffering
 ---
-
 # Increasing the compiling time by spliting into several cpp files
 
 **Repository:** [ROCm/flash-attention](https://github.com/ROCm/flash-attention) · **PR:** [#7](https://github.com/ROCm/flash-attention/pull/7) · **Merged:** 2023-07-31 · **Author:** @dejay-vu

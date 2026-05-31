@@ -1,6 +1,6 @@
 ---
 id: technique-kernel-fusion
-title: "Kernel Fusion — Epilogues and Adjacent-Op Merging"
+title: Kernel Fusion — Epilogues and Adjacent-Op Merging
 type: technique
 architectures:
 - gfx942
@@ -40,8 +40,16 @@ sources:
 - ref-aiter
 - ref-composable-kernel
 - doc-mi300x-datasheet
+implemented_by:
+- pr-composable_kernel-2978
+- pr-composable_kernel-1789
+- pr-composable_kernel-1791
+- pr-composable_kernel-2594
+- pr-composable_kernel-2551
+- pr-composable_kernel-1862
+- pr-composable_kernel-3259
+- pr-composable_kernel-1591
 ---
-
 # Kernel Fusion — Epilogues and Adjacent-Op Merging
 
 ## What and why

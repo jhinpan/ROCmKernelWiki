@@ -1,6 +1,6 @@
 ---
 id: technique-split-k
-title: "Split-K / GlobalSplitU — Partial-Sum Reduction GEMM for Small M·N, Large K"
+title: Split-K / GlobalSplitU — Partial-Sum Reduction GEMM for Small M·N, Large K
 type: technique
 architectures:
 - gfx942
@@ -41,8 +41,16 @@ sources:
 - ref-composable-kernel
 - ref-hipblaslt
 - doc-mi300x-datasheet
+implemented_by:
+- pr-composable_kernel-933
+- pr-composable_kernel-2152
+- pr-composable_kernel-2059
+- pr-Tensile-1355
+- pr-FlyDSL-370
+- pr-FlyDSL-346
+- pr-composable_kernel-785
+- pr-composable_kernel-767
 ---
-
 # Split-K / GlobalSplitU — Partial-Sum Reduction GEMM
 
 ## The problem: not enough tiles to fill the GPU

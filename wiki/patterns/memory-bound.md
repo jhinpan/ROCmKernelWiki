@@ -1,6 +1,6 @@
 ---
 id: pattern-memory-bound
-title: "Memory-Bound Kernel (HBM-limited, idle matrix cores)"
+title: Memory-Bound Kernel (HBM-limited, idle matrix cores)
 type: pattern
 architectures:
 - gfx942
@@ -34,7 +34,6 @@ sources:
 - doc-mi300x-datasheet
 - doc-cdna3-isa
 ---
-
 # Memory-Bound Kernel (HBM-limited, idle matrix cores)
 
 ## What this pattern looks like

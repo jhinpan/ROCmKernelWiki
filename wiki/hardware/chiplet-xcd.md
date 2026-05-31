@@ -1,6 +1,6 @@
 ---
 id: hw-chiplet-xcd
-title: "XCD Chiplets, Per-XCD L2, Infinity Cache & Partition Modes (CDNA3/CDNA4)"
+title: XCD Chiplets, Per-XCD L2, Infinity Cache & Partition Modes (CDNA3/CDNA4)
 type: hardware
 architectures:
 - gfx942
@@ -28,14 +28,13 @@ sources:
 - blog-gemm-optimization
 aliases:
 - XCD
-- "Accelerator Complex Die"
+- Accelerator Complex Die
 - chiplet
 - NUMA
 - SPX
 - CPX
-- "partition modes"
+- partition modes
 ---
-
 # XCD Chiplets, Per-XCD L2, Infinity Cache & Partition Modes (CDNA3/CDNA4)
 
 ## Overview

@@ -1,6 +1,6 @@
 ---
 id: pattern-vgpr-pressure
-title: "VGPR Pressure, Register Spills, and Occupancy Collapse"
+title: VGPR Pressure, Register Spills, and Occupancy Collapse
 type: pattern
 architectures:
 - gfx942
@@ -34,8 +34,11 @@ sources:
 - doc-rocm-hip-hw
 - doc-llvm-amdgpu
 - blog-gemm-optimization
+implemented_by:
+- pr-Tensile-1371
+- pr-Tensile-1100
+- pr-Tensile-1383
 ---
-
 # VGPR Pressure, Register Spills, and Occupancy Collapse
 
 ## The pattern

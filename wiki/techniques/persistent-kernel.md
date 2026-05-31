@@ -1,6 +1,6 @@
 ---
 id: technique-persistent-kernel
-title: "Persistent Kernels — Grid-Stride Work Loops for Launch & L2 Reuse"
+title: Persistent Kernels — Grid-Stride Work Loops for Launch & L2 Reuse
 type: technique
 architectures:
 - gfx942
@@ -40,8 +40,16 @@ sources:
 - kernel-bandwidth-microbench
 - blog-gemm-optimization
 - doc-mi300x-datasheet
+implemented_by:
+- pr-composable_kernel-3301
+- pr-composable_kernel-3202
+- pr-composable_kernel-1360
+- pr-composable_kernel-3520
+- pr-composable_kernel-3359
+- pr-composable_kernel-3107
+- pr-composable_kernel-2786
+- pr-composable_kernel-2781
 ---
-
 # Persistent Kernels — Grid-Stride Work Loops for Launch & L2 Reuse
 
 ## Overview

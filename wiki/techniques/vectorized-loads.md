@@ -1,6 +1,6 @@
 ---
 id: technique-vectorized-loads
-title: "Vectorized & Non-Temporal Loads (128-bit) to Saturate HBM"
+title: Vectorized & Non-Temporal Loads (128-bit) to Saturate HBM
 type: technique
 architectures:
 - gfx942
@@ -36,8 +36,16 @@ sources:
 - doc-mi300x-datasheet
 - blog-gemm-optimization
 - doc-llvm-amdgpu
+implemented_by:
+- pr-aiter-2394
+- pr-triton-729
+- pr-composable_kernel-1430
+- pr-aiter-3072
+- pr-Tensile-293
+- pr-Tensile-1521
+- pr-Tensile-1288
+- pr-Tensile-1185
 ---
-
 # Vectorized & Non-Temporal Loads (128-bit) to Saturate HBM
 
 ## Overview

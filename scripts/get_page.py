@@ -93,6 +93,10 @@ def main():
                         help="Also print a 500-char excerpt from each cited source")
     parser.add_argument("--include-code", action="store_true",
                         help="After the body, print files under the page's artifact_dir")
+    parser.add_argument("--summary", action="store_true",
+                        help="With --include-code: print diff_summary.md instead of the full diff.patch (token-economical)")
+    parser.add_argument("--max-bytes", type=int, default=200 * 1024,
+                        help="With --include-code: per-file byte cap (default 200 KiB)")
     args = parser.parse_args()
 
     page_path = find_page(args.lookup)
@@ -114,6 +118,27 @@ def main():
     print(f"# {page_path.relative_to(WIKI_ROOT)}")
     print()
     print(content)
+
+    # Surface the PR<->wiki bridge so an agent sees the connection without a
+    # second query. implemented_by lives on wiki pages; related-wiki on PR pages.
+    if fm:
+        impl = fm.get("implemented_by") or []
+        if impl:
+            print()
+            print("## Implementing PRs (real upstream changes)")
+            print()
+            for pid in impl:
+                print(f"- `{pid}` — fetch with `get_page.py {pid}`")
+        if "/prs/" in str(page_path):
+            wiki_refs = [r for r in (fm.get("related") or [])
+                         if str(r).startswith(("hw-", "technique-", "kernel-",
+                                               "pattern-", "lang-", "migration-"))]
+            if wiki_refs:
+                print()
+                print("## Synthesized in (wiki pages explaining this)")
+                print()
+                for wid in wiki_refs:
+                    print(f"- `{wid}` — fetch with `get_page.py {wid}`")
 
     if args.follow_sources and fm and "sources" in fm:
         print()
@@ -142,16 +167,25 @@ def main():
             suffix = " (conventional path — artifact_dir not backfilled)" if is_fallback else ""
             print(f"## Artifact Bundle: `{ad}`{suffix}")
             print()
-            for f in sorted(ad_path.rglob("*")):
-                if not f.is_file() or f.suffix.lower() not in exts:
-                    continue
+            files_all = sorted(f for f in ad_path.rglob("*")
+                               if f.is_file() and f.suffix.lower() in exts)
+            # --summary: prefer the compact diff_summary.md and skip the raw
+            # diff.patch entirely, so an agent learns the change cheaply.
+            if args.summary:
+                if any(f.name == "diff_summary.md" for f in files_all):
+                    files_all = [f for f in files_all if f.name != "diff.patch"]
+                print("*(--summary: showing diff_summary.md in place of full diff.patch where available)*")
+                print()
+            cap = max(1024, args.max_bytes)
+            for f in files_all:
                 print(f"### `{f.relative_to(ad_path)}`")
                 print()
                 try:
                     data = f.read_bytes()
-                    if len(data) > 200 * 1024:
-                        print(f"*(file is {len(data)} bytes; showing first 200 KiB)*")
-                        data = data[:200 * 1024]
+                    if len(data) > cap:
+                        print(f"*(file is {len(data)} bytes; showing first {cap} bytes — "
+                              f"raise with --max-bytes or see diff_summary.md)*")
+                        data = data[:cap]
                     print("```" + (f.suffix.lstrip(".") or ""))
                     print(data.decode("utf-8", errors="replace"))
                     print("```")

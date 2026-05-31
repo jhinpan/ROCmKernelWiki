@@ -27,8 +27,11 @@ inclusion_reason: kernel path 'csrc/py_itfs_ck/attention_kernels.cu'; keyword 'a
 changed_paths:
 - csrc/py_itfs_ck/attention_kernels.cu
 - op_tests/test_pa.py
+related:
+- kernel-paged-attention
+- kernel-mla-decode
+- kernel-flash-attention-ck
 ---
-
 # fix err
 
 **Repository:** [ROCm/aiter](https://github.com/ROCm/aiter) · **PR:** [#8](https://github.com/ROCm/aiter/pull/8) · **Merged:** 2024-12-11 · **Author:** @carlushuang

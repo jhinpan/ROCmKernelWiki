@@ -1,6 +1,6 @@
 ---
 id: pattern-xcd-locality
-title: "Poor XCD / L2 Locality and Cross-Chiplet Traffic (CDNA3/CDNA4)"
+title: Poor XCD / L2 Locality and Cross-Chiplet Traffic (CDNA3/CDNA4)
 type: pattern
 architectures:
 - gfx942
@@ -35,7 +35,6 @@ sources:
 - doc-mi300x-datasheet
 - blog-gemm-optimization
 ---
-
 # Poor XCD / L2 Locality and Cross-Chiplet Traffic
 
 ## Symptom

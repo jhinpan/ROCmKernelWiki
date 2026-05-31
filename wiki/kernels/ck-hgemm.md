@@ -1,6 +1,6 @@
 ---
 id: kernel-ck-hgemm
-title: "FP16 GEMM via Composable Kernel / MFMA on MI300X"
+title: FP16 GEMM via Composable Kernel / MFMA on MI300X
 type: kernel
 architectures:
 - gfx942
@@ -41,25 +41,33 @@ performance_claims:
 - gpu: MI300X
   dtype: fp16
   metric: TFLOPS
-  value: "~1000-1150 TFLOPS (large compute-bound M=N=K=8192)"
-  shape: "8192x8192x8192"
-  utilization: "~75-88% of 1307 TFLOPS dense FP16 peak"
+  value: ~1000-1150 TFLOPS (large compute-bound M=N=K=8192)
+  shape: 8192x8192x8192
+  utilization: ~75-88% of 1307 TFLOPS dense FP16 peak
   source_id: blog-cktile-gemm
   baseline: hipBLASLt
 - gpu: MI300X
   dtype: bf16
   metric: TFLOPS
-  value: "~1000-1150 TFLOPS (compute-bound)"
-  shape: "8192x8192x8192"
-  utilization: "~75-88% of 1307 TFLOPS dense BF16 peak"
+  value: ~1000-1150 TFLOPS (compute-bound)
+  shape: 8192x8192x8192
+  utilization: ~75-88% of 1307 TFLOPS dense BF16 peak
   source_id: doc-mi300x-datasheet
 - gpu: MI300X
   dtype: fp16
   metric: peak-TFLOPS-reference
-  value: "1307 TFLOPS dense FP16/BF16 (hardware ceiling)"
+  value: 1307 TFLOPS dense FP16/BF16 (hardware ceiling)
   source_id: doc-mi300x-datasheet
+implemented_by:
+- pr-Tensile-910
+- pr-Tensile-1714
+- pr-Tensile-1155
+- pr-Tensile-1124
+- pr-Tensile-972
+- pr-Tensile-2114
+- pr-Tensile-2113
+- pr-Tensile-1702
 ---
-
 # FP16 GEMM via Composable Kernel / MFMA on MI300X
 
 ## Overview

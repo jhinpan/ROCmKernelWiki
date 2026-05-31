@@ -1,6 +1,6 @@
 ---
 id: hw-memory-instructions
-title: "Memory Instructions — buffer (MUBUF) vs global vs flat"
+title: Memory Instructions — buffer (MUBUF) vs global vs flat
 type: hardware
 architectures:
 - gfx942
@@ -39,10 +39,13 @@ aliases:
 - buffer_load
 - global_load
 - flat_load
-- "V#"
-- "resource descriptor"
+- V#
+- resource descriptor
+implemented_by:
+- pr-composable_kernel-2984
+- pr-Tensile-1521
+- pr-Tensile-1288
 ---
-
 # Memory Instructions — buffer (MUBUF) vs global vs flat
 
 ## Overview

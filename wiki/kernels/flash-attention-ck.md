@@ -1,6 +1,6 @@
 ---
 id: kernel-flash-attention-ck
-title: "FlashAttention-2 via CK-tile on CDNA (MI300X)"
+title: FlashAttention-2 via CK-tile on CDNA (MI300X)
 type: kernel
 architectures:
 - gfx942
@@ -52,17 +52,25 @@ performance_claims:
   dtype: bf16
   metric: TFLOPS
   value: 620
-  shape: "batch=2, heads=32, seqlen=8192, headdim=128, causal"
-  utilization: "~47% of 1307 TFLOPS bf16 peak"
+  shape: batch=2, heads=32, seqlen=8192, headdim=128, causal
+  utilization: ~47% of 1307 TFLOPS bf16 peak
   source_id: blog-flash-attention-amd
 - gpu: MI300X
   dtype: bf16
   metric: TFLOPS
   value: 450
-  shape: "batch=4, heads=32, seqlen=4096, headdim=128, non-causal"
+  shape: batch=4, heads=32, seqlen=4096, headdim=128, non-causal
   source_id: blog-cktile-flash
+implemented_by:
+- pr-composable_kernel-1224
+- pr-aiter-1383
+- pr-FlyDSL-346
+- pr-triton-247
+- pr-aiter-2945
+- pr-vllm-40871
+- pr-aiter-3357
+- pr-aiter-2525
 ---
-
 # FlashAttention-2 via CK-tile on CDNA (MI300X)
 
 ## Overview

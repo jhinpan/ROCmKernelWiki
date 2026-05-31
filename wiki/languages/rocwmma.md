@@ -1,6 +1,6 @@
 ---
 id: lang-rocwmma
-title: "rocWMMA — Portable C++ Matrix Fragment API"
+title: rocWMMA — Portable C++ Matrix Fragment API
 type: language
 architectures:
 - gfx90a
@@ -34,8 +34,16 @@ sources:
 - hw-wmma
 - blog-amd-matrix-cores
 - doc-cdna3-isa
+implemented_by:
+- pr-composable_kernel-2110
+- pr-triton-775
+- pr-composable_kernel-932
+- pr-composable_kernel-690
+- pr-composable_kernel-2963
+- pr-composable_kernel-2821
+- pr-composable_kernel-2606
+- pr-composable_kernel-2528
 ---
-
 # rocWMMA — Portable C++ Matrix Fragment API
 
 ## Overview

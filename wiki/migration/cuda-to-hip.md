@@ -1,6 +1,6 @@
 ---
 id: migration-cuda-to-hip
-title: "CUDA → HIP Kernel Porting (CDNA3/CDNA4)"
+title: CUDA → HIP Kernel Porting (CDNA3/CDNA4)
 type: migration
 architectures:
 - gfx942
@@ -34,19 +34,25 @@ sources:
 - doc-cdna4-isa
 - blog-matrix-cores-cdna
 - doc-llvm-amdgpu
-cross_vendor_note: >
-  NVIDIA SM and AMD CDNA differ in three ways that break a naive 1:1 port:
-  (1) warp = 32 lanes on NVIDIA, but a CDNA wavefront is 64 lanes (wave64-only) —
-  `__ballot`/`__activemask` return 64-bit masks and per-warp reductions change
-  trip count. (2) NVIDIA exposes a named async object model (`cp.async` +
-  `mbarrier`, and on Hopper TMA + `wgmma`); AMD has no mbarrier and no TMA —
-  the closest async primitive is direct-to-LDS load gated by the global,
-  compiler-scheduled `s_waitcnt` counters. (3) Tensor cores: `wgmma`/`wmma`
-  (PTX) map to CDNA `v_mfma_*`, which run per-wavefront over 64 lanes with a
-  different register layout, so PTX tile-fragment code must be regenerated, not
-  textually translated.
+cross_vendor_note: 'NVIDIA SM and AMD CDNA differ in three ways that break a naive
+  1:1 port: (1) warp = 32 lanes on NVIDIA, but a CDNA wavefront is 64 lanes (wave64-only)
+  — `__ballot`/`__activemask` return 64-bit masks and per-warp reductions change trip
+  count. (2) NVIDIA exposes a named async object model (`cp.async` + `mbarrier`, and
+  on Hopper TMA + `wgmma`); AMD has no mbarrier and no TMA — the closest async primitive
+  is direct-to-LDS load gated by the global, compiler-scheduled `s_waitcnt` counters.
+  (3) Tensor cores: `wgmma`/`wmma` (PTX) map to CDNA `v_mfma_*`, which run per-wavefront
+  over 64 lanes with a different register layout, so PTX tile-fragment code must be
+  regenerated, not textually translated.'
+implemented_by:
+- pr-aiter-2136
+- pr-composable_kernel-2466
+- pr-aiter-3072
+- pr-aiter-2394
+- pr-Tensile-1406
+- pr-Tensile-1288
+- pr-composable_kernel-2722
+- pr-composable_kernel-2704
 ---
-
 # CUDA → HIP Kernel Porting (CDNA3/CDNA4)
 
 ## Overview

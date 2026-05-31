@@ -1,6 +1,6 @@
 ---
 id: technique-stream-k
-title: "Stream-K — Load-Balanced GEMM Tile Scheduling for CUs/XCDs"
+title: Stream-K — Load-Balanced GEMM Tile Scheduling for CUs/XCDs
 type: technique
 architectures:
 - gfx942
@@ -40,8 +40,16 @@ sources:
 - blog-gemm-optimization
 - doc-mi300x-datasheet
 - ref-tensile
+implemented_by:
+- pr-Tensile-1815
+- pr-composable_kernel-933
+- pr-composable_kernel-2059
+- pr-composable_kernel-1862
+- pr-FlyDSL-340
+- pr-composable_kernel-882
+- pr-composable_kernel-3237
+- pr-composable_kernel-2152
 ---
-
 # Stream-K — Load-Balanced GEMM Tile Scheduling for CUs/XCDs
 
 ## The problem: quantization tail on a chiplet GPU

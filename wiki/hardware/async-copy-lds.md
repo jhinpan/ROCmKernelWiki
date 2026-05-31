@@ -1,6 +1,6 @@
 ---
 id: hw-async-copy-lds
-title: "Direct-to-LDS Async Copy — buffer_load…lds / global_load_lds"
+title: Direct-to-LDS Async Copy — buffer_load…lds / global_load_lds
 type: hardware
 architectures:
 - gfx942
@@ -35,20 +35,29 @@ sources:
 - doc-cdna4-isa
 - doc-llvm-amdgpu
 - ref-gcnasm
-cross_vendor_note: >
-  This is AMD's closest analog to NVIDIA's cp.async (Ampere) — an HBM→shared-memory
-  copy that bypasses the register file. There is no TMA/mbarrier equivalent on
-  CDNA; completion is gated by the generic VMCNT counter, not a dedicated barrier
-  object.
-aliases:
-- "direct-to-LDS"
-- "direct to LDS"
-- "async copy"
-- "global_load_lds"
-- "buffer_load_dword lds"
-- "cp.async analog"
----
+cross_vendor_note: 'This is AMD''s closest analog to NVIDIA''s cp.async (Ampere) —
+  an HBM→shared-memory copy that bypasses the register file. There is no TMA/mbarrier
+  equivalent on CDNA; completion is gated by the generic VMCNT counter, not a dedicated
+  barrier object.
 
+  '
+aliases:
+- direct-to-LDS
+- direct to LDS
+- async copy
+- global_load_lds
+- buffer_load_dword lds
+- cp.async analog
+implemented_by:
+- pr-composable_kernel-2949
+- pr-composable_kernel-2573
+- pr-composable_kernel-2425
+- pr-FlyDSL-139
+- pr-aiter-2394
+- pr-composable_kernel-2984
+- pr-composable_kernel-2545
+- pr-aiter-3336
+---
 # Direct-to-LDS Async Copy — `buffer_load…lds` / `global_load_lds`
 
 ## Overview

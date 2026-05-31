@@ -1,6 +1,6 @@
 ---
 id: technique-lds-double-buffering
-title: "LDS Double / Multi-Buffering (Overlapping HBM Loads with MFMA)"
+title: LDS Double / Multi-Buffering (Overlapping HBM Loads with MFMA)
 type: technique
 architectures:
 - gfx942
@@ -43,8 +43,16 @@ sources:
 - hw-s-waitcnt
 - blog-gemm-optimization
 - ref-gcnasm
+implemented_by:
+- pr-FlyDSL-346
+- pr-Tensile-1521
+- pr-composable_kernel-3098
+- pr-composable_kernel-3237
+- pr-aiter-3072
+- pr-composable_kernel-3401
+- pr-composable_kernel-2836
+- pr-composable_kernel-2528
 ---
-
 # LDS Double / Multi-Buffering
 
 ## Overview

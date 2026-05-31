@@ -1,6 +1,6 @@
 ---
 id: migration-wmma-vs-mfma
-title: "WMMA (RDNA4) vs MFMA (CDNA3/4): porting matrix-core kernels"
+title: 'WMMA (RDNA4) vs MFMA (CDNA3/4): porting matrix-core kernels'
 type: migration
 architectures:
 - gfx942
@@ -16,15 +16,16 @@ tags:
 - rdna
 - cdna
 confidence: source-reported
-cross_vendor_note: >
-  AMD exposes two distinct matrix-core ISAs — WMMA on RDNA (consumer/workstation
-  gfx11xx/gfx12xx) and MFMA on CDNA (datacenter gfx9xx). This mirrors NVIDIA's
-  split between the `mma.sync`/`nvcuda::wmma` fragment path on consumer GeForce
-  and the `wgmma`/`tcgen05` warp-group path on datacenter Hopper/Blackwell.
-  AMD's WMMA is the closest analog to NVIDIA's `nvcuda::wmma` (warp/wave-level
-  16×16×16 fragments); AMD's MFMA is the closest analog to the larger
-  tensor-core `mma`/`wgmma` ops. The portable abstraction across both AMD
-  families is rocWMMA, analogous in spirit to CUTLASS/`nvcuda::wmma`.
+cross_vendor_note: 'AMD exposes two distinct matrix-core ISAs — WMMA on RDNA (consumer/workstation
+  gfx11xx/gfx12xx) and MFMA on CDNA (datacenter gfx9xx). This mirrors NVIDIA''s split
+  between the `mma.sync`/`nvcuda::wmma` fragment path on consumer GeForce and the
+  `wgmma`/`tcgen05` warp-group path on datacenter Hopper/Blackwell. AMD''s WMMA is
+  the closest analog to NVIDIA''s `nvcuda::wmma` (warp/wave-level 16×16×16 fragments);
+  AMD''s MFMA is the closest analog to the larger tensor-core `mma`/`wgmma` ops. The
+  portable abstraction across both AMD families is rocWMMA, analogous in spirit to
+  CUTLASS/`nvcuda::wmma`.
+
+  '
 related:
 - hw-mfma
 - hw-wmma
@@ -37,8 +38,16 @@ sources:
 - blog-amd-matrix-cores
 - doc-cdna3-isa
 - ref-matrix-calculator
+implemented_by:
+- pr-composable_kernel-2704
+- pr-aiter-3236
+- pr-composable_kernel-2528
+- pr-composable_kernel-2466
+- pr-triton-358
+- pr-composable_kernel-3479
+- pr-composable_kernel-2110
+- pr-FlyDSL-250
 ---
-
 # WMMA (RDNA4) vs MFMA (CDNA3/4): porting matrix-core kernels
 
 ## Why there are two instruction families

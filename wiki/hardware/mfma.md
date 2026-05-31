@@ -1,7 +1,10 @@
 ---
 id: hw-mfma
-title: "MFMA — AMD Matrix Core Instructions (CDNA)"
+title: MFMA — AMD Matrix Core Instructions (CDNA)
 type: hardware
+version_sensitive:
+- vs-fp8-fnuz-gfx942
+- vs-fp8-ocp-gfx950
 architectures:
 - gfx942
 - gfx950
@@ -33,11 +36,18 @@ sources:
 - ref-matrix-calculator
 aliases:
 - MFMA
-- "matrix cores"
-- "matrix fused multiply add"
+- matrix cores
+- matrix fused multiply add
 - xdlops
+implemented_by:
+- pr-composable_kernel-2110
+- pr-triton-368
+- pr-triton-358
+- pr-composable_kernel-2202
+- pr-composable_kernel-1902
+- pr-Tensile-827
+- pr-composable_kernel-2199
 ---
-
 # MFMA — AMD Matrix Core Instructions (CDNA)
 
 ## Overview

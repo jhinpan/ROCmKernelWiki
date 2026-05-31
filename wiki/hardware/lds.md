@@ -1,7 +1,9 @@
 ---
 id: hw-lds
-title: "LDS — Local Data Share (CDNA3/CDNA4 Shared Memory)"
+title: LDS — Local Data Share (CDNA3/CDNA4 Shared Memory)
 type: hardware
+version_sensitive:
+- vs-lds-size-gfx950
 architectures:
 - gfx942
 - gfx950
@@ -28,12 +30,13 @@ sources:
 - doc-llvm-amdgpu
 aliases:
 - LDS
-- "local data share"
-- "shared memory"
-- "groupshared"
+- local data share
+- shared memory
+- groupshared
 - __shared__
+implemented_by:
+- pr-FlyDSL-191
 ---
-
 # LDS — Local Data Share (CDNA3/CDNA4 Shared Memory)
 
 ## Overview

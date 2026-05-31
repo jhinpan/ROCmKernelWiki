@@ -13705,6 +13705,7 @@
 - [technique-bank-conflict-avoidance](wiki/techniques/bank-conflict-avoidance.md) — LDS Bank-Conflict Avoidance (padding, swizzle, ds_read2)  `[wiki-technique]`
 - [technique-buffer-oob-guard](wiki/techniques/buffer-oob-guard.md) — Branchless Boundary Handling with Buffer OOB Guards  `[wiki-technique]`
 - [technique-fine-grained-quantization](wiki/techniques/fine-grained-quantization.md) — Fine-Grained FP8 Quantization & Block Scaling  `[wiki-technique]`
+- [technique-hip-graphs](wiki/techniques/hip-graphs.md) — HIP Graphs — Launch-Overhead Amortization for Decode & Many-Small-Kernel Loops  `[wiki-technique]`
 - [technique-kernel-fusion](wiki/techniques/kernel-fusion.md) — Kernel Fusion — Epilogues and Adjacent-Op Merging  `[wiki-technique]`
 - [technique-lds-double-buffering](wiki/techniques/lds-double-buffering.md) — LDS Double / Multi-Buffering (Overlapping HBM Loads with MFMA)  `[wiki-technique]`
 - [technique-lds-swizzling](wiki/techniques/lds-swizzling.md) — LDS Swizzling — Conflict-Free A/B Tile Staging for MFMA  `[wiki-technique]`
@@ -13712,6 +13713,7 @@
 - [technique-occupancy-tuning](wiki/techniques/occupancy-tuning.md) — Occupancy Tuning — Waves per SIMD vs ILP on CDNA  `[wiki-technique]`
 - [technique-persistent-kernel](wiki/techniques/persistent-kernel.md) — Persistent Kernels — Grid-Stride Work Loops for Launch & L2 Reuse  `[wiki-technique]`
 - [technique-preshuffle-layout](wiki/techniques/preshuffle-layout.md) — Pre-shuffle Weight Layout for MFMA  `[wiki-technique]`
+- [technique-profiling-workflow](wiki/techniques/profiling-workflow.md) — Profiling & Roofline Workflow on ROCm (rocprof / Omniperf)  `[wiki-technique]`
 - [technique-split-k](wiki/techniques/split-k.md) — Split-K / GlobalSplitU — Partial-Sum Reduction GEMM for Small M·N, Large K  `[wiki-technique]`
 - [technique-stream-k](wiki/techniques/stream-k.md) — Stream-K — Load-Balanced GEMM Tile Scheduling for CUs/XCDs  `[wiki-technique]`
 - [technique-vectorized-loads](wiki/techniques/vectorized-loads.md) — Vectorized & Non-Temporal Loads (128-bit) to Saturate HBM  `[wiki-technique]`

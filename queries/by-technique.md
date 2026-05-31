@@ -7,49 +7,5382 @@ Every page (wiki + PR sources) that uses each optimization technique.
 
 - [kernel-vector-add-asm](wiki/kernels/vector-add-asm.md) — Persistent Vector Add in GCN Assembly (async direct-to-LDS, double-buffered)  `[wiki-kernel]`
 
+## bank-conflict-avoidance
+
+- [pr-FlyDSL-191](sources/prs/FlyDSL/PR-191.md) — Refine code  `[source-pr]`
+- [pr-FlyDSL-225](sources/prs/FlyDSL/PR-225.md) — Add FMHA kernel  `[source-pr]`
+- [pr-FlyDSL-250](sources/prs/FlyDSL/PR-250.md) — 【2/N】add support wmma kernels for RDNA4(GFX1201)  `[source-pr]`
+- [pr-FlyDSL-270](sources/prs/FlyDSL/PR-270.md) — Refine kernel code  `[source-pr]`
+- [pr-FlyDSL-340](sources/prs/FlyDSL/PR-340.md) — [gfx1250] optimize FP4 GEMM for large tile 256x256  `[source-pr]`
+- [pr-Tensile-1015](sources/prs/Tensile/PR-1015.md) — modify logic of ldsPad=-1  `[source-pr]`
+- [pr-Tensile-1529](sources/prs/Tensile/PR-1529.md) — merge staging 3c17e5a into master on GO from CQE  `[source-pr]`
+- [pr-Tensile-206](sources/prs/Tensile/PR-206.md) — add Exact size 1024,1024,1,1024  `[source-pr]`
+- [pr-Tensile-291](sources/prs/Tensile/PR-291.md) — Fix hpa beta  `[source-pr]`
+- [pr-Tensile-293](sources/prs/Tensile/PR-293.md) — Fix half gsu  `[source-pr]`
+- [pr-Tensile-299](sources/prs/Tensile/PR-299.md) — merge with develop branch as of 2018-07-29  `[source-pr]`
+- [pr-composable_kernel-190](sources/prs/composable_kernel/PR-190.md) — [Perf][Bwd-weights]Lds re-layout to avoid ds read/write bank conflict and balance ds ops with address calculations  `[source-pr]`
+- [pr-composable_kernel-2007](sources/prs/composable_kernel/PR-2007.md) — Fix A/B lds transform  `[source-pr]`
+- [pr-composable_kernel-2961](sources/prs/composable_kernel/PR-2961.md) — Gridwise gemm conv v3 force padded layout on gfx950  `[source-pr]`
+- [pr-composable_kernel-3038](sources/prs/composable_kernel/PR-3038.md) — Add CK Tile Tutorials Folder with GEMM and COPY Kernel  `[source-pr]`
+- [pr-composable_kernel-3130](sources/prs/composable_kernel/PR-3130.md) — [CK-tile] unhardcode the number of LDS banks from universal gemm policy  `[source-pr]`
+- [pr-composable_kernel-3592](sources/prs/composable_kernel/PR-3592.md) — [CK_BUILDER] Add reflection for wmma and bwd weight instances to ck builder reflection  `[source-pr]`
+- [pr-composable_kernel-3627](sources/prs/composable_kernel/PR-3627.md) — Add ck-rocprof: GPU profiling tool for rocprof-compute  `[source-pr]`
+- [pr-rocBLAS-207](sources/prs/rocBLAS/PR-207.md) — add MIOpen sizes for TN with k high multiple of 2  `[source-pr]`
+- [pr-triton-285](sources/prs/triton/PR-285.md) — [MFMA] Swizzle k-major dot operands  `[source-pr]`
+- [pr-triton-340](sources/prs/triton/PR-340.md) — [FA fwd D=128] Reduce LDS usage in epilogue  `[source-pr]`
+- [pr-triton-635](sources/prs/triton/PR-635.md) — Move utility tools from triton-mlir to main_perf branch  `[source-pr]`
+- [pr-triton-775](sources/prs/triton/PR-775.md) — plot_layout.py Refactoring  `[source-pr]`
+- [pr-triton-846](sources/prs/triton/PR-846.md) — [Cherry-Pick] gfx950 improvements and bug fixes  `[source-pr]`
+
 ## buffer-oob-guard
 
+- [pr-FlyDSL-131](sources/prs/FlyDSL/PR-131.md) — Fix test coverage  `[source-pr]`
+- [pr-FlyDSL-197](sources/prs/FlyDSL/PR-197.md) — clean codes and wrap numerics in bufferops  `[source-pr]`
+- [pr-FlyDSL-359](sources/prs/FlyDSL/PR-359.md) — [Refactor] Convert norm/softmax kernels from raw buffer_ops to layout…  `[source-pr]`
+- [pr-FlyDSL-554](sources/prs/FlyDSL/PR-554.md) — [Feat] Add TensorAdaptor.mark_static for shape-aware JIT cache keys  `[source-pr]`
+- [pr-FlyDSL-59](sources/prs/FlyDSL/PR-59.md) — fix dynamic m  `[source-pr]`
+- [pr-Tensile-1116](sources/prs/Tensile/PR-1116.md) — New BoundsCheck design: guard page  `[source-pr]`
+- [pr-Tensile-1133](sources/prs/Tensile/PR-1133.md) — Fix bug of CopyTensor function  `[source-pr]`
+- [pr-Tensile-1288](sources/prs/Tensile/PR-1288.md) — rename replacement kernels for MFMA Int8 GEMM  `[source-pr]`
+- [pr-Tensile-1521](sources/prs/Tensile/PR-1521.md) — Support Tensile for gfx11 series platform  `[source-pr]`
+- [pr-Tensile-1604](sources/prs/Tensile/PR-1604.md) — Fixed issues with large array sizes  `[source-pr]`
+- [pr-Tensile-381](sources/prs/Tensile/PR-381.md) — Suppress special loop iter  `[source-pr]`
+- [pr-Tensile-592](sources/prs/Tensile/PR-592.md) — Support float complex gemm by hip solutions  `[source-pr]`
+- [pr-Tensile-840](sources/prs/Tensile/PR-840.md) — Fix page fault in host tests.  `[source-pr]`
+- [pr-aiter-1048](sources/prs/aiter/PR-1048.md) — [MI35x]Gating bf16gemm  `[source-pr]`
+- [pr-aiter-1439](sources/prs/aiter/PR-1439.md) — fix_prebuiild_asm  `[source-pr]`
+- [pr-aiter-1490](sources/prs/aiter/PR-1490.md) — Enable bf16 asm bpreshuffle tune  `[source-pr]`
+- [pr-aiter-1514](sources/prs/aiter/PR-1514.md) — bf16gemm_asm_tune  `[source-pr]`
+- [pr-aiter-1700](sources/prs/aiter/PR-1700.md) — bf16_gemm_clean_in_kl  `[source-pr]`
+- [pr-aiter-2048](sources/prs/aiter/PR-2048.md) — [Gluon] Unified Attention 3D development for gfx12  `[source-pr]`
+- [pr-aiter-2136](sources/prs/aiter/PR-2136.md) — add mhc_pre hip kernel (mhc_pre_gemm_sqrsum, mhc_pre_big_fuse)  `[source-pr]`
+- [pr-aiter-2328](sources/prs/aiter/PR-2328.md) — Fix OOB GU scales access in 64x128 kernels  `[source-pr]`
+- [pr-aiter-2329](sources/prs/aiter/PR-2329.md) — feat(custom_all_reduce): support GPT-OSS-120B hidden_size=2880 in fus…  `[source-pr]`
+- [pr-aiter-2373](sources/prs/aiter/PR-2373.md) — [FIX] fix igemm 4GB oob bug  `[source-pr]`
+- [pr-aiter-2638](sources/prs/aiter/PR-2638.md) — fix(car): craph capture err  `[source-pr]`
+- [pr-aiter-2900](sources/prs/aiter/PR-2900.md) — Fix: correct mxfp4  for K not divisible by 256  `[source-pr]`
+- [pr-aiter-3005](sources/prs/aiter/PR-3005.md) — [Silo] Bulk merge: kernel fixes and features (SplitK, MoE fixes, Qwen3-Next, pa_mqa OOB)  `[source-pr]`
+- [pr-aiter-3032](sources/prs/aiter/PR-3032.md) — fix(batch_prefill): OOB page table read fix + regression tests (AICK-1171)  `[source-pr]`
+- [pr-aiter-3033](sources/prs/aiter/PR-3033.md) — Fix sqrsum store race condition in mhc_pre_gemm_sqrsum_kernel  `[source-pr]`
+- [pr-aiter-3078](sources/prs/aiter/PR-3078.md) — fix: fix out-of-bounds issue in rope under concurrent scenarios，fix interleaved fused_rope_rms_2way cos/sin out-of-bounds access  `[source-pr]`
+- [pr-aiter-3117](sources/prs/aiter/PR-3117.md) — perf(flydsl): MXFP4 fused-MoE stage2 optimization for EP prefill  `[source-pr]`
+- [pr-aiter-3148](sources/prs/aiter/PR-3148.md) — Rchamber/optimised dynamic per group scaled quant v2  `[source-pr]`
+- [pr-aiter-3235](sources/prs/aiter/PR-3235.md) — Guard sparse indexer padding and mapped tokens  `[source-pr]`
+- [pr-composable_kernel-1453](sources/prs/composable_kernel/PR-1453.md) — [GEMM] gemm_universal related optimization  `[source-pr]`
+- [pr-composable_kernel-1649](sources/prs/composable_kernel/PR-1649.md) — [CK_TILE] Fix fmha fwd splitkv block table read out-of-bound  `[source-pr]`
+- [pr-composable_kernel-1941](sources/prs/composable_kernel/PR-1941.md) — Ck tile/complete k prefetch  `[source-pr]`
+- [pr-composable_kernel-1972](sources/prs/composable_kernel/PR-1972.md) — ck_moe: fix useless code and remove usless oob  `[source-pr]`
+- [pr-composable_kernel-1979](sources/prs/composable_kernel/PR-1979.md) — Ck moe hot fix  `[source-pr]`
+- [pr-composable_kernel-2425](sources/prs/composable_kernel/PR-2425.md) — Enable Async Copy for MI355  `[source-pr]`
+- [pr-composable_kernel-2511](sources/prs/composable_kernel/PR-2511.md) — FA bwd asm oob nan issue fix  `[source-pr]`
+- [pr-composable_kernel-2638](sources/prs/composable_kernel/PR-2638.md) — Mirchen/gemm blockscale wp segfault fix  `[source-pr]`
+- [pr-composable_kernel-2710](sources/prs/composable_kernel/PR-2710.md) — Jimniu/ ck tile gemm stride validation  `[source-pr]`
+- [pr-composable_kernel-2715](sources/prs/composable_kernel/PR-2715.md) — [CK_TILE] FMHA avoid unnecessary vmcnt0  `[source-pr]`
+- [pr-composable_kernel-284](sources/prs/composable_kernel/PR-284.md) — Standalone softmax kernel  `[source-pr]`
+- [pr-composable_kernel-2905](sources/prs/composable_kernel/PR-2905.md) — [CK_TILE] Share partition index across threads and specify offset in load_tile()/async_load_tile()/load_tile_transpose()  `[source-pr]`
+- [pr-composable_kernel-3094](sources/prs/composable_kernel/PR-3094.md) — Remove 'basic' and universal GEMM tests, and incorporate their test cases into the GEMM pipeline tests  `[source-pr]`
+- [pr-composable_kernel-3208](sources/prs/composable_kernel/PR-3208.md) — [CK_TILE] Add Flatmm MX FP8  `[source-pr]`
+- [pr-composable_kernel-3236](sources/prs/composable_kernel/PR-3236.md) — Add validity checks for MoE FlatMM scatter and enable bf16 hardware atomic-add  `[source-pr]`
+- [pr-composable_kernel-3342](sources/prs/composable_kernel/PR-3342.md) — Merge some updates for ck_tile headers  `[source-pr]`
+- [pr-composable_kernel-3373](sources/prs/composable_kernel/PR-3373.md) — fix a16w4 moe bugs  `[source-pr]`
+- [pr-composable_kernel-3389](sources/prs/composable_kernel/PR-3389.md) — [CK_TILE] support split-k a16w4 gemm1  `[source-pr]`
+- [pr-composable_kernel-3512](sources/prs/composable_kernel/PR-3512.md) — [CK TILE] Refactor function amd_buffer_load_invalid_element_return_zero  `[source-pr]`
+- [pr-composable_kernel-3520](sources/prs/composable_kernel/PR-3520.md) — [CK-Tile] add persistent async input scheduler parameters to kernel device-side and host-side args  `[source-pr]`
+- [pr-composable_kernel-3537](sources/prs/composable_kernel/PR-3537.md) — Padding support for wave transfer  `[source-pr]`
+- [pr-composable_kernel-3578](sources/prs/composable_kernel/PR-3578.md) — Multi AB support for wave transfer  `[source-pr]`
+- [pr-composable_kernel-395](sources/prs/composable_kernel/PR-395.md) — Fused attention instances & padding tests  `[source-pr]`
+- [pr-flash-attention-98](sources/prs/flash-attention/PR-98.md) — [CK_TILE] Fix fmha fwd splitkv block table read out-of-bound  `[source-pr]`
+- [pr-sglang-24587](sources/prs/sglang/PR-24587.md) — [AMD][aiter] Fix cuda_graph_kv_indices OOB under page_size>1  `[source-pr]`
+- [pr-sglang-25898](sources/prs/sglang/PR-25898.md) — [AMD] Dsv4/pr1 fix run time issue  `[source-pr]`
+- [pr-triton-614](sources/prs/triton/PR-614.md) — Copy *tune_gemm* from `triton-mlir` branch to `main_perf` branch  `[source-pr]`
+- [pr-triton-629](sources/prs/triton/PR-629.md) — Clean up *tune_gemm* script from `main_perf` branch  `[source-pr]`
+- [pr-vllm-37329](sources/prs/vllm/PR-37329.md) — [Bugfix] Fix ConchLinearKernel channelwise quantization (group_size=-1)  `[source-pr]`
+- [pr-vllm-37424](sources/prs/vllm/PR-37424.md) — [Responses API] Add kv_transfer_params for PD disaggregation  `[source-pr]`
+- [pr-vllm-39225](sources/prs/vllm/PR-39225.md) — [Bug] Fix rocm sparse attn indexer issue  `[source-pr]`
 - [kernel-vector-add-asm](wiki/kernels/vector-add-asm.md) — Persistent Vector Add in GCN Assembly (async direct-to-LDS, double-buffered)  `[wiki-kernel]`
 
 ## direct-to-lds
 
 - [kernel-vector-add-asm](wiki/kernels/vector-add-asm.md) — Persistent Vector Add in GCN Assembly (async direct-to-LDS, double-buffered)  `[wiki-kernel]`
 
+## epilogue-fusion
+
+- [pr-FlyDSL-143](sources/prs/FlyDSL/PR-143.md) — W4a16 bf16 fp8 bf16 moe  `[source-pr]`
+- [pr-FlyDSL-145](sources/prs/FlyDSL/PR-145.md) — Pre v0.1 gemm  `[source-pr]`
+- [pr-FlyDSL-158](sources/prs/FlyDSL/PR-158.md) — use abs import for correct importing kernels from wheel  `[source-pr]`
+- [pr-FlyDSL-191](sources/prs/FlyDSL/PR-191.md) — Refine code  `[source-pr]`
+- [pr-FlyDSL-197](sources/prs/FlyDSL/PR-197.md) — clean codes and wrap numerics in bufferops  `[source-pr]`
+- [pr-FlyDSL-250](sources/prs/FlyDSL/PR-250.md) — 【2/N】add support wmma kernels for RDNA4(GFX1201)  `[source-pr]`
+- [pr-FlyDSL-270](sources/prs/FlyDSL/PR-270.md) — Refine kernel code  `[source-pr]`
+- [pr-FlyDSL-331](sources/prs/FlyDSL/PR-331.md) — [gfx1250] Unified MXFP8/MXFP4/A8W4 GEMM kernel  `[source-pr]`
+- [pr-FlyDSL-340](sources/prs/FlyDSL/PR-340.md) — [gfx1250] optimize FP4 GEMM for large tile 256x256  `[source-pr]`
+- [pr-FlyDSL-37](sources/prs/FlyDSL/PR-37.md) — Dev/int4 moe  `[source-pr]`
+- [pr-FlyDSL-388](sources/prs/FlyDSL/PR-388.md) — [Perf] Port mixed_moe kernel optimizations for stage1/stage2  `[source-pr]`
+- [pr-FlyDSL-402](sources/prs/FlyDSL/PR-402.md) — Gfx1250 moe  `[source-pr]`
+- [pr-FlyDSL-404](sources/prs/FlyDSL/PR-404.md) — Add fused epilogue support to preshuffle GEMM: bias + ReLU/SiLU/GeLU  `[source-pr]`
+- [pr-FlyDSL-447](sources/prs/FlyDSL/PR-447.md) — Port kernels internal types except moe  `[source-pr]`
+- [pr-FlyDSL-465](sources/prs/FlyDSL/PR-465.md) — some optimization about smoothquant moe  `[source-pr]`
+- [pr-FlyDSL-483](sources/prs/FlyDSL/PR-483.md) — [gfx1250] MoE 2-stage GEMM: MXScale rework + TDM K-loop hoist + build  `[source-pr]`
+- [pr-FlyDSL-554](sources/prs/FlyDSL/PR-554.md) — [Feat] Add TensorAdaptor.mark_static for shape-aware JIT cache keys  `[source-pr]`
+- [pr-FlyDSL-579](sources/prs/FlyDSL/PR-579.md) — [Enh] Port AITER FlyDSL kernels  `[source-pr]`
+- [pr-FlyDSL-60](sources/prs/FlyDSL/PR-60.md) — Dev/fp16 gemm  `[source-pr]`
+- [pr-FlyDSL-67](sources/prs/FlyDSL/PR-67.md) — Moe dynamic all  `[source-pr]`
+- [pr-FlyDSL-77](sources/prs/FlyDSL/PR-77.md) — [MoE] Optimize  GEMM Stage2 with vec8 stores for reduce-based epilogue  `[source-pr]`
+- [pr-FlyDSL-79](sources/prs/FlyDSL/PR-79.md) — [FP4] preshuffle gemm a8w4&a4w4 moe gemm a8w4  `[source-pr]`
+- [pr-FlyDSL-91](sources/prs/FlyDSL/PR-91.md) — fix lds bug  `[source-pr]`
+- [pr-aiter-1786](sources/prs/aiter/PR-1786.md) — maybe fix build  `[source-pr]`
+- [pr-aiter-2113](sources/prs/aiter/PR-2113.md) — [FlyDSL] import flydsl implement of a4w4 moe  `[source-pr]`
+- [pr-aiter-2329](sources/prs/aiter/PR-2329.md) — feat(custom_all_reduce): support GPT-OSS-120B hidden_size=2880 in fus…  `[source-pr]`
+- [pr-aiter-2332](sources/prs/aiter/PR-2332.md) — [Gluon][gfx1250] Gemm MXFP4 preshuffled  `[source-pr]`
+- [pr-aiter-2390](sources/prs/aiter/PR-2390.md) — [FlyDSL] Add FlyDSL MoE a4w4 support and update kernels  `[source-pr]`
+- [pr-aiter-2546](sources/prs/aiter/PR-2546.md) — So/a8w8 bpreshuffle flydsl  `[source-pr]`
+- [pr-aiter-2726](sources/prs/aiter/PR-2726.md) — [FlyDSL MOE] update a8w4 moe  `[source-pr]`
+- [pr-aiter-2811](sources/prs/aiter/PR-2811.md) — [CK_TILE] Fix bpreshuffle compile failure due to stale CShuffleEpilogueProblem arg  `[source-pr]`
+- [pr-aiter-2823](sources/prs/aiter/PR-2823.md) — Add fused AR + RMSNorm + per-group FP8 quant: optional bf16 side-output  `[source-pr]`
+- [pr-aiter-2856](sources/prs/aiter/PR-2856.md) — Dev/aot fix  `[source-pr]`
+- [pr-aiter-2972](sources/prs/aiter/PR-2972.md) — add swiglu a4w4 moe path for gpt-oss model  `[source-pr]`
+- [pr-aiter-3153](sources/prs/aiter/PR-3153.md) — [MoE] Align FlyDSL MXFP4 rounding  `[source-pr]`
+- [pr-aiter-3231](sources/prs/aiter/PR-3231.md) — [TRITON] Use tl.dot(..., acc=...) accumulator form  `[source-pr]`
+- [pr-aiter-3293](sources/prs/aiter/PR-3293.md) — Moe gfx1250 optimizations  `[source-pr]`
+- [pr-aiter-3317](sources/prs/aiter/PR-3317.md) — [GLUON] Moe a8w4 optimizations  `[source-pr]`
+- [pr-aiter-3318](sources/prs/aiter/PR-3318.md) — Revert '[Gluon][gfx1250] Gemm MXFP4 preshuffled'  `[source-pr]`
+- [pr-composable_kernel-1269](sources/prs/composable_kernel/PR-1269.md) — [CK_TILE] support alibi  `[source-pr]`
+- [pr-composable_kernel-1295](sources/prs/composable_kernel/PR-1295.md) — [CK_TILE] support group from cmdline  `[source-pr]`
+- [pr-composable_kernel-1338](sources/prs/composable_kernel/PR-1338.md) — [CK_TILE] fmha forward split-kv + combine kernels  `[source-pr]`
+- [pr-composable_kernel-1397](sources/prs/composable_kernel/PR-1397.md) — [CK_TILE] FA bwd kernels optimization  `[source-pr]`
+- [pr-composable_kernel-1484](sources/prs/composable_kernel/PR-1484.md) — Add gemm universal bf16 instances  `[source-pr]`
+- [pr-composable_kernel-1488](sources/prs/composable_kernel/PR-1488.md) — Ck tile gemm example  `[source-pr]`
+- [pr-composable_kernel-1535](sources/prs/composable_kernel/PR-1535.md) — Ck tile gemm cshuffle & CK Tile GEMM restructure  `[source-pr]`
+- [pr-composable_kernel-1558](sources/prs/composable_kernel/PR-1558.md) — [CK-Tile] Universal gemm memory bound pipeline  `[source-pr]`
+- [pr-composable_kernel-1574](sources/prs/composable_kernel/PR-1574.md) — Rebase the PR #1520 to ROCm repo.  `[source-pr]`
+- [pr-composable_kernel-1588](sources/prs/composable_kernel/PR-1588.md) — [CK_TILE] More fmha splitkv optimizations  `[source-pr]`
+- [pr-composable_kernel-1604](sources/prs/composable_kernel/PR-1604.md) — [CK_TILE] layernorm support fused-quant/fused-add  `[source-pr]`
+- [pr-composable_kernel-1608](sources/prs/composable_kernel/PR-1608.md) — [CK_TILE] Add fmha fwd headdim96 support  `[source-pr]`
+- [pr-composable_kernel-1615](sources/prs/composable_kernel/PR-1615.md) — Ck tile batched gemm example  `[source-pr]`
+- [pr-composable_kernel-1623](sources/prs/composable_kernel/PR-1623.md) — [CK_TILE] layernorm have more accurate residual  `[source-pr]`
+- [pr-composable_kernel-1651](sources/prs/composable_kernel/PR-1651.md) — [CK Tile] Improve the Layout, Padding, and Alignment features of CK Tile GEMM  `[source-pr]`
+- [pr-composable_kernel-1705](sources/prs/composable_kernel/PR-1705.md) — [CK_TILE] Add fmha fwd N-Warp S-Shuffle pipeline (fmha fwd splitkv pipeline variant)  `[source-pr]`
+- [pr-composable_kernel-1713](sources/prs/composable_kernel/PR-1713.md) — Ck tile grouped GEMM example  `[source-pr]`
+- [pr-composable_kernel-1724](sources/prs/composable_kernel/PR-1724.md) — [CK TILE] GEMM and Batched GEMM SplitK support  `[source-pr]`
+- [pr-composable_kernel-1730](sources/prs/composable_kernel/PR-1730.md) — [CK TILE] Refactor GemmKernel to be reused by other GEMM related operators  `[source-pr]`
+- [pr-composable_kernel-1756](sources/prs/composable_kernel/PR-1756.md) — CK-Tile Grouped GEMM refactor and post PR fixes  `[source-pr]`
+- [pr-composable_kernel-1767](sources/prs/composable_kernel/PR-1767.md) — Promote latest CK develop  `[source-pr]`
+- [pr-composable_kernel-1770](sources/prs/composable_kernel/PR-1770.md) — Promote develop into amd-develop  `[source-pr]`
+- [pr-composable_kernel-1776](sources/prs/composable_kernel/PR-1776.md) — CK Tile GEMM CICD fixed & register block method refactor  `[source-pr]`
+- [pr-composable_kernel-1778](sources/prs/composable_kernel/PR-1778.md) — Remove using partitioner for all fmha kernels  `[source-pr]`
+- [pr-composable_kernel-1784](sources/prs/composable_kernel/PR-1784.md) — Ck tile/layernorm:  implement naive reduce, opt performance  `[source-pr]`
+- [pr-composable_kernel-1789](sources/prs/composable_kernel/PR-1789.md) — [CK_TILE] fmha fwd splitkv optimization for decode (seqlen_q=1)  `[source-pr]`
+- [pr-composable_kernel-1791](sources/prs/composable_kernel/PR-1791.md) — [CK_TILE] Add GetName for GEMM kernels  `[source-pr]`
+- [pr-composable_kernel-1802](sources/prs/composable_kernel/PR-1802.md) — [CK_TILE] Add Various Fusion Functions to RMSNorm  `[source-pr]`
+- [pr-composable_kernel-1835](sources/prs/composable_kernel/PR-1835.md) — [CK-Tile] Enable vectorized reads on all layouts & improve perf.  `[source-pr]`
+- [pr-composable_kernel-1842](sources/prs/composable_kernel/PR-1842.md) — [CK TILE] Implement cschuflle algorithm  `[source-pr]`
+- [pr-composable_kernel-1843](sources/prs/composable_kernel/PR-1843.md) — [CK Tile] Spatially local GEMM tile partitioner.  `[source-pr]`
+- [pr-composable_kernel-1845](sources/prs/composable_kernel/PR-1845.md) — Support for dtypes (fp8, bf8, bf16 and fp16) for the ck_tile/03_gemm example.  `[source-pr]`
+- [pr-composable_kernel-1853](sources/prs/composable_kernel/PR-1853.md) — CK Tile GEMM Compute V2 (2 LDS Ping Pong mechanism)  `[source-pr]`
+- [pr-composable_kernel-1861](sources/prs/composable_kernel/PR-1861.md) — [CK_TILE] Improve RMS/Layer Normalization 2 Pass Pipeline Performance  `[source-pr]`
+- [pr-composable_kernel-1907](sources/prs/composable_kernel/PR-1907.md) — [CK TILE] Gemm pk_int4_t permute B  `[source-pr]`
+- [pr-composable_kernel-1919](sources/prs/composable_kernel/PR-1919.md) — [CK_TILE] Switch to universal gemm for batched and grouped gemms  `[source-pr]`
+- [pr-composable_kernel-1923](sources/prs/composable_kernel/PR-1923.md) — MIGraphX hipRTC fix  `[source-pr]`
+- [pr-composable_kernel-2001](sources/prs/composable_kernel/PR-2001.md) — [CK_TILE] Remove scratch usage from universal gemm  `[source-pr]`
+- [pr-composable_kernel-2020](sources/prs/composable_kernel/PR-2020.md) — Add default arguments for prologue and epilogue  `[source-pr]`
+- [pr-composable_kernel-2079](sources/prs/composable_kernel/PR-2079.md) — Solve the Static Encoding Pattern compile error when the tile size is too small  `[source-pr]`
+- [pr-composable_kernel-2089](sources/prs/composable_kernel/PR-2089.md) — [flatmm] implement basic fp16 flatmm  `[source-pr]`
+- [pr-composable_kernel-2108](sources/prs/composable_kernel/PR-2108.md) — [CK_TILE] Allow specifying logits soft-caping through fMHA forwawrd APIs  `[source-pr]`
+- [pr-composable_kernel-2125](sources/prs/composable_kernel/PR-2125.md) — Support for MFMA_16x16x128 for fp8/bf8  `[source-pr]`
+- [pr-composable_kernel-2138](sources/prs/composable_kernel/PR-2138.md) — [CK Tile] Fix the numerical issue for MFMA 16x16x128 for FP8  `[source-pr]`
+- [pr-composable_kernel-2146](sources/prs/composable_kernel/PR-2146.md) — [CK_TILE] Grouped GEMM tile loop  `[source-pr]`
+- [pr-composable_kernel-2163](sources/prs/composable_kernel/PR-2163.md) — [CK_TILE] Add logits soft-capping & customization support to the FMHA forward kernel/pipelines  `[source-pr]`
+- [pr-composable_kernel-2167](sources/prs/composable_kernel/PR-2167.md) — [CK_TILE] fix for default epilogue  `[source-pr]`
+- [pr-composable_kernel-2168](sources/prs/composable_kernel/PR-2168.md) — Flatmm merge  `[source-pr]`
+- [pr-composable_kernel-2185](sources/prs/composable_kernel/PR-2185.md) — add CShuffleM/NXdlPerWavePerShuffle in cshuffle_epilogue  `[source-pr]`
+- [pr-composable_kernel-2188](sources/prs/composable_kernel/PR-2188.md) — [CK TILE] Grouped Convolution Forward Kernel  `[source-pr]`
+- [pr-composable_kernel-2191](sources/prs/composable_kernel/PR-2191.md) — [CK_TILE] Tile loop persistent gemm kernel  `[source-pr]`
+- [pr-composable_kernel-2193](sources/prs/composable_kernel/PR-2193.md) — [Tile Engine] Add benchmark for tile engine gemm.  `[source-pr]`
+- [pr-composable_kernel-2200](sources/prs/composable_kernel/PR-2200.md) — [CK_tile] Add rotating buffer feature for universal gemm  `[source-pr]`
+- [pr-composable_kernel-2219](sources/prs/composable_kernel/PR-2219.md) — [CK_TILE] Multiple-D GEMM example  `[source-pr]`
+- [pr-composable_kernel-2222](sources/prs/composable_kernel/PR-2222.md) — [CK_TILE] Move GEMM pipeline tail handling logic to pipelines  `[source-pr]`
+- [pr-composable_kernel-2239](sources/prs/composable_kernel/PR-2239.md) — [CK_TILE] Refine fp8 support in flatmm  `[source-pr]`
+- [pr-composable_kernel-2256](sources/prs/composable_kernel/PR-2256.md) — Revert '[CK_tile] Add rotating buffer feature for universal gemm'  `[source-pr]`
+- [pr-composable_kernel-2260](sources/prs/composable_kernel/PR-2260.md) — Revert 'add CShuffleM/NXdlPerWavePerShuffle in cshuffle_epilogue'  `[source-pr]`
+- [pr-composable_kernel-2262](sources/prs/composable_kernel/PR-2262.md) — [CK_Tile] Fix gemm kernel for 4,64,16 and 64,4,16 warp tile sizes  `[source-pr]`
+- [pr-composable_kernel-2276](sources/prs/composable_kernel/PR-2276.md) — Code drop for 2 warp ping pong scheduler along K dimension.  `[source-pr]`
+- [pr-composable_kernel-2280](sources/prs/composable_kernel/PR-2280.md) — Merge 'amd-develop' till 29574f05f into amd-master  `[source-pr]`
+- [pr-composable_kernel-2293](sources/prs/composable_kernel/PR-2293.md) — Revert '[CK_TILE] Tile loop persistent gemm kernel'  `[source-pr]`
+- [pr-composable_kernel-2299](sources/prs/composable_kernel/PR-2299.md) — [CK_TILE] Tileloop persistent gemm - resubmit  `[source-pr]`
+- [pr-composable_kernel-2312](sources/prs/composable_kernel/PR-2312.md) — Epilogue cshuffle Improvement  `[source-pr]`
+- [pr-composable_kernel-2356](sources/prs/composable_kernel/PR-2356.md) — Fix the CK Tile related operators  `[source-pr]`
+- [pr-composable_kernel-2357](sources/prs/composable_kernel/PR-2357.md) — [CK_TILE] Grouped Convolution Backward Weight Kernel  `[source-pr]`
+- [pr-composable_kernel-2358](sources/prs/composable_kernel/PR-2358.md) — Fix default epilogue  `[source-pr]`
+- [pr-composable_kernel-2364](sources/prs/composable_kernel/PR-2364.md) — Revert 'Fix default epilogue '  `[source-pr]`
+- [pr-composable_kernel-2367](sources/prs/composable_kernel/PR-2367.md) — Reland fix default epilogue  `[source-pr]`
+- [pr-composable_kernel-2388](sources/prs/composable_kernel/PR-2388.md) — [CK_TILE] Fix compilation errors introduced in #2320, #2219 and #2214  `[source-pr]`
+- [pr-composable_kernel-2405](sources/prs/composable_kernel/PR-2405.md) — ck tile pagedkv prefill  `[source-pr]`
+- [pr-composable_kernel-2409](sources/prs/composable_kernel/PR-2409.md) — [CK_TILE] Enhance RMSNorm Accuracy: New Pipeline Pass for Selectable Implementation  `[source-pr]`
+- [pr-composable_kernel-2434](sources/prs/composable_kernel/PR-2434.md) — Merge flatmm Operator with universal gemm  `[source-pr]`
+- [pr-composable_kernel-2466](sources/prs/composable_kernel/PR-2466.md) — [CK_TILE] CK_TILE GEMM WMMA Support for GFX11/GFX12  `[source-pr]`
+- [pr-composable_kernel-2473](sources/prs/composable_kernel/PR-2473.md) — ck_tile kernel for gemm with groupwise quantized A  tensor  `[source-pr]`
+- [pr-composable_kernel-2514](sources/prs/composable_kernel/PR-2514.md) — Revert '[CK_TILE] Eliminate fmha batch_prefill warning caused by failed to meet occupancy requirement'  `[source-pr]`
+- [pr-composable_kernel-2520](sources/prs/composable_kernel/PR-2520.md) — [CK_TILE] Introduces a new GEMM API that splits the existing basic GEMM class into multiple specialized classes.  `[source-pr]`
+- [pr-composable_kernel-2528](sources/prs/composable_kernel/PR-2528.md) — [CK_TILE] Support WMMA (gfx12) in FMHA  `[source-pr]`
+- [pr-composable_kernel-2550](sources/prs/composable_kernel/PR-2550.md) — [CK_TILE] FMHA BWD Remove Unnecessary Padding  `[source-pr]`
+- [pr-composable_kernel-2593](sources/prs/composable_kernel/PR-2593.md) — [CK_Tile] Updating gpu timer when doing flush cache  `[source-pr]`
+- [pr-composable_kernel-2594](sources/prs/composable_kernel/PR-2594.md) — Support Wave32 in CK_TILE - Part 1  `[source-pr]`
+- [pr-composable_kernel-2624](sources/prs/composable_kernel/PR-2624.md) — Preshuffle AQ matrix in block scale gemm  `[source-pr]`
+- [pr-composable_kernel-2628](sources/prs/composable_kernel/PR-2628.md) — [CK_TILE] FMHA BWD Optimization For GFX950  `[source-pr]`
+- [pr-composable_kernel-2629](sources/prs/composable_kernel/PR-2629.md) — [CK-TILE] Default epilogue, adding support for D  `[source-pr]`
+- [pr-composable_kernel-263](sources/prs/composable_kernel/PR-263.md) — Single-kernel GEMM + layernorm  `[source-pr]`
+- [pr-composable_kernel-2641](sources/prs/composable_kernel/PR-2641.md) — Optimize fmha fwd decode & prefill for gfx950  `[source-pr]`
+- [pr-composable_kernel-2643](sources/prs/composable_kernel/PR-2643.md) — [CK_TILE] FMHA BWD Decode Pipeline  `[source-pr]`
+- [pr-composable_kernel-2652](sources/prs/composable_kernel/PR-2652.md) — [CK Tile] Grouped convolution backward data  `[source-pr]`
+- [pr-composable_kernel-2663](sources/prs/composable_kernel/PR-2663.md) — ck_tile kernel for gemm with groupwise quantized B tensor.  `[source-pr]`
+- [pr-composable_kernel-2670](sources/prs/composable_kernel/PR-2670.md) — Revert 'Optimize fmha fwd decode & prefill for gfx950'  `[source-pr]`
+- [pr-composable_kernel-2671](sources/prs/composable_kernel/PR-2671.md) — Re-enable optimization for gfx950 fmha fwd  `[source-pr]`
+- [pr-composable_kernel-2697](sources/prs/composable_kernel/PR-2697.md) — [CK Tile] gemm splitk two stage  `[source-pr]`
+- [pr-composable_kernel-2712](sources/prs/composable_kernel/PR-2712.md) — [CK TILE ENGINE] Adding GEMM Preshuffle to CK Tile Engine  `[source-pr]`
+- [pr-composable_kernel-2715](sources/prs/composable_kernel/PR-2715.md) — [CK_TILE] FMHA avoid unnecessary vmcnt0  `[source-pr]`
+- [pr-composable_kernel-2721](sources/prs/composable_kernel/PR-2721.md) — feat(grouped_gemm): add preshuffle v2 support to grouped gemm example  `[source-pr]`
+- [pr-composable_kernel-2729](sources/prs/composable_kernel/PR-2729.md) — [CK_TILE] Row/Col quant gemm  `[source-pr]`
+- [pr-composable_kernel-2746](sources/prs/composable_kernel/PR-2746.md) — Revert '[CK-TILE] Default epilogue, adding support for D'  `[source-pr]`
+- [pr-composable_kernel-2747](sources/prs/composable_kernel/PR-2747.md) — Restructure the Tile Engine to have faster build time and clear config report  `[source-pr]`
+- [pr-composable_kernel-2752](sources/prs/composable_kernel/PR-2752.md) — [CK-TILE] Default2DEpilogue, example and adding nullptr_t type for D  `[source-pr]`
+- [pr-composable_kernel-2764](sources/prs/composable_kernel/PR-2764.md) — [CK_TILE] Add permuteN optimization to remove lds operation in c_shuffle  `[source-pr]`
+- [pr-composable_kernel-2765](sources/prs/composable_kernel/PR-2765.md) — [CK_TILE] Fix fmha_fwd_v3() Default2DEpilogue usage  `[source-pr]`
+- [pr-composable_kernel-2766](sources/prs/composable_kernel/PR-2766.md) — refactor: use snake_case naming in ck_tile/core components  `[source-pr]`
+- [pr-composable_kernel-2771](sources/prs/composable_kernel/PR-2771.md) — Fix mha prefill  `[source-pr]`
+- [pr-composable_kernel-2773](sources/prs/composable_kernel/PR-2773.md) — [CK_TILE] Epilogue chaining (Lwpck 3373)  `[source-pr]`
+- [pr-composable_kernel-2781](sources/prs/composable_kernel/PR-2781.md) — [CK_TILE] Stream-K GEMM Implementation  `[source-pr]`
+- [pr-composable_kernel-2784](sources/prs/composable_kernel/PR-2784.md) — [FIX] fix on fmha_bwd  `[source-pr]`
+- [pr-composable_kernel-2786](sources/prs/composable_kernel/PR-2786.md) — [CK_TILE] Implement Row/Col quant grouped gemm  `[source-pr]`
+- [pr-composable_kernel-2788](sources/prs/composable_kernel/PR-2788.md) — [CK_TILE] Multiple-ABD GEMM example  `[source-pr]`
+- [pr-composable_kernel-2801](sources/prs/composable_kernel/PR-2801.md) — Bf16*fp4 gemm  `[source-pr]`
+- [pr-composable_kernel-2808](sources/prs/composable_kernel/PR-2808.md) — [CK_TILE] Fix example batched_gemm, grouped_gemm, gemm_multi_d, convolution on gfx11 & gfx12  `[source-pr]`
+- [pr-composable_kernel-2813](sources/prs/composable_kernel/PR-2813.md) — [CK-Tile] Fix quant example code  `[source-pr]`
+- [pr-composable_kernel-2837](sources/prs/composable_kernel/PR-2837.md) — [CK_TILE][REGRESSION] Correct blockSize in Generic2dBlockShape (c254f…  `[source-pr]`
+- [pr-composable_kernel-2839](sources/prs/composable_kernel/PR-2839.md) — [CK TILE GEMM] Fixed permutation error in shuffle_b_permuteN  `[source-pr]`
+- [pr-composable_kernel-2846](sources/prs/composable_kernel/PR-2846.md) — [CK_TILE] Tensor-wise scaled quant gemm kernel  `[source-pr]`
+- [pr-composable_kernel-2855](sources/prs/composable_kernel/PR-2855.md) — [CK_TILE] Add conv bwd weight two stage support  `[source-pr]`
+- [pr-composable_kernel-2873](sources/prs/composable_kernel/PR-2873.md) — Congma/ck tile/remove cpp 20 code  `[source-pr]`
+- [pr-composable_kernel-2877](sources/prs/composable_kernel/PR-2877.md) — Weight Preshuffle Block Scale gemm support  `[source-pr]`
+- [pr-composable_kernel-2892](sources/prs/composable_kernel/PR-2892.md) — Add attn sink  `[source-pr]`
+- [pr-composable_kernel-2897](sources/prs/composable_kernel/PR-2897.md) — [CK TILE GEMM] Support Aquant GEMM with transposeC and preshuffle  `[source-pr]`
+- [pr-composable_kernel-2901](sources/prs/composable_kernel/PR-2901.md) — [CK Tile] contraction multi d - kernel & example  `[source-pr]`
+- [pr-composable_kernel-2903](sources/prs/composable_kernel/PR-2903.md) — [CK_TILE] Fix cshuffle epilogue issue with IsLoadableTile  `[source-pr]`
+- [pr-composable_kernel-2905](sources/prs/composable_kernel/PR-2905.md) — [CK_TILE] Share partition index across threads and specify offset in load_tile()/async_load_tile()/load_tile_transpose()  `[source-pr]`
+- [pr-composable_kernel-2918](sources/prs/composable_kernel/PR-2918.md) — [CK_TILE] FMHA BWD Pad HDim to a Multiple of 8  `[source-pr]`
+- [pr-composable_kernel-2919](sources/prs/composable_kernel/PR-2919.md) — Ck tile engine preshuffle  `[source-pr]`
+- [pr-composable_kernel-2923](sources/prs/composable_kernel/PR-2923.md) — Integrate Multi D GEMMs into Grouped GEMMs along with unit tests  `[source-pr]`
+- [pr-composable_kernel-2947](sources/prs/composable_kernel/PR-2947.md) — Wmma support for grouped convolution bwd weight  `[source-pr]`
+- [pr-composable_kernel-2950](sources/prs/composable_kernel/PR-2950.md) — fix: nil performance results for gemm examples  `[source-pr]`
+- [pr-composable_kernel-2964](sources/prs/composable_kernel/PR-2964.md) — Grouped convolution forward device implementation and base flavors for RDNA3/4  `[source-pr]`
+- [pr-composable_kernel-2966](sources/prs/composable_kernel/PR-2966.md) — [CK Tile] CShuffle Tile Permute N all warp compatible  `[source-pr]`
+- [pr-composable_kernel-2970](sources/prs/composable_kernel/PR-2970.md) — [CK TILE] Grouped conv fwd split image  `[source-pr]`
+- [pr-composable_kernel-2974](sources/prs/composable_kernel/PR-2974.md) — Streamk functional tests  `[source-pr]`
+- [pr-composable_kernel-2975](sources/prs/composable_kernel/PR-2975.md) — supporting prefill shapes for preshuffle block scale gemm  `[source-pr]`
+- [pr-composable_kernel-2978](sources/prs/composable_kernel/PR-2978.md) — Update include path to break the cyclic dep issue  `[source-pr]`
+- [pr-composable_kernel-2981](sources/prs/composable_kernel/PR-2981.md) — [CK_TILE] Switch into universal gemms for conv bwds  `[source-pr]`
+- [pr-composable_kernel-2982](sources/prs/composable_kernel/PR-2982.md) — Ck tile engine gemm  `[source-pr]`
+- [pr-composable_kernel-2986](sources/prs/composable_kernel/PR-2986.md) — [CK_Tile] Merge multiple convolution groups into a single GEMM batch  `[source-pr]`
+- [pr-composable_kernel-2989](sources/prs/composable_kernel/PR-2989.md) — WMMA gemm_add_relu_add_layernorm  `[source-pr]`
+- [pr-composable_kernel-3012](sources/prs/composable_kernel/PR-3012.md) — [CK_TILE] Add conv fwd + bias + clamp example  `[source-pr]`
+- [pr-composable_kernel-3019](sources/prs/composable_kernel/PR-3019.md) — [CK_TILE] Adding support for TiledPermuteN on preshuffle Block Scale Gemm  `[source-pr]`
+- [pr-composable_kernel-3028](sources/prs/composable_kernel/PR-3028.md) — [CK_TILE] Improve grouped conv kernel name generation  `[source-pr]`
+- [pr-composable_kernel-3041](sources/prs/composable_kernel/PR-3041.md) — [CK_TILE] Stream-K Gemm Example for fp8 and bf8  `[source-pr]`
+- [pr-composable_kernel-3055](sources/prs/composable_kernel/PR-3055.md) — [CK TILE ENGINE] Code changes to finding GPU id from TARGET  `[source-pr]`
+- [pr-composable_kernel-3063](sources/prs/composable_kernel/PR-3063.md) — [CK_TILE] Add Bquant to Grouped Gemm  `[source-pr]`
+- [pr-composable_kernel-3064](sources/prs/composable_kernel/PR-3064.md) — [CK_TILE] Stream-K operator() Reboot  `[source-pr]`
+- [pr-composable_kernel-3080](sources/prs/composable_kernel/PR-3080.md) — [CK_TILE] Add mxfp4 flatmm  `[source-pr]`
+- [pr-composable_kernel-3107](sources/prs/composable_kernel/PR-3107.md) — Introduces the new partitioner to implement the reduction StreamK kernel.  `[source-pr]`
+- [pr-composable_kernel-3119](sources/prs/composable_kernel/PR-3119.md) — test(grouped_gemm): add unit tests for grouped_gemm bquant with preshuffleB true  `[source-pr]`
+- [pr-composable_kernel-3145](sources/prs/composable_kernel/PR-3145.md) — Wmma support for gemm_reduce  `[source-pr]`
+- [pr-composable_kernel-3151](sources/prs/composable_kernel/PR-3151.md) — [CK TILE] Refactor Conv configs and Conv Elementwise  `[source-pr]`
+- [pr-composable_kernel-3153](sources/prs/composable_kernel/PR-3153.md) — [CK_TILE][FMHA] Integrate FAv2 & FAv3 (WIP) in the single fmha_fwd() API  `[source-pr]`
+- [pr-composable_kernel-3157](sources/prs/composable_kernel/PR-3157.md) — Tile engine for streamk  `[source-pr]`
+- [pr-composable_kernel-3183](sources/prs/composable_kernel/PR-3183.md) — [CK_BUILDER] Add grouped conv fwd ck tile traits  `[source-pr]`
+- [pr-composable_kernel-3186](sources/prs/composable_kernel/PR-3186.md) — [CK_TILE] Fix block_scale gemm on gfx12  `[source-pr]`
+- [pr-composable_kernel-3202](sources/prs/composable_kernel/PR-3202.md) — [CK_TILE] Remove Old CK Tile Stream-K Artifacts  `[source-pr]`
+- [pr-composable_kernel-3206](sources/prs/composable_kernel/PR-3206.md) — Support fp8 dynamic quantization for fmha  `[source-pr]`
+- [pr-composable_kernel-3207](sources/prs/composable_kernel/PR-3207.md) — [CK_TILE] MX Flatmm Split kernel instances  `[source-pr]`
+- [pr-composable_kernel-3235](sources/prs/composable_kernel/PR-3235.md) — [CK Tile] Fix example for conv fwd + bias + clamp  `[source-pr]`
+- [pr-composable_kernel-3237](sources/prs/composable_kernel/PR-3237.md) — Add grouped gemm instances for RDNA4  `[source-pr]`
+- [pr-composable_kernel-3245](sources/prs/composable_kernel/PR-3245.md) — Fix and improve the gemm quant pipeline infrastructure  `[source-pr]`
+- [pr-composable_kernel-3250](sources/prs/composable_kernel/PR-3250.md) — Revert 'Add attn sink'  `[source-pr]`
+- [pr-composable_kernel-3251](sources/prs/composable_kernel/PR-3251.md) — [CK-Tile] Refactor base pipeline usage  `[source-pr]`
+- [pr-composable_kernel-3276](sources/prs/composable_kernel/PR-3276.md) — [CK_BUILDER] Refactor builder factory code.  `[source-pr]`
+- [pr-composable_kernel-3298](sources/prs/composable_kernel/PR-3298.md) — [CK_Tile] Enable PreshuffleB for 2d block scale Gemm  `[source-pr]`
+- [pr-composable_kernel-3301](sources/prs/composable_kernel/PR-3301.md) — [CK_TILE] Port hw independent changes from internal repo to develop branch  `[source-pr]`
+- [pr-composable_kernel-3316](sources/prs/composable_kernel/PR-3316.md) — Wmma support for gemm_bias_add_reduce  `[source-pr]`
+- [pr-composable_kernel-3332](sources/prs/composable_kernel/PR-3332.md) — WMMA support for batched_gemm_reduce  `[source-pr]`
+- [pr-composable_kernel-3337](sources/prs/composable_kernel/PR-3337.md) — [CK Tile] Grouped GEMM aquant mode and non-persistent kernel  `[source-pr]`
+- [pr-composable_kernel-3341](sources/prs/composable_kernel/PR-3341.md) — [CK_TILE][FMHA] Add sparse attention VSA  `[source-pr]`
+- [pr-composable_kernel-3342](sources/prs/composable_kernel/PR-3342.md) — Merge some updates for ck_tile headers  `[source-pr]`
+- [pr-composable_kernel-3351](sources/prs/composable_kernel/PR-3351.md) — [CK_TILE] Split-K autodeduction  `[source-pr]`
+- [pr-composable_kernel-3352](sources/prs/composable_kernel/PR-3352.md) — [CK_BUILDER] Ck Tile Grouped convolution factory  `[source-pr]`
+- [pr-composable_kernel-3359](sources/prs/composable_kernel/PR-3359.md) — [CK-Tile] move out memory operation from cshuffle epilogue class  `[source-pr]`
+- [pr-composable_kernel-3364](sources/prs/composable_kernel/PR-3364.md) — [CK TILE][AICK-439] Fix cshuffle epilogue wave per shuffle  `[source-pr]`
+- [pr-composable_kernel-3371](sources/prs/composable_kernel/PR-3371.md) — [CK_TILE] Stream-K Tree Reduction and Cache Skipping Integration  `[source-pr]`
+- [pr-composable_kernel-3414](sources/prs/composable_kernel/PR-3414.md) — [CK_TILE] Grouped gemm quant tensor layouts  `[source-pr]`
+- [pr-composable_kernel-3434](sources/prs/composable_kernel/PR-3434.md) — [TILE ENGINE] Restructure to Base class of GEMM  `[source-pr]`
+- [pr-composable_kernel-3442](sources/prs/composable_kernel/PR-3442.md) — [FMHA] Batch Prefill Support Improvements:  Change KV Cache Layout & Large Page Size Support  `[source-pr]`
+- [pr-composable_kernel-3452](sources/prs/composable_kernel/PR-3452.md) — [CKTILE] Support A/B Quantization in Blockscale Grouped Gemm  `[source-pr]`
+- [pr-composable_kernel-3465](sources/prs/composable_kernel/PR-3465.md) — Add support for direct store in epilogue and padding support for wave transfer without transpose  `[source-pr]`
+- [pr-composable_kernel-3493](sources/prs/composable_kernel/PR-3493.md) — Refactor weight preshuffled pipeline and unify LDS buffer management API  `[source-pr]`
+- [pr-composable_kernel-3509](sources/prs/composable_kernel/PR-3509.md) — [CK_BUILDER] Add bwd weight factories  `[source-pr]`
+- [pr-composable_kernel-3520](sources/prs/composable_kernel/PR-3520.md) — [CK-Tile] add persistent async input scheduler parameters to kernel device-side and host-side args  `[source-pr]`
+- [pr-composable_kernel-3531](sources/prs/composable_kernel/PR-3531.md) — fix mxfp8-gemm example failure  `[source-pr]`
+- [pr-composable_kernel-3544](sources/prs/composable_kernel/PR-3544.md) — [CK] Add base class GridwiseGemm_xdl_cshuffle_base for all gridwise_gemm_xdl classes  `[source-pr]`
+- [pr-composable_kernel-3603](sources/prs/composable_kernel/PR-3603.md) — [CK_Tile] Support for a4w4 (fp4) in block scale gemm AB quant  `[source-pr]`
+- [pr-triton-177](sources/prs/triton/PR-177.md) — [dotOp] [rocMLIR] Make test_dot.py work  `[source-pr]`
+- [pr-triton-180](sources/prs/triton/PR-180.md) — [MFMA] Implementation of MFMA DotOp pipeline  `[source-pr]`
+- [pr-triton-305](sources/prs/triton/PR-305.md) — [MLIR] Added tritongpu-stream-pipeline pass  `[source-pr]`
+- [pr-triton-340](sources/prs/triton/PR-340.md) — [FA fwd D=128] Reduce LDS usage in epilogue  `[source-pr]`
+- [pr-triton-346](sources/prs/triton/PR-346.md) — Add OptimizeEpilogue pass.  `[source-pr]`
+- [pr-triton-798](sources/prs/triton/PR-798.md) — merge from shared  `[source-pr]`
+- [pr-triton-849](sources/prs/triton/PR-849.md) — Use the MoE kernel in commit 7f341eb95 to avoid regression  `[source-pr]`
+- [pr-vllm-40327](sources/prs/vllm/PR-40327.md) — attention: add USE_TD constexpr for tensor descriptor Q/K/V load/store  `[source-pr]`
+
 ## fine-grained-quantization
 
+- [pr-FlyDSL-118](sources/prs/FlyDSL/PR-118.md) — rebase smooth_quant int8 to main branch  `[source-pr]`
+- [pr-FlyDSL-12](sources/prs/FlyDSL/PR-12.md) — per_token quant  `[source-pr]`
+- [pr-FlyDSL-14](sources/prs/FlyDSL/PR-14.md) — Dev/gemm opt decode  `[source-pr]`
+- [pr-FlyDSL-143](sources/prs/FlyDSL/PR-143.md) — W4a16 bf16 fp8 bf16 moe  `[source-pr]`
+- [pr-FlyDSL-15](sources/prs/FlyDSL/PR-15.md) — update quant benchmark  `[source-pr]`
+- [pr-FlyDSL-153](sources/prs/FlyDSL/PR-153.md) — Pre v0.1 gemm fix  `[source-pr]`
+- [pr-FlyDSL-158](sources/prs/FlyDSL/PR-158.md) — use abs import for correct importing kernels from wheel  `[source-pr]`
+- [pr-FlyDSL-16](sources/prs/FlyDSL/PR-16.md) — Dev layout algebra  `[source-pr]`
+- [pr-FlyDSL-17](sources/prs/FlyDSL/PR-17.md) — code style  `[source-pr]`
+- [pr-FlyDSL-21](sources/prs/FlyDSL/PR-21.md) — Felix/dev  `[source-pr]`
+- [pr-FlyDSL-30](sources/prs/FlyDSL/PR-30.md) — Python wrapper refine  `[source-pr]`
+- [pr-FlyDSL-359](sources/prs/FlyDSL/PR-359.md) — [Refactor] Convert norm/softmax kernels from raw buffer_ops to layout…  `[source-pr]`
+- [pr-FlyDSL-377](sources/prs/FlyDSL/PR-377.md) — implement 1d tensorssa, remove vector dialect in kernels and use soffset for quant kernel  `[source-pr]`
+- [pr-FlyDSL-388](sources/prs/FlyDSL/PR-388.md) — [Perf] Port mixed_moe kernel optimizations for stage1/stage2  `[source-pr]`
+- [pr-FlyDSL-41](sources/prs/FlyDSL/PR-41.md) — [FLIR]:AITer not available Error.  `[source-pr]`
+- [pr-FlyDSL-421](sources/prs/FlyDSL/PR-421.md) — feat: align quant and fused kernels with Triton in FlyDSL  `[source-pr]`
+- [pr-FlyDSL-465](sources/prs/FlyDSL/PR-465.md) — some optimization about smoothquant moe  `[source-pr]`
+- [pr-FlyDSL-481](sources/prs/FlyDSL/PR-481.md) — [Feat] Align quant and fused rmsnorm kernels with aiter/triton  `[source-pr]`
+- [pr-FlyDSL-524](sources/prs/FlyDSL/PR-524.md) — [Enh] Add shortcut make_rmem_tensor for allocate register tensor  `[source-pr]`
+- [pr-FlyDSL-539](sources/prs/FlyDSL/PR-539.md) — Pa update  `[source-pr]`
+- [pr-FlyDSL-549](sources/prs/FlyDSL/PR-549.md) — [Feat] Align quant and fused layernorm kernels with aiter/triton  `[source-pr]`
+- [pr-FlyDSL-554](sources/prs/FlyDSL/PR-554.md) — [Feat] Add TensorAdaptor.mark_static for shape-aware JIT cache keys  `[source-pr]`
+- [pr-FlyDSL-579](sources/prs/FlyDSL/PR-579.md) — [Enh] Port AITER FlyDSL kernels  `[source-pr]`
+- [pr-FlyDSL-8](sources/prs/FlyDSL/PR-8.md) — update per_token quant bench  `[source-pr]`
+- [pr-FlyDSL-9](sources/prs/FlyDSL/PR-9.md) — perftest support functions  `[source-pr]`
+- [pr-aiter-1002](sources/prs/aiter/PR-1002.md) — [MI35x]mi350_fmoe_asm  `[source-pr]`
+- [pr-aiter-1007](sources/prs/aiter/PR-1007.md) — fix moe blockscale bug  `[source-pr]`
+- [pr-aiter-1009](sources/prs/aiter/PR-1009.md) — [Triton] Shaoclee/085 triton fusion  `[source-pr]`
+- [pr-aiter-1013](sources/prs/aiter/PR-1013.md) — Revert '[Triton] Shaoclee/085 triton fusion'  `[source-pr]`
+- [pr-aiter-1014](sources/prs/aiter/PR-1014.md) — [Triton] Shaoclee/085 triton fusion  `[source-pr]`
+- [pr-aiter-1025](sources/prs/aiter/PR-1025.md) — Fix moe dtype fp4 new  `[source-pr]`
+- [pr-aiter-1048](sources/prs/aiter/PR-1048.md) — [MI35x]Gating bf16gemm  `[source-pr]`
+- [pr-aiter-1058](sources/prs/aiter/PR-1058.md) — Pa mtp3 update  `[source-pr]`
+- [pr-aiter-1081](sources/prs/aiter/PR-1081.md) — Add block_m=16 for a8w8_ck_moe_blockscale  `[source-pr]`
+- [pr-aiter-1092](sources/prs/aiter/PR-1092.md) — [MI300X] tune Gemm performance for llama 70b/405b  `[source-pr]`
+- [pr-aiter-110](sources/prs/aiter/PR-110.md) — moe_sorting_update  `[source-pr]`
+- [pr-aiter-1102](sources/prs/aiter/PR-1102.md) — Tuning Utility update  `[source-pr]`
+- [pr-aiter-1148](sources/prs/aiter/PR-1148.md) — Catchall PR for all 355_wip related changes  `[source-pr]`
+- [pr-aiter-1161](sources/prs/aiter/PR-1161.md) — A8w8 asm codegen and tune  `[source-pr]`
+- [pr-aiter-117](sources/prs/aiter/PR-117.md) — Revert 'moe_sorting_update (#110)'  `[source-pr]`
+- [pr-aiter-118](sources/prs/aiter/PR-118.md) — Revert 'Revert 'moe_sorting_update (#110)' (#117)'  `[source-pr]`
+- [pr-aiter-119](sources/prs/aiter/PR-119.md) — blockscale MoE  `[source-pr]`
+- [pr-aiter-1201](sources/prs/aiter/PR-1201.md) — update mi308 fmoe fp16 asm,MI35x  `[source-pr]`
+- [pr-aiter-1217](sources/prs/aiter/PR-1217.md) — [Triton] [355_wip] DS 355_wip fused_shared_expert  `[source-pr]`
+- [pr-aiter-1218](sources/prs/aiter/PR-1218.md) — [Triton] [355_wip_triton] DS 355_wip fused_shared_expert  `[source-pr]`
+- [pr-aiter-1219](sources/prs/aiter/PR-1219.md) — [TRITON] Fix fp8 bmm op unit test bug on MI350  `[source-pr]`
+- [pr-aiter-1258](sources/prs/aiter/PR-1258.md) — Fix rowwise a8w8 gemm in swizzled hipb_mm  `[source-pr]`
+- [pr-aiter-1265](sources/prs/aiter/PR-1265.md) — integrate deep gemm  `[source-pr]`
+- [pr-aiter-1266](sources/prs/aiter/PR-1266.md) — moe mxfp4 block_m = 64/128  `[source-pr]`
+- [pr-aiter-1271](sources/prs/aiter/PR-1271.md) — fix_fp4_quant_dtype  `[source-pr]`
+- [pr-aiter-128](sources/prs/aiter/PR-128.md) — add int8 smooth quant MoE support  `[source-pr]`
+- [pr-aiter-1283](sources/prs/aiter/PR-1283.md) — [TRITON] GEMM kernels nomenclature changes  `[source-pr]`
+- [pr-aiter-129](sources/prs/aiter/PR-129.md) — Workaround for failing Fmoe-g1u1 fp8smoothquant test  `[source-pr]`
+- [pr-aiter-1291](sources/prs/aiter/PR-1291.md) — [FEAT] [Triton] Add transpose scale to the triton fused_rms_fp8_group_quant  `[source-pr]`
+- [pr-aiter-1293](sources/prs/aiter/PR-1293.md) — [TRITON] Batched GEMM kernels nomenclature changes  `[source-pr]`
+- [pr-aiter-1295](sources/prs/aiter/PR-1295.md) — [TRITON]  Apply config-aware naming (kernel_repr) to attention kernels  `[source-pr]`
+- [pr-aiter-1299](sources/prs/aiter/PR-1299.md) — Fix ATOM fp8 model quant fail issue in torch compile  `[source-pr]`
+- [pr-aiter-13](sources/prs/aiter/PR-13.md) — use torch.profiler in gradlib, move test_common to ater  `[source-pr]`
+- [pr-aiter-130](sources/prs/aiter/PR-130.md) — update native pa to support per tensor quant  `[source-pr]`
+- [pr-aiter-1314](sources/prs/aiter/PR-1314.md) — Dsv32 cache  `[source-pr]`
+- [pr-aiter-1315](sources/prs/aiter/PR-1315.md) — [Triton] 355 wip Llama FP4 triton fusion + TP8 triton decode shape tunning  `[source-pr]`
+- [pr-aiter-1317](sources/prs/aiter/PR-1317.md) — using standalone pybind  `[source-pr]`
+- [pr-aiter-1326](sources/prs/aiter/PR-1326.md) — [TRITON] Simplify and optimize triton_kernels moe code and move it into aiter  `[source-pr]`
+- [pr-aiter-1328](sources/prs/aiter/PR-1328.md) — [Triton] DS a16w8 GEMM and fused reduce_rms_fp8_group_quant  `[source-pr]`
+- [pr-aiter-1330](sources/prs/aiter/PR-1330.md) — Add Fused RMSNorm + FP8 Per-tensor Static Quantization Triton Kernel  `[source-pr]`
+- [pr-aiter-1331](sources/prs/aiter/PR-1331.md) — [Triton] add gemm tune check utility function  `[source-pr]`
+- [pr-aiter-1341](sources/prs/aiter/PR-1341.md) — [MI35X]cktile moe a16w4 support  `[source-pr]`
+- [pr-aiter-1356](sources/prs/aiter/PR-1356.md) — [TRITON] Add MoE GEMM a8w8 kernel  `[source-pr]`
+- [pr-aiter-1370](sources/prs/aiter/PR-1370.md) — bug fix  `[source-pr]`
+- [pr-aiter-1371](sources/prs/aiter/PR-1371.md) — [Triton] DS FP4 triton fusion  `[source-pr]`
+- [pr-aiter-1380](sources/prs/aiter/PR-1380.md) — Fused qk rope cat and cache mla  `[source-pr]`
+- [pr-aiter-1383](sources/prs/aiter/PR-1383.md) — Add paged attention decode with Gluon JIT/AOT for AMD CDNA3  `[source-pr]`
+- [pr-aiter-139](sources/prs/aiter/PR-139.md) — Dev/devx  `[source-pr]`
+- [pr-aiter-1392](sources/prs/aiter/PR-1392.md) — Revert '[Triton] DS FP4 triton fusion'  `[source-pr]`
+- [pr-aiter-1405](sources/prs/aiter/PR-1405.md) — fix error in fmoe_tuner  `[source-pr]`
+- [pr-aiter-1408](sources/prs/aiter/PR-1408.md) — minor fix for mi355  `[source-pr]`
+- [pr-aiter-1418](sources/prs/aiter/PR-1418.md) — [Bugfix] [Config] Retune ptpc fmoe deepseek-r1 for MI308  `[source-pr]`
+- [pr-aiter-1434](sources/prs/aiter/PR-1434.md) — [Triton] DS FP4 fusions redo  `[source-pr]`
+- [pr-aiter-1443](sources/prs/aiter/PR-1443.md) — fix merging aiter config  `[source-pr]`
+- [pr-aiter-1456](sources/prs/aiter/PR-1456.md) — add gen_fake for 4 gemm operators  `[source-pr]`
+- [pr-aiter-1464](sources/prs/aiter/PR-1464.md) — Initial development of triton based communication primitives using Iris  `[source-pr]`
+- [pr-aiter-1483](sources/prs/aiter/PR-1483.md) — [TRITON] Add a8w8 blockscale MoE  `[source-pr]`
+- [pr-aiter-1489](sources/prs/aiter/PR-1489.md) — [TRITON] change all MI350 config file names to gfx950*  `[source-pr]`
+- [pr-aiter-1490](sources/prs/aiter/PR-1490.md) — Enable bf16 asm bpreshuffle tune  `[source-pr]`
+- [pr-aiter-1498](sources/prs/aiter/PR-1498.md) — Add gfx11XX targets  `[source-pr]`
+- [pr-aiter-15](sources/prs/aiter/PR-15.md) — edit csrc/rocm_ops.py and  smoothquant_kernel  `[source-pr]`
+- [pr-aiter-1509](sources/prs/aiter/PR-1509.md) — [TRITON] Change all MI300 references to gfx942  `[source-pr]`
+- [pr-aiter-1510](sources/prs/aiter/PR-1510.md) — [TRITON] Setting kpack to 1 for all MI350 configs  `[source-pr]`
+- [pr-aiter-152](sources/prs/aiter/PR-152.md) — Add Triton Quantization Kernels  `[source-pr]`
+- [pr-aiter-1551](sources/prs/aiter/PR-1551.md) — Add `fused_qk_norm_mrope_cache_quant_shuffle` for Qwen-VL models  `[source-pr]`
+- [pr-aiter-1553](sources/prs/aiter/PR-1553.md) — [Triton] Add Fused GEMM A8W8 + Split + Concat Triton Kernel  `[source-pr]`
+- [pr-aiter-156](sources/prs/aiter/PR-156.md) — Fp8 blockscale gemm  `[source-pr]`
+- [pr-aiter-1564](sources/prs/aiter/PR-1564.md) — Wjx/opt a4w4  `[source-pr]`
+- [pr-aiter-1577](sources/prs/aiter/PR-1577.md) — Fix torch 2.9 deepseek-0528 error  `[source-pr]`
+- [pr-aiter-1587](sources/prs/aiter/PR-1587.md) — [TRITON] Standardize get_config for GEMM kernels and have a unified format for their configs  `[source-pr]`
+- [pr-aiter-1601](sources/prs/aiter/PR-1601.md) — Revert 'Initial development of triton based communication primitives using Iris'  `[source-pr]`
+- [pr-aiter-1602](sources/prs/aiter/PR-1602.md) — [TRITON] Move triton_tests into respective folders  `[source-pr]`
+- [pr-aiter-1607](sources/prs/aiter/PR-1607.md) — Initial development of triton based communication primitives using Iris - try 2  `[source-pr]`
+- [pr-aiter-1638](sources/prs/aiter/PR-1638.md) — [TRITON] Move triton files into respective folders  `[source-pr]`
+- [pr-aiter-1649](sources/prs/aiter/PR-1649.md) — Add FP8 support for batch_prefill with per-tensor quantization  `[source-pr]`
+- [pr-aiter-1650](sources/prs/aiter/PR-1650.md) — add qk_norm_rope_cache_quant fusion  `[source-pr]`
+- [pr-aiter-1654](sources/prs/aiter/PR-1654.md) — support moe a8w8 splitk  `[source-pr]`
+- [pr-aiter-1655](sources/prs/aiter/PR-1655.md) — Zan/moe a8w4  `[source-pr]`
+- [pr-aiter-1657](sources/prs/aiter/PR-1657.md) — fix some compile issues with -Werror  `[source-pr]`
+- [pr-aiter-1658](sources/prs/aiter/PR-1658.md) — fixed a bug in rmsnorm quantization fusion kernel and add a unit test  `[source-pr]`
+- [pr-aiter-1667](sources/prs/aiter/PR-1667.md) — Dev/a8w4 and a8w8splitk  `[source-pr]`
+- [pr-aiter-1695](sources/prs/aiter/PR-1695.md) — add ntile 128 for a8 blkQ moe 1 stage  `[source-pr]`
+- [pr-aiter-1697](sources/prs/aiter/PR-1697.md) — fused kv quant with rope rms  `[source-pr]`
+- [pr-aiter-1715](sources/prs/aiter/PR-1715.md) — Fix compiled_ops argument checking for enum arguments when AITER_JIT_DIR is set  `[source-pr]`
+- [pr-aiter-1719](sources/prs/aiter/PR-1719.md) — [refractor] mha fwd api refractor  `[source-pr]`
+- [pr-aiter-172](sources/prs/aiter/PR-172.md) — Add a8w8 CK Batched GEMM  `[source-pr]`
+- [pr-aiter-1729](sources/prs/aiter/PR-1729.md) — Wjx/ck tile moe merge  `[source-pr]`
+- [pr-aiter-1737](sources/prs/aiter/PR-1737.md) — use a16w4 to replace a4w4 as default policy  `[source-pr]`
+- [pr-aiter-1745](sources/prs/aiter/PR-1745.md) — [Triton] skip_reduce for gemm_afp4wfp4_preshuffle  `[source-pr]`
+- [pr-aiter-1747](sources/prs/aiter/PR-1747.md) — [MOE] special path for moe fp8/bf16, batch 1~16  `[source-pr]`
+- [pr-aiter-1754](sources/prs/aiter/PR-1754.md) — [FMHA] Support Vectorized KV Cache Layout and vLLM/SGLang block table in Batch Prefill kernel  `[source-pr]`
+- [pr-aiter-1764](sources/prs/aiter/PR-1764.md) — [Triton] Triton FP8 bloscale GEMM preshuffle  `[source-pr]`
+- [pr-aiter-1769](sources/prs/aiter/PR-1769.md) — fix dynamic_per_group_scaled_quant_perf_drop dure to amd_buffer_coher…  `[source-pr]`
+- [pr-aiter-1773](sources/prs/aiter/PR-1773.md) — mdf_bf16_semaphore_check  `[source-pr]`
+- [pr-aiter-1776](sources/prs/aiter/PR-1776.md) — Opt fused shuffle mrope and quant  `[source-pr]`
+- [pr-aiter-1777](sources/prs/aiter/PR-1777.md) — [Triton] Triton A16WFP4 GEMM prequant  `[source-pr]`
+- [pr-aiter-1778](sources/prs/aiter/PR-1778.md) — [Triton] Triton a16w8 gemm preshuffle  `[source-pr]`
+- [pr-aiter-1780](sources/prs/aiter/PR-1780.md) — minor refine  `[source-pr]`
+- [pr-aiter-1814](sources/prs/aiter/PR-1814.md) — rebase and init optimization  `[source-pr]`
+- [pr-aiter-1818](sources/prs/aiter/PR-1818.md) — [TRITON] Fav3 sage  `[source-pr]`
+- [pr-aiter-186](sources/prs/aiter/PR-186.md) — Add CK batched Gemm for BF16  `[source-pr]`
+- [pr-aiter-1891](sources/prs/aiter/PR-1891.md) — fix test_fused_fp8_quant  `[source-pr]`
+- [pr-aiter-1892](sources/prs/aiter/PR-1892.md) — Add fp8 block scale quantization parameters  `[source-pr]`
+- [pr-aiter-19](sources/prs/aiter/PR-19.md) — naive fp8-pa  `[source-pr]`
+- [pr-aiter-1907](sources/prs/aiter/PR-1907.md) — add hip rmsnorm fuse add and quant(support 1x128|1x64|1x32 i8|fp8|fp4)  `[source-pr]`
+- [pr-aiter-1922](sources/prs/aiter/PR-1922.md) — use hip smoothquant suppot moe ep  `[source-pr]`
+- [pr-aiter-1927](sources/prs/aiter/PR-1927.md) — fix aot fp4 moe  `[source-pr]`
+- [pr-aiter-194](sources/prs/aiter/PR-194.md) — Mdf compiler 0312  `[source-pr]`
+- [pr-aiter-1969](sources/prs/aiter/PR-1969.md) — Add `fused_qk_norm_rope_2way` horizon fusion kernel for Qwen-Image model  `[source-pr]`
+- [pr-aiter-1975](sources/prs/aiter/PR-1975.md) — [CK_TILE][FMHA] Add FP8 KV_BLOCKSCALE support for batch prefill  `[source-pr]`
+- [pr-aiter-198](sources/prs/aiter/PR-198.md) — add fp8/int8 g1u1 gelu support  `[source-pr]`
+- [pr-aiter-1990](sources/prs/aiter/PR-1990.md) — Add `allreduce+rmsnorm+quant` fusion pass  `[source-pr]`
+- [pr-aiter-1994](sources/prs/aiter/PR-1994.md) — fix rmsnorm2d_fwd api for input.shape[-1] > 8192  `[source-pr]`
+- [pr-aiter-20](sources/prs/aiter/PR-20.md) — add asm moe int8 with input quant fused  `[source-pr]`
+- [pr-aiter-2011](sources/prs/aiter/PR-2011.md) — fix residual_out accuracy of  hip rmsnorm fused add  `[source-pr]`
+- [pr-aiter-2027](sources/prs/aiter/PR-2027.md) — Fuse rms rope blk quant kernel  `[source-pr]`
+- [pr-aiter-2043](sources/prs/aiter/PR-2043.md) — Fix qk_norm_rope_cache_quant ut  `[source-pr]`
+- [pr-aiter-2049](sources/prs/aiter/PR-2049.md) — [TRITON] Add smoothquant int8 MoE kernel  `[source-pr]`
+- [pr-aiter-2050](sources/prs/aiter/PR-2050.md) — [TRITON] Add Model Benchmarking Tool  `[source-pr]`
+- [pr-aiter-2053](sources/prs/aiter/PR-2053.md) — Support per_block for Pa PS  `[source-pr]`
+- [pr-aiter-21](sources/prs/aiter/PR-21.md) — kv-quant update  `[source-pr]`
+- [pr-aiter-2104](sources/prs/aiter/PR-2104.md) — fix smoothquant hip kernel exceed int32's maximum.  `[source-pr]`
+- [pr-aiter-2105](sources/prs/aiter/PR-2105.md) — mha fwd v3 hdim128 support per tensor fp8 for MI300/MI308  `[source-pr]`
+- [pr-aiter-2113](sources/prs/aiter/PR-2113.md) — [FlyDSL] import flydsl implement of a4w4 moe  `[source-pr]`
+- [pr-aiter-2136](sources/prs/aiter/PR-2136.md) — add mhc_pre hip kernel (mhc_pre_gemm_sqrsum, mhc_pre_big_fuse)  `[source-pr]`
+- [pr-aiter-2152](sources/prs/aiter/PR-2152.md) — fixes around MoE kernel selection  `[source-pr]`
+- [pr-aiter-2156](sources/prs/aiter/PR-2156.md) — update_test  `[source-pr]`
+- [pr-aiter-2169](sources/prs/aiter/PR-2169.md) — Fix LRU cache pollution causing BLOCK_SIZE_S3 KeyError in gemm_afp4wfp4  `[source-pr]`
+- [pr-aiter-2188](sources/prs/aiter/PR-2188.md) — support FP8/MXFP4-quantized activation dtype  `[source-pr]`
+- [pr-aiter-2199](sources/prs/aiter/PR-2199.md) — Enhance fused_qk_norm_rope_cache_quant functions by adding rotary_dim  `[source-pr]`
+- [pr-aiter-2206](sources/prs/aiter/PR-2206.md) — opt fuse_qk_norm_rope_blkquant kernel  `[source-pr]`
+- [pr-aiter-2231](sources/prs/aiter/PR-2231.md) — update hip moe smoothquant support expert_num <= 1024  `[source-pr]`
+- [pr-aiter-2240](sources/prs/aiter/PR-2240.md) — [TRITON] Sagev2 patch  `[source-pr]`
+- [pr-aiter-2249](sources/prs/aiter/PR-2249.md) — [MXFP4] Patch fp4_utils.py rounding logic following #975  `[source-pr]`
+- [pr-aiter-2262](sources/prs/aiter/PR-2262.md) — Introduce asm fmoe kernels that do not require bf16->fp8 quantization  `[source-pr]`
+- [pr-aiter-228](sources/prs/aiter/PR-228.md) — Moe 2stages  `[source-pr]`
+- [pr-aiter-2295](sources/prs/aiter/PR-2295.md) — add moe_smooth_per_token_scaled_quant_v1&v2  `[source-pr]`
+- [pr-aiter-2315](sources/prs/aiter/PR-2315.md) — [TRITON] Add gfx1250 support: GFX_MAP + default GEMM/MHA configs  `[source-pr]`
+- [pr-aiter-2316](sources/prs/aiter/PR-2316.md) — [TRITON]: Add gfx1250 arch enablement: fp8 support + test refactoring  `[source-pr]`
+- [pr-aiter-2328](sources/prs/aiter/PR-2328.md) — Fix OOB GU scales access in 64x128 kernels  `[source-pr]`
+- [pr-aiter-2329](sources/prs/aiter/PR-2329.md) — feat(custom_all_reduce): support GPT-OSS-120B hidden_size=2880 in fus…  `[source-pr]`
+- [pr-aiter-2331](sources/prs/aiter/PR-2331.md) — replace ck_tile type convert by opus cast  `[source-pr]`
+- [pr-aiter-2333](sources/prs/aiter/PR-2333.md) — update moe_smooth_quant dispatch and v2 supports block_m  is a multiple of 16  `[source-pr]`
+- [pr-aiter-236](sources/prs/aiter/PR-236.md) — Tkw1  `[source-pr]`
+- [pr-aiter-2390](sources/prs/aiter/PR-2390.md) — [FlyDSL] Add FlyDSL MoE a4w4 support and update kernels  `[source-pr]`
+- [pr-aiter-24](sources/prs/aiter/PR-24.md) — Fp8 pa update kvcache  `[source-pr]`
+- [pr-aiter-2414](sources/prs/aiter/PR-2414.md) — perf: optimize _moe_mxfp4_sort_kernel — reduce recompilation and improve throughput  `[source-pr]`
+- [pr-aiter-242](sources/prs/aiter/PR-242.md) — expose out_before_quant for rmsnorm2d_with_add_smoothquant  `[source-pr]`
+- [pr-aiter-2427](sources/prs/aiter/PR-2427.md) — [TRITON]edit batched_gemm_a8w8 and gemm_a16_w16 kernel args for no recompile  `[source-pr]`
+- [pr-aiter-243](sources/prs/aiter/PR-243.md) — Disable some Triton quant tests  `[source-pr]`
+- [pr-aiter-2439](sources/prs/aiter/PR-2439.md) — Assembly kernel cleanup work  `[source-pr]`
+- [pr-aiter-2441](sources/prs/aiter/PR-2441.md) — [Triton MoE]: Add optimized Gluon kernel for AMD CDNA3 with K-dimension unrolling  `[source-pr]`
+- [pr-aiter-2442](sources/prs/aiter/PR-2442.md) — add fused_qknorm hip kernel  `[source-pr]`
+- [pr-aiter-2479](sources/prs/aiter/PR-2479.md) — mhc：add mhc_post hip kernel  `[source-pr]`
+- [pr-aiter-2482](sources/prs/aiter/PR-2482.md) — fix(gemm): add EVEN_MN heuristic to restore vectorized store in gemm_…  `[source-pr]`
+- [pr-aiter-2487](sources/prs/aiter/PR-2487.md) — Expose AQLayout as tunable parameter for CKTile blockscale 8-warp GEMM kernels  `[source-pr]`
+- [pr-aiter-2496](sources/prs/aiter/PR-2496.md) — Rebase to main  `[source-pr]`
+- [pr-aiter-2497](sources/prs/aiter/PR-2497.md) — Wjx/upgrade flydsl fused  `[source-pr]`
+- [pr-aiter-2499](sources/prs/aiter/PR-2499.md) — Fuse gated rmsnorm + group_quant for qwen3next and qwen3.5  `[source-pr]`
+- [pr-aiter-2522](sources/prs/aiter/PR-2522.md) — Update gfx942 PA PS kernels and write stride_scale_blk in asm_pa  `[source-pr]`
+- [pr-aiter-2525](sources/prs/aiter/PR-2525.md) — add WARP_SIZE define in csrc/include/aiter_hip_common.h  for host and device  &&   rm hip_compat.h  `[source-pr]`
+- [pr-aiter-2527](sources/prs/aiter/PR-2527.md) — add fused_qk_norm_group_quant kernel  `[source-pr]`
+- [pr-aiter-2533](sources/prs/aiter/PR-2533.md) — replace ck_tile api with opus api in some hip kernels  `[source-pr]`
+- [pr-aiter-2534](sources/prs/aiter/PR-2534.md) — Refactor RoPE Operators  `[source-pr]`
+- [pr-aiter-2545](sources/prs/aiter/PR-2545.md) — refactor hip kernel -- remove torch from csrc  `[source-pr]`
+- [pr-aiter-2555](sources/prs/aiter/PR-2555.md) — Fix some benchmark scripts so that they generate the output CSVs  `[source-pr]`
+- [pr-aiter-2556](sources/prs/aiter/PR-2556.md) — Adding benchmark script to PR #2360  `[source-pr]`
+- [pr-aiter-2562](sources/prs/aiter/PR-2562.md) — Fix nondeterministic RNG in test_fused_mxfp4_quant  `[source-pr]`
+- [pr-aiter-2568](sources/prs/aiter/PR-2568.md) — [feat](rope): support shuffle value cache layout  `[source-pr]`
+- [pr-aiter-2569](sources/prs/aiter/PR-2569.md) — Update gfx950 PA PS kernels and wire stride_scale_blk in asm_pa  `[source-pr]`
+- [pr-aiter-2571](sources/prs/aiter/PR-2571.md) — fix: del asm layernorm  `[source-pr]`
+- [pr-aiter-2581](sources/prs/aiter/PR-2581.md) — [FlyDSL] Optimize a4w4 MOE kernels  `[source-pr]`
+- [pr-aiter-2583](sources/prs/aiter/PR-2583.md) — [TRITON] Swiglu and reduce refactor  `[source-pr]`
+- [pr-aiter-261](sources/prs/aiter/PR-261.md) — Add per token quantization to PA Decode  `[source-pr]`
+- [pr-aiter-2620](sources/prs/aiter/PR-2620.md) — Add fused_dynamic_mxfp4_quant_moe_sort_hip  `[source-pr]`
+- [pr-aiter-2637](sources/prs/aiter/PR-2637.md) — fix stride check  error in fused_qk_norm_group_quant  `[source-pr]`
+- [pr-aiter-2657](sources/prs/aiter/PR-2657.md) — add triton fallback for mi455 gptoss & dsfp4  `[source-pr]`
+- [pr-aiter-2658](sources/prs/aiter/PR-2658.md) — [Perf]support ck fp8 blockscale splitk in moe tunner  `[source-pr]`
+- [pr-aiter-2688](sources/prs/aiter/PR-2688.md) — [TRITON] fix torch.compile graph break in arch_info.get_arch()  `[source-pr]`
+- [pr-aiter-2693](sources/prs/aiter/PR-2693.md) — fix fused_dynamic_mxfp4_quant_moe_sort dispatch  `[source-pr]`
+- [pr-aiter-2700](sources/prs/aiter/PR-2700.md) — Optimize fused_dynamic_mxfp4_quant_moe_sort_hip in small M  `[source-pr]`
+- [pr-aiter-2704](sources/prs/aiter/PR-2704.md) — Update quant.pyfix: add pack_dim to per_1x32_f4_quant for tl.dot_scaled RHS compatibility  `[source-pr]`
+- [pr-aiter-271](sources/prs/aiter/PR-271.md) — Wjx/moe activation  `[source-pr]`
+- [pr-aiter-2726](sources/prs/aiter/PR-2726.md) — [FlyDSL MOE] update a8w4 moe  `[source-pr]`
+- [pr-aiter-2734](sources/prs/aiter/PR-2734.md) — add tuner test suite  `[source-pr]`
+- [pr-aiter-2759](sources/prs/aiter/PR-2759.md) — Fix fused_dynamic_mxfp4_quant_moe_sort_hip err in EP  `[source-pr]`
+- [pr-aiter-2763](sources/prs/aiter/PR-2763.md) — [fix](cache): add eps to avoid dividing zero  `[source-pr]`
+- [pr-aiter-278](sources/prs/aiter/PR-278.md) — remove torch deps  `[source-pr]`
+- [pr-aiter-2796](sources/prs/aiter/PR-2796.md) — Update gfx942&gfx950 PA PS kernels and write stride_scale_page in asm_pa  `[source-pr]`
+- [pr-aiter-2811](sources/prs/aiter/PR-2811.md) — [CK_TILE] Fix bpreshuffle compile failure due to stale CShuffleEpilogueProblem arg  `[source-pr]`
+- [pr-aiter-282](sources/prs/aiter/PR-282.md) — Disable Triton PA Decode Quant GQA Test  `[source-pr]`
+- [pr-aiter-2823](sources/prs/aiter/PR-2823.md) — Add fused AR + RMSNorm + per-group FP8 quant: optional bf16 side-output  `[source-pr]`
+- [pr-aiter-2825](sources/prs/aiter/PR-2825.md) — test(moe_2stage): add csv-driven mode covering model_configs fmoe csvs  `[source-pr]`
+- [pr-aiter-2845](sources/prs/aiter/PR-2845.md) — Update kimik2 FP4 tuned fMoE config  `[source-pr]`
+- [pr-aiter-2846](sources/prs/aiter/PR-2846.md) — [release/v0.1.12] Remove C10_HIP_KERNEL_LAUNCH_CHECK (Lingpeng's preferred fix)  `[source-pr]`
+- [pr-aiter-2853](sources/prs/aiter/PR-2853.md) — make rmsnorm quant fusion support gemma  `[source-pr]`
+- [pr-aiter-2855](sources/prs/aiter/PR-2855.md) — [feat](norm_rope_cache): support q k v input for fused_qk_norm_rope_c…  `[source-pr]`
+- [pr-aiter-2863](sources/prs/aiter/PR-2863.md) — kimi a16wi4 moe support  `[source-pr]`
+- [pr-aiter-287](sources/prs/aiter/PR-287.md) — add asm moe stage1 doweight  `[source-pr]`
+- [pr-aiter-2879](sources/prs/aiter/PR-2879.md) — Support preshuffled layout in indexer_k_quant_and_cache / cp_gather_indexer_k_quant_cache  `[source-pr]`
+- [pr-aiter-2900](sources/prs/aiter/PR-2900.md) — Fix: correct mxfp4  for K not divisible by 256  `[source-pr]`
+- [pr-aiter-2921](sources/prs/aiter/PR-2921.md) — [TRITON] Set RNG seed in Triton tests  `[source-pr]`
+- [pr-aiter-2932](sources/prs/aiter/PR-2932.md) — [quant] refactor hip kernels  `[source-pr]`
+- [pr-aiter-2951](sources/prs/aiter/PR-2951.md) — [MOE DSV4] flydsl a8w4 moe for dsv4  `[source-pr]`
+- [pr-aiter-2954](sources/prs/aiter/PR-2954.md) — Fix indexing in cp_gather_indexer_k_quant_cache  `[source-pr]`
+- [pr-aiter-2958](sources/prs/aiter/PR-2958.md) — [kernel] add fused_qk_rmsnorm_per_token_quant kernel  `[source-pr]`
+- [pr-aiter-2959](sources/prs/aiter/PR-2959.md) — Use triton wheel no fork  `[source-pr]`
+- [pr-aiter-2962](sources/prs/aiter/PR-2962.md) — [kernel] add fused_qk_norm_rope_1way kernel  `[source-pr]`
+- [pr-aiter-297](sources/prs/aiter/PR-297.md) — [RFC] enhance the fmoe heuristic rule for block_n selection  `[source-pr]`
+- [pr-aiter-2972](sources/prs/aiter/PR-2972.md) — add swiglu a4w4 moe path for gpt-oss model  `[source-pr]`
+- [pr-aiter-2976](sources/prs/aiter/PR-2976.md) — mxfp4 quantize kernel  `[source-pr]`
+- [pr-aiter-3001](sources/prs/aiter/PR-3001.md) — Remove sorting for fmoe  `[source-pr]`
+- [pr-aiter-3005](sources/prs/aiter/PR-3005.md) — [Silo] Bulk merge: kernel fixes and features (SplitK, MoE fixes, Qwen3-Next, pa_mqa OOB)  `[source-pr]`
+- [pr-aiter-3006](sources/prs/aiter/PR-3006.md) — mla/gather_kv_b_proj: handle unquantized kv_b_proj weight (kv_proj_scale=None)  `[source-pr]`
+- [pr-aiter-301](sources/prs/aiter/PR-301.md) — Fa moe tuning  `[source-pr]`
+- [pr-aiter-3010](sources/prs/aiter/PR-3010.md) — no quant rmsnorm support  `[source-pr]`
+- [pr-aiter-3035](sources/prs/aiter/PR-3035.md) — add rope/rotate_activation/fp4_quant_inplace fused kernel for dsv4  `[source-pr]`
+- [pr-aiter-304](sources/prs/aiter/PR-304.md) — [TRITON]: GEMM, MoE  and Quants Kernel/Benchmark Updates  `[source-pr]`
+- [pr-aiter-3049](sources/prs/aiter/PR-3049.md) — [Hotfix] aiter/__init__: do not swallow import errors on Linux (fixes silent rms*/quant*/gemm* truncation)  `[source-pr]`
+- [pr-aiter-3050](sources/prs/aiter/PR-3050.md) — Fix CK MoE split-k dispatch for blockscale FP8  `[source-pr]`
+- [pr-aiter-3057](sources/prs/aiter/PR-3057.md) — [Triton] [ATOM] DSV4 fusions phase 1  `[source-pr]`
+- [pr-aiter-3078](sources/prs/aiter/PR-3078.md) — fix: fix out-of-bounds issue in rope under concurrent scenarios，fix interleaved fused_rope_rms_2way cos/sin out-of-bounds access  `[source-pr]`
+- [pr-aiter-308](sources/prs/aiter/PR-308.md) — ck fuse activation in moe stage1  `[source-pr]`
+- [pr-aiter-31](sources/prs/aiter/PR-31.md) — Ddddd  `[source-pr]`
+- [pr-aiter-3103](sources/prs/aiter/PR-3103.md) — [MOE] Special path for moe ptpc fp8, batch 1~32 with hsaco  `[source-pr]`
+- [pr-aiter-3123](sources/prs/aiter/PR-3123.md) — [MoE] Align Swiglu MXFP4 fused quant paths  `[source-pr]`
+- [pr-aiter-3137](sources/prs/aiter/PR-3137.md) — [qk_rmsnorm_group_quant] refactor hip kl  `[source-pr]`
+- [pr-aiter-3145](sources/prs/aiter/PR-3145.md) — add silu_and_mul_quant and Opt silu_and_mul  `[source-pr]`
+- [pr-aiter-3148](sources/prs/aiter/PR-3148.md) — Rchamber/optimised dynamic per group scaled quant v2  `[source-pr]`
+- [pr-aiter-3153](sources/prs/aiter/PR-3153.md) — [MoE] Align FlyDSL MXFP4 rounding  `[source-pr]`
+- [pr-aiter-3159](sources/prs/aiter/PR-3159.md) — [module_fused_qk_norm_rope_cache_quant_shuffle] hip kl refactor  `[source-pr]`
+- [pr-aiter-3185](sources/prs/aiter/PR-3185.md) — Add fused DeepSeek-V3.2 indexer cache kernel  `[source-pr]`
+- [pr-aiter-3187](sources/prs/aiter/PR-3187.md) — [TRITON] Remove precision ieee from non-F32 tl.dots  `[source-pr]`
+- [pr-aiter-320](sources/prs/aiter/PR-320.md) — add pa qlen for mtp  `[source-pr]`
+- [pr-aiter-3214](sources/prs/aiter/PR-3214.md) — configs: add DSv4-Flash shape to dsv4_fp8fp4_tuned_fmoe.csv  `[source-pr]`
+- [pr-aiter-3228](sources/prs/aiter/PR-3228.md) — [TRITON] Add gfx1201 fp8 gemm configs  `[source-pr]`
+- [pr-aiter-3231](sources/prs/aiter/PR-3231.md) — [TRITON] Use tl.dot(..., acc=...) accumulator form  `[source-pr]`
+- [pr-aiter-3235](sources/prs/aiter/PR-3235.md) — Guard sparse indexer padding and mapped tokens  `[source-pr]`
+- [pr-aiter-3283](sources/prs/aiter/PR-3283.md) — Tune gfx950 batched GEMM configs and benchmarks  `[source-pr]`
+- [pr-aiter-329](sources/prs/aiter/PR-329.md) — Resolve import conflicts with installed `triton` library by renaming `op_tests.triton` for modular imports  `[source-pr]`
+- [pr-aiter-3293](sources/prs/aiter/PR-3293.md) — Moe gfx1250 optimizations  `[source-pr]`
+- [pr-aiter-3301](sources/prs/aiter/PR-3301.md) — support indexer_qk_rope_quant_and_cache_kernel non-contiguous k input  `[source-pr]`
+- [pr-aiter-3312](sources/prs/aiter/PR-3312.md) — [MOE] Add fused dynamic MXFP8 quant + moe_sort HIP path  `[source-pr]`
+- [pr-aiter-3313](sources/prs/aiter/PR-3313.md) — Zhimding/fix aot moe pad 0522  `[source-pr]`
+- [pr-aiter-332](sources/prs/aiter/PR-332.md) — Asm extend chip arch  `[source-pr]`
+- [pr-aiter-3320](sources/prs/aiter/PR-3320.md) — feat(flydsl): add fused qk_norm_rope_quant kernel for DeepSeek-V4-Pro decode  `[source-pr]`
+- [pr-aiter-3322](sources/prs/aiter/PR-3322.md) — [csrc] opus pk_mul_f32 + rmsnorm_quant: drop CDNA-only v_pk_mul_f32 asm  `[source-pr]`
+- [pr-aiter-3332](sources/prs/aiter/PR-3332.md) — [dtypes] add gfx1200 / gfx1201 (RDNA4) to FP8 dtype map  `[source-pr]`
+- [pr-aiter-3336](sources/prs/aiter/PR-3336.md) — [csrc/opus] add synchronous fallback to _async_load for non-buffer-to-LDS archs  `[source-pr]`
+- [pr-aiter-3341](sources/prs/aiter/PR-3341.md) — [MoE] Optimize qwen3.5 397B ptpc fp8 moe prefill and decoding  `[source-pr]`
+- [pr-aiter-3342](sources/prs/aiter/PR-3342.md) — Revert 'Zhimding/fix aot moe pad 0522'  `[source-pr]`
+- [pr-aiter-3356](sources/prs/aiter/PR-3356.md) — [csrc] activation: guard CDNA-only v_pk_mul_f32 asm in silu/swiglu kernels  `[source-pr]`
+- [pr-aiter-3357](sources/prs/aiter/PR-3357.md) — [Kernel] flydsl fused_compress_attn for V4-Pro/V4-Flash CSA+HCA  `[source-pr]`
+- [pr-aiter-3358](sources/prs/aiter/PR-3358.md) — support partial rope with fused_qk_norm_rope_cache_quant_shuffle  `[source-pr]`
+- [pr-aiter-3367](sources/prs/aiter/PR-3367.md) — [MOE] Drop a_scale_one for _fp8 stage1 + remove fp8 fuse_quant bypass  `[source-pr]`
+- [pr-aiter-3373](sources/prs/aiter/PR-3373.md) — Flydsl update fix dynmaic layout; use fx.ptr for kernels not using layout  `[source-pr]`
+- [pr-aiter-3398](sources/prs/aiter/PR-3398.md) — Opt prefill mxfp8 quant moe sort  `[source-pr]`
+- [pr-aiter-3400](sources/prs/aiter/PR-3400.md) — [MoE] Support Qwen3.5-122B TP8 and Qwen3.5-35B TP4  `[source-pr]`
+- [pr-aiter-3404](sources/prs/aiter/PR-3404.md) — moe enable padding params as runtime  `[source-pr]`
+- [pr-aiter-3416](sources/prs/aiter/PR-3416.md) — Fix causal f8 mha kernel to properly support causal mask  `[source-pr]`
+- [pr-aiter-3435](sources/prs/aiter/PR-3435.md) — Revert 'moe enable padding params as runtime'  `[source-pr]`
+- [pr-aiter-362](sources/prs/aiter/PR-362.md) — [TRITON] Add RMSNorm quant (smooth and dynamic) Triton Kernel  `[source-pr]`
+- [pr-aiter-37](sources/prs/aiter/PR-37.md) — Asm layernorm  `[source-pr]`
+- [pr-aiter-373](sources/prs/aiter/PR-373.md) — [Triton] fused routing and fused quant kernels  `[source-pr]`
+- [pr-aiter-377](sources/prs/aiter/PR-377.md) — update build utility  `[source-pr]`
+- [pr-aiter-381](sources/prs/aiter/PR-381.md) — [TRITON][GEMM] Add support for inplace output  `[source-pr]`
+- [pr-aiter-39](sources/prs/aiter/PR-39.md) — add layernorm asm  `[source-pr]`
+- [pr-aiter-394](sources/prs/aiter/PR-394.md) — [TRITON]: Mxfp4 Quant and GEMM Kernel  `[source-pr]`
+- [pr-aiter-414](sources/prs/aiter/PR-414.md) — Skinny GEMM support bfloat16 input  `[source-pr]`
+- [pr-aiter-422](sources/prs/aiter/PR-422.md) — Update FA api & get AITER_ASM_DIR in csrc  `[source-pr]`
+- [pr-aiter-424](sources/prs/aiter/PR-424.md) — [TRITON]: Add MXFP4 quantization reference  `[source-pr]`
+- [pr-aiter-435](sources/prs/aiter/PR-435.md) — mxfp4_quant_shuffle  `[source-pr]`
+- [pr-aiter-437](sources/prs/aiter/PR-437.md) — hip pertoken/pertensor quant kernel opt  `[source-pr]`
+- [pr-aiter-439](sources/prs/aiter/PR-439.md) — add asm fp4 gemm  `[source-pr]`
+- [pr-aiter-446](sources/prs/aiter/PR-446.md) — feat: add allreduce fp8 kernel  `[source-pr]`
+- [pr-aiter-452](sources/prs/aiter/PR-452.md) — TRITON: Tune mxfp4 quantization kernel  `[source-pr]`
+- [pr-aiter-466](sources/prs/aiter/PR-466.md) — Add aiter namespace to avoid symbol conflict with vllm  `[source-pr]`
+- [pr-aiter-471](sources/prs/aiter/PR-471.md) — [TRITON]: Add fused activation and mxfp4 quantization kernel  `[source-pr]`
+- [pr-aiter-479](sources/prs/aiter/PR-479.md) — remove input pad for asm gemm a4w4  `[source-pr]`
+- [pr-aiter-482](sources/prs/aiter/PR-482.md) — add a4w4 asm_moe  `[source-pr]`
+- [pr-aiter-497](sources/prs/aiter/PR-497.md) — cherry pick from asm_moe_1stage  `[source-pr]`
+- [pr-aiter-50](sources/prs/aiter/PR-50.md) — compiler_by_json  `[source-pr]`
+- [pr-aiter-503](sources/prs/aiter/PR-503.md) — Quant kernel refine  `[source-pr]`
+- [pr-aiter-507](sources/prs/aiter/PR-507.md) — Cache_block_quant_update for asm pa  `[source-pr]`
+- [pr-aiter-509](sources/prs/aiter/PR-509.md) — quant_opt  `[source-pr]`
+- [pr-aiter-510](sources/prs/aiter/PR-510.md) — [TRITON] Add LayerNorm fused with quant Triton Kernels  `[source-pr]`
+- [pr-aiter-512](sources/prs/aiter/PR-512.md) — [TRITON]: Triton moe refactor  `[source-pr]`
+- [pr-aiter-523](sources/prs/aiter/PR-523.md) — Hotfix reduce  `[source-pr]`
+- [pr-aiter-526](sources/prs/aiter/PR-526.md) — moe_ep_fix_test_g1u0  `[source-pr]`
+- [pr-aiter-531](sources/prs/aiter/PR-531.md) — format kernel list python  `[source-pr]`
+- [pr-aiter-538](sources/prs/aiter/PR-538.md) — Fp4_quant_update  `[source-pr]`
+- [pr-aiter-545](sources/prs/aiter/PR-545.md) — update quant  for i8 pertensor  `[source-pr]`
+- [pr-aiter-547](sources/prs/aiter/PR-547.md) — Gemm_f4_bpreshuffle  `[source-pr]`
+- [pr-aiter-553](sources/prs/aiter/PR-553.md) — update pa asm  `[source-pr]`
+- [pr-aiter-557](sources/prs/aiter/PR-557.md) — Fix torch-compile error  `[source-pr]`
+- [pr-aiter-571](sources/prs/aiter/PR-571.md) — Dispatch combine  `[source-pr]`
+- [pr-aiter-573](sources/prs/aiter/PR-573.md) — [TRITON]: GEMM updates for DS  `[source-pr]`
+- [pr-aiter-576](sources/prs/aiter/PR-576.md) — [TRITON] Add RMSNorm bwd Triton Kernels  `[source-pr]`
+- [pr-aiter-579](sources/prs/aiter/PR-579.md) — mi350_pa  `[source-pr]`
+- [pr-aiter-580](sources/prs/aiter/PR-580.md) — merge moe from 350 launch  `[source-pr]`
+- [pr-aiter-588](sources/prs/aiter/PR-588.md) — [TRITON]: Quantization updates(add int8 and use common fp8 dtypes)  `[source-pr]`
+- [pr-aiter-590](sources/prs/aiter/PR-590.md) — update args  `[source-pr]`
+- [pr-aiter-591](sources/prs/aiter/PR-591.md) — Pa rocm refresh4  `[source-pr]`
+- [pr-aiter-594](sources/prs/aiter/PR-594.md) — [TRITON]: Kernel benchmarking improvements (for op_benchmarks/triton)  `[source-pr]`
+- [pr-aiter-596](sources/prs/aiter/PR-596.md) — DIY_args  `[source-pr]`
+- [pr-aiter-597](sources/prs/aiter/PR-597.md) — [TRITON]: Standardize GEMM weight shape to (N, K) and TN memory layout (by default)  `[source-pr]`
+- [pr-aiter-598](sources/prs/aiter/PR-598.md) — [TRITON] Refactor Triton RMSNorm and LayerNorm unit tests  `[source-pr]`
+- [pr-aiter-60](sources/prs/aiter/PR-60.md) — Rmsnorm fp8gemm  `[source-pr]`
+- [pr-aiter-602](sources/prs/aiter/PR-602.md) — add MI350 support for skinny_gemm  `[source-pr]`
+- [pr-aiter-607](sources/prs/aiter/PR-607.md) — [Triton] DS fused custom ops  `[source-pr]`
+- [pr-aiter-610](sources/prs/aiter/PR-610.md) — [TRITON]: Moe tuning mi350  `[source-pr]`
+- [pr-aiter-615](sources/prs/aiter/PR-615.md) — compile flag clean up  `[source-pr]`
+- [pr-aiter-62](sources/prs/aiter/PR-62.md) — Fmoe g1u1 a8w8  `[source-pr]`
+- [pr-aiter-624](sources/prs/aiter/PR-624.md) — add blockscale ps asm moe  `[source-pr]`
+- [pr-aiter-626](sources/prs/aiter/PR-626.md) — Topksoftmax_opt  `[source-pr]`
+- [pr-aiter-633](sources/prs/aiter/PR-633.md) — update hip quant for corner case  `[source-pr]`
+- [pr-aiter-64](sources/prs/aiter/PR-64.md) — fix quant test fail  `[source-pr]`
+- [pr-aiter-650](sources/prs/aiter/PR-650.md) — [TRITON]: Benchmarking scripts updates  `[source-pr]`
+- [pr-aiter-67](sources/prs/aiter/PR-67.md) — Fix ck fmoe  `[source-pr]`
+- [pr-aiter-680](sources/prs/aiter/PR-680.md) — [TRITON]: Add missing GEMM benchmarks  `[source-pr]`
+- [pr-aiter-690](sources/prs/aiter/PR-690.md) — fmoe_codegen_asm  `[source-pr]`
+- [pr-aiter-702](sources/prs/aiter/PR-702.md) — asm_fmoe_codegen  `[source-pr]`
+- [pr-aiter-71](sources/prs/aiter/PR-71.md) — update fp8 quant kernel select  `[source-pr]`
+- [pr-aiter-715](sources/prs/aiter/PR-715.md) — add fp8 test for rms_fuse_quant  `[source-pr]`
+- [pr-aiter-719](sources/prs/aiter/PR-719.md) — update ptpc bpreshuffle gemm tune  `[source-pr]`
+- [pr-aiter-72](sources/prs/aiter/PR-72.md) — rename ater to aiter  `[source-pr]`
+- [pr-aiter-722](sources/prs/aiter/PR-722.md) — [TRITON]: Add logging to GEMM ops  `[source-pr]`
+- [pr-aiter-729](sources/prs/aiter/PR-729.md) — [TRITON]: Add logging info to Triton Kernels  `[source-pr]`
+- [pr-aiter-73](sources/prs/aiter/PR-73.md) — add fmoe asm g1u1 fp8 smoothquant  `[source-pr]`
+- [pr-aiter-733](sources/prs/aiter/PR-733.md) — fix multiprocess tuning problem  `[source-pr]`
+- [pr-aiter-740](sources/prs/aiter/PR-740.md) — Enable custom op and avoid graph breaks  `[source-pr]`
+- [pr-aiter-743](sources/prs/aiter/PR-743.md) — [TRITON]: Clear cache allocator in Triton tests  `[source-pr]`
+- [pr-aiter-752](sources/prs/aiter/PR-752.md) — mdf_UT_args  `[source-pr]`
+- [pr-aiter-758](sources/prs/aiter/PR-758.md) — fix quant_type=1x128(128x128) can't use tuned_fmoe cfg  `[source-pr]`
+- [pr-aiter-786](sources/prs/aiter/PR-786.md) — [TRITON] add test scripts for fp8 bmm prequant kernel  `[source-pr]`
+- [pr-aiter-790](sources/prs/aiter/PR-790.md) — [TRITON] Moe fp8 tuning mi350  `[source-pr]`
+- [pr-aiter-794](sources/prs/aiter/PR-794.md) — fix test_rmsnorm2dFusedAddQuant.py --mode 3  `[source-pr]`
+- [pr-aiter-796](sources/prs/aiter/PR-796.md) — fix typehint for rmsnorm2d_fwd_with_add_smoothquant  `[source-pr]`
+- [pr-aiter-80](sources/prs/aiter/PR-80.md) — update g1u1 fp8 smoothquant fmoe  `[source-pr]`
+- [pr-aiter-801](sources/prs/aiter/PR-801.md) — [feature] [rocm] add quick allreduce  `[source-pr]`
+- [pr-aiter-824](sources/prs/aiter/PR-824.md) — [TRITON] Add non-TN layout tests to Triton GEMMs  `[source-pr]`
+- [pr-aiter-837](sources/prs/aiter/PR-837.md) — add moe 1stage implementation to tune  `[source-pr]`
+- [pr-aiter-841](sources/prs/aiter/PR-841.md) — add aot kernel build for deepseek  `[source-pr]`
+- [pr-aiter-852](sources/prs/aiter/PR-852.md) — [TRITON]: Reduce usage of hardcoded XCD  `[source-pr]`
+- [pr-aiter-866](sources/prs/aiter/PR-866.md) — refine moe codegen  `[source-pr]`
+- [pr-aiter-870](sources/prs/aiter/PR-870.md) — update batch & group mode fwd kernel padding on seqlen dimension  `[source-pr]`
+- [pr-aiter-871](sources/prs/aiter/PR-871.md) — [TRITON]: Add Json file for batched gemm a8w8  `[source-pr]`
+- [pr-aiter-888](sources/prs/aiter/PR-888.md) — unit8 compatibility  `[source-pr]`
+- [pr-aiter-90](sources/prs/aiter/PR-90.md) — update asm pa  `[source-pr]`
+- [pr-aiter-901](sources/prs/aiter/PR-901.md) — [Port][355_wip] Port 2 PRs into 355_wip branch(quick gemm, unit8 compatibility)  `[source-pr]`
+- [pr-aiter-939](sources/prs/aiter/PR-939.md) — [TRITON]: Triton add jax triton support  `[source-pr]`
+- [pr-aiter-95](sources/prs/aiter/PR-95.md) — add ck moe 2stage  `[source-pr]`
+- [pr-aiter-961](sources/prs/aiter/PR-961.md) — Fix rmsnorm2dFusedAddQuant error since custom op SymInt issue  `[source-pr]`
+- [pr-aiter-966](sources/prs/aiter/PR-966.md) — update fmoe co_kernel  `[source-pr]`
+- [pr-aiter-967](sources/prs/aiter/PR-967.md) — Fix get_hip_quant graph breaks  `[source-pr]`
+- [pr-aiter-97](sources/prs/aiter/PR-97.md) — FP16 Paged Attention & Fused MoE  `[source-pr]`
+- [pr-aiter-975](sources/prs/aiter/PR-975.md) — [TRITON] fix: MXFP4 mantissa rounding  `[source-pr]`
+- [pr-aiter-977](sources/prs/aiter/PR-977.md) — add cktile moe a16w4  `[source-pr]`
+- [pr-aiter-983](sources/prs/aiter/PR-983.md) — Smoothquant update  `[source-pr]`
+- [pr-aiter-984](sources/prs/aiter/PR-984.md) — [Triton] 355 wip fused triton  `[source-pr]`
+- [pr-composable_kernel-1035](sources/prs/composable_kernel/PR-1035.md) — Introduce multiABD api and deprecate multiD  `[source-pr]`
+- [pr-composable_kernel-1044](sources/prs/composable_kernel/PR-1044.md) — Split the static library into several files.  `[source-pr]`
+- [pr-composable_kernel-108](sources/prs/composable_kernel/PR-108.md) — Int8 qunatization gemm xdl  `[source-pr]`
+- [pr-composable_kernel-1081](sources/prs/composable_kernel/PR-1081.md) — Support broadcast for bias in grouped conv fwd  `[source-pr]`
+- [pr-composable_kernel-116](sources/prs/composable_kernel/PR-116.md) — Consider gemm requant relu requant as gemm fusuion  `[source-pr]`
+- [pr-composable_kernel-1180](sources/prs/composable_kernel/PR-1180.md) — Replacing RowMajor type alias in gemm-related client examples  `[source-pr]`
+- [pr-composable_kernel-1223](sources/prs/composable_kernel/PR-1223.md) — Split the instances by architecture.  `[source-pr]`
+- [pr-composable_kernel-1224](sources/prs/composable_kernel/PR-1224.md) — F8 quantization for FMHA forward  `[source-pr]`
+- [pr-composable_kernel-1246](sources/prs/composable_kernel/PR-1246.md) — Small refactor  `[source-pr]`
+- [pr-composable_kernel-126](sources/prs/composable_kernel/PR-126.md) — Grouped GEMM for fp16  `[source-pr]`
+- [pr-composable_kernel-1269](sources/prs/composable_kernel/PR-1269.md) — [CK_TILE] support alibi  `[source-pr]`
+- [pr-composable_kernel-1295](sources/prs/composable_kernel/PR-1295.md) — [CK_TILE] support group from cmdline  `[source-pr]`
+- [pr-composable_kernel-1387](sources/prs/composable_kernel/PR-1387.md) — [CK_TILE] Add PagedAttention kernels  `[source-pr]`
+- [pr-composable_kernel-1430](sources/prs/composable_kernel/PR-1430.md) — [CK_TILE] Pick bugfixes for ROCm 6.2 compiler issues  `[source-pr]`
+- [pr-composable_kernel-1513](sources/prs/composable_kernel/PR-1513.md) — Duplicate Cmake tidy-target issue  `[source-pr]`
+- [pr-composable_kernel-155](sources/prs/composable_kernel/PR-155.md) — Refine kernel parameter of int8 (ScalarPerVector)  `[source-pr]`
+- [pr-composable_kernel-156](sources/prs/composable_kernel/PR-156.md) — Batched gemm and reduction  `[source-pr]`
+- [pr-composable_kernel-1591](sources/prs/composable_kernel/PR-1591.md) — add int8 gemm multiply multiply a8w8  `[source-pr]`
+- [pr-composable_kernel-1604](sources/prs/composable_kernel/PR-1604.md) — [CK_TILE] layernorm support fused-quant/fused-add  `[source-pr]`
+- [pr-composable_kernel-1605](sources/prs/composable_kernel/PR-1605.md) — [Ck tile] support rmsnorm and related fusion  `[source-pr]`
+- [pr-composable_kernel-1608](sources/prs/composable_kernel/PR-1608.md) — [CK_TILE] Add fmha fwd headdim96 support  `[source-pr]`
+- [pr-composable_kernel-1610](sources/prs/composable_kernel/PR-1610.md) — Remove virtual destructors from unary ops  `[source-pr]`
+- [pr-composable_kernel-1617](sources/prs/composable_kernel/PR-1617.md) — [Ck_tile] smoothquant  `[source-pr]`
+- [pr-composable_kernel-1623](sources/prs/composable_kernel/PR-1623.md) — [CK_TILE] layernorm have more accurate residual  `[source-pr]`
+- [pr-composable_kernel-1624](sources/prs/composable_kernel/PR-1624.md) — Ck tile/moe sorting  `[source-pr]`
+- [pr-composable_kernel-1634](sources/prs/composable_kernel/PR-1634.md) — [CK_TILE] fused-moe first version  `[source-pr]`
+- [pr-composable_kernel-1654](sources/prs/composable_kernel/PR-1654.md) — support max3 in smoothquant and add+ rmsnorm + rdquant  `[source-pr]`
+- [pr-composable_kernel-1660](sources/prs/composable_kernel/PR-1660.md) — add batched_transpose implement  `[source-pr]`
+- [pr-composable_kernel-1672](sources/prs/composable_kernel/PR-1672.md) — [CK_TILE]Moe update index  `[source-pr]`
+- [pr-composable_kernel-1678](sources/prs/composable_kernel/PR-1678.md) — [CK_TILE] Add paged-kvcache support in group mode fmha fwd splitkv kernels  `[source-pr]`
+- [pr-composable_kernel-1705](sources/prs/composable_kernel/PR-1705.md) — [CK_TILE] Add fmha fwd N-Warp S-Shuffle pipeline (fmha fwd splitkv pipeline variant)  `[source-pr]`
+- [pr-composable_kernel-1713](sources/prs/composable_kernel/PR-1713.md) — Ck tile grouped GEMM example  `[source-pr]`
+- [pr-composable_kernel-1741](sources/prs/composable_kernel/PR-1741.md) — enable bias feature that add bias before adding residual (for rtpllm project)  `[source-pr]`
+- [pr-composable_kernel-1742](sources/prs/composable_kernel/PR-1742.md) — Ck tile/smoothquant out stride  `[source-pr]`
+- [pr-composable_kernel-1747](sources/prs/composable_kernel/PR-1747.md) — [CK_TILE]naive attn support FP8 KVCache quant  `[source-pr]`
+- [pr-composable_kernel-175](sources/prs/composable_kernel/PR-175.md) — Code refactor  `[source-pr]`
+- [pr-composable_kernel-1770](sources/prs/composable_kernel/PR-1770.md) — Promote develop into amd-develop  `[source-pr]`
+- [pr-composable_kernel-1778](sources/prs/composable_kernel/PR-1778.md) — Remove using partitioner for all fmha kernels  `[source-pr]`
+- [pr-composable_kernel-1784](sources/prs/composable_kernel/PR-1784.md) — Ck tile/layernorm:  implement naive reduce, opt performance  `[source-pr]`
+- [pr-composable_kernel-1786](sources/prs/composable_kernel/PR-1786.md) — Implement the fp16xint4 scale weight only kernel for Ali  `[source-pr]`
+- [pr-composable_kernel-1789](sources/prs/composable_kernel/PR-1789.md) — [CK_TILE] fmha fwd splitkv optimization for decode (seqlen_q=1)  `[source-pr]`
+- [pr-composable_kernel-1791](sources/prs/composable_kernel/PR-1791.md) — [CK_TILE] Add GetName for GEMM kernels  `[source-pr]`
+- [pr-composable_kernel-1802](sources/prs/composable_kernel/PR-1802.md) — [CK_TILE] Add Various Fusion Functions to RMSNorm  `[source-pr]`
+- [pr-composable_kernel-1807](sources/prs/composable_kernel/PR-1807.md) — enable int4 scale (weight only) kernel  `[source-pr]`
+- [pr-composable_kernel-1808](sources/prs/composable_kernel/PR-1808.md) — [CK_TILE] Fix mock token id, support g1u1/g1u0 through same inline code block  `[source-pr]`
+- [pr-composable_kernel-1814](sources/prs/composable_kernel/PR-1814.md) — [CK_TILE] Implement fp8 quant tests/examples for layernorm and rmsnorm  `[source-pr]`
+- [pr-composable_kernel-1830](sources/prs/composable_kernel/PR-1830.md) — [CK_TILE] moe-smoothquant support fp8 output  `[source-pr]`
+- [pr-composable_kernel-1839](sources/prs/composable_kernel/PR-1839.md) — Added Int4 mixed batch gemm support  `[source-pr]`
+- [pr-composable_kernel-1861](sources/prs/composable_kernel/PR-1861.md) — [CK_TILE] Improve RMS/Layer Normalization 2 Pass Pipeline Performance  `[source-pr]`
+- [pr-composable_kernel-1862](sources/prs/composable_kernel/PR-1862.md) — [A8W8 GEMM] Optimized weight-preshuffled implementation & add quantization datatype for CK TILE rms_norm  `[source-pr]`
+- [pr-composable_kernel-1880](sources/prs/composable_kernel/PR-1880.md) — Add ck tile examples to package  `[source-pr]`
+- [pr-composable_kernel-1901](sources/prs/composable_kernel/PR-1901.md) — enable pipeline v3.  `[source-pr]`
+- [pr-composable_kernel-1910](sources/prs/composable_kernel/PR-1910.md) — [CK_TILE] add moe-sorting MP kernel  `[source-pr]`
+- [pr-composable_kernel-1936](sources/prs/composable_kernel/PR-1936.md) — ck moe gemm implement  `[source-pr]`
+- [pr-composable_kernel-1949](sources/prs/composable_kernel/PR-1949.md) — Ck int4 moe develop  `[source-pr]`
+- [pr-composable_kernel-199](sources/prs/composable_kernel/PR-199.md) — Add FP64 XDL GEMM built-in function  `[source-pr]`
+- [pr-composable_kernel-2026](sources/prs/composable_kernel/PR-2026.md) — Moe gemm activation  `[source-pr]`
+- [pr-composable_kernel-2040](sources/prs/composable_kernel/PR-2040.md) — fuse moe activation  `[source-pr]`
+- [pr-composable_kernel-2045](sources/prs/composable_kernel/PR-2045.md) — fix no quant case  `[source-pr]`
+- [pr-composable_kernel-2060](sources/prs/composable_kernel/PR-2060.md) — Merge moe act to testx  `[source-pr]`
+- [pr-composable_kernel-2108](sources/prs/composable_kernel/PR-2108.md) — [CK_TILE] Allow specifying logits soft-caping through fMHA forwawrd APIs  `[source-pr]`
+- [pr-composable_kernel-2125](sources/prs/composable_kernel/PR-2125.md) — Support for MFMA_16x16x128 for fp8/bf8  `[source-pr]`
+- [pr-composable_kernel-2150](sources/prs/composable_kernel/PR-2150.md) — Revert 'Add ck tile examples to package'  `[source-pr]`
+- [pr-composable_kernel-2163](sources/prs/composable_kernel/PR-2163.md) — [CK_TILE] Add logits soft-capping & customization support to the FMHA forward kernel/pipelines  `[source-pr]`
+- [pr-composable_kernel-2202](sources/prs/composable_kernel/PR-2202.md) — Use new mfma instructions for FP8 on gfx950  `[source-pr]`
+- [pr-composable_kernel-2207](sources/prs/composable_kernel/PR-2207.md) — Fix 11_add_rmsnorm2d_rdquant  `[source-pr]`
+- [pr-composable_kernel-2243](sources/prs/composable_kernel/PR-2243.md) — [CK_TILE] fix build error in tile_add_rmsnorm2d_rdquant_fwd  `[source-pr]`
+- [pr-composable_kernel-2280](sources/prs/composable_kernel/PR-2280.md) — Merge 'amd-develop' till 29574f05f into amd-master  `[source-pr]`
+- [pr-composable_kernel-2294](sources/prs/composable_kernel/PR-2294.md) — Optimized GEMMs for MX FP4/8  `[source-pr]`
+- [pr-composable_kernel-2301](sources/prs/composable_kernel/PR-2301.md) — Label CMakeLists message() as DEBUG or STATUS for clean build output  `[source-pr]`
+- [pr-composable_kernel-2320](sources/prs/composable_kernel/PR-2320.md) — Do not use warpSize as compile time constant as it is removed  `[source-pr]`
+- [pr-composable_kernel-2339](sources/prs/composable_kernel/PR-2339.md) — fix moe i4 bug from aiter  `[source-pr]`
+- [pr-composable_kernel-2350](sources/prs/composable_kernel/PR-2350.md) — WMMA GEMM b_scale  `[source-pr]`
+- [pr-composable_kernel-2357](sources/prs/composable_kernel/PR-2357.md) — [CK_TILE] Grouped Convolution Backward Weight Kernel  `[source-pr]`
+- [pr-composable_kernel-2388](sources/prs/composable_kernel/PR-2388.md) — [CK_TILE] Fix compilation errors introduced in #2320, #2219 and #2214  `[source-pr]`
+- [pr-composable_kernel-2405](sources/prs/composable_kernel/PR-2405.md) — ck tile pagedkv prefill  `[source-pr]`
+- [pr-composable_kernel-2409](sources/prs/composable_kernel/PR-2409.md) — [CK_TILE] Enhance RMSNorm Accuracy: New Pipeline Pass for Selectable Implementation  `[source-pr]`
+- [pr-composable_kernel-2417](sources/prs/composable_kernel/PR-2417.md) — Tests for CK tile Permute and MOE Sorting  `[source-pr]`
+- [pr-composable_kernel-2453](sources/prs/composable_kernel/PR-2453.md) — Tests for CK Tile Batched Transpose and Smoothquant  `[source-pr]`
+- [pr-composable_kernel-2454](sources/prs/composable_kernel/PR-2454.md) — Support sink-attn in a specific forward fmha branch  `[source-pr]`
+- [pr-composable_kernel-2458](sources/prs/composable_kernel/PR-2458.md) — Tests for CK Tile Flatmm and MOE Smoothquant  `[source-pr]`
+- [pr-composable_kernel-2473](sources/prs/composable_kernel/PR-2473.md) — ck_tile kernel for gemm with groupwise quantized A  tensor  `[source-pr]`
+- [pr-composable_kernel-2528](sources/prs/composable_kernel/PR-2528.md) — [CK_TILE] Support WMMA (gfx12) in FMHA  `[source-pr]`
+- [pr-composable_kernel-2551](sources/prs/composable_kernel/PR-2551.md) — Add json dump support to output details from CK/CKTile Examples.  `[source-pr]`
+- [pr-composable_kernel-2554](sources/prs/composable_kernel/PR-2554.md) — [CK Tile] Fix building issue on RHEL8  `[source-pr]`
+- [pr-composable_kernel-2596](sources/prs/composable_kernel/PR-2596.md) — [CK_Tile] Refactor MOE Sorting and Smoothquant ctests to gtests  `[source-pr]`
+- [pr-composable_kernel-2622](sources/prs/composable_kernel/PR-2622.md) — [CK_Tile] Refactor Permute and MOE Smoothquant ctests to gtests  `[source-pr]`
+- [pr-composable_kernel-2624](sources/prs/composable_kernel/PR-2624.md) — Preshuffle AQ matrix in block scale gemm  `[source-pr]`
+- [pr-composable_kernel-2629](sources/prs/composable_kernel/PR-2629.md) — [CK-TILE] Default epilogue, adding support for D  `[source-pr]`
+- [pr-composable_kernel-2641](sources/prs/composable_kernel/PR-2641.md) — Optimize fmha fwd decode & prefill for gfx950  `[source-pr]`
+- [pr-composable_kernel-2653](sources/prs/composable_kernel/PR-2653.md) — Fix num_byte calculations to use nhead_k for K & V size  `[source-pr]`
+- [pr-composable_kernel-2663](sources/prs/composable_kernel/PR-2663.md) — ck_tile kernel for gemm with groupwise quantized B tensor.  `[source-pr]`
+- [pr-composable_kernel-2670](sources/prs/composable_kernel/PR-2670.md) — Revert 'Optimize fmha fwd decode & prefill for gfx950'  `[source-pr]`
+- [pr-composable_kernel-2671](sources/prs/composable_kernel/PR-2671.md) — Re-enable optimization for gfx950 fmha fwd  `[source-pr]`
+- [pr-composable_kernel-2679](sources/prs/composable_kernel/PR-2679.md) — Support transposed C tile in Aquant  `[source-pr]`
+- [pr-composable_kernel-2687](sources/prs/composable_kernel/PR-2687.md) — [Documentation] update instructions for launching script which launches cmake  `[source-pr]`
+- [pr-composable_kernel-2700](sources/prs/composable_kernel/PR-2700.md) — [CK TILE] Fix bugs in AQuant preshuffle  `[source-pr]`
+- [pr-composable_kernel-2714](sources/prs/composable_kernel/PR-2714.md) — Support fp8 block quant gemm for both AB matrix in ck-tile  `[source-pr]`
+- [pr-composable_kernel-2722](sources/prs/composable_kernel/PR-2722.md) — Extend XDL kernel to Support RDNA3/4 - Part 2  `[source-pr]`
+- [pr-composable_kernel-2724](sources/prs/composable_kernel/PR-2724.md) — Extend XDL kernel to Support RDNA3/4 - Part 4  `[source-pr]`
+- [pr-composable_kernel-2726](sources/prs/composable_kernel/PR-2726.md) — Add input fp8 and output bf16 attention  `[source-pr]`
+- [pr-composable_kernel-2729](sources/prs/composable_kernel/PR-2729.md) — [CK_TILE] Row/Col quant gemm  `[source-pr]`
+- [pr-composable_kernel-2746](sources/prs/composable_kernel/PR-2746.md) — Revert '[CK-TILE] Default epilogue, adding support for D'  `[source-pr]`
+- [pr-composable_kernel-2752](sources/prs/composable_kernel/PR-2752.md) — [CK-TILE] Default2DEpilogue, example and adding nullptr_t type for D  `[source-pr]`
+- [pr-composable_kernel-2753](sources/prs/composable_kernel/PR-2753.md) — [CK TILE GEMM] Fix a merge conflict  `[source-pr]`
+- [pr-composable_kernel-2766](sources/prs/composable_kernel/PR-2766.md) — refactor: use snake_case naming in ck_tile/core components  `[source-pr]`
+- [pr-composable_kernel-2772](sources/prs/composable_kernel/PR-2772.md) — [CK TILE GEMM] Fix Gemm AQuant gfx950 building issues  `[source-pr]`
+- [pr-composable_kernel-2773](sources/prs/composable_kernel/PR-2773.md) — [CK_TILE] Epilogue chaining (Lwpck 3373)  `[source-pr]`
+- [pr-composable_kernel-2786](sources/prs/composable_kernel/PR-2786.md) — [CK_TILE] Implement Row/Col quant grouped gemm  `[source-pr]`
+- [pr-composable_kernel-2795](sources/prs/composable_kernel/PR-2795.md) — [CK_TILE] Refine Generic2dBlockShape to fix ck_tile example 2,10,11,14 on rdna3 and 4  `[source-pr]`
+- [pr-composable_kernel-2801](sources/prs/composable_kernel/PR-2801.md) — Bf16*fp4 gemm  `[source-pr]`
+- [pr-composable_kernel-2805](sources/prs/composable_kernel/PR-2805.md) — [CK TILE] Support fp8/fp16 with pk_int4_t as data types for tensors A and B  `[source-pr]`
+- [pr-composable_kernel-2813](sources/prs/composable_kernel/PR-2813.md) — [CK-Tile] Fix quant example code  `[source-pr]`
+- [pr-composable_kernel-2819](sources/prs/composable_kernel/PR-2819.md) — [CK TILE GEMM] Fixed the regression issue with transpose C in Quant Gemm  `[source-pr]`
+- [pr-composable_kernel-2821](sources/prs/composable_kernel/PR-2821.md) — [CK_TILE] Enable ck_tile tests on gfx11 and gfx12  `[source-pr]`
+- [pr-composable_kernel-2826](sources/prs/composable_kernel/PR-2826.md) — [CK][EXAMPLES]  `[source-pr]`
+- [pr-composable_kernel-2829](sources/prs/composable_kernel/PR-2829.md) — Verify `HostTensorDescriptor` when it is created  `[source-pr]`
+- [pr-composable_kernel-2836](sources/prs/composable_kernel/PR-2836.md) — [CK_TILE] Support f32 in FMHA (fwd and bwd)  `[source-pr]`
+- [pr-composable_kernel-2837](sources/prs/composable_kernel/PR-2837.md) — [CK_TILE][REGRESSION] Correct blockSize in Generic2dBlockShape (c254f…  `[source-pr]`
+- [pr-composable_kernel-2841](sources/prs/composable_kernel/PR-2841.md) — Wmma support for GEMM quantization  `[source-pr]`
+- [pr-composable_kernel-2846](sources/prs/composable_kernel/PR-2846.md) — [CK_TILE] Tensor-wise scaled quant gemm kernel  `[source-pr]`
+- [pr-composable_kernel-2858](sources/prs/composable_kernel/PR-2858.md) — Add gemm weight preshuffle pk_int_t support  `[source-pr]`
+- [pr-composable_kernel-2873](sources/prs/composable_kernel/PR-2873.md) — Congma/ck tile/remove cpp 20 code  `[source-pr]`
+- [pr-composable_kernel-2877](sources/prs/composable_kernel/PR-2877.md) — Weight Preshuffle Block Scale gemm support  `[source-pr]`
+- [pr-composable_kernel-2878](sources/prs/composable_kernel/PR-2878.md) — [CK-Tile] Add the API to load SGPR with any byte size  `[source-pr]`
+- [pr-composable_kernel-2883](sources/prs/composable_kernel/PR-2883.md) — Revert '[CK_TILE] Add sequence padding and variable length support in fmha (a…'  `[source-pr]`
+- [pr-composable_kernel-2892](sources/prs/composable_kernel/PR-2892.md) — Add attn sink  `[source-pr]`
+- [pr-composable_kernel-2897](sources/prs/composable_kernel/PR-2897.md) — [CK TILE GEMM] Support Aquant GEMM with transposeC and preshuffle  `[source-pr]`
+- [pr-composable_kernel-2901](sources/prs/composable_kernel/PR-2901.md) — [CK Tile] contraction multi d - kernel & example  `[source-pr]`
+- [pr-composable_kernel-2904](sources/prs/composable_kernel/PR-2904.md) — Revert '[CK-Tile] Add the API to load SGPR '  `[source-pr]`
+- [pr-composable_kernel-2911](sources/prs/composable_kernel/PR-2911.md) — Fix the gfx950 numerical errors  `[source-pr]`
+- [pr-composable_kernel-2913](sources/prs/composable_kernel/PR-2913.md) — Fix the compilation error of #2878  `[source-pr]`
+- [pr-composable_kernel-2922](sources/prs/composable_kernel/PR-2922.md) — use inline function in hpp  `[source-pr]`
+- [pr-composable_kernel-2923](sources/prs/composable_kernel/PR-2923.md) — Integrate Multi D GEMMs into Grouped GEMMs along with unit tests  `[source-pr]`
+- [pr-composable_kernel-2926](sources/prs/composable_kernel/PR-2926.md) — fix clang format  `[source-pr]`
+- [pr-composable_kernel-2934](sources/prs/composable_kernel/PR-2934.md) — [CK_TILE] FMHA Fix synchronization issue in FWD splitkv combine pipeline  `[source-pr]`
+- [pr-composable_kernel-2949](sources/prs/composable_kernel/PR-2949.md) — Add a new gemm pipeline based on ComputeV4 which utilizes async copy API  `[source-pr]`
+- [pr-composable_kernel-295](sources/prs/composable_kernel/PR-295.md) — Standalone sweep once softmax kernel w/ ckProfiler  `[source-pr]`
+- [pr-composable_kernel-2950](sources/prs/composable_kernel/PR-2950.md) — fix: nil performance results for gemm examples  `[source-pr]`
+- [pr-composable_kernel-2956](sources/prs/composable_kernel/PR-2956.md) — [CK_TILE] Pooling FWD (Lwpck 3683)  `[source-pr]`
+- [pr-composable_kernel-2965](sources/prs/composable_kernel/PR-2965.md) — [CK TILE GEMM] Refactor the code of transposeC and quantpreshuffle of AQuant Gemm  `[source-pr]`
+- [pr-composable_kernel-2975](sources/prs/composable_kernel/PR-2975.md) — supporting prefill shapes for preshuffle block scale gemm  `[source-pr]`
+- [pr-composable_kernel-2978](sources/prs/composable_kernel/PR-2978.md) — Update include path to break the cyclic dep issue  `[source-pr]`
+- [pr-composable_kernel-2987](sources/prs/composable_kernel/PR-2987.md) — Add Memory pipeline for AQuant Block Scale GEMM  `[source-pr]`
+- [pr-composable_kernel-3007](sources/prs/composable_kernel/PR-3007.md) — [CK_TILE] add tensorwise quant in grouped gemm  `[source-pr]`
+- [pr-composable_kernel-3019](sources/prs/composable_kernel/PR-3019.md) — [CK_TILE] Adding support for TiledPermuteN on preshuffle Block Scale Gemm  `[source-pr]`
+- [pr-composable_kernel-3063](sources/prs/composable_kernel/PR-3063.md) — [CK_TILE] Add Bquant to Grouped Gemm  `[source-pr]`
+- [pr-composable_kernel-3074](sources/prs/composable_kernel/PR-3074.md) — [CK_TILE] B matrix 2D block scale gemm  `[source-pr]`
+- [pr-composable_kernel-3079](sources/prs/composable_kernel/PR-3079.md) — Fix quant scale matrix layout for block scale gemm  `[source-pr]`
+- [pr-composable_kernel-3094](sources/prs/composable_kernel/PR-3094.md) — Remove 'basic' and universal GEMM tests, and incorporate their test cases into the GEMM pipeline tests  `[source-pr]`
+- [pr-composable_kernel-3102](sources/prs/composable_kernel/PR-3102.md) — [CK_BUILDER] Add name member to CK elementwise operations  `[source-pr]`
+- [pr-composable_kernel-3119](sources/prs/composable_kernel/PR-3119.md) — test(grouped_gemm): add unit tests for grouped_gemm bquant with preshuffleB true  `[source-pr]`
+- [pr-composable_kernel-3135](sources/prs/composable_kernel/PR-3135.md) — [CK_TILE] FMHA Fix synchronization issue in FWD QR pipeline with dropout  `[source-pr]`
+- [pr-composable_kernel-3146](sources/prs/composable_kernel/PR-3146.md) — [CK_TILE] Move DataTypeTraits into a Common File  `[source-pr]`
+- [pr-composable_kernel-3147](sources/prs/composable_kernel/PR-3147.md) — [CK tile] Add 2D multiple reductions  `[source-pr]`
+- [pr-composable_kernel-3153](sources/prs/composable_kernel/PR-3153.md) — [CK_TILE][FMHA] Integrate FAv2 & FAv3 (WIP) in the single fmha_fwd() API  `[source-pr]`
+- [pr-composable_kernel-3165](sources/prs/composable_kernel/PR-3165.md) — [CK_Tile] Support for preshuffle weight(B) quant tensor for block scale gemm  `[source-pr]`
+- [pr-composable_kernel-3181](sources/prs/composable_kernel/PR-3181.md) — [CK TILE GEMM] Refactor block_scale_gemm examples  `[source-pr]`
+- [pr-composable_kernel-3182](sources/prs/composable_kernel/PR-3182.md) — [CK_Tile] Moving duplicate function to common place  `[source-pr]`
+- [pr-composable_kernel-3183](sources/prs/composable_kernel/PR-3183.md) — [CK_BUILDER] Add grouped conv fwd ck tile traits  `[source-pr]`
+- [pr-composable_kernel-3186](sources/prs/composable_kernel/PR-3186.md) — [CK_TILE] Fix block_scale gemm on gfx12  `[source-pr]`
+- [pr-composable_kernel-3193](sources/prs/composable_kernel/PR-3193.md) — feat(block_scale_gemm): Support RRR-R, CRR-R and CCR-C layout for aquant quant mode  `[source-pr]`
+- [pr-composable_kernel-3196](sources/prs/composable_kernel/PR-3196.md) — [ck_tile] enable test grouped_gemm_quant and gemm_streamk on gfx12  `[source-pr]`
+- [pr-composable_kernel-3204](sources/prs/composable_kernel/PR-3204.md) — remove usage of tile partitioner's full gemm shape  `[source-pr]`
+- [pr-composable_kernel-3206](sources/prs/composable_kernel/PR-3206.md) — Support fp8 dynamic quantization for fmha  `[source-pr]`
+- [pr-composable_kernel-3220](sources/prs/composable_kernel/PR-3220.md) — Add support for RDNA1 GPUs  `[source-pr]`
+- [pr-composable_kernel-3227](sources/prs/composable_kernel/PR-3227.md) — Ck tile/gemm blockscale opt  `[source-pr]`
+- [pr-composable_kernel-3232](sources/prs/composable_kernel/PR-3232.md) — [CK_BUILDER] Put global CK functions in a CK namespace  `[source-pr]`
+- [pr-composable_kernel-3245](sources/prs/composable_kernel/PR-3245.md) — Fix and improve the gemm quant pipeline infrastructure  `[source-pr]`
+- [pr-composable_kernel-3250](sources/prs/composable_kernel/PR-3250.md) — Revert 'Add attn sink'  `[source-pr]`
+- [pr-composable_kernel-3259](sources/prs/composable_kernel/PR-3259.md) — [CK Tile] enable building examples by default  `[source-pr]`
+- [pr-composable_kernel-3277](sources/prs/composable_kernel/PR-3277.md) — Extend pk_int4_t support for block_scale_gemm aquant CR and RR layout  `[source-pr]`
+- [pr-composable_kernel-3282](sources/prs/composable_kernel/PR-3282.md) — fix: add dynamic selection of pipelines for aquant mode  `[source-pr]`
+- [pr-composable_kernel-3283](sources/prs/composable_kernel/PR-3283.md) — [CK_Tile] Enable block scale gemm for gfx1201  `[source-pr]`
+- [pr-composable_kernel-3298](sources/prs/composable_kernel/PR-3298.md) — [CK_Tile] Enable PreshuffleB for 2d block scale Gemm  `[source-pr]`
+- [pr-composable_kernel-3311](sources/prs/composable_kernel/PR-3311.md) — [ck_tile] remove duplicate functions in ck_tile  `[source-pr]`
+- [pr-composable_kernel-3318](sources/prs/composable_kernel/PR-3318.md) — feat(block_scale_gemm): Add layout Col-Col-Row-Col (ABC-Aquant) for tensors in aquant  `[source-pr]`
+- [pr-composable_kernel-3319](sources/prs/composable_kernel/PR-3319.md) — refactor: break test instances into multiple cpp files to reduce build time  `[source-pr]`
+- [pr-composable_kernel-3320](sources/prs/composable_kernel/PR-3320.md) — [CK_TILE] Fix Quant GEMM build  `[source-pr]`
+- [pr-composable_kernel-3325](sources/prs/composable_kernel/PR-3325.md) — Make CK TILE GEMM Aquant support block tile 128x128x128  `[source-pr]`
+- [pr-composable_kernel-3330](sources/prs/composable_kernel/PR-3330.md) — Fp8 block scale quantization for fmha  fwd  `[source-pr]`
+- [pr-composable_kernel-3337](sources/prs/composable_kernel/PR-3337.md) — [CK Tile] Grouped GEMM aquant mode and non-persistent kernel  `[source-pr]`
+- [pr-composable_kernel-3341](sources/prs/composable_kernel/PR-3341.md) — [CK_TILE][FMHA] Add sparse attention VSA  `[source-pr]`
+- [pr-composable_kernel-3343](sources/prs/composable_kernel/PR-3343.md) — Support A/B Quantization in Blockscale GEMM  `[source-pr]`
+- [pr-composable_kernel-3346](sources/prs/composable_kernel/PR-3346.md) — [CK Tile] Aquant mem pipeline bugfixes  `[source-pr]`
+- [pr-composable_kernel-3349](sources/prs/composable_kernel/PR-3349.md) — [CK_TILE] Support more layouts for BQuant GEMM  `[source-pr]`
+- [pr-composable_kernel-3350](sources/prs/composable_kernel/PR-3350.md) — Add the gfx1011 support on CK Tile with the SGPR builtin reading protection  `[source-pr]`
+- [pr-composable_kernel-3359](sources/prs/composable_kernel/PR-3359.md) — [CK-Tile] move out memory operation from cshuffle epilogue class  `[source-pr]`
+- [pr-composable_kernel-3364](sources/prs/composable_kernel/PR-3364.md) — [CK TILE][AICK-439] Fix cshuffle epilogue wave per shuffle  `[source-pr]`
+- [pr-composable_kernel-3368](sources/prs/composable_kernel/PR-3368.md) — Add attention sink support for FMHA FWD  `[source-pr]`
+- [pr-composable_kernel-3389](sources/prs/composable_kernel/PR-3389.md) — [CK_TILE] support split-k a16w4 gemm1  `[source-pr]`
+- [pr-composable_kernel-3394](sources/prs/composable_kernel/PR-3394.md) — [CK_TILE] Fix some inconsistencies with OverrideBDatatype in BQuant GEMM  `[source-pr]`
+- [pr-composable_kernel-3395](sources/prs/composable_kernel/PR-3395.md) — build: reduce build time for bquant tests by splitting into multiple cpp & support on other gfx10 case  `[source-pr]`
+- [pr-composable_kernel-3408](sources/prs/composable_kernel/PR-3408.md) — build: Hot fix to reduce massive build time by just disabling the ins…  `[source-pr]`
+- [pr-composable_kernel-3414](sources/prs/composable_kernel/PR-3414.md) — [CK_TILE] Grouped gemm quant tensor layouts  `[source-pr]`
+- [pr-composable_kernel-3417](sources/prs/composable_kernel/PR-3417.md) — CK Tile: Enable padding blockscale example  `[source-pr]`
+- [pr-composable_kernel-3420](sources/prs/composable_kernel/PR-3420.md) — Disable test_tile_gemm_quant_bquant_preshuffle.  `[source-pr]`
+- [pr-composable_kernel-3425](sources/prs/composable_kernel/PR-3425.md) — [CK_TILE][FMHA] Add FP8 support for batch_prefill kernel  `[source-pr]`
+- [pr-composable_kernel-3442](sources/prs/composable_kernel/PR-3442.md) — [FMHA] Batch Prefill Support Improvements:  Change KV Cache Layout & Large Page Size Support  `[source-pr]`
+- [pr-composable_kernel-3445](sources/prs/composable_kernel/PR-3445.md) — [CK_Tile] Support for various group sizes Preshuffle quant for 2d block scale gemm  `[source-pr]`
+- [pr-composable_kernel-3452](sources/prs/composable_kernel/PR-3452.md) — [CKTILE] Support A/B Quantization in Blockscale Grouped Gemm  `[source-pr]`
+- [pr-composable_kernel-3453](sources/prs/composable_kernel/PR-3453.md) — Enable padding blockscale for abquant  `[source-pr]`
+- [pr-composable_kernel-3462](sources/prs/composable_kernel/PR-3462.md) — [CK_Tile]  Support for group size 128 for Preshuffle quant for 2d block scale gemm  `[source-pr]`
+- [pr-composable_kernel-3490](sources/prs/composable_kernel/PR-3490.md) — [CK_TILE][FMHA] Enable gpt-oss sink  `[source-pr]`
+- [pr-composable_kernel-3493](sources/prs/composable_kernel/PR-3493.md) — Refactor weight preshuffled pipeline and unify LDS buffer management API  `[source-pr]`
+- [pr-composable_kernel-3495](sources/prs/composable_kernel/PR-3495.md) — [CK_TILE] add preshuffleB mode for ABQuant GEMM  `[source-pr]`
+- [pr-composable_kernel-3540](sources/prs/composable_kernel/PR-3540.md) — feat: Add Interwave scheduler for aquant memory pipeline  `[source-pr]`
+- [pr-composable_kernel-3542](sources/prs/composable_kernel/PR-3542.md) — refactor: remove Default scheduler implementation as it not used anymore  `[source-pr]`
+- [pr-composable_kernel-3569](sources/prs/composable_kernel/PR-3569.md) — [CK][Examples] Fixing stride issues in ck examples 68/69 by workaroun…  `[source-pr]`
+- [pr-composable_kernel-3584](sources/prs/composable_kernel/PR-3584.md) — [CK TILE QUANT GEMM] use OverrideADataType in aquant pipeline  `[source-pr]`
+- [pr-composable_kernel-3603](sources/prs/composable_kernel/PR-3603.md) — [CK_Tile] Support for a4w4 (fp4) in block scale gemm AB quant  `[source-pr]`
+- [pr-composable_kernel-3620](sources/prs/composable_kernel/PR-3620.md) — GEMM Blockscale ABQuant Optimization  `[source-pr]`
+- [pr-composable_kernel-3629](sources/prs/composable_kernel/PR-3629.md) — [CK_Tile] Adding support for preshuffleQuant in AB quant Block Scale Gemm  `[source-pr]`
+- [pr-composable_kernel-3633](sources/prs/composable_kernel/PR-3633.md) — Revert ' Fp8 block scale quantization for fmha  fwd'  `[source-pr]`
+- [pr-composable_kernel-3635](sources/prs/composable_kernel/PR-3635.md) — Revert 'Revert ' Fp8 block scale quantization for fmha  fwd''  `[source-pr]`
+- [pr-composable_kernel-3638](sources/prs/composable_kernel/PR-3638.md) — [CK_TILE] ABQuant New Preshuffle  `[source-pr]`
+- [pr-composable_kernel-3640](sources/prs/composable_kernel/PR-3640.md) — [Compiler] Addressing new compiler warnings  `[source-pr]`
+- [pr-composable_kernel-3653](sources/prs/composable_kernel/PR-3653.md) — feat: add split_k support for block scale gemm bquant mode.  `[source-pr]`
+- [pr-composable_kernel-438](sources/prs/composable_kernel/PR-438.md) — Rangify STL algorithms  `[source-pr]`
+- [pr-composable_kernel-444](sources/prs/composable_kernel/PR-444.md) — Rangify check_err()  `[source-pr]`
+- [pr-composable_kernel-445](sources/prs/composable_kernel/PR-445.md) — Rangify constructor of HostTensorDescriptor & Tensor<>  `[source-pr]`
+- [pr-composable_kernel-471](sources/prs/composable_kernel/PR-471.md) — Conv perlayer int8 quantization  `[source-pr]`
+- [pr-composable_kernel-503](sources/prs/composable_kernel/PR-503.md) — gemm, conv perchannel quantization  `[source-pr]`
+- [pr-composable_kernel-625](sources/prs/composable_kernel/PR-625.md) — gemm/Conv xdlops + dlops quantization  `[source-pr]`
+- [pr-composable_kernel-645](sources/prs/composable_kernel/PR-645.md) — Conv + quantization + tanh  `[source-pr]`
+- [pr-composable_kernel-652](sources/prs/composable_kernel/PR-652.md) — Merge up from develop to staging.  `[source-pr]`
+- [pr-composable_kernel-672](sources/prs/composable_kernel/PR-672.md) — fixed quant client_example  `[source-pr]`
+- [pr-composable_kernel-675](sources/prs/composable_kernel/PR-675.md) — Revise layout of group convolution  `[source-pr]`
+- [pr-composable_kernel-695](sources/prs/composable_kernel/PR-695.md) — Fix the group of quantization_int8 kernels on MI300.  `[source-pr]`
+- [pr-composable_kernel-714](sources/prs/composable_kernel/PR-714.md) — Enable gemm_dl and other kernels on Navi3x.  `[source-pr]`
+- [pr-composable_kernel-752](sources/prs/composable_kernel/PR-752.md) — Enable gfx941 and gfx942 architectures.  `[source-pr]`
+- [pr-composable_kernel-777](sources/prs/composable_kernel/PR-777.md) — Move Device Ops implementations into impl directory.  `[source-pr]`
+- [pr-composable_kernel-82](sources/prs/composable_kernel/PR-82.md) — Reduction in Composable Kernel  `[source-pr]`
+- [pr-composable_kernel-827](sources/prs/composable_kernel/PR-827.md) — fpAintB_gemm implementation  `[source-pr]`
+- [pr-composable_kernel-830](sources/prs/composable_kernel/PR-830.md) — Allow building CK for specific data types and split off last remaining DL instances.  `[source-pr]`
+- [pr-composable_kernel-851](sources/prs/composable_kernel/PR-851.md) — New implementation fpAintB  `[source-pr]`
+- [pr-composable_kernel-932](sources/prs/composable_kernel/PR-932.md) — Refactoring cmake files to build data types separately.  `[source-pr]`
+- [pr-rocBLAS-1364](sources/prs/rocBLAS/PR-1364.md) — Hotfix guard kernel launches  `[source-pr]`
+- [pr-sglang-21040](sources/prs/sglang/PR-21040.md) — [AMD][MoRI] Auto-select dispatch quantization type from MoE weight dtype.  `[source-pr]`
+- [pr-sglang-21062](sources/prs/sglang/PR-21062.md) — Use spec v2 by default  `[source-pr]`
+- [pr-sglang-21067](sources/prs/sglang/PR-21067.md) — Revert '[AMD] Add MoE weights and scales padding'  `[source-pr]`
+- [pr-sglang-21097](sources/prs/sglang/PR-21097.md) — [AMD] Add MoE weights and scales padding  `[source-pr]`
+- [pr-sglang-21403](sources/prs/sglang/PR-21403.md) — [AMD] Fuse RMSNorm + FP8 per-token quant for GLM-4.7-FP8  `[source-pr]`
+- [pr-sglang-21431](sources/prs/sglang/PR-21431.md) — [Diffusion] [AMD] Online MXFP4 and FP8 Quantization for Multimodal Generation  `[source-pr]`
+- [pr-sglang-21458](sources/prs/sglang/PR-21458.md) — [AMD] Optimize Qwen3-VL decode - fuse QK-norm + 3D mRoPE + KV cache write  `[source-pr]`
+- [pr-sglang-21463](sources/prs/sglang/PR-21463.md) — Migrate all callers from /get_server_info to /server_info  `[source-pr]`
+- [pr-sglang-21511](sources/prs/sglang/PR-21511.md) — [AMD] Enable FP8 KV cache and FP8 attention kernel for NSA on MI300/MI355 with TileLang backend  `[source-pr]`
+- [pr-sglang-21657](sources/prs/sglang/PR-21657.md) — [AMD] Use tgemm.mm for MoEGate router gemm in deepseek_v2.py  `[source-pr]`
+- [pr-sglang-21669](sources/prs/sglang/PR-21669.md) — [AMD] Add Qwen3.5-397B FP8 nightly perf benchmarks for MI30x and MI35x  `[source-pr]`
+- [pr-sglang-21710](sources/prs/sglang/PR-21710.md) — [AMD] Add GLM-5-FP8 nightly performance benchmarks for MI30x and MI35x  `[source-pr]`
+- [pr-sglang-21825](sources/prs/sglang/PR-21825.md) — [ROCM][RL] Shuffle Weight In-Place to Preserve Parameter Attributes  `[source-pr]`
+- [pr-sglang-21952](sources/prs/sglang/PR-21952.md) — [New Model] Gemma 4  `[source-pr]`
+- [pr-sglang-22143](sources/prs/sglang/PR-22143.md) — Cache gfx95 quant format detection in DeepseekV2DecoderLayer  `[source-pr]`
+- [pr-sglang-22188](sources/prs/sglang/PR-22188.md) — [AMD] Fix test_kimi_k25_mxfp4.py : stage-c-test-large-8-gpu-amd-mi35x (linux-mi35x-gpu-8, 1)  `[source-pr]`
+- [pr-sglang-22232](sources/prs/sglang/PR-22232.md) — Reduce unnecessary kernels and copies in the NSA indexer  `[source-pr]`
+- [pr-sglang-22258](sources/prs/sglang/PR-22258.md) — [AMD][HIP] NSA: bf16 passthrough from RMSNorm to eliminate FP8 dequantization  `[source-pr]`
+- [pr-sglang-22314](sources/prs/sglang/PR-22314.md) — [AMD] Fix GLM-5 fp8 KV quant path dispatch on MI300  `[source-pr]`
+- [pr-sglang-22338](sources/prs/sglang/PR-22338.md) — :sparkles: [diffusion][npu][quant] Add MXFP4 quantization support for Wan2.2 Diffusion on Ascend NPU  `[source-pr]`
+- [pr-sglang-22363](sources/prs/sglang/PR-22363.md) — [AMD] Fix `aiter` import failure in ROCm Docker images  `[source-pr]`
+- [pr-sglang-22424](sources/prs/sglang/PR-22424.md) — [AMD] Use aiter CK layernorm2d for LayerNorm to reduce NSA indexer kernel launches  `[source-pr]`
+- [pr-sglang-22543](sources/prs/sglang/PR-22543.md) — GLM-5/5.1 MXFP4 Checkpoint Inference Compatibility Fix  `[source-pr]`
+- [pr-sglang-22850](sources/prs/sglang/PR-22850.md) — [AMD] Reduce NSA indexer kernels (weights_proj,  k-cache store kernel fusion)  `[source-pr]`
+- [pr-sglang-22948](sources/prs/sglang/PR-22948.md) — [AMD] Qwen3.5 MXFP4 breaks after shared expert fusion is enabled  `[source-pr]`
+- [pr-sglang-23031](sources/prs/sglang/PR-23031.md) — Revert 'feat: Support MXFP4 quantized dense models on AMD CDNA2/CDNA3 GPUs (#19143)'  `[source-pr]`
+- [pr-sglang-23045](sources/prs/sglang/PR-23045.md) — [AMD] Fix AMD Multimodal Test - skip nvfp4 tests  `[source-pr]`
+- [pr-sglang-23146](sources/prs/sglang/PR-23146.md) — [AMD] Enable EAGLE speculative decoding for Qwen3.5 FP8 and MXFP4 models with aiter's unified attention  `[source-pr]`
+- [pr-sglang-23159](sources/prs/sglang/PR-23159.md) — Revert 'perf: optimize PCG inductor path for FP8 models (#21734)'  `[source-pr]`
+- [pr-sglang-23186](sources/prs/sglang/PR-23186.md) — [AMD] Fused qk rmsnorm bf16 for amd/Kimi-K2.5-MXFP4  `[source-pr]`
+- [pr-sglang-23219](sources/prs/sglang/PR-23219.md) — [AMD] Enable MTP for GLM-5-mxfp4 model  `[source-pr]`
+- [pr-sglang-23227](sources/prs/sglang/PR-23227.md) — perf: optimize PCG inductor path for FP8 models (redo of #21734)  `[source-pr]`
+- [pr-sglang-23319](sources/prs/sglang/PR-23319.md) — [AMD] Use bpreshuffle FP8 blockscale GEMM to replace ABScale GEMM  `[source-pr]`
+- [pr-sglang-23408](sources/prs/sglang/PR-23408.md) — [AMD] Fix Kimi-K2.6 Quark MXFP4 loading prefix and packed module mapping  `[source-pr]`
+- [pr-sglang-23455](sources/prs/sglang/PR-23455.md) — [AMD] Restore test_zimage_turbo.py and test_int4fp8_moe.py with __main__ entry  `[source-pr]`
+- [pr-sglang-23467](sources/prs/sglang/PR-23467.md) — fix: dot-boundary match in is_layer_skipped for FP8 modules_to_not_convert  `[source-pr]`
+- [pr-sglang-23585](sources/prs/sglang/PR-23585.md) — Move expert_mask_gpu from FusedMoE layer to StandardDispatcher  `[source-pr]`
+- [pr-sglang-23597](sources/prs/sglang/PR-23597.md) — [MoE] Add Aiter MoE runner backend and purge aiter.fused_moe from quant methods  `[source-pr]`
+- [pr-sglang-23625](sources/prs/sglang/PR-23625.md) — Flux2 nvfp4 quantization correctness on Blackwell (B200)  `[source-pr]`
+- [pr-sglang-23633](sources/prs/sglang/PR-23633.md) — [MUSA] Use MUSA-optimized operators in piecewise CUDA graph  `[source-pr]`
+- [pr-sglang-23646](sources/prs/sglang/PR-23646.md) — [MUSA][Diffusion] Fix fa3 API on MT MUSA  `[source-pr]`
+- [pr-sglang-23654](sources/prs/sglang/PR-23654.md) — [MUSA][20/N] Support qwen series models  `[source-pr]`
+- [pr-sglang-23671](sources/prs/sglang/PR-23671.md) — [AMD][bugfix] add gate rocm >= 7.2 for bpreshuffle  `[source-pr]`
+- [pr-sglang-23760](sources/prs/sglang/PR-23760.md) — [MoE] Unify DeepEPMoE+MoriEPMoE through AITER MoeRunner pre/post-permute  `[source-pr]`
+- [pr-sglang-23787](sources/prs/sglang/PR-23787.md) — amd/deepseek_v4 integration 1/N - 0426  `[source-pr]`
+- [pr-sglang-23882](sources/prs/sglang/PR-23882.md) — Deepseek V4  `[source-pr]`
+- [pr-sglang-24031](sources/prs/sglang/PR-24031.md) — amd/deepseek_v4 integration 3/N - FP4 Models 0428  `[source-pr]`
+- [pr-sglang-24337](sources/prs/sglang/PR-24337.md) — amd/deepseek_v4 integration 9/N - Check MoE weight type from config.json 0504  `[source-pr]`
+- [pr-sglang-24339](sources/prs/sglang/PR-24339.md) — revert rocm artifacts from dsv4-rebase (cuda-only scope)  `[source-pr]`
+- [pr-sglang-24360](sources/prs/sglang/PR-24360.md) — [AMD] Replace naive triton RMSNorm with aiter RMSNorm for diffusion model  `[source-pr]`
+- [pr-sglang-24730](sources/prs/sglang/PR-24730.md) — [Cookbook]: add Laguna-XS.2 (Poolside)  `[source-pr]`
+- [pr-sglang-24752](sources/prs/sglang/PR-24752.md) — [diffusion] hardware: support sage attention backend on MUSA (attn backend, 21/N)  `[source-pr]`
+- [pr-sglang-24799](sources/prs/sglang/PR-24799.md) — [AMD] Fix DeepSeek import cascade by supporting both pre- and post-#2958 aiter `fused_qk_rmsnorm` APIs  `[source-pr]`
+- [pr-sglang-24816](sources/prs/sglang/PR-24816.md) — Add FlashInfer SM90 cutlass MXFP4 MoE backend (W4A16) for GPT-OSS + DeepSeek-V4  `[source-pr]`
+- [pr-sglang-24879](sources/prs/sglang/PR-24879.md) — [AMD] support fp8 blockwise quantization combine for mori ep  `[source-pr]`
+- [pr-sglang-24933](sources/prs/sglang/PR-24933.md) — Amd/deepseek v4 rebase main 0509  `[source-pr]`
+- [pr-sglang-24971](sources/prs/sglang/PR-24971.md) — amd/deepseek_v4 integration 17/N flydsl moe 0508  `[source-pr]`
+- [pr-sglang-25043](sources/prs/sglang/PR-25043.md) — amd/deepseek_v4 integration 19/N fuse input_layernorm + FP8 per-128 group quant for attention path 0511  `[source-pr]`
+- [pr-sglang-25097](sources/prs/sglang/PR-25097.md) — amd/deepseek_v4 integration 21/N Triton fused store cache for ROCm  `[source-pr]`
+- [pr-sglang-25191](sources/prs/sglang/PR-25191.md) — [Apple Silicon] [MLX] Auto-detect MLX-format quantization_config dict  `[source-pr]`
+- [pr-sglang-25205](sources/prs/sglang/PR-25205.md) — [AMD]  Auto-fallback NSA indexer to page_size=1 when aiter preshuffle gluon kernel is unavailable (Deepseek v3.2)  `[source-pr]`
+- [pr-sglang-25375](sources/prs/sglang/PR-25375.md) — amd/deepseek_v4 integration 26/N rmsnorm_quant fusion for wqb input  `[source-pr]`
+- [pr-sglang-25390](sources/prs/sglang/PR-25390.md) — [AMD] Enable shared-experts fusion with new KIMI-K2.5-MXFP4 model.  `[source-pr]`
+- [pr-sglang-25460](sources/prs/sglang/PR-25460.md) — [perf] prepare_prefill_qkv hook + fp8 quantize jit kernel  `[source-pr]`
+- [pr-sglang-25463](sources/prs/sglang/PR-25463.md) — [ROCm] Eliminate redundant contiguous copy in MLA attention on ROCm MXFP4  `[source-pr]`
+- [pr-sglang-25523](sources/prs/sglang/PR-25523.md) — [Diffusion] Default NVFP4 backend to FlashInfer TRTLLM  `[source-pr]`
+- [pr-sglang-25540](sources/prs/sglang/PR-25540.md) — Use DeepGEMM BF16 for unquantized DeepEP LL MoE  `[source-pr]`
+- [pr-sglang-25898](sources/prs/sglang/PR-25898.md) — [AMD] Dsv4/pr1 fix run time issue  `[source-pr]`
+- [pr-sglang-25974](sources/prs/sglang/PR-25974.md) — [Fix]: Restrict Kimi-K2.5 shared-experts fusion to Quark MXFP4 checkpoints  `[source-pr]`
+- [pr-sglang-25977](sources/prs/sglang/PR-25977.md) — amd/deepseek_v4 30/N Enable fused nosplitk attention dispatch for extend, from separate gather+attention to 1 fused kernel  `[source-pr]`
+- [pr-sglang-26337](sources/prs/sglang/PR-26337.md) — amd/deepseek_v4 32/N Use CK bpreshuffle for wo_b GEMM (7168, 2048) instead of Triton  `[source-pr]`
+- [pr-triton-55](sources/prs/triton/PR-55.md) — Skip Segfaults  `[source-pr]`
+- [pr-triton-669](sources/prs/triton/PR-669.md) — Tianxing/fa int8  `[source-pr]`
+- [pr-triton-702](sources/prs/triton/PR-702.md) — moe quantization support int8 and fp8  `[source-pr]`
+- [pr-triton-849](sources/prs/triton/PR-849.md) — Use the MoE kernel in commit 7f341eb95 to avoid regression  `[source-pr]`
+- [pr-vllm-35859](sources/prs/vllm/PR-35859.md) — [Quark] Support loading Quark NVFP4 checkpoints in vLLM  `[source-pr]`
+- [pr-vllm-35893](sources/prs/vllm/PR-35893.md) — [ROCm][Bugfix] Fall back from CK MXFP4 MoE when GEMM dimensions are unsupported  `[source-pr]`
+- [pr-vllm-35970](sources/prs/vllm/PR-35970.md) — In-Tree AMD Zen CPU Backend via zentorch [1/N]  `[source-pr]`
+- [pr-vllm-36022](sources/prs/vllm/PR-36022.md) — [Kernel] Add FlashInfer MoE A2A Kernel  `[source-pr]`
+- [pr-vllm-36100](sources/prs/vllm/PR-36100.md) — [ROCm] Fix fused_moe_fake signature mismatch and other AITER bugs  `[source-pr]`
+- [pr-vllm-36232](sources/prs/vllm/PR-36232.md) — [ROCm][Quantization] make quark ocp mx dtype parser robust for weight-only quantization  `[source-pr]`
+- [pr-vllm-36247](sources/prs/vllm/PR-36247.md) — [Bugfix] Fix compressed-tensors quantization failure for DeepSeek-R1 on MI300x  `[source-pr]`
+- [pr-vllm-36286](sources/prs/vllm/PR-36286.md) — [MoE Refactor] Migrate Unquantized to Full Oracle Flow  `[source-pr]`
+- [pr-vllm-36320](sources/prs/vllm/PR-36320.md) — [Quantization] Support Quark W8A8 INT8 MoE inference  `[source-pr]`
+- [pr-vllm-36505](sources/prs/vllm/PR-36505.md) — [ROCm][Refactor] Enable AWQMarlinConfig on ROCm to use choose_mp_linear_kernel  `[source-pr]`
+- [pr-vllm-36574](sources/prs/vllm/PR-36574.md) — [ROCm] Utilize persistent MLA kernel from AITER  `[source-pr]`
+- [pr-vllm-36854](sources/prs/vllm/PR-36854.md) — [Bugfix] Clear error message for FP8 torchao quantization on unsupported GPUs  `[source-pr]`
+- [pr-vllm-36927](sources/prs/vllm/PR-36927.md) — [ROCm][Quantization] add fp8xfp8 attn support for rocm_aiter_unified_attn  `[source-pr]`
+- [pr-vllm-36965](sources/prs/vllm/PR-36965.md) — [Model][Quantization] Add GGUF support for MiniMax-M2.1  `[source-pr]`
+- [pr-vllm-37128](sources/prs/vllm/PR-37128.md) — [MoE Refactor] Mxfp4 oracle rebased  `[source-pr]`
+- [pr-vllm-37207](sources/prs/vllm/PR-37207.md) — [Feat] Enable CompressedTensorW4A8Int for XPU  `[source-pr]`
+- [pr-vllm-37329](sources/prs/vllm/PR-37329.md) — [Bugfix] Fix ConchLinearKernel channelwise quantization (group_size=-1)  `[source-pr]`
+- [pr-vllm-37331](sources/prs/vllm/PR-37331.md) — [Bugfix] Reject channelwise quantization (group_size <= 0) in ExllamaLinearKernel  `[source-pr]`
+- [pr-vllm-37352](sources/prs/vllm/PR-37352.md) — [Kernel][Hardware][AMD] Add TritonW4A16LinearKernel for ROCm  `[source-pr]`
+- [pr-vllm-37418](sources/prs/vllm/PR-37418.md) — [Bugfix][ROCm] Fix MoRI + AITER FP8 dispatch compatibility for defer_input_quant  `[source-pr]`
+- [pr-vllm-37453](sources/prs/vllm/PR-37453.md) — [ROCm] Fix GPT-OSS import for triton 3.6  `[source-pr]`
+- [pr-vllm-37529](sources/prs/vllm/PR-37529.md) — [ROCm] Enable MORI EP for unquantized MoE with AITER backend  `[source-pr]`
+- [pr-vllm-37640](sources/prs/vllm/PR-37640.md) — [ROCm][Test] Fix ROCM_AITER_UNIFIED_ATTN attn+quant fusion test  `[source-pr]`
+- [pr-vllm-37646](sources/prs/vllm/PR-37646.md) — [ROCm][FEAT] AITER Fused Allreduce + RMSNorm  `[source-pr]`
+- [pr-vllm-37698](sources/prs/vllm/PR-37698.md) — [ROCm][Bugfix] fix exception related to trust_remote_code for MiniMax-M2.1-MXFP4  `[source-pr]`
+- [pr-vllm-37787](sources/prs/vllm/PR-37787.md) — [Bugfix][ROCm][MoE] Fix mxfp4 oracle regressions from #37128  `[source-pr]`
+- [pr-vllm-37826](sources/prs/vllm/PR-37826.md) — [ROCm] Widen OAI Triton MoE capability range to include gfx12 (RDNA4)  `[source-pr]`
+- [pr-vllm-37833](sources/prs/vllm/PR-37833.md) — [ROCm] Fix MoE kernel test failures on gfx950  `[source-pr]`
+- [pr-vllm-37841](sources/prs/vllm/PR-37841.md) — replace cuda_device_count_stateless() to current_platform.device_count()  `[source-pr]`
+- [pr-vllm-37887](sources/prs/vllm/PR-37887.md) — [ROCm][perf] fix Aiter sparse MLA with MTP>1  `[source-pr]`
+- [pr-vllm-38043](sources/prs/vllm/PR-38043.md) — {ROCm]: gpt-oss fusion/padding fixes  `[source-pr]`
+- [pr-vllm-38123](sources/prs/vllm/PR-38123.md) — [compile] Allow strings in custom ops without regressing compilation times  `[source-pr]`
+- [pr-vllm-38288](sources/prs/vllm/PR-38288.md) — [Quant] Consolidate GPTQ: rename gptq_marlin.py to auto_gptq.py  `[source-pr]`
+- [pr-vllm-38442](sources/prs/vllm/PR-38442.md) — [QeRL] Fix online quantized reloading  `[source-pr]`
+- [pr-vllm-38468](sources/prs/vllm/PR-38468.md) — Add platform manual_seed_all API  `[source-pr]`
+- [pr-vllm-38501](sources/prs/vllm/PR-38501.md) — [ROCm][Quantization] Add asymmetric INT8 quantization support to TritonInt8ScaledMMLinearKernel  `[source-pr]`
+- [pr-vllm-38504](sources/prs/vllm/PR-38504.md) — [Kernels][MoE] Fix legacy_routing to use bitmatrix-based routing path  `[source-pr]`
+- [pr-vllm-38659](sources/prs/vllm/PR-38659.md) — [1/N][Cleanup] Standardize on use of `is_quantized_kv_cache`  `[source-pr]`
+- [pr-vllm-38750](sources/prs/vllm/PR-38750.md) — [ROCm][Bugfix] Fix ROCm runtime failure due to missing symbol  `[source-pr]`
+- [pr-vllm-38774](sources/prs/vllm/PR-38774.md) — [ROCm][Quantization][1/N] Refactor quark_moe w_mxfp4 w/ oracle  `[source-pr]`
+- [pr-vllm-38817](sources/prs/vllm/PR-38817.md) — [ROCm] Enable fused_silu_mul_block_quant on ROCm  `[source-pr]`
+- [pr-vllm-38901](sources/prs/vllm/PR-38901.md) — refactor hard coded device string in test files under tests/compile tests/quantization tests/models and tests/model_executor  `[source-pr]`
+- [pr-vllm-38922](sources/prs/vllm/PR-38922.md) — [Bugfix] Fix broken explicit unquantized kv cache dtype support  `[source-pr]`
+- [pr-vllm-39014](sources/prs/vllm/PR-39014.md) — [vLLM IR] rework gemma_rms_norm  `[source-pr]`
+- [pr-vllm-39024](sources/prs/vllm/PR-39024.md) — Add structure to `requirements/` directory  `[source-pr]`
+- [pr-vllm-39083](sources/prs/vllm/PR-39083.md) — [FEAT] [Perf] [Gemma4] Fused Gemma4 Routing Function Triton  `[source-pr]`
+- [pr-vllm-39121](sources/prs/vllm/PR-39121.md) — [ROCm] Use quant_dtype in per_token_quant instead of hardcoded FP8  `[source-pr]`
+- [pr-vllm-39122](sources/prs/vllm/PR-39122.md) — [ROCm] Remove unnecessary fp8 roundtrip in gather cache NHD dequant  `[source-pr]`
+- [pr-vllm-39136](sources/prs/vllm/PR-39136.md) — [ROCm][Quantization][2/N] Refactor quark_moe w4a8 w/ oracle  `[source-pr]`
+- [pr-vllm-39387](sources/prs/vllm/PR-39387.md) — [ROCm] Disable fused_silu_mul_block_quant on ROCm  `[source-pr]`
+- [pr-vllm-39471](sources/prs/vllm/PR-39471.md) — [GGUF] Support non-standard quant types with prefix (e.g. UD-IQ1_S)  `[source-pr]`
+- [pr-vllm-39538](sources/prs/vllm/PR-39538.md) — [Kernel][UX] Add `--linear-backend` arg for linear kernel selection  `[source-pr]`
+- [pr-vllm-39684](sources/prs/vllm/PR-39684.md) — [Compilation] Refactor SiluMul activation+quant Fusion Pass  `[source-pr]`
+- [pr-vllm-39705](sources/prs/vllm/PR-39705.md) — [Bugfix][Kernel][ROCm] Fix triton_w4a16 scales mismatch when BLOCK_K > group_size  `[source-pr]`
+- [pr-vllm-39754](sources/prs/vllm/PR-39754.md) — [Bugfix][ROCm]: Allow `gpt_oss_mxfp4` quantization method on rocm  `[source-pr]`
+- [pr-vllm-39856](sources/prs/vllm/PR-39856.md) — [XPU] update dp rank w/o env-var isolation  `[source-pr]`
+- [pr-vllm-39901](sources/prs/vllm/PR-39901.md) — FIX: support language_model.backbone naming in NemotronH Nano VL quantization config  `[source-pr]`
+- [pr-vllm-39931](sources/prs/vllm/PR-39931.md) — [Feature] TurboQuant: support hybrid models and uniform quantization  `[source-pr]`
+- [pr-vllm-39953](sources/prs/vllm/PR-39953.md) — [ROCm] Fix TurboQuant on ROCm: backend routing, flash-attn compat, int64 overflow  `[source-pr]`
+- [pr-vllm-39987](sources/prs/vllm/PR-39987.md) — [ROCm] Add env flags to disable dynamic MXFP4 quant and enable AITER tuned GEMMs for Attention Projection Layers  `[source-pr]`
+- [pr-vllm-40033](sources/prs/vllm/PR-40033.md) — [NVFP4][Hopper/AMD Instinct] Add Triton kernels for NVFP4 dequantization and QDQ emulation  `[source-pr]`
+- [pr-vllm-40159](sources/prs/vllm/PR-40159.md) — [MyPy] Enable mypy for `vllm/model_executor/layers/`  `[source-pr]`
+- [pr-vllm-40338](sources/prs/vllm/PR-40338.md) — [LoRA] MoE LoRA Refactor  `[source-pr]`
+- [pr-vllm-40386](sources/prs/vllm/PR-40386.md) — [ROCm] Hotfix: guard MLA dual RMS norm fusion against older AITer versions  `[source-pr]`
+- [pr-vllm-40390](sources/prs/vllm/PR-40390.md) — [Bugfix][Rocm]Aiter MoE re-uses existing tensor addresses after weight update.  `[source-pr]`
+- [pr-vllm-40537](sources/prs/vllm/PR-40537.md) — Add system_fingerprint field to OpenAI-compatible API responses  `[source-pr]`
+- [pr-vllm-40687](sources/prs/vllm/PR-40687.md) — [ROCm][Perf] Support N=5 in wvSplitK skinny GEMM kernels for speculative decoding  `[source-pr]`
+- [pr-vllm-40710](sources/prs/vllm/PR-40710.md) — [Aiter][ROCm] RMSNormGated+GroupedQuantFP8 fusion  `[source-pr]`
+- [pr-vllm-40749](sources/prs/vllm/PR-40749.md) — [Bugfix] Skip PP sampled-token receive on last rank during async scheduling  `[source-pr]`
+- [pr-vllm-40754](sources/prs/vllm/PR-40754.md) — [Bugfix][ROCm] Fix gemm_a4w4 call to use updated AITER API signature  `[source-pr]`
+- [pr-vllm-40808](sources/prs/vllm/PR-40808.md) — [Bugfix] Disable FlashInfer CUTLASS MoE on SM110 (Jetson Thor AGX)  `[source-pr]`
+- [pr-vllm-40871](sources/prs/vllm/PR-40871.md) — [New Model][ROCm] Add AMD support for DeepSeek V4  `[source-pr]`
+- [pr-vllm-40941](sources/prs/vllm/PR-40941.md) — [Attention][TurboQuant] Share dequant buffers, eliminate float16_copy  `[source-pr]`
+- [pr-vllm-41055](sources/prs/vllm/PR-41055.md) — [MoE Refactor]  EPLB refactoring for FusedMoE  `[source-pr]`
+- [pr-vllm-41084](sources/prs/vllm/PR-41084.md) — [Examples][last/6] Resettle examples.  `[source-pr]`
+- [pr-vllm-41165](sources/prs/vllm/PR-41165.md) — [ROCm][Bugfix][GPTOSS]: fix input_ids and expert_map args for quark w4a8 gptoss  `[source-pr]`
+- [pr-vllm-41175](sources/prs/vllm/PR-41175.md) — [ROCm][Bugfix]: W4A4 MOE using emulation instead of AITER on MXFP4-supported hardware  `[source-pr]`
+- [pr-vllm-41394](sources/prs/vllm/PR-41394.md) — [Kernel][ROCm] Native W4A16 kernel for AMD RDNA3 (gfx1100) — fp16 + bf16  `[source-pr]`
+- [pr-vllm-41405](sources/prs/vllm/PR-41405.md) — [ROCm][Bugfix] Fix init-time bias dtype cast when gate.out_dtype is None  `[source-pr]`
+- [pr-vllm-41428](sources/prs/vllm/PR-41428.md) — [DSv4] Improved fused Indexer Q quant kernel  `[source-pr]`
+- [pr-vllm-41436](sources/prs/vllm/PR-41436.md) — [ROCm][Quantization][3/N] Refactor quark_moe w4a4 w/ oracle  `[source-pr]`
+- [pr-vllm-41675](sources/prs/vllm/PR-41675.md) — [ROCm] Add QuickReduce min-size override and codec threshold  `[source-pr]`
+- [pr-vllm-41802](sources/prs/vllm/PR-41802.md) — use HIP_VERSION variables to guard against duplicate atomicAdd definitions  `[source-pr]`
+- [pr-vllm-41825](sources/prs/vllm/PR-41825.md) — [ROCm][Perf] Fix RMSNorm+Quant fusion for gfx950 (non-fnuz)  `[source-pr]`
+- [pr-vllm-41892](sources/prs/vllm/PR-41892.md) — [Bugfix][Quark] Fix W8A8 INT8 garbage outputs on Step-3.5-Flash (and other 3-key fused-MoE Quark exports)  `[source-pr]`
+- [pr-vllm-41979](sources/prs/vllm/PR-41979.md) — [MoE] Move various experts classes to fused_moe/experts/  `[source-pr]`
+- [pr-vllm-42061](sources/prs/vllm/PR-42061.md) — [ROCm][Bugfix] Re-tag AITER MoE weights as preshuffled after replace_parameter  `[source-pr]`
+- [pr-vllm-42326](sources/prs/vllm/PR-42326.md) — [AMD] skip machete tests for rocm  `[source-pr]`
+- [pr-vllm-42521](sources/prs/vllm/PR-42521.md) — [Fix]  Weight loading for qwen3_5 using runai_streamer  `[source-pr]`
+- [pr-vllm-42663](sources/prs/vllm/PR-42663.md) — [6/n] Migrate activation kernels, gptq, gguf, non cutlass w8a8 to libtorch stable ABI (continued)  `[source-pr]`
+- [pr-vllm-42950](sources/prs/vllm/PR-42950.md) — [XPU]fix: add XPU platform guards to DeepSeek-V4 ops  `[source-pr]`
+- [pr-vllm-42952](sources/prs/vllm/PR-42952.md) — [XPU]feat: enable FP8 block-scaled quantization on XPU  `[source-pr]`
+- [pr-vllm-43004](sources/prs/vllm/PR-43004.md) — [Model Refactoring] Migrate DeepSeek V4 to vllm/models/ [1/N]  `[source-pr]`
+- [pr-vllm-43073](sources/prs/vllm/PR-43073.md) — [Model Refactoring] Move deepseek_v4_ops to models/deepseek_v4 [3/N]  `[source-pr]`
+- [pr-vllm-43108](sources/prs/vllm/PR-43108.md) — [MoE Refactor] Remove supports_expert_map  `[source-pr]`
+- [pr-vllm-43135](sources/prs/vllm/PR-43135.md) — [Perf][gpt-oss] Downgrade triton_kernels to v3.5.1  `[source-pr]`
+- [pr-vllm-43148](sources/prs/vllm/PR-43148.md) — [Deprecation] Mark env vars covered by --moe-backend / --linear-backend  `[source-pr]`
+- [pr-vllm-43149](sources/prs/vllm/PR-43149.md) — [Refactor] Extract DeepSeek V4 sparse MLA impl into model folder  `[source-pr]`
+- [pr-vllm-43162](sources/prs/vllm/PR-43162.md) — [Feat][DSV4] Fuse q pad into deepseek v4 fused kernel  `[source-pr]`
+- [pr-vllm-43571](sources/prs/vllm/PR-43571.md) — [BugFix][Platform] Fix import vllm.platforms.rocm error on non-CUDA test_gpt_oss.py  `[source-pr]`
+- [pr-vllm-43710](sources/prs/vllm/PR-43710.md) — [DSv4] Refactor compressor & Fix ROCm compatibility  `[source-pr]`
+- [pr-vllm-43717](sources/prs/vllm/PR-43717.md) — [9/n] Migrate attention and cache kernels to torch stable ABI (continued)  `[source-pr]`
+- [pr-vllm-43727](sources/prs/vllm/PR-43727.md) — [MoE] Remove inplace fused experts mechanism  `[source-pr]`
+- [pr-vllm-43740](sources/prs/vllm/PR-43740.md) — Add @AndreasKaratzas to CODEOWNERS  `[source-pr]`
 - [kernel-rmsnorm](wiki/kernels/rmsnorm.md) — Fused RMSNorm (+ residual / quant) on CDNA  `[wiki-kernel]`
 
 ## kernel-fusion
 
+- [pr-FlyDSL-153](sources/prs/FlyDSL/PR-153.md) — Pre v0.1 gemm fix  `[source-pr]`
+- [pr-FlyDSL-191](sources/prs/FlyDSL/PR-191.md) — Refine code  `[source-pr]`
+- [pr-FlyDSL-300](sources/prs/FlyDSL/PR-300.md) — [FlyDSL] fused RoPE kernel with layout APIs  `[source-pr]`
+- [pr-FlyDSL-327](sources/prs/FlyDSL/PR-327.md) — Add hgemm split-k kernels  `[source-pr]`
+- [pr-FlyDSL-331](sources/prs/FlyDSL/PR-331.md) — [gfx1250] Unified MXFP8/MXFP4/A8W4 GEMM kernel  `[source-pr]`
+- [pr-FlyDSL-346](sources/prs/FlyDSL/PR-346.md) — [FLYDSL]: if dispatch dynamic tests refactor  `[source-pr]`
+- [pr-FlyDSL-359](sources/prs/FlyDSL/PR-359.md) — [Refactor] Convert norm/softmax kernels from raw buffer_ops to layout…  `[source-pr]`
+- [pr-FlyDSL-377](sources/prs/FlyDSL/PR-377.md) — implement 1d tensorssa, remove vector dialect in kernels and use soffset for quant kernel  `[source-pr]`
+- [pr-FlyDSL-388](sources/prs/FlyDSL/PR-388.md) — [Perf] Port mixed_moe kernel optimizations for stage1/stage2  `[source-pr]`
+- [pr-FlyDSL-402](sources/prs/FlyDSL/PR-402.md) — Gfx1250 moe  `[source-pr]`
+- [pr-FlyDSL-404](sources/prs/FlyDSL/PR-404.md) — Add fused epilogue support to preshuffle GEMM: bias + ReLU/SiLU/GeLU  `[source-pr]`
+- [pr-FlyDSL-416](sources/prs/FlyDSL/PR-416.md) — improve fused_rope kernel  `[source-pr]`
+- [pr-FlyDSL-421](sources/prs/FlyDSL/PR-421.md) — feat: align quant and fused kernels with Triton in FlyDSL  `[source-pr]`
+- [pr-FlyDSL-443](sources/prs/FlyDSL/PR-443.md) — Add profile congruence check for prim ops  `[source-pr]`
+- [pr-FlyDSL-447](sources/prs/FlyDSL/PR-447.md) — Port kernels internal types except moe  `[source-pr]`
+- [pr-FlyDSL-448](sources/prs/FlyDSL/PR-448.md) — Reduce redundant FlyDSL numeric wrappers  `[source-pr]`
+- [pr-FlyDSL-450](sources/prs/FlyDSL/PR-450.md) — Refactor MLA decode kernel: unify types and simplify MLIR calls  `[source-pr]`
+- [pr-FlyDSL-458](sources/prs/FlyDSL/PR-458.md) — fix: mark fused rope token tensors dynamic  `[source-pr]`
+- [pr-FlyDSL-465](sources/prs/FlyDSL/PR-465.md) — some optimization about smoothquant moe  `[source-pr]`
+- [pr-FlyDSL-481](sources/prs/FlyDSL/PR-481.md) — [Feat] Align quant and fused rmsnorm kernels with aiter/triton  `[source-pr]`
+- [pr-FlyDSL-483](sources/prs/FlyDSL/PR-483.md) — [gfx1250] MoE 2-stage GEMM: MXScale rework + TDM K-loop hoist + build  `[source-pr]`
+- [pr-FlyDSL-524](sources/prs/FlyDSL/PR-524.md) — [Enh] Add shortcut make_rmem_tensor for allocate register tensor  `[source-pr]`
+- [pr-FlyDSL-540](sources/prs/FlyDSL/PR-540.md) — [Feat] Add FlyDSL MoE sorting kernel  `[source-pr]`
+- [pr-FlyDSL-549](sources/prs/FlyDSL/PR-549.md) — [Feat] Align quant and fused layernorm kernels with aiter/triton  `[source-pr]`
+- [pr-FlyDSL-554](sources/prs/FlyDSL/PR-554.md) — [Feat] Add TensorAdaptor.mark_static for shape-aware JIT cache keys  `[source-pr]`
+- [pr-FlyDSL-579](sources/prs/FlyDSL/PR-579.md) — [Enh] Port AITER FlyDSL kernels  `[source-pr]`
+- [pr-FlyDSL-60](sources/prs/FlyDSL/PR-60.md) — Dev/fp16 gemm  `[source-pr]`
+- [pr-Tensile-2009](sources/prs/Tensile/PR-2009.md) — Suppress developer warnings  `[source-pr]`
+- [pr-Tensile-908](sources/prs/Tensile/PR-908.md) — Including entire path to YAML file in test name.  `[source-pr]`
+- [pr-aiter-1007](sources/prs/aiter/PR-1007.md) — fix moe blockscale bug  `[source-pr]`
+- [pr-aiter-1008](sources/prs/aiter/PR-1008.md) — Topksoftmax_asm  `[source-pr]`
+- [pr-aiter-1009](sources/prs/aiter/PR-1009.md) — [Triton] Shaoclee/085 triton fusion  `[source-pr]`
+- [pr-aiter-1013](sources/prs/aiter/PR-1013.md) — Revert '[Triton] Shaoclee/085 triton fusion'  `[source-pr]`
+- [pr-aiter-1014](sources/prs/aiter/PR-1014.md) — [Triton] Shaoclee/085 triton fusion  `[source-pr]`
+- [pr-aiter-1019](sources/prs/aiter/PR-1019.md) — refactor fmoe tuner  `[source-pr]`
+- [pr-aiter-1022](sources/prs/aiter/PR-1022.md) — add moe dp share expert  `[source-pr]`
+- [pr-aiter-1024](sources/prs/aiter/PR-1024.md) — 085 aiter topk  `[source-pr]`
+- [pr-aiter-1025](sources/prs/aiter/PR-1025.md) — Fix moe dtype fp4 new  `[source-pr]`
+- [pr-aiter-1027](sources/prs/aiter/PR-1027.md) — fix(build): force platform-specific wheels  `[source-pr]`
+- [pr-aiter-1047](sources/prs/aiter/PR-1047.md) — remove runtime call to inspect.signature  `[source-pr]`
+- [pr-aiter-1058](sources/prs/aiter/PR-1058.md) — Pa mtp3 update  `[source-pr]`
+- [pr-aiter-1086](sources/prs/aiter/PR-1086.md) — fix moe_fused_gate meet nan data bug  `[source-pr]`
+- [pr-aiter-1087](sources/prs/aiter/PR-1087.md) — 085 fix topk2  `[source-pr]`
+- [pr-aiter-110](sources/prs/aiter/PR-110.md) — moe_sorting_update  `[source-pr]`
+- [pr-aiter-1102](sources/prs/aiter/PR-1102.md) — Tuning Utility update  `[source-pr]`
+- [pr-aiter-1111](sources/prs/aiter/PR-1111.md) — integrate cktile moe into fused_moe interface  `[source-pr]`
+- [pr-aiter-1116](sources/prs/aiter/PR-1116.md) — [Triton] Shaoclee/ll cpp fused rope kv cache  `[source-pr]`
+- [pr-aiter-1145](sources/prs/aiter/PR-1145.md) — Fix sgl deepseek error with cudagraph plus torch.compile  `[source-pr]`
+- [pr-aiter-1148](sources/prs/aiter/PR-1148.md) — Catchall PR for all 355_wip related changes  `[source-pr]`
+- [pr-aiter-117](sources/prs/aiter/PR-117.md) — Revert 'moe_sorting_update (#110)'  `[source-pr]`
+- [pr-aiter-118](sources/prs/aiter/PR-118.md) — Revert 'Revert 'moe_sorting_update (#110)' (#117)'  `[source-pr]`
+- [pr-aiter-1184](sources/prs/aiter/PR-1184.md) — [TRITON] Add Positional Encoding (PE) support to Triton MHA kernels  `[source-pr]`
+- [pr-aiter-119](sources/prs/aiter/PR-119.md) — blockscale MoE  `[source-pr]`
+- [pr-aiter-1203](sources/prs/aiter/PR-1203.md) — [TRITON] Add Positional Encoding (PE) support to Triton MHA kernels  `[source-pr]`
+- [pr-aiter-1206](sources/prs/aiter/PR-1206.md) — Revert 'fix a8w8 kernel name'  `[source-pr]`
+- [pr-aiter-121](sources/prs/aiter/PR-121.md) — [SWDEV-496180] Implement Fused RoPE Forward and Backward Kernels  `[source-pr]`
+- [pr-aiter-1217](sources/prs/aiter/PR-1217.md) — [Triton] [355_wip] DS 355_wip fused_shared_expert  `[source-pr]`
+- [pr-aiter-1218](sources/prs/aiter/PR-1218.md) — [Triton] [355_wip_triton] DS 355_wip fused_shared_expert  `[source-pr]`
+- [pr-aiter-1242](sources/prs/aiter/PR-1242.md) — [Triton] [355_wip_triton] AOT fix  `[source-pr]`
+- [pr-aiter-1244](sources/prs/aiter/PR-1244.md) — Revert 'integrate cktile moe into fused_moe interface'  `[source-pr]`
+- [pr-aiter-1251](sources/prs/aiter/PR-1251.md) — Fused TopK and Sigmoid kernel  `[source-pr]`
+- [pr-aiter-1266](sources/prs/aiter/PR-1266.md) — moe mxfp4 block_m = 64/128  `[source-pr]`
+- [pr-aiter-128](sources/prs/aiter/PR-128.md) — add int8 smooth quant MoE support  `[source-pr]`
+- [pr-aiter-1282](sources/prs/aiter/PR-1282.md) — Copy from #1148 add MI300 config for fused_gemm_a8w8_blockscale_a16w16  `[source-pr]`
+- [pr-aiter-1283](sources/prs/aiter/PR-1283.md) — [TRITON] GEMM kernels nomenclature changes  `[source-pr]`
+- [pr-aiter-1290](sources/prs/aiter/PR-1290.md) — Ar rms  `[source-pr]`
+- [pr-aiter-1291](sources/prs/aiter/PR-1291.md) — [FEAT] [Triton] Add transpose scale to the triton fused_rms_fp8_group_quant  `[source-pr]`
+- [pr-aiter-1292](sources/prs/aiter/PR-1292.md) — [TRITON] GEMM kernels nomenclature changes  `[source-pr]`
+- [pr-aiter-1295](sources/prs/aiter/PR-1295.md) — [TRITON]  Apply config-aware naming (kernel_repr) to attention kernels  `[source-pr]`
+- [pr-aiter-13](sources/prs/aiter/PR-13.md) — use torch.profiler in gradlib, move test_common to ater  `[source-pr]`
+- [pr-aiter-1301](sources/prs/aiter/PR-1301.md) — feat - pa_fwd support block map with stride in num_kv_heads_dim  `[source-pr]`
+- [pr-aiter-1315](sources/prs/aiter/PR-1315.md) — [Triton] 355 wip Llama FP4 triton fusion + TP8 triton decode shape tunning  `[source-pr]`
+- [pr-aiter-1316](sources/prs/aiter/PR-1316.md) — Fix displaying supported architectures  `[source-pr]`
+- [pr-aiter-1326](sources/prs/aiter/PR-1326.md) — [TRITON] Simplify and optimize triton_kernels moe code and move it into aiter  `[source-pr]`
+- [pr-aiter-1328](sources/prs/aiter/PR-1328.md) — [Triton] DS a16w8 GEMM and fused reduce_rms_fp8_group_quant  `[source-pr]`
+- [pr-aiter-1330](sources/prs/aiter/PR-1330.md) — Add Fused RMSNorm + FP8 Per-tensor Static Quantization Triton Kernel  `[source-pr]`
+- [pr-aiter-1331](sources/prs/aiter/PR-1331.md) — [Triton] add gemm tune check utility function  `[source-pr]`
+- [pr-aiter-1335](sources/prs/aiter/PR-1335.md) — [fix]: car 6 rank coredump  `[source-pr]`
+- [pr-aiter-1341](sources/prs/aiter/PR-1341.md) — [MI35X]cktile moe a16w4 support  `[source-pr]`
+- [pr-aiter-1353](sources/prs/aiter/PR-1353.md) — Support distributed_init_method and DP in init_distributed  `[source-pr]`
+- [pr-aiter-1356](sources/prs/aiter/PR-1356.md) — [TRITON] Add MoE GEMM a8w8 kernel  `[source-pr]`
+- [pr-aiter-1360](sources/prs/aiter/PR-1360.md) — Zhimding/cktilemoe  `[source-pr]`
+- [pr-aiter-1366](sources/prs/aiter/PR-1366.md) — redirect asm_moe_tkw1 call to fused_moe in order to force kernel tuning  `[source-pr]`
+- [pr-aiter-1371](sources/prs/aiter/PR-1371.md) — [Triton] DS FP4 triton fusion  `[source-pr]`
+- [pr-aiter-138](sources/prs/aiter/PR-138.md) — Add Triton RMSNorm Kernels  `[source-pr]`
+- [pr-aiter-1380](sources/prs/aiter/PR-1380.md) — Fused qk rope cat and cache mla  `[source-pr]`
+- [pr-aiter-1383](sources/prs/aiter/PR-1383.md) — Add paged attention decode with Gluon JIT/AOT for AMD CDNA3  `[source-pr]`
+- [pr-aiter-139](sources/prs/aiter/PR-139.md) — Dev/devx  `[source-pr]`
+- [pr-aiter-1392](sources/prs/aiter/PR-1392.md) — Revert '[Triton] DS FP4 triton fusion'  `[source-pr]`
+- [pr-aiter-1401](sources/prs/aiter/PR-1401.md) — Ar rms new interface  `[source-pr]`
+- [pr-aiter-1406](sources/prs/aiter/PR-1406.md) — Add fused multimodal ROPE RMS for Qwen vision language models  `[source-pr]`
+- [pr-aiter-1407](sources/prs/aiter/PR-1407.md) — fused_qk_rope_cat_and_cache_mla: Fix Triton compilation error and batch size constraint and output tensor sizing  `[source-pr]`
+- [pr-aiter-1410](sources/prs/aiter/PR-1410.md) — [TRITON] Moe a8w4 tuning  `[source-pr]`
+- [pr-aiter-1418](sources/prs/aiter/PR-1418.md) — [Bugfix] [Config] Retune ptpc fmoe deepseek-r1 for MI308  `[source-pr]`
+- [pr-aiter-1429](sources/prs/aiter/PR-1429.md) — Remove lru func in fake to avoid Symint error  `[source-pr]`
+- [pr-aiter-1434](sources/prs/aiter/PR-1434.md) — [Triton] DS FP4 fusions redo  `[source-pr]`
+- [pr-aiter-1443](sources/prs/aiter/PR-1443.md) — fix merging aiter config  `[source-pr]`
+- [pr-aiter-1447](sources/prs/aiter/PR-1447.md) — Merge trtllm fusion to branch `xyt/dev`  `[source-pr]`
+- [pr-aiter-1448](sources/prs/aiter/PR-1448.md) — Merge mrope to branch `xyt/dev`  `[source-pr]`
+- [pr-aiter-1464](sources/prs/aiter/PR-1464.md) — Initial development of triton based communication primitives using Iris  `[source-pr]`
+- [pr-aiter-1483](sources/prs/aiter/PR-1483.md) — [TRITON] Add a8w8 blockscale MoE  `[source-pr]`
+- [pr-aiter-1487](sources/prs/aiter/PR-1487.md) — [fix]: fused_ar_rms acc error  `[source-pr]`
+- [pr-aiter-1488](sources/prs/aiter/PR-1488.md) — some fix for support gpt_oss  `[source-pr]`
+- [pr-aiter-1489](sources/prs/aiter/PR-1489.md) — [TRITON] change all MI350 config file names to gfx950*  `[source-pr]`
+- [pr-aiter-150](sources/prs/aiter/PR-150.md) — fix logic of AITER_ENABLE_VSKIP  `[source-pr]`
+- [pr-aiter-1502](sources/prs/aiter/PR-1502.md) — [fix] correct return type of fused arnorm fake impl  `[source-pr]`
+- [pr-aiter-1507](sources/prs/aiter/PR-1507.md) — [fix]: local_device_load_rmsnorm acc error  `[source-pr]`
+- [pr-aiter-1509](sources/prs/aiter/PR-1509.md) — [TRITON] Change all MI300 references to gfx942  `[source-pr]`
+- [pr-aiter-151](sources/prs/aiter/PR-151.md) — Add Triton fused add LayerNorm Kernel  `[source-pr]`
+- [pr-aiter-1522](sources/prs/aiter/PR-1522.md) — [fix] fix fused_ar_rmsnorm acc  `[source-pr]`
+- [pr-aiter-1541](sources/prs/aiter/PR-1541.md) — Add fused bias support for GMM and bias‑gradient/accumulate support for persistent TGMM  `[source-pr]`
+- [pr-aiter-1551](sources/prs/aiter/PR-1551.md) — Add `fused_qk_norm_mrope_cache_quant_shuffle` for Qwen-VL models  `[source-pr]`
+- [pr-aiter-1553](sources/prs/aiter/PR-1553.md) — [Triton] Add Fused GEMM A8W8 + Split + Concat Triton Kernel  `[source-pr]`
+- [pr-aiter-1561](sources/prs/aiter/PR-1561.md) — [moe] moe NT type opt & preshuffle layout tuning  `[source-pr]`
+- [pr-aiter-1564](sources/prs/aiter/PR-1564.md) — Wjx/opt a4w4  `[source-pr]`
+- [pr-aiter-1576](sources/prs/aiter/PR-1576.md) — [TRITON] Add attention sink support to Triton MHA kernels  `[source-pr]`
+- [pr-aiter-1586](sources/prs/aiter/PR-1586.md) — [Triton] add triton fused_gemm_a8w8_blockscale_mul_add  `[source-pr]`
+- [pr-aiter-1587](sources/prs/aiter/PR-1587.md) — [TRITON] Standardize get_config for GEMM kernels and have a unified format for their configs  `[source-pr]`
+- [pr-aiter-1590](sources/prs/aiter/PR-1590.md) — Add `qknorm+rope` fused kernel  `[source-pr]`
+- [pr-aiter-1594](sources/prs/aiter/PR-1594.md) — [Triton] Support GDR prefill and decode  `[source-pr]`
+- [pr-aiter-1597](sources/prs/aiter/PR-1597.md) — [MHA V3] Remove uses of AITER_ASM_DIR and embed code objects  `[source-pr]`
+- [pr-aiter-1601](sources/prs/aiter/PR-1601.md) — Revert 'Initial development of triton based communication primitives using Iris'  `[source-pr]`
+- [pr-aiter-1602](sources/prs/aiter/PR-1602.md) — [TRITON] Move triton_tests into respective folders  `[source-pr]`
+- [pr-aiter-1605](sources/prs/aiter/PR-1605.md) — Update fused_moe dispatch  `[source-pr]`
+- [pr-aiter-1607](sources/prs/aiter/PR-1607.md) — Initial development of triton based communication primitives using Iris - try 2  `[source-pr]`
+- [pr-aiter-1609](sources/prs/aiter/PR-1609.md) — fix type hints mismatch  `[source-pr]`
+- [pr-aiter-1614](sources/prs/aiter/PR-1614.md) — refactor fmoe tuner profile  `[source-pr]`
+- [pr-aiter-1616](sources/prs/aiter/PR-1616.md) — [fix]: Resolve perf regression of fused_ar_rms on MI300 and MI355  `[source-pr]`
+- [pr-aiter-1636](sources/prs/aiter/PR-1636.md) — [TRITON] Move triton_tests into respective folders  `[source-pr]`
+- [pr-aiter-1638](sources/prs/aiter/PR-1638.md) — [TRITON] Move triton files into respective folders  `[source-pr]`
+- [pr-aiter-1650](sources/prs/aiter/PR-1650.md) — add qk_norm_rope_cache_quant fusion  `[source-pr]`
+- [pr-aiter-1652](sources/prs/aiter/PR-1652.md) — Fix sink error for asm fmha  `[source-pr]`
+- [pr-aiter-1654](sources/prs/aiter/PR-1654.md) — support moe a8w8 splitk  `[source-pr]`
+- [pr-aiter-1655](sources/prs/aiter/PR-1655.md) — Zan/moe a8w4  `[source-pr]`
+- [pr-aiter-1656](sources/prs/aiter/PR-1656.md) — [Triton] Shaoclee/triton fp4 gemm cat preshuffle  `[source-pr]`
+- [pr-aiter-1657](sources/prs/aiter/PR-1657.md) — fix some compile issues with -Werror  `[source-pr]`
+- [pr-aiter-1658](sources/prs/aiter/PR-1658.md) — fixed a bug in rmsnorm quantization fusion kernel and add a unit test  `[source-pr]`
+- [pr-aiter-1667](sources/prs/aiter/PR-1667.md) — Dev/a8w4 and a8w8splitk  `[source-pr]`
+- [pr-aiter-1682](sources/prs/aiter/PR-1682.md) — [TRITON] Add script to select Triton tests based on diff content  `[source-pr]`
+- [pr-aiter-1692](sources/prs/aiter/PR-1692.md) — Add qknorm mrope/rope setkv  `[source-pr]`
+- [pr-aiter-1693](sources/prs/aiter/PR-1693.md) — Add allreduce fusion  `[source-pr]`
+- [pr-aiter-1695](sources/prs/aiter/PR-1695.md) — add ntile 128 for a8 blkQ moe 1 stage  `[source-pr]`
+- [pr-aiter-1697](sources/prs/aiter/PR-1697.md) — fused kv quant with rope rms  `[source-pr]`
+- [pr-aiter-1706](sources/prs/aiter/PR-1706.md) — add fp32 input  `[source-pr]`
+- [pr-aiter-1714](sources/prs/aiter/PR-1714.md) — add fake for MLA RoPE operator  `[source-pr]`
+- [pr-aiter-1715](sources/prs/aiter/PR-1715.md) — Fix compiled_ops argument checking for enum arguments when AITER_JIT_DIR is set  `[source-pr]`
+- [pr-aiter-1726](sources/prs/aiter/PR-1726.md) — fix ck_moe_stage1 input  `[source-pr]`
+- [pr-aiter-1729](sources/prs/aiter/PR-1729.md) — Wjx/ck tile moe merge  `[source-pr]`
+- [pr-aiter-1737](sources/prs/aiter/PR-1737.md) — use a16w4 to replace a4w4 as default policy  `[source-pr]`
+- [pr-aiter-1742](sources/prs/aiter/PR-1742.md) — add groupnorm cuda kernel  `[source-pr]`
+- [pr-aiter-1743](sources/prs/aiter/PR-1743.md) — moe tunner fix  `[source-pr]`
+- [pr-aiter-1747](sources/prs/aiter/PR-1747.md) — [MOE] special path for moe fp8/bf16, batch 1~16  `[source-pr]`
+- [pr-aiter-1751](sources/prs/aiter/PR-1751.md) — fused shuffle kv cache into mrope rms kernel  `[source-pr]`
+- [pr-aiter-1754](sources/prs/aiter/PR-1754.md) — [FMHA] Support Vectorized KV Cache Layout and vLLM/SGLang block table in Batch Prefill kernel  `[source-pr]`
+- [pr-aiter-1761](sources/prs/aiter/PR-1761.md) — [Triton] fix get_config  `[source-pr]`
+- [pr-aiter-1764](sources/prs/aiter/PR-1764.md) — [Triton] Triton FP8 bloscale GEMM preshuffle  `[source-pr]`
+- [pr-aiter-1773](sources/prs/aiter/PR-1773.md) — mdf_bf16_semaphore_check  `[source-pr]`
+- [pr-aiter-1776](sources/prs/aiter/PR-1776.md) — Opt fused shuffle mrope and quant  `[source-pr]`
+- [pr-aiter-1777](sources/prs/aiter/PR-1777.md) — [Triton] Triton A16WFP4 GEMM prequant  `[source-pr]`
+- [pr-aiter-1778](sources/prs/aiter/PR-1778.md) — [Triton] Triton a16w8 gemm preshuffle  `[source-pr]`
+- [pr-aiter-1780](sources/prs/aiter/PR-1780.md) — minor refine  `[source-pr]`
+- [pr-aiter-1783](sources/prs/aiter/PR-1783.md) — Fix fused qk concat cache mla  `[source-pr]`
+- [pr-aiter-1788](sources/prs/aiter/PR-1788.md) — a8w4 moe fix  `[source-pr]`
+- [pr-aiter-1805](sources/prs/aiter/PR-1805.md) — [Triton] fix get_config return  `[source-pr]`
+- [pr-aiter-1814](sources/prs/aiter/PR-1814.md) — rebase and init optimization  `[source-pr]`
+- [pr-aiter-1823](sources/prs/aiter/PR-1823.md) — Fused bmm + rope_kv_cache  `[source-pr]`
+- [pr-aiter-183](sources/prs/aiter/PR-183.md) — fix  `[source-pr]`
+- [pr-aiter-1847](sources/prs/aiter/PR-1847.md) — Fused rope_kv and bmm  `[source-pr]`
+- [pr-aiter-1851](sources/prs/aiter/PR-1851.md) — [Triton] Shaoclee/fused rope kv bmm test  `[source-pr]`
+- [pr-aiter-1861](sources/prs/aiter/PR-1861.md) — revert ck fp9 blockwise kernel switch and fix moe regression.  `[source-pr]`
+- [pr-aiter-1866](sources/prs/aiter/PR-1866.md) — Fix code style after updating Black to 26.1.0  `[source-pr]`
+- [pr-aiter-1874](sources/prs/aiter/PR-1874.md) — Add kv head in fused qk concat  `[source-pr]`
+- [pr-aiter-1877](sources/prs/aiter/PR-1877.md) — Refactor mHC kernel and wrapper to implement equations 14-18 as fused kernel  `[source-pr]`
+- [pr-aiter-1878](sources/prs/aiter/PR-1878.md) — Fix issues  `[source-pr]`
+- [pr-aiter-1885](sources/prs/aiter/PR-1885.md) — Add fused 2way rms rope  `[source-pr]`
+- [pr-aiter-1887](sources/prs/aiter/PR-1887.md) — add asm topksoftmax for bf16 input  `[source-pr]`
+- [pr-aiter-1891](sources/prs/aiter/PR-1891.md) — fix test_fused_fp8_quant  `[source-pr]`
+- [pr-aiter-1899](sources/prs/aiter/PR-1899.md) — fix tolerance for large shape for test_fused_add_rmsnorm  `[source-pr]`
+- [pr-aiter-1907](sources/prs/aiter/PR-1907.md) — add hip rmsnorm fuse add and quant(support 1x128|1x64|1x32 i8|fp8|fp4)  `[source-pr]`
+- [pr-aiter-1912](sources/prs/aiter/PR-1912.md) — Add gfx950 mla a8w8 qh32 kernel  `[source-pr]`
+- [pr-aiter-1922](sources/prs/aiter/PR-1922.md) — use hip smoothquant suppot moe ep  `[source-pr]`
+- [pr-aiter-1927](sources/prs/aiter/PR-1927.md) — fix aot fp4 moe  `[source-pr]`
+- [pr-aiter-194](sources/prs/aiter/PR-194.md) — Mdf compiler 0312  `[source-pr]`
+- [pr-aiter-1942](sources/prs/aiter/PR-1942.md) — [Triton] Sync Flash Attention Package  `[source-pr]`
+- [pr-aiter-1949](sources/prs/aiter/PR-1949.md) — Add allreduce rmsnorm 1stage fusion pass  `[source-pr]`
+- [pr-aiter-196](sources/prs/aiter/PR-196.md) — update ck & some fix  `[source-pr]`
+- [pr-aiter-1960](sources/prs/aiter/PR-1960.md) — Instrumentation ar  `[source-pr]`
+- [pr-aiter-1963](sources/prs/aiter/PR-1963.md) — [wip] int8 smooth yadai  `[source-pr]`
+- [pr-aiter-1964](sources/prs/aiter/PR-1964.md) — Dev/bytedance tmp  `[source-pr]`
+- [pr-aiter-1969](sources/prs/aiter/PR-1969.md) — Add `fused_qk_norm_rope_2way` horizon fusion kernel for Qwen-Image model  `[source-pr]`
+- [pr-aiter-198](sources/prs/aiter/PR-198.md) — add fp8/int8 g1u1 gelu support  `[source-pr]`
+- [pr-aiter-1990](sources/prs/aiter/PR-1990.md) — Add `allreduce+rmsnorm+quant` fusion pass  `[source-pr]`
+- [pr-aiter-1994](sources/prs/aiter/PR-1994.md) — fix rmsnorm2d_fwd api for input.shape[-1] > 8192  `[source-pr]`
+- [pr-aiter-20](sources/prs/aiter/PR-20.md) — add asm moe int8 with input quant fused  `[source-pr]`
+- [pr-aiter-2011](sources/prs/aiter/PR-2011.md) — fix residual_out accuracy of  hip rmsnorm fused add  `[source-pr]`
+- [pr-aiter-2023](sources/prs/aiter/PR-2023.md) — Fix wrong path to the tune script  `[source-pr]`
+- [pr-aiter-2027](sources/prs/aiter/PR-2027.md) — Fuse rms rope blk quant kernel  `[source-pr]`
+- [pr-aiter-2043](sources/prs/aiter/PR-2043.md) — Fix qk_norm_rope_cache_quant ut  `[source-pr]`
+- [pr-aiter-2049](sources/prs/aiter/PR-2049.md) — [TRITON] Add smoothquant int8 MoE kernel  `[source-pr]`
+- [pr-aiter-2077](sources/prs/aiter/PR-2077.md) — [OPUS] Enhance opus.hpp, add moe_sorting_opus, workgroup_barrier, and device tests  `[source-pr]`
+- [pr-aiter-208](sources/prs/aiter/PR-208.md) — silu_and_mul fused moe  `[source-pr]`
+- [pr-aiter-2095](sources/prs/aiter/PR-2095.md) — [Triton] fix config selection bug for FP4 preshuffled GEMM  `[source-pr]`
+- [pr-aiter-2113](sources/prs/aiter/PR-2113.md) — [FlyDSL] import flydsl implement of a4w4 moe  `[source-pr]`
+- [pr-aiter-2130](sources/prs/aiter/PR-2130.md) — add asm topsoftmax support 384x8  `[source-pr]`
+- [pr-aiter-2136](sources/prs/aiter/PR-2136.md) — add mhc_pre hip kernel (mhc_pre_gemm_sqrsum, mhc_pre_big_fuse)  `[source-pr]`
+- [pr-aiter-2152](sources/prs/aiter/PR-2152.md) — fixes around MoE kernel selection  `[source-pr]`
+- [pr-aiter-2169](sources/prs/aiter/PR-2169.md) — Fix LRU cache pollution causing BLOCK_SIZE_S3 KeyError in gemm_afp4wfp4  `[source-pr]`
+- [pr-aiter-2173](sources/prs/aiter/PR-2173.md) — Fix 'BLOCK_SIZE_S3 unrecognized' error caused by config reuse  `[source-pr]`
+- [pr-aiter-218](sources/prs/aiter/PR-218.md) — add  fmoe_int8_g1u1 a16  `[source-pr]`
+- [pr-aiter-2188](sources/prs/aiter/PR-2188.md) — support FP8/MXFP4-quantized activation dtype  `[source-pr]`
+- [pr-aiter-2193](sources/prs/aiter/PR-2193.md) — Fix to default kernel selection for inter_dim % 128  `[source-pr]`
+- [pr-aiter-2199](sources/prs/aiter/PR-2199.md) — Enhance fused_qk_norm_rope_cache_quant functions by adding rotary_dim  `[source-pr]`
+- [pr-aiter-2206](sources/prs/aiter/PR-2206.md) — opt fuse_qk_norm_rope_blkquant kernel  `[source-pr]`
+- [pr-aiter-221](sources/prs/aiter/PR-221.md) — Add fused scaled_silu_and_mul (for Mixtral)  `[source-pr]`
+- [pr-aiter-2217](sources/prs/aiter/PR-2217.md) — feat(fused_kv_cache): support value_cache 5D shuffle layout and add gpt-oss-120b precision tests  `[source-pr]`
+- [pr-aiter-2233](sources/prs/aiter/PR-2233.md) — opt prefill  `[source-pr]`
+- [pr-aiter-2240](sources/prs/aiter/PR-2240.md) — [TRITON] Sagev2 patch  `[source-pr]`
+- [pr-aiter-2262](sources/prs/aiter/PR-2262.md) — Introduce asm fmoe kernels that do not require bf16->fp8 quantization  `[source-pr]`
+- [pr-aiter-2279](sources/prs/aiter/PR-2279.md) — 64x256 fmoe  `[source-pr]`
+- [pr-aiter-228](sources/prs/aiter/PR-228.md) — Moe 2stages  `[source-pr]`
+- [pr-aiter-2285](sources/prs/aiter/PR-2285.md) — Add 32x128 and 64x128 asm kernels to support qwen3-next TP4  `[source-pr]`
+- [pr-aiter-2286](sources/prs/aiter/PR-2286.md) — fix by disable code path for https://github.com/ROCm/aiter/pull/2279  `[source-pr]`
+- [pr-aiter-2295](sources/prs/aiter/PR-2295.md) — add moe_smooth_per_token_scaled_quant_v1&v2  `[source-pr]`
+- [pr-aiter-2313](sources/prs/aiter/PR-2313.md) — Add blockPerCu support for CKTile GEMMs and CKTile MOE tuning  `[source-pr]`
+- [pr-aiter-2315](sources/prs/aiter/PR-2315.md) — [TRITON] Add gfx1250 support: GFX_MAP + default GEMM/MHA configs  `[source-pr]`
+- [pr-aiter-2316](sources/prs/aiter/PR-2316.md) — [TRITON]: Add gfx1250 arch enablement: fp8 support + test refactoring  `[source-pr]`
+- [pr-aiter-2322](sources/prs/aiter/PR-2322.md) — fix fmoe_int8_g1u0_a16  `[source-pr]`
+- [pr-aiter-2326](sources/prs/aiter/PR-2326.md) — [HIP] Optimized fused split GDR decode  `[source-pr]`
+- [pr-aiter-2327](sources/prs/aiter/PR-2327.md) — Refactor topk softmax asm bind  `[source-pr]`
+- [pr-aiter-2329](sources/prs/aiter/PR-2329.md) — feat(custom_all_reduce): support GPT-OSS-120B hidden_size=2880 in fus…  `[source-pr]`
+- [pr-aiter-2331](sources/prs/aiter/PR-2331.md) — replace ck_tile type convert by opus cast  `[source-pr]`
+- [pr-aiter-2333](sources/prs/aiter/PR-2333.md) — update moe_smooth_quant dispatch and v2 supports block_m  is a multiple of 16  `[source-pr]`
+- [pr-aiter-2345](sources/prs/aiter/PR-2345.md) — Discard check_LLVM_MAIN_REVISION object file  `[source-pr]`
+- [pr-aiter-2356](sources/prs/aiter/PR-2356.md) — enable topk_softmax with share expert scoring function  `[source-pr]`
+- [pr-aiter-2359](sources/prs/aiter/PR-2359.md) — Update topk.py to support non-power-of-2 experts (Kimi-K2) for long contexts  `[source-pr]`
+- [pr-aiter-236](sources/prs/aiter/PR-236.md) — Tkw1  `[source-pr]`
+- [pr-aiter-2360](sources/prs/aiter/PR-2360.md) — [TRITON] Unified attention FP8 cleanup  `[source-pr]`
+- [pr-aiter-2375](sources/prs/aiter/PR-2375.md) — Add run_config and compare in tuner  `[source-pr]`
+- [pr-aiter-2390](sources/prs/aiter/PR-2390.md) — [FlyDSL] Add FlyDSL MoE a4w4 support and update kernels  `[source-pr]`
+- [pr-aiter-2403](sources/prs/aiter/PR-2403.md) — [TRITON] Fix unit tests on `gfx950`  `[source-pr]`
+- [pr-aiter-2414](sources/prs/aiter/PR-2414.md) — perf: optimize _moe_mxfp4_sort_kernel — reduce recompilation and improve throughput  `[source-pr]`
+- [pr-aiter-242](sources/prs/aiter/PR-242.md) — expose out_before_quant for rmsnorm2d_with_add_smoothquant  `[source-pr]`
+- [pr-aiter-2442](sources/prs/aiter/PR-2442.md) — add fused_qknorm hip kernel  `[source-pr]`
+- [pr-aiter-2446](sources/prs/aiter/PR-2446.md) — [HIP] Refine split fused GDR decode test  `[source-pr]`
+- [pr-aiter-2479](sources/prs/aiter/PR-2479.md) — mhc：add mhc_post hip kernel  `[source-pr]`
+- [pr-aiter-2491](sources/prs/aiter/PR-2491.md) — [TRITON] Fix unit tests on `gfx950` - part 2  `[source-pr]`
+- [pr-aiter-2492](sources/prs/aiter/PR-2492.md) — [Triton] [Gluon] [GFX12] add MLA triton and gluon kernel  `[source-pr]`
+- [pr-aiter-2496](sources/prs/aiter/PR-2496.md) — Rebase to main  `[source-pr]`
+- [pr-aiter-2497](sources/prs/aiter/PR-2497.md) — Wjx/upgrade flydsl fused  `[source-pr]`
+- [pr-aiter-2499](sources/prs/aiter/PR-2499.md) — Fuse gated rmsnorm + group_quant for qwen3next and qwen3.5  `[source-pr]`
+- [pr-aiter-2525](sources/prs/aiter/PR-2525.md) — add WARP_SIZE define in csrc/include/aiter_hip_common.h  for host and device  &&   rm hip_compat.h  `[source-pr]`
+- [pr-aiter-2527](sources/prs/aiter/PR-2527.md) — add fused_qk_norm_group_quant kernel  `[source-pr]`
+- [pr-aiter-2533](sources/prs/aiter/PR-2533.md) — replace ck_tile api with opus api in some hip kernels  `[source-pr]`
+- [pr-aiter-2534](sources/prs/aiter/PR-2534.md) — Refactor RoPE Operators  `[source-pr]`
+- [pr-aiter-2545](sources/prs/aiter/PR-2545.md) — refactor hip kernel -- remove torch from csrc  `[source-pr]`
+- [pr-aiter-2551](sources/prs/aiter/PR-2551.md) — (alternative to #2508) Fix/splitk tmp_out undersized buffer avoid double-zeroing  `[source-pr]`
+- [pr-aiter-2562](sources/prs/aiter/PR-2562.md) — Fix nondeterministic RNG in test_fused_mxfp4_quant  `[source-pr]`
+- [pr-aiter-2568](sources/prs/aiter/PR-2568.md) — [feat](rope): support shuffle value cache layout  `[source-pr]`
+- [pr-aiter-2571](sources/prs/aiter/PR-2571.md) — fix: del asm layernorm  `[source-pr]`
+- [pr-aiter-2578](sources/prs/aiter/PR-2578.md) — silu_mul_fused kernel  `[source-pr]`
+- [pr-aiter-2579](sources/prs/aiter/PR-2579.md) — Blockwise Sparse Sage Attention  `[source-pr]`
+- [pr-aiter-2581](sources/prs/aiter/PR-2581.md) — [FlyDSL] Optimize a4w4 MOE kernels  `[source-pr]`
+- [pr-aiter-2583](sources/prs/aiter/PR-2583.md) — [TRITON] Swiglu and reduce refactor  `[source-pr]`
+- [pr-aiter-2584](sources/prs/aiter/PR-2584.md) — [TRITON] Reduce GEMM unit tests  `[source-pr]`
+- [pr-aiter-2586](sources/prs/aiter/PR-2586.md) — Fix: Numerical Accuracy in `allreduce_fusion_kernel_1stage`  `[source-pr]`
+- [pr-aiter-2588](sources/prs/aiter/PR-2588.md) — [TRITON] Reduce rope tests  `[source-pr]`
+- [pr-aiter-2599](sources/prs/aiter/PR-2599.md) — Update some HIP kernels support different warp_size(topksoftmax/grouptopk, cache, sample)  `[source-pr]`
+- [pr-aiter-2604](sources/prs/aiter/PR-2604.md) — Group_topk: moe_fused_gate support num expert is not  power of 2  `[source-pr]`
+- [pr-aiter-2612](sources/prs/aiter/PR-2612.md) — [TRITON] Reduce MHA UTs  `[source-pr]`
+- [pr-aiter-2616](sources/prs/aiter/PR-2616.md) — [Perf] Add DSv3-MXFP4 tuned configs for MI355X  `[source-pr]`
+- [pr-aiter-2619](sources/prs/aiter/PR-2619.md) — [Perf] Add Kimi-K2.5 tuned configs for MI355X  `[source-pr]`
+- [pr-aiter-2620](sources/prs/aiter/PR-2620.md) — Add fused_dynamic_mxfp4_quant_moe_sort_hip  `[source-pr]`
+- [pr-aiter-2637](sources/prs/aiter/PR-2637.md) — fix stride check  error in fused_qk_norm_group_quant  `[source-pr]`
+- [pr-aiter-2639](sources/prs/aiter/PR-2639.md) — Annotate moe_sorting_dispatch_policy as int for fused_moe  `[source-pr]`
+- [pr-aiter-2646](sources/prs/aiter/PR-2646.md) — [TRITON] mHC-pre: Manifold-constrained Hyper Connection  `[source-pr]`
+- [pr-aiter-2657](sources/prs/aiter/PR-2657.md) — add triton fallback for mi455 gptoss & dsfp4  `[source-pr]`
+- [pr-aiter-2658](sources/prs/aiter/PR-2658.md) — [Perf]support ck fp8 blockscale splitk in moe tunner  `[source-pr]`
+- [pr-aiter-2686](sources/prs/aiter/PR-2686.md) — add optimized prefill gdn kernels for qwen3_5  `[source-pr]`
+- [pr-aiter-2688](sources/prs/aiter/PR-2688.md) — [TRITON] fix torch.compile graph break in arch_info.get_arch()  `[source-pr]`
+- [pr-aiter-2693](sources/prs/aiter/PR-2693.md) — fix fused_dynamic_mxfp4_quant_moe_sort dispatch  `[source-pr]`
+- [pr-aiter-2696](sources/prs/aiter/PR-2696.md) — Introduce 16x128 fused moe kernel with weigths prefetch  `[source-pr]`
+- [pr-aiter-2700](sources/prs/aiter/PR-2700.md) — Optimize fused_dynamic_mxfp4_quant_moe_sort_hip in small M  `[source-pr]`
+- [pr-aiter-271](sources/prs/aiter/PR-271.md) — Wjx/moe activation  `[source-pr]`
+- [pr-aiter-2723](sources/prs/aiter/PR-2723.md) — Fix Triton MoE GEMM shared memory exhaustion by reducing stage count  `[source-pr]`
+- [pr-aiter-2726](sources/prs/aiter/PR-2726.md) — [FlyDSL MOE] update a8w4 moe  `[source-pr]`
+- [pr-aiter-2750](sources/prs/aiter/PR-2750.md) — [TRITON] Fix `test_moe_routing_sigmoid_top1_fused` reference implementation tie-breaking  `[source-pr]`
+- [pr-aiter-2759](sources/prs/aiter/PR-2759.md) — Fix fused_dynamic_mxfp4_quant_moe_sort_hip err in EP  `[source-pr]`
+- [pr-aiter-2766](sources/prs/aiter/PR-2766.md) — Fix fused_gemm_a8w8_blockscale_a16w16 unit test failures  `[source-pr]`
+- [pr-aiter-2775](sources/prs/aiter/PR-2775.md) — Xiaobing/gptoss small m  `[source-pr]`
+- [pr-aiter-2784](sources/prs/aiter/PR-2784.md) — Fix LDS Exhaustion in `fused_gemm_afp4wfp4_a16w16` for ASYNC_COPY Enabled  `[source-pr]`
+- [pr-aiter-2808](sources/prs/aiter/PR-2808.md) — fix(mha_bwd): pass independent strides for do in _bwd_preprocess  `[source-pr]`
+- [pr-aiter-281](sources/prs/aiter/PR-281.md) — Add Triton MoE fused with GeLU  `[source-pr]`
+- [pr-aiter-2823](sources/prs/aiter/PR-2823.md) — Add fused AR + RMSNorm + per-group FP8 quant: optional bf16 side-output  `[source-pr]`
+- [pr-aiter-284](sources/prs/aiter/PR-284.md) — xcd remapping utils and fixed accuracy issue when group_size_m = 8 persistent MoE  `[source-pr]`
+- [pr-aiter-2845](sources/prs/aiter/PR-2845.md) — Update kimik2 FP4 tuned fMoE config  `[source-pr]`
+- [pr-aiter-2853](sources/prs/aiter/PR-2853.md) — make rmsnorm quant fusion support gemma  `[source-pr]`
+- [pr-aiter-2855](sources/prs/aiter/PR-2855.md) — [feat](norm_rope_cache): support q k v input for fused_qk_norm_rope_c…  `[source-pr]`
+- [pr-aiter-2863](sources/prs/aiter/PR-2863.md) — kimi a16wi4 moe support  `[source-pr]`
+- [pr-aiter-287](sources/prs/aiter/PR-287.md) — add asm moe stage1 doweight  `[source-pr]`
+- [pr-aiter-2877](sources/prs/aiter/PR-2877.md) — Fix FlyDSL split-k barrier synchronization issue  `[source-pr]`
+- [pr-aiter-2890](sources/prs/aiter/PR-2890.md) — Fix 2-stage fused_allreduce_rmsnorm memory ordering  `[source-pr]`
+- [pr-aiter-2902](sources/prs/aiter/PR-2902.md) — feat(triton/rope): fused QKV split, QK RMSNorm, RoPE, and paged KV cache  `[source-pr]`
+- [pr-aiter-2910](sources/prs/aiter/PR-2910.md) — improve fused rope kernel  `[source-pr]`
+- [pr-aiter-2911](sources/prs/aiter/PR-2911.md) — F8 fmha ASM gfx950  `[source-pr]`
+- [pr-aiter-2921](sources/prs/aiter/PR-2921.md) — [TRITON] Set RNG seed in Triton tests  `[source-pr]`
+- [pr-aiter-2940](sources/prs/aiter/PR-2940.md) — fix num_stages in `test_ff_a16w16_fused.py` to account for irregular shapes  `[source-pr]`
+- [pr-aiter-2945](sources/prs/aiter/PR-2945.md) — [OPUS]bf16 opus gemm support  `[source-pr]`
+- [pr-aiter-2951](sources/prs/aiter/PR-2951.md) — [MOE DSV4] flydsl a8w4 moe for dsv4  `[source-pr]`
+- [pr-aiter-2958](sources/prs/aiter/PR-2958.md) — [kernel] add fused_qk_rmsnorm_per_token_quant kernel  `[source-pr]`
+- [pr-aiter-2959](sources/prs/aiter/PR-2959.md) — Use triton wheel no fork  `[source-pr]`
+- [pr-aiter-2961](sources/prs/aiter/PR-2961.md) — [MOE] Special path for moe ptpc fp8 , batch 1~32  `[source-pr]`
+- [pr-aiter-2962](sources/prs/aiter/PR-2962.md) — [kernel] add fused_qk_norm_rope_1way kernel  `[source-pr]`
+- [pr-aiter-2967](sources/prs/aiter/PR-2967.md) — [TRITON] mHC-post: Apply post-stream and res-stream mixing  `[source-pr]`
+- [pr-aiter-2972](sources/prs/aiter/PR-2972.md) — add swiglu a4w4 moe path for gpt-oss model  `[source-pr]`
+- [pr-aiter-2974](sources/prs/aiter/PR-2974.md) — [Moe_sorting_opus] refactor  `[source-pr]`
+- [pr-aiter-2976](sources/prs/aiter/PR-2976.md) — mxfp4 quantize kernel  `[source-pr]`
+- [pr-aiter-2978](sources/prs/aiter/PR-2978.md) — Fix mhc_pre_big_fuse's accuracy because of loading synchronization  `[source-pr]`
+- [pr-aiter-3001](sources/prs/aiter/PR-3001.md) — Remove sorting for fmoe  `[source-pr]`
+- [pr-aiter-3004](sources/prs/aiter/PR-3004.md) — [Silo] Bulk merge: tuned GEMM and FMoE configs (GLM-4.7, Kimi-K2.5, MiniMax-M2.5, DeepSeek-V3.2)  `[source-pr]`
+- [pr-aiter-3005](sources/prs/aiter/PR-3005.md) — [Silo] Bulk merge: kernel fixes and features (SplitK, MoE fixes, Qwen3-Next, pa_mqa OOB)  `[source-pr]`
+- [pr-aiter-301](sources/prs/aiter/PR-301.md) — Fa moe tuning  `[source-pr]`
+- [pr-aiter-3010](sources/prs/aiter/PR-3010.md) — no quant rmsnorm support  `[source-pr]`
+- [pr-aiter-3011](sources/prs/aiter/PR-3011.md) — use opus moe as default  `[source-pr]`
+- [pr-aiter-3035](sources/prs/aiter/PR-3035.md) — add rope/rotate_activation/fp4_quant_inplace fused kernel for dsv4  `[source-pr]`
+- [pr-aiter-3047](sources/prs/aiter/PR-3047.md) — [OPUS] moe_sorting_opus: allocate workspace tensor in Python instead of C++  `[source-pr]`
+- [pr-aiter-3050](sources/prs/aiter/PR-3050.md) — Fix CK MoE split-k dispatch for blockscale FP8  `[source-pr]`
+- [pr-aiter-3057](sources/prs/aiter/PR-3057.md) — [Triton] [ATOM] DSV4 fusions phase 1  `[source-pr]`
+- [pr-aiter-3075](sources/prs/aiter/PR-3075.md) — blockscale gemm: dispatch by kernelName, strict tuned-CSV validation  `[source-pr]`
+- [pr-aiter-3078](sources/prs/aiter/PR-3078.md) — fix: fix out-of-bounds issue in rope under concurrent scenarios，fix interleaved fused_rope_rms_2way cos/sin out-of-bounds access  `[source-pr]`
+- [pr-aiter-308](sources/prs/aiter/PR-308.md) — ck fuse activation in moe stage1  `[source-pr]`
+- [pr-aiter-3090](sources/prs/aiter/PR-3090.md) — Black format  `[source-pr]`
+- [pr-aiter-3096](sources/prs/aiter/PR-3096.md) — [Triton] [ATOM] fused topk  `[source-pr]`
+- [pr-aiter-31](sources/prs/aiter/PR-31.md) — Ddddd  `[source-pr]`
+- [pr-aiter-3100](sources/prs/aiter/PR-3100.md) — feat(topk): optimized topk_gating kernel with sigmoid/softmax support  `[source-pr]`
+- [pr-aiter-3103](sources/prs/aiter/PR-3103.md) — [MOE] Special path for moe ptpc fp8, batch 1~32 with hsaco  `[source-pr]`
+- [pr-aiter-311](sources/prs/aiter/PR-311.md) — [TRITON] Add e2e MoE Triton Kernel  `[source-pr]`
+- [pr-aiter-3117](sources/prs/aiter/PR-3117.md) — perf(flydsl): MXFP4 fused-MoE stage2 optimization for EP prefill  `[source-pr]`
+- [pr-aiter-3123](sources/prs/aiter/PR-3123.md) — [MoE] Align Swiglu MXFP4 fused quant paths  `[source-pr]`
+- [pr-aiter-3128](sources/prs/aiter/PR-3128.md) — hsa/gfx942/mla: fix BF16 mla_qh8 LDS size + add FP8 mla_qh8 kernel  `[source-pr]`
+- [pr-aiter-3137](sources/prs/aiter/PR-3137.md) — [qk_rmsnorm_group_quant] refactor hip kl  `[source-pr]`
+- [pr-aiter-3144](sources/prs/aiter/PR-3144.md) — Fusion allreduce old add rmsnorm  `[source-pr]`
+- [pr-aiter-3145](sources/prs/aiter/PR-3145.md) — add silu_and_mul_quant and Opt silu_and_mul  `[source-pr]`
+- [pr-aiter-3153](sources/prs/aiter/PR-3153.md) — [MoE] Align FlyDSL MXFP4 rounding  `[source-pr]`
+- [pr-aiter-3159](sources/prs/aiter/PR-3159.md) — [module_fused_qk_norm_rope_cache_quant_shuffle] hip kl refactor  `[source-pr]`
+- [pr-aiter-3163](sources/prs/aiter/PR-3163.md) — minimax ops: support fused qknorm+allreduce kernel  `[source-pr]`
+- [pr-aiter-3164](sources/prs/aiter/PR-3164.md) — feat(aot): align FlyDSL AOT precompile with runtime cache keys  `[source-pr]`
+- [pr-aiter-3184](sources/prs/aiter/PR-3184.md) — fix deepseek v4 padding issue  `[source-pr]`
+- [pr-aiter-3185](sources/prs/aiter/PR-3185.md) — Add fused DeepSeek-V3.2 indexer cache kernel  `[source-pr]`
+- [pr-aiter-3187](sources/prs/aiter/PR-3187.md) — [TRITON] Remove precision ieee from non-F32 tl.dots  `[source-pr]`
+- [pr-aiter-3189](sources/prs/aiter/PR-3189.md) — [custom_all_reduce] qknorm_allreduce_fusion_kernel_2stage: grid-strided loop, drop 80-token cap  `[source-pr]`
+- [pr-aiter-3190](sources/prs/aiter/PR-3190.md) — [Triton] [ATOM] DSV4 fusion phase2  `[source-pr]`
+- [pr-aiter-3208](sources/prs/aiter/PR-3208.md) — [Bugfix][CKTile] Use local expert ids for MoE bias activation  `[source-pr]`
+- [pr-aiter-3213](sources/prs/aiter/PR-3213.md) — [fused_moe] kernel2 is cktile  `[source-pr]`
+- [pr-aiter-3217](sources/prs/aiter/PR-3217.md) — perf(sampling): replace ternary-search TopKRenorm with radix-select +…  `[source-pr]`
+- [pr-aiter-3220](sources/prs/aiter/PR-3220.md) — Fix checkclose and refactor tuner  `[source-pr]`
+- [pr-aiter-3231](sources/prs/aiter/PR-3231.md) — [TRITON] Use tl.dot(..., acc=...) accumulator form  `[source-pr]`
+- [pr-aiter-3235](sources/prs/aiter/PR-3235.md) — Guard sparse indexer padding and mapped tokens  `[source-pr]`
+- [pr-aiter-3237](sources/prs/aiter/PR-3237.md) — Optimize mHC hip kernel performce(Adjust fp32 gemm pipeline and add NT cache policy to memory bound case)  `[source-pr]`
+- [pr-aiter-3274](sources/prs/aiter/PR-3274.md) — [MOE] remove fill(0) in flydsl_moe_stage2  `[source-pr]`
+- [pr-aiter-3278](sources/prs/aiter/PR-3278.md) — [bugfix] fix mhc split-k acc_sq mask  `[source-pr]`
+- [pr-aiter-3293](sources/prs/aiter/PR-3293.md) — Moe gfx1250 optimizations  `[source-pr]`
+- [pr-aiter-3305](sources/prs/aiter/PR-3305.md) — [Triton] update mHC_pre_post  `[source-pr]`
+- [pr-aiter-3306](sources/prs/aiter/PR-3306.md) — [Triton] merge fused gate + downcast kernel  `[source-pr]`
+- [pr-aiter-3312](sources/prs/aiter/PR-3312.md) — [MOE] Add fused dynamic MXFP8 quant + moe_sort HIP path  `[source-pr]`
+- [pr-aiter-3313](sources/prs/aiter/PR-3313.md) — Zhimding/fix aot moe pad 0522  `[source-pr]`
+- [pr-aiter-332](sources/prs/aiter/PR-332.md) — Asm extend chip arch  `[source-pr]`
+- [pr-aiter-3320](sources/prs/aiter/PR-3320.md) — feat(flydsl): add fused qk_norm_rope_quant kernel for DeepSeek-V4-Pro decode  `[source-pr]`
+- [pr-aiter-3336](sources/prs/aiter/PR-3336.md) — [csrc/opus] add synchronous fallback to _async_load for non-buffer-to-LDS archs  `[source-pr]`
+- [pr-aiter-3341](sources/prs/aiter/PR-3341.md) — [MoE] Optimize qwen3.5 397B ptpc fp8 moe prefill and decoding  `[source-pr]`
+- [pr-aiter-3342](sources/prs/aiter/PR-3342.md) — Revert 'Zhimding/fix aot moe pad 0522'  `[source-pr]`
+- [pr-aiter-3344](sources/prs/aiter/PR-3344.md) — Revert 'perf(flydsl): MXFP4 fused-MoE stage2 optimization for EP prefill'  `[source-pr]`
+- [pr-aiter-3348](sources/prs/aiter/PR-3348.md) — [TRITON] moe routing support expert_map for expert parallelism  `[source-pr]`
+- [pr-aiter-3357](sources/prs/aiter/PR-3357.md) — [Kernel] flydsl fused_compress_attn for V4-Pro/V4-Flash CSA+HCA  `[source-pr]`
+- [pr-aiter-3358](sources/prs/aiter/PR-3358.md) — support partial rope with fused_qk_norm_rope_cache_quant_shuffle  `[source-pr]`
+- [pr-aiter-3367](sources/prs/aiter/PR-3367.md) — [MOE] Drop a_scale_one for _fp8 stage1 + remove fp8 fuse_quant bypass  `[source-pr]`
+- [pr-aiter-3373](sources/prs/aiter/PR-3373.md) — Flydsl update fix dynmaic layout; use fx.ptr for kernels not using layout  `[source-pr]`
+- [pr-aiter-3383](sources/prs/aiter/PR-3383.md) — [Perf] tune a8w8_blockscale_bpreshuffle for DSv4-Pro shapes on MI355X  `[source-pr]`
+- [pr-aiter-3396](sources/prs/aiter/PR-3396.md) — Add add mhc_pre fused rmsnorm  `[source-pr]`
+- [pr-aiter-3398](sources/prs/aiter/PR-3398.md) — Opt prefill mxfp8 quant moe sort  `[source-pr]`
+- [pr-aiter-3400](sources/prs/aiter/PR-3400.md) — [MoE] Support Qwen3.5-122B TP8 and Qwen3.5-35B TP4  `[source-pr]`
+- [pr-aiter-3401](sources/prs/aiter/PR-3401.md) — [FLYDSL MOE] fix MoE accuracy with openning pad  `[source-pr]`
+- [pr-aiter-3404](sources/prs/aiter/PR-3404.md) — moe enable padding params as runtime  `[source-pr]`
+- [pr-aiter-341](sources/prs/aiter/PR-341.md) — add block scale moe python api for asm_moe  `[source-pr]`
+- [pr-aiter-3411](sources/prs/aiter/PR-3411.md) — [Triton] mhc fix  `[source-pr]`
+- [pr-aiter-3417](sources/prs/aiter/PR-3417.md) — Fix mhc_pre_big_fuse accuracy issue in rocm7.2.3  `[source-pr]`
+- [pr-aiter-3435](sources/prs/aiter/PR-3435.md) — Revert 'moe enable padding params as runtime'  `[source-pr]`
+- [pr-aiter-362](sources/prs/aiter/PR-362.md) — [TRITON] Add RMSNorm quant (smooth and dynamic) Triton Kernel  `[source-pr]`
+- [pr-aiter-373](sources/prs/aiter/PR-373.md) — [Triton] fused routing and fused quant kernels  `[source-pr]`
+- [pr-aiter-377](sources/prs/aiter/PR-377.md) — update build utility  `[source-pr]`
+- [pr-aiter-39](sources/prs/aiter/PR-39.md) — add layernorm asm  `[source-pr]`
+- [pr-aiter-397](sources/prs/aiter/PR-397.md) — AITER Ruff Fixes  `[source-pr]`
+- [pr-aiter-401](sources/prs/aiter/PR-401.md) — Gradlib mp  `[source-pr]`
+- [pr-aiter-430](sources/prs/aiter/PR-430.md) — [TRITON]: Mha fused backward kernels  `[source-pr]`
+- [pr-aiter-437](sources/prs/aiter/PR-437.md) — hip pertoken/pertensor quant kernel opt  `[source-pr]`
+- [pr-aiter-471](sources/prs/aiter/PR-471.md) — [TRITON]: Add fused activation and mxfp4 quantization kernel  `[source-pr]`
+- [pr-aiter-482](sources/prs/aiter/PR-482.md) — add a4w4 asm_moe  `[source-pr]`
+- [pr-aiter-497](sources/prs/aiter/PR-497.md) — cherry pick from asm_moe_1stage  `[source-pr]`
+- [pr-aiter-51](sources/prs/aiter/PR-51.md) — add allreduce_fuse_layernorm  `[source-pr]`
+- [pr-aiter-510](sources/prs/aiter/PR-510.md) — [TRITON] Add LayerNorm fused with quant Triton Kernels  `[source-pr]`
+- [pr-aiter-512](sources/prs/aiter/PR-512.md) — [TRITON]: Triton moe refactor  `[source-pr]`
+- [pr-aiter-531](sources/prs/aiter/PR-531.md) — format kernel list python  `[source-pr]`
+- [pr-aiter-555](sources/prs/aiter/PR-555.md) — typehint update, utility update  `[source-pr]`
+- [pr-aiter-556](sources/prs/aiter/PR-556.md) — [TRITON]: Add strides support to new MHA bkwd kernels  `[source-pr]`
+- [pr-aiter-561](sources/prs/aiter/PR-561.md) — [TRITON]: Reorg mha code and use common fp8 type  `[source-pr]`
+- [pr-aiter-571](sources/prs/aiter/PR-571.md) — Dispatch combine  `[source-pr]`
+- [pr-aiter-580](sources/prs/aiter/PR-580.md) — merge moe from 350 launch  `[source-pr]`
+- [pr-aiter-588](sources/prs/aiter/PR-588.md) — [TRITON]: Quantization updates(add int8 and use common fp8 dtypes)  `[source-pr]`
+- [pr-aiter-590](sources/prs/aiter/PR-590.md) — update args  `[source-pr]`
+- [pr-aiter-591](sources/prs/aiter/PR-591.md) — Pa rocm refresh4  `[source-pr]`
+- [pr-aiter-594](sources/prs/aiter/PR-594.md) — [TRITON]: Kernel benchmarking improvements (for op_benchmarks/triton)  `[source-pr]`
+- [pr-aiter-595](sources/prs/aiter/PR-595.md) — [TRITON]: add json config and refactor  `[source-pr]`
+- [pr-aiter-596](sources/prs/aiter/PR-596.md) — DIY_args  `[source-pr]`
+- [pr-aiter-597](sources/prs/aiter/PR-597.md) — [TRITON]: Standardize GEMM weight shape to (N, K) and TN memory layout (by default)  `[source-pr]`
+- [pr-aiter-60](sources/prs/aiter/PR-60.md) — Rmsnorm fp8gemm  `[source-pr]`
+- [pr-aiter-607](sources/prs/aiter/PR-607.md) — [Triton] DS fused custom ops  `[source-pr]`
+- [pr-aiter-610](sources/prs/aiter/PR-610.md) — [TRITON]: Moe tuning mi350  `[source-pr]`
+- [pr-aiter-62](sources/prs/aiter/PR-62.md) — Fmoe g1u1 a8w8  `[source-pr]`
+- [pr-aiter-624](sources/prs/aiter/PR-624.md) — add blockscale ps asm moe  `[source-pr]`
+- [pr-aiter-642](sources/prs/aiter/PR-642.md) — [Triton]: Disable fused+causal for MHA bkwd  `[source-pr]`
+- [pr-aiter-650](sources/prs/aiter/PR-650.md) — [TRITON]: Benchmarking scripts updates  `[source-pr]`
+- [pr-aiter-652](sources/prs/aiter/PR-652.md) — Optimize topksoftmax WARPS_PER_TB for higher occupancy and remove redundant precision conversion  `[source-pr]`
+- [pr-aiter-660](sources/prs/aiter/PR-660.md) — update moe sorting and CK  `[source-pr]`
+- [pr-aiter-67](sources/prs/aiter/PR-67.md) — Fix ck fmoe  `[source-pr]`
+- [pr-aiter-700](sources/prs/aiter/PR-700.md) — add moe_fuse_gate_topK from sglang  `[source-pr]`
+- [pr-aiter-701](sources/prs/aiter/PR-701.md) — refine moe  `[source-pr]`
+- [pr-aiter-702](sources/prs/aiter/PR-702.md) — asm_fmoe_codegen  `[source-pr]`
+- [pr-aiter-71](sources/prs/aiter/PR-71.md) — update fp8 quant kernel select  `[source-pr]`
+- [pr-aiter-715](sources/prs/aiter/PR-715.md) — add fp8 test for rms_fuse_quant  `[source-pr]`
+- [pr-aiter-719](sources/prs/aiter/PR-719.md) — update ptpc bpreshuffle gemm tune  `[source-pr]`
+- [pr-aiter-72](sources/prs/aiter/PR-72.md) — rename ater to aiter  `[source-pr]`
+- [pr-aiter-729](sources/prs/aiter/PR-729.md) — [TRITON]: Add logging info to Triton Kernels  `[source-pr]`
+- [pr-aiter-73](sources/prs/aiter/PR-73.md) — add fmoe asm g1u1 fp8 smoothquant  `[source-pr]`
+- [pr-aiter-736](sources/prs/aiter/PR-736.md) — [TRITON]: Add fused GEMMs to optimize FF block  `[source-pr]`
+- [pr-aiter-743](sources/prs/aiter/PR-743.md) — [TRITON]: Clear cache allocator in Triton tests  `[source-pr]`
+- [pr-aiter-758](sources/prs/aiter/PR-758.md) — fix quant_type=1x128(128x128) can't use tuned_fmoe cfg  `[source-pr]`
+- [pr-aiter-77](sources/prs/aiter/PR-77.md) — Moe fp8 heuristic  `[source-pr]`
+- [pr-aiter-773](sources/prs/aiter/PR-773.md) — Support torch.library.infer_schema for torch < 2.5  `[source-pr]`
+- [pr-aiter-778](sources/prs/aiter/PR-778.md) — [TRITON]: End-to-end fused feed-forward kernel  `[source-pr]`
+- [pr-aiter-783](sources/prs/aiter/PR-783.md) — Make Gemm and other ops return Tesnor And graph break fix  `[source-pr]`
+- [pr-aiter-790](sources/prs/aiter/PR-790.md) — [TRITON] Moe fp8 tuning mi350  `[source-pr]`
+- [pr-aiter-794](sources/prs/aiter/PR-794.md) — fix test_rmsnorm2dFusedAddQuant.py --mode 3  `[source-pr]`
+- [pr-aiter-80](sources/prs/aiter/PR-80.md) — update g1u1 fp8 smoothquant fmoe  `[source-pr]`
+- [pr-aiter-804](sources/prs/aiter/PR-804.md) — Optimize topksoftmax: top-K-only softmax + 32B vector loads  `[source-pr]`
+- [pr-aiter-837](sources/prs/aiter/PR-837.md) — add moe 1stage implementation to tune  `[source-pr]`
+- [pr-aiter-841](sources/prs/aiter/PR-841.md) — add aot kernel build for deepseek  `[source-pr]`
+- [pr-aiter-852](sources/prs/aiter/PR-852.md) — [TRITON]: Reduce usage of hardcoded XCD  `[source-pr]`
+- [pr-aiter-858](sources/prs/aiter/PR-858.md) — refine moe tuner  `[source-pr]`
+- [pr-aiter-859](sources/prs/aiter/PR-859.md) — Enable group mode seqlen padding between batch  `[source-pr]`
+- [pr-aiter-890](sources/prs/aiter/PR-890.md) — [Triton] Constexpr function bug fix  `[source-pr]`
+- [pr-aiter-939](sources/prs/aiter/PR-939.md) — [TRITON]: Triton add jax triton support  `[source-pr]`
+- [pr-aiter-944](sources/prs/aiter/PR-944.md) — Add hip kernels for symmetric matrix tridiagonalization  `[source-pr]`
+- [pr-aiter-947](sources/prs/aiter/PR-947.md) — [Triton] add fused_qk_rope_reshape_and_cache  `[source-pr]`
+- [pr-aiter-95](sources/prs/aiter/PR-95.md) — add ck moe 2stage  `[source-pr]`
+- [pr-aiter-961](sources/prs/aiter/PR-961.md) — Fix rmsnorm2dFusedAddQuant error since custom op SymInt issue  `[source-pr]`
+- [pr-aiter-97](sources/prs/aiter/PR-97.md) — FP16 Paged Attention & Fused MoE  `[source-pr]`
+- [pr-aiter-977](sources/prs/aiter/PR-977.md) — add cktile moe a16w4  `[source-pr]`
+- [pr-aiter-984](sources/prs/aiter/PR-984.md) — [Triton] 355 wip fused triton  `[source-pr]`
+- [pr-aiter-993](sources/prs/aiter/PR-993.md) — Sglang deepseek-R1 graph break in torch.compile  `[source-pr]`
+- [pr-composable_kernel-1044](sources/prs/composable_kernel/PR-1044.md) — Split the static library into several files.  `[source-pr]`
+- [pr-composable_kernel-1142](sources/prs/composable_kernel/PR-1142.md) — Fixing most of the cppcheck errors.  `[source-pr]`
+- [pr-composable_kernel-1180](sources/prs/composable_kernel/PR-1180.md) — Replacing RowMajor type alias in gemm-related client examples  `[source-pr]`
+- [pr-composable_kernel-1223](sources/prs/composable_kernel/PR-1223.md) — Split the instances by architecture.  `[source-pr]`
+- [pr-composable_kernel-1224](sources/prs/composable_kernel/PR-1224.md) — F8 quantization for FMHA forward  `[source-pr]`
+- [pr-composable_kernel-1269](sources/prs/composable_kernel/PR-1269.md) — [CK_TILE] support alibi  `[source-pr]`
+- [pr-composable_kernel-128](sources/prs/composable_kernel/PR-128.md) — Gemm+Reduce Fusion  `[source-pr]`
+- [pr-composable_kernel-1372](sources/prs/composable_kernel/PR-1372.md) — Fix issue with multiple targets and remove smfmac tests from unsupported test targets  `[source-pr]`
+- [pr-composable_kernel-156](sources/prs/composable_kernel/PR-156.md) — Batched gemm and reduction  `[source-pr]`
+- [pr-composable_kernel-1591](sources/prs/composable_kernel/PR-1591.md) — add int8 gemm multiply multiply a8w8  `[source-pr]`
+- [pr-composable_kernel-1592](sources/prs/composable_kernel/PR-1592.md) — topk_softmax  `[source-pr]`
+- [pr-composable_kernel-1604](sources/prs/composable_kernel/PR-1604.md) — [CK_TILE] layernorm support fused-quant/fused-add  `[source-pr]`
+- [pr-composable_kernel-1605](sources/prs/composable_kernel/PR-1605.md) — [Ck tile] support rmsnorm and related fusion  `[source-pr]`
+- [pr-composable_kernel-1624](sources/prs/composable_kernel/PR-1624.md) — Ck tile/moe sorting  `[source-pr]`
+- [pr-composable_kernel-1634](sources/prs/composable_kernel/PR-1634.md) — [CK_TILE] fused-moe first version  `[source-pr]`
+- [pr-composable_kernel-1642](sources/prs/composable_kernel/PR-1642.md) — MoeSorting fuse set zero  `[source-pr]`
+- [pr-composable_kernel-1660](sources/prs/composable_kernel/PR-1660.md) — add batched_transpose implement  `[source-pr]`
+- [pr-composable_kernel-1678](sources/prs/composable_kernel/PR-1678.md) — [CK_TILE] Add paged-kvcache support in group mode fmha fwd splitkv kernels  `[source-pr]`
+- [pr-composable_kernel-1712](sources/prs/composable_kernel/PR-1712.md) — added moe interleaving pipeline  `[source-pr]`
+- [pr-composable_kernel-1713](sources/prs/composable_kernel/PR-1713.md) — Ck tile grouped GEMM example  `[source-pr]`
+- [pr-composable_kernel-1741](sources/prs/composable_kernel/PR-1741.md) — enable bias feature that add bias before adding residual (for rtpllm project)  `[source-pr]`
+- [pr-composable_kernel-1771](sources/prs/composable_kernel/PR-1771.md) — [CK_TILE] optimize moe-sorting kernel  `[source-pr]`
+- [pr-composable_kernel-1778](sources/prs/composable_kernel/PR-1778.md) — Remove using partitioner for all fmha kernels  `[source-pr]`
+- [pr-composable_kernel-1784](sources/prs/composable_kernel/PR-1784.md) — Ck tile/layernorm:  implement naive reduce, opt performance  `[source-pr]`
+- [pr-composable_kernel-1789](sources/prs/composable_kernel/PR-1789.md) — [CK_TILE] fmha fwd splitkv optimization for decode (seqlen_q=1)  `[source-pr]`
+- [pr-composable_kernel-1791](sources/prs/composable_kernel/PR-1791.md) — [CK_TILE] Add GetName for GEMM kernels  `[source-pr]`
+- [pr-composable_kernel-1802](sources/prs/composable_kernel/PR-1802.md) — [CK_TILE] Add Various Fusion Functions to RMSNorm  `[source-pr]`
+- [pr-composable_kernel-1808](sources/prs/composable_kernel/PR-1808.md) — [CK_TILE] Fix mock token id, support g1u1/g1u0 through same inline code block  `[source-pr]`
+- [pr-composable_kernel-1814](sources/prs/composable_kernel/PR-1814.md) — [CK_TILE] Implement fp8 quant tests/examples for layernorm and rmsnorm  `[source-pr]`
+- [pr-composable_kernel-1840](sources/prs/composable_kernel/PR-1840.md) — [CK_TILE] moe sorting ex kernel to support expert > 128  `[source-pr]`
+- [pr-composable_kernel-1861](sources/prs/composable_kernel/PR-1861.md) — [CK_TILE] Improve RMS/Layer Normalization 2 Pass Pipeline Performance  `[source-pr]`
+- [pr-composable_kernel-1876](sources/prs/composable_kernel/PR-1876.md) — Replace buffer load/store intrinsics with builtins  `[source-pr]`
+- [pr-composable_kernel-1880](sources/prs/composable_kernel/PR-1880.md) — Add ck tile examples to package  `[source-pr]`
+- [pr-composable_kernel-1884](sources/prs/composable_kernel/PR-1884.md) — porting fmoe_sorting from moe_sorting  `[source-pr]`
+- [pr-composable_kernel-1910](sources/prs/composable_kernel/PR-1910.md) — [CK_TILE] add moe-sorting MP kernel  `[source-pr]`
+- [pr-composable_kernel-1936](sources/prs/composable_kernel/PR-1936.md) — ck moe gemm implement  `[source-pr]`
+- [pr-composable_kernel-1976](sources/prs/composable_kernel/PR-1976.md) — hotfix fmoe build issue  `[source-pr]`
+- [pr-composable_kernel-1982](sources/prs/composable_kernel/PR-1982.md) — [CK_TILE] return value with macro in ck_tile::kernel_launch API  `[source-pr]`
+- [pr-composable_kernel-2025](sources/prs/composable_kernel/PR-2025.md) — hotfix fix sorting int64  `[source-pr]`
+- [pr-composable_kernel-2026](sources/prs/composable_kernel/PR-2026.md) — Moe gemm activation  `[source-pr]`
+- [pr-composable_kernel-2040](sources/prs/composable_kernel/PR-2040.md) — fuse moe activation  `[source-pr]`
+- [pr-composable_kernel-2060](sources/prs/composable_kernel/PR-2060.md) — Merge moe act to testx  `[source-pr]`
+- [pr-composable_kernel-2108](sources/prs/composable_kernel/PR-2108.md) — [CK_TILE] Allow specifying logits soft-caping through fMHA forwawrd APIs  `[source-pr]`
+- [pr-composable_kernel-2150](sources/prs/composable_kernel/PR-2150.md) — Revert 'Add ck tile examples to package'  `[source-pr]`
+- [pr-composable_kernel-2153](sources/prs/composable_kernel/PR-2153.md) — [CK_TILE] optimize moe sorting kernel, boost large context case up to 20x  `[source-pr]`
+- [pr-composable_kernel-2301](sources/prs/composable_kernel/PR-2301.md) — Label CMakeLists message() as DEBUG or STATUS for clean build output  `[source-pr]`
+- [pr-composable_kernel-2327](sources/prs/composable_kernel/PR-2327.md) — [CK_TILE] moe sorting optimization : refactor subtoken logic to let more kernel pickup mp kernel  `[source-pr]`
+- [pr-composable_kernel-2335](sources/prs/composable_kernel/PR-2335.md) — [CK_TILE] moe_sorting support 'local_tokens' feature for EP case  `[source-pr]`
+- [pr-composable_kernel-2339](sources/prs/composable_kernel/PR-2339.md) — fix moe i4 bug from aiter  `[source-pr]`
+- [pr-composable_kernel-2388](sources/prs/composable_kernel/PR-2388.md) — [CK_TILE] Fix compilation errors introduced in #2320, #2219 and #2214  `[source-pr]`
+- [pr-composable_kernel-2409](sources/prs/composable_kernel/PR-2409.md) — [CK_TILE] Enhance RMSNorm Accuracy: New Pipeline Pass for Selectable Implementation  `[source-pr]`
+- [pr-composable_kernel-2455](sources/prs/composable_kernel/PR-2455.md) — [CK] Mxfp4 moe blockscale buf2lds version support  `[source-pr]`
+- [pr-composable_kernel-2469](sources/prs/composable_kernel/PR-2469.md) — [CK_TILE] moe sorting optimize local_token  `[source-pr]`
+- [pr-composable_kernel-2602](sources/prs/composable_kernel/PR-2602.md) — update the switch condition for buffer built-ins  `[source-pr]`
+- [pr-composable_kernel-2612](sources/prs/composable_kernel/PR-2612.md) — Implement batched gemm gemm for RDNA (3 and 4)  `[source-pr]`
+- [pr-composable_kernel-2687](sources/prs/composable_kernel/PR-2687.md) — [Documentation] update instructions for launching script which launches cmake  `[source-pr]`
+- [pr-composable_kernel-2720](sources/prs/composable_kernel/PR-2720.md) — Ud fix moe sorting gfx908  `[source-pr]`
+- [pr-composable_kernel-2722](sources/prs/composable_kernel/PR-2722.md) — Extend XDL kernel to Support RDNA3/4 - Part 2  `[source-pr]`
+- [pr-composable_kernel-2726](sources/prs/composable_kernel/PR-2726.md) — Add input fp8 and output bf16 attention  `[source-pr]`
+- [pr-composable_kernel-2728](sources/prs/composable_kernel/PR-2728.md) — [Regression] Fix CK_TILE build error in grouped_convolution, copy_basic and fused_moegemm_kernel  `[source-pr]`
+- [pr-composable_kernel-2752](sources/prs/composable_kernel/PR-2752.md) — [CK-TILE] Default2DEpilogue, example and adding nullptr_t type for D  `[source-pr]`
+- [pr-composable_kernel-2822](sources/prs/composable_kernel/PR-2822.md) — opt moe sorting  `[source-pr]`
+- [pr-composable_kernel-2878](sources/prs/composable_kernel/PR-2878.md) — [CK-Tile] Add the API to load SGPR with any byte size  `[source-pr]`
+- [pr-composable_kernel-2893](sources/prs/composable_kernel/PR-2893.md) — Use __builtin_amdgcn_readfirstlane for buffer resource in fused_moe  `[source-pr]`
+- [pr-composable_kernel-2902](sources/prs/composable_kernel/PR-2902.md) — Felix/opt sorting  `[source-pr]`
+- [pr-composable_kernel-2904](sources/prs/composable_kernel/PR-2904.md) — Revert '[CK-Tile] Add the API to load SGPR '  `[source-pr]`
+- [pr-composable_kernel-2913](sources/prs/composable_kernel/PR-2913.md) — Fix the compilation error of #2878  `[source-pr]`
+- [pr-composable_kernel-2924](sources/prs/composable_kernel/PR-2924.md) — hot fix check eid range  `[source-pr]`
+- [pr-composable_kernel-2949](sources/prs/composable_kernel/PR-2949.md) — Add a new gemm pipeline based on ComputeV4 which utilizes async copy API  `[source-pr]`
+- [pr-composable_kernel-2978](sources/prs/composable_kernel/PR-2978.md) — Update include path to break the cyclic dep issue  `[source-pr]`
+- [pr-composable_kernel-2989](sources/prs/composable_kernel/PR-2989.md) — WMMA gemm_add_relu_add_layernorm  `[source-pr]`
+- [pr-composable_kernel-3003](sources/prs/composable_kernel/PR-3003.md) — [ck_tile]update s_barrier's logic in gfx12 architecture  `[source-pr]`
+- [pr-composable_kernel-3098](sources/prs/composable_kernel/PR-3098.md) — Ck moe mxfp4 blockm32  `[source-pr]`
+- [pr-composable_kernel-3206](sources/prs/composable_kernel/PR-3206.md) — Support fp8 dynamic quantization for fmha  `[source-pr]`
+- [pr-composable_kernel-3259](sources/prs/composable_kernel/PR-3259.md) — [CK Tile] enable building examples by default  `[source-pr]`
+- [pr-composable_kernel-3301](sources/prs/composable_kernel/PR-3301.md) — [CK_TILE] Port hw independent changes from internal repo to develop branch  `[source-pr]`
+- [pr-composable_kernel-3324](sources/prs/composable_kernel/PR-3324.md) — [CK_TILE] Generate random tensor values with multiple threads  `[source-pr]`
+- [pr-composable_kernel-3331](sources/prs/composable_kernel/PR-3331.md) — [CK_BUILDER] Refactor convolution signature to provide data type/layout/elementwise op per tensor  `[source-pr]`
+- [pr-composable_kernel-345](sources/prs/composable_kernel/PR-345.md) — Fused attention  `[source-pr]`
+- [pr-composable_kernel-3465](sources/prs/composable_kernel/PR-3465.md) — Add support for direct store in epilogue and padding support for wave transfer without transpose  `[source-pr]`
+- [pr-composable_kernel-3490](sources/prs/composable_kernel/PR-3490.md) — [CK_TILE][FMHA] Enable gpt-oss sink  `[source-pr]`
+- [pr-composable_kernel-351](sources/prs/composable_kernel/PR-351.md) — Fused GEMM+GEMM  `[source-pr]`
+- [pr-composable_kernel-3586](sources/prs/composable_kernel/PR-3586.md) — [CK_TILE][FMHA] Add new tile size for async  `[source-pr]`
+- [pr-composable_kernel-360](sources/prs/composable_kernel/PR-360.md) — Hotfix LDS data hazard in fused attention  `[source-pr]`
+- [pr-composable_kernel-370](sources/prs/composable_kernel/PR-370.md) — Attention with output permutation  `[source-pr]`
+- [pr-composable_kernel-376](sources/prs/composable_kernel/PR-376.md) — Implement padding and sanity checks for fused GEMM+GEMM  `[source-pr]`
+- [pr-composable_kernel-395](sources/prs/composable_kernel/PR-395.md) — Fused attention instances & padding tests  `[source-pr]`
+- [pr-composable_kernel-403](sources/prs/composable_kernel/PR-403.md) — Batchnorm-forward implemented using welford method to calculate variance  `[source-pr]`
+- [pr-composable_kernel-405](sources/prs/composable_kernel/PR-405.md) — embedding fuse layernorm  `[source-pr]`
+- [pr-composable_kernel-41](sources/prs/composable_kernel/PR-41.md) — FP16 data in-register transpose  `[source-pr]`
+- [pr-composable_kernel-412](sources/prs/composable_kernel/PR-412.md) — Grouped batched attention + permute  `[source-pr]`
+- [pr-composable_kernel-425](sources/prs/composable_kernel/PR-425.md) — MNKO padding support on bmm+masking+scale+softmax+bmm+premute  `[source-pr]`
+- [pr-composable_kernel-460](sources/prs/composable_kernel/PR-460.md) — Input/output permutation for fused attention  `[source-pr]`
+- [pr-composable_kernel-461](sources/prs/composable_kernel/PR-461.md) — BatchNorm backward implementation  `[source-pr]`
+- [pr-composable_kernel-468](sources/prs/composable_kernel/PR-468.md) — Fused elementwise layernorm  `[source-pr]`
+- [pr-composable_kernel-49](sources/prs/composable_kernel/PR-49.md) — v5r1 fusion kernels for inference  `[source-pr]`
+- [pr-composable_kernel-491](sources/prs/composable_kernel/PR-491.md) — Revert 'Fused elementwise layernorm'  `[source-pr]`
+- [pr-composable_kernel-492](sources/prs/composable_kernel/PR-492.md) — Fused elementwise normalization  `[source-pr]`
+- [pr-composable_kernel-494](sources/prs/composable_kernel/PR-494.md) — Fused attention client example  `[source-pr]`
+- [pr-composable_kernel-504](sources/prs/composable_kernel/PR-504.md) — Add BF16 tests for batched_gemm_softmax_gemm_permute  `[source-pr]`
+- [pr-composable_kernel-576](sources/prs/composable_kernel/PR-576.md) — Add GemmAddSoftmaxGemm support for MSFT ORT (instances and client API)  `[source-pr]`
+- [pr-composable_kernel-592](sources/prs/composable_kernel/PR-592.md) — Fwd drop verify2  `[source-pr]`
+- [pr-composable_kernel-593](sources/prs/composable_kernel/PR-593.md) — Added dropout verification for flash attention forward  `[source-pr]`
+- [pr-composable_kernel-62](sources/prs/composable_kernel/PR-62.md) — Fusion Conv+Bias+ReLU(+Add)  `[source-pr]`
+- [pr-composable_kernel-669](sources/prs/composable_kernel/PR-669.md) — Grouped Gemm + SplitK + simplified Kernel Args  `[source-pr]`
+- [pr-composable_kernel-865](sources/prs/composable_kernel/PR-865.md) — Fp16/fp8 mixed-precision Gemm with multiply+add fusion  `[source-pr]`
+- [pr-composable_kernel-943](sources/prs/composable_kernel/PR-943.md) — Add new flash attention forward for inference  `[source-pr]`
+- [pr-flash-attention-122](sources/prs/flash-attention/PR-122.md) — Performant backward Triton implementation with separated dkdv and dq kernels  `[source-pr]`
+- [pr-flash-attention-135](sources/prs/flash-attention/PR-135.md) — Bench  `[source-pr]`
+- [pr-flash-attention-137](sources/prs/flash-attention/PR-137.md) — Fused Bwd  `[source-pr]`
+- [pr-flash-attention-140](sources/prs/flash-attention/PR-140.md) — Add fp8 to fused kernel  `[source-pr]`
+- [pr-flash-attention-148](sources/prs/flash-attention/PR-148.md) — Pad LSE  `[source-pr]`
+- [pr-flash-attention-152](sources/prs/flash-attention/PR-152.md) — Fix Device Segfault  `[source-pr]`
+- [pr-flash-attention-157](sources/prs/flash-attention/PR-157.md) — Enable FA V3  `[source-pr]`
+- [pr-flash-attention-159](sources/prs/flash-attention/PR-159.md) — AITER integration  `[source-pr]`
+- [pr-sglang-21067](sources/prs/sglang/PR-21067.md) — Revert '[AMD] Add MoE weights and scales padding'  `[source-pr]`
+- [pr-sglang-21097](sources/prs/sglang/PR-21097.md) — [AMD] Add MoE weights and scales padding  `[source-pr]`
+- [pr-sglang-21188](sources/prs/sglang/PR-21188.md) — [AMD] Add fused GemmaRMSNorm forward_hip to use aiter/vllm kernels for qwen3.5  `[source-pr]`
+- [pr-sglang-21315](sources/prs/sglang/PR-21315.md) — [AMD] Fused rope kv store  `[source-pr]`
+- [pr-sglang-21403](sources/prs/sglang/PR-21403.md) — [AMD] Fuse RMSNorm + FP8 per-token quant for GLM-4.7-FP8  `[source-pr]`
+- [pr-sglang-21421](sources/prs/sglang/PR-21421.md) — [AMD]Integrate aiter's fused_topk for softmax scoring in topk function  `[source-pr]`
+- [pr-sglang-21431](sources/prs/sglang/PR-21431.md) — [Diffusion] [AMD] Online MXFP4 and FP8 Quantization for Multimodal Generation  `[source-pr]`
+- [pr-sglang-21437](sources/prs/sglang/PR-21437.md) — fix(sgl-kernel): align wheel METADATA/WHEEL with +cu filename  `[source-pr]`
+- [pr-sglang-21442](sources/prs/sglang/PR-21442.md) — [AMD] Add peft>=0.18.0 to diffusion_hip deps for transformers 5.x compat for AMD diffusion model  `[source-pr]`
+- [pr-sglang-21458](sources/prs/sglang/PR-21458.md) — [AMD] Optimize Qwen3-VL decode - fuse QK-norm + 3D mRoPE + KV cache write  `[source-pr]`
+- [pr-sglang-21511](sources/prs/sglang/PR-21511.md) — [AMD] Enable FP8 KV cache and FP8 attention kernel for NSA on MI300/MI355 with TileLang backend  `[source-pr]`
+- [pr-sglang-21657](sources/prs/sglang/PR-21657.md) — [AMD] Use tgemm.mm for MoEGate router gemm in deepseek_v2.py  `[source-pr]`
+- [pr-sglang-21947](sources/prs/sglang/PR-21947.md) — [AMD] Resolve the performance degression when launch server with '--enable-aiter-allreduce-fusion'  `[source-pr]`
+- [pr-sglang-21952](sources/prs/sglang/PR-21952.md) — [New Model] Gemma 4  `[source-pr]`
+- [pr-sglang-21986](sources/prs/sglang/PR-21986.md) — [AMD] Simplify fused allreduce + RMSNorm and remove hidden_dim allowlist  `[source-pr]`
+- [pr-sglang-22188](sources/prs/sglang/PR-22188.md) — [AMD] Fix test_kimi_k25_mxfp4.py : stage-c-test-large-8-gpu-amd-mi35x (linux-mi35x-gpu-8, 1)  `[source-pr]`
+- [pr-sglang-22232](sources/prs/sglang/PR-22232.md) — Reduce unnecessary kernels and copies in the NSA indexer  `[source-pr]`
+- [pr-sglang-22258](sources/prs/sglang/PR-22258.md) — [AMD][HIP] NSA: bf16 passthrough from RMSNorm to eliminate FP8 dequantization  `[source-pr]`
+- [pr-sglang-22314](sources/prs/sglang/PR-22314.md) — [AMD] Fix GLM-5 fp8 KV quant path dispatch on MI300  `[source-pr]`
+- [pr-sglang-22335](sources/prs/sglang/PR-22335.md) — [AMD] Fix multimodal diffusion test crash on ROCm by falling back to SDPA  `[source-pr]`
+- [pr-sglang-22338](sources/prs/sglang/PR-22338.md) — :sparkles: [diffusion][npu][quant] Add MXFP4 quantization support for Wan2.2 Diffusion on Ascend NPU  `[source-pr]`
+- [pr-sglang-22353](sources/prs/sglang/PR-22353.md) — [SKILL] add torch profiler analysis workflow  `[source-pr]`
+- [pr-sglang-22424](sources/prs/sglang/PR-22424.md) — [AMD] Use aiter CK layernorm2d for LayerNorm to reduce NSA indexer kernel launches  `[source-pr]`
+- [pr-sglang-22428](sources/prs/sglang/PR-22428.md) — [AMD] Diffusion - Enabel rocm miopen tuning on vae  `[source-pr]`
+- [pr-sglang-22673](sources/prs/sglang/PR-22673.md) — [Perf] Precompute gemma_weight to avoid redundant add on every forward  `[source-pr]`
+- [pr-sglang-22690](sources/prs/sglang/PR-22690.md) — [diffusion] model: Properly validate device for Mistral 3 attention  `[source-pr]`
+- [pr-sglang-22791](sources/prs/sglang/PR-22791.md) — [MoE] Add LFM2 MoE tuning support + tuned configs for H100/B200/MI325X  `[source-pr]`
+- [pr-sglang-22802](sources/prs/sglang/PR-22802.md) — [diffusion] [AMD] model: allow AITER backends in Flux 2 pipeline  `[source-pr]`
+- [pr-sglang-22844](sources/prs/sglang/PR-22844.md) — [AMD] Optimize _append_shared_to_topk_output by a single fused Triton kernel for Qwen3.5  `[source-pr]`
+- [pr-sglang-22850](sources/prs/sglang/PR-22850.md) — [AMD] Reduce NSA indexer kernels (weights_proj,  k-cache store kernel fusion)  `[source-pr]`
+- [pr-sglang-22948](sources/prs/sglang/PR-22948.md) — [AMD] Qwen3.5 MXFP4 breaks after shared expert fusion is enabled  `[source-pr]`
+- [pr-sglang-22952](sources/prs/sglang/PR-22952.md) — [AMD] Add SGLANG_MORI_MOE_MAX_INPUT_TOKENS to truncate dispatch before MoE.  `[source-pr]`
+- [pr-sglang-22971](sources/prs/sglang/PR-22971.md) — [AMD][diffusion] Temporal-unfolded batched Conv2D for ROCm VAE decode  `[source-pr]`
+- [pr-sglang-23001](sources/prs/sglang/PR-23001.md) — Add new Mintlify documentation site (docs_new/)  `[source-pr]`
+- [pr-sglang-23019](sources/prs/sglang/PR-23019.md) — refactor(moe): de-duplicate triton MoE runner path into shared helpers  `[source-pr]`
+- [pr-sglang-23178](sources/prs/sglang/PR-23178.md) — [LoRA] Fix EP + per-expert MoE LoRA illegal memory access  `[source-pr]`
+- [pr-sglang-23186](sources/prs/sglang/PR-23186.md) — [AMD] Fused qk rmsnorm bf16 for amd/Kimi-K2.5-MXFP4  `[source-pr]`
+- [pr-sglang-23226](sources/prs/sglang/PR-23226.md) — [gRPC] Pass --experimental_allow_proto3_optional to protoc in build.rs  `[source-pr]`
+- [pr-sglang-23227](sources/prs/sglang/PR-23227.md) — perf: optimize PCG inductor path for FP8 models (redo of #21734)  `[source-pr]`
+- [pr-sglang-23319](sources/prs/sglang/PR-23319.md) — [AMD] Use bpreshuffle FP8 blockscale GEMM to replace ABScale GEMM  `[source-pr]`
+- [pr-sglang-23382](sources/prs/sglang/PR-23382.md) — [AMD] skip deterministic inference for MLA FP8 test  `[source-pr]`
+- [pr-sglang-23408](sources/prs/sglang/PR-23408.md) — [AMD] Fix Kimi-K2.6 Quark MXFP4 loading prefix and packed module mapping  `[source-pr]`
+- [pr-sglang-23449](sources/prs/sglang/PR-23449.md) — [Apple Silicon] Add Metal kernel support in sgl-kernel  `[source-pr]`
+- [pr-sglang-23455](sources/prs/sglang/PR-23455.md) — [AMD] Restore test_zimage_turbo.py and test_int4fp8_moe.py with __main__ entry  `[source-pr]`
+- [pr-sglang-23467](sources/prs/sglang/PR-23467.md) — fix: dot-boundary match in is_layer_skipped for FP8 modules_to_not_convert  `[source-pr]`
+- [pr-sglang-23575](sources/prs/sglang/PR-23575.md) — [AMD] fused qk gemma norm kernels to reduce four kernels  `[source-pr]`
+- [pr-sglang-23585](sources/prs/sglang/PR-23585.md) — Move expert_mask_gpu from FusedMoE layer to StandardDispatcher  `[source-pr]`
+- [pr-sglang-23593](sources/prs/sglang/PR-23593.md) — [Docker] Prep for torch 2.11: cu129 fix, image validator, dep cleanup  `[source-pr]`
+- [pr-sglang-23597](sources/prs/sglang/PR-23597.md) — [MoE] Add Aiter MoE runner backend and purge aiter.fused_moe from quant methods  `[source-pr]`
+- [pr-sglang-23620](sources/prs/sglang/PR-23620.md) — [AMD] Optimize MiniMax-M2.5 - enable fused Triton kernel for FP8 KV cache write in aiter decode path  `[source-pr]`
+- [pr-sglang-23625](sources/prs/sglang/PR-23625.md) — Flux2 nvfp4 quantization correctness on Blackwell (B200)  `[source-pr]`
+- [pr-sglang-23633](sources/prs/sglang/PR-23633.md) — [MUSA] Use MUSA-optimized operators in piecewise CUDA graph  `[source-pr]`
+- [pr-sglang-23646](sources/prs/sglang/PR-23646.md) — [MUSA][Diffusion] Fix fa3 API on MT MUSA  `[source-pr]`
+- [pr-sglang-23648](sources/prs/sglang/PR-23648.md) — [diffusion] model: Fix FLUX.1/2 graph breaks  `[source-pr]`
+- [pr-sglang-23654](sources/prs/sglang/PR-23654.md) — [MUSA][20/N] Support qwen series models  `[source-pr]`
+- [pr-sglang-23707](sources/prs/sglang/PR-23707.md) — [MoE] Deprecate act_and_mul_triton; fold filter_expert into JIT silu/gelu_and_mul  `[source-pr]`
+- [pr-sglang-23760](sources/prs/sglang/PR-23760.md) — [MoE] Unify DeepEPMoE+MoriEPMoE through AITER MoeRunner pre/post-permute  `[source-pr]`
+- [pr-sglang-23787](sources/prs/sglang/PR-23787.md) — amd/deepseek_v4 integration 1/N - 0426  `[source-pr]`
+- [pr-sglang-23848](sources/prs/sglang/PR-23848.md) — [AMD] Add Kimi-K2.6 in nightly tests for MI30x and MI35x  `[source-pr]`
+- [pr-sglang-23882](sources/prs/sglang/PR-23882.md) — Deepseek V4  `[source-pr]`
+- [pr-sglang-23929](sources/prs/sglang/PR-23929.md) — [AMD] Support sdma path for moriep  `[source-pr]`
+- [pr-sglang-23955](sources/prs/sglang/PR-23955.md) — [AMD] Add AMD FP8 MLA attention test for Wan2.2-T2V-A14B  `[source-pr]`
+- [pr-sglang-24004](sources/prs/sglang/PR-24004.md) — fix(moe): relocate orphan tuned configs after #23019  `[source-pr]`
+- [pr-sglang-24005](sources/prs/sglang/PR-24005.md) — [AMD] Enable dual-stream MoE on ROCm  `[source-pr]`
+- [pr-sglang-24014](sources/prs/sglang/PR-24014.md) — xxxx  `[source-pr]`
+- [pr-sglang-24125](sources/prs/sglang/PR-24125.md) — [AMD] Skip redundant CatArrayBatchedCopy in GLM-5 NSA TileLang decode  `[source-pr]`
+- [pr-sglang-24148](sources/prs/sglang/PR-24148.md) — [AMD] Add _skip_rope_for_aiter_fused_mla method and check to avoid double rotating with gfx950 and Aiter backend  `[source-pr]`
+- [pr-sglang-24249](sources/prs/sglang/PR-24249.md) — amd/deepseek_v4 integration 8/N - fuse compress decode 0501  `[source-pr]`
+- [pr-sglang-24360](sources/prs/sglang/PR-24360.md) — [AMD] Replace naive triton RMSNorm with aiter RMSNorm for diffusion model  `[source-pr]`
+- [pr-sglang-24424](sources/prs/sglang/PR-24424.md) — amd/deepseek_v4 integration 11/N Compressor element-wise kernel fusion 0505  `[source-pr]`
+- [pr-sglang-24491](sources/prs/sglang/PR-24491.md) — [diffusion] Add performance mode defaults  `[source-pr]`
+- [pr-sglang-24629](sources/prs/sglang/PR-24629.md) — [Fix] Disable FlashInfer allreduce fusion under deterministic inference  `[source-pr]`
+- [pr-sglang-24677](sources/prs/sglang/PR-24677.md) — [AMD] Intro SGLANG_DIFFUSION_AITER_FP8_ATTN  `[source-pr]`
+- [pr-sglang-24727](sources/prs/sglang/PR-24727.md) — amd/deepseek_v4 integration 14/N fuse rope hadamard using rope_rotate_activation 0508  `[source-pr]`
+- [pr-sglang-24728](sources/prs/sglang/PR-24728.md) — amd/deepseek_v4 integration 15/N fuse hash topk 0508  `[source-pr]`
+- [pr-sglang-24752](sources/prs/sglang/PR-24752.md) — [diffusion] hardware: support sage attention backend on MUSA (attn backend, 21/N)  `[source-pr]`
+- [pr-sglang-24799](sources/prs/sglang/PR-24799.md) — [AMD] Fix DeepSeek import cascade by supporting both pre- and post-#2958 aiter `fused_qk_rmsnorm` APIs  `[source-pr]`
+- [pr-sglang-24816](sources/prs/sglang/PR-24816.md) — Add FlashInfer SM90 cutlass MXFP4 MoE backend (W4A16) for GPT-OSS + DeepSeek-V4  `[source-pr]`
+- [pr-sglang-24930](sources/prs/sglang/PR-24930.md) — amd/deepseek_v4 integration 16/N Triton sparse MLA kernel 0508  `[source-pr]`
+- [pr-sglang-24933](sources/prs/sglang/PR-24933.md) — Amd/deepseek v4 rebase main 0509  `[source-pr]`
+- [pr-sglang-24971](sources/prs/sglang/PR-24971.md) — amd/deepseek_v4 integration 17/N flydsl moe 0508  `[source-pr]`
+- [pr-sglang-25001](sources/prs/sglang/PR-25001.md) — [LoRA] MLA attention LoRA: q_b_proj / kv_b_proj support  `[source-pr]`
+- [pr-sglang-25020](sources/prs/sglang/PR-25020.md) — amd/deepseek_v4 integration 18/N compressor optimization 0511  `[source-pr]`
+- [pr-sglang-25043](sources/prs/sglang/PR-25043.md) — amd/deepseek_v4 integration 19/N fuse input_layernorm + FP8 per-128 group quant for attention path 0511  `[source-pr]`
+- [pr-sglang-25097](sources/prs/sglang/PR-25097.md) — amd/deepseek_v4 integration 21/N Triton fused store cache for ROCm  `[source-pr]`
+- [pr-sglang-25189](sources/prs/sglang/PR-25189.md) — [perf] DeepSeekV3: drop redundant FP32 upcasts in trtllm MoE paths  `[source-pr]`
+- [pr-sglang-25245](sources/prs/sglang/PR-25245.md) — [AMD] amd/deepseek_v4 integration 23/N fused softmax pool Triton kernel for compressor  `[source-pr]`
+- [pr-sglang-25345](sources/prs/sglang/PR-25345.md) — [AMD] amd/deepseek_v4 integration 24/N enable fuse_wqkv in ROCm  `[source-pr]`
+- [pr-sglang-25353](sources/prs/sglang/PR-25353.md) — amd/deepseek_v4 integration 25/N enable new compressor path  `[source-pr]`
+- [pr-sglang-25375](sources/prs/sglang/PR-25375.md) — amd/deepseek_v4 integration 26/N rmsnorm_quant fusion for wqb input  `[source-pr]`
+- [pr-sglang-25390](sources/prs/sglang/PR-25390.md) — [AMD] Enable shared-experts fusion with new KIMI-K2.5-MXFP4 model.  `[source-pr]`
+- [pr-sglang-25523](sources/prs/sglang/PR-25523.md) — [Diffusion] Default NVFP4 backend to FlashInfer TRTLLM  `[source-pr]`
+- [pr-sglang-25540](sources/prs/sglang/PR-25540.md) — Use DeepGEMM BF16 for unquantized DeepEP LL MoE  `[source-pr]`
+- [pr-sglang-25554](sources/prs/sglang/PR-25554.md) — amd/deepseek_v4 27/N [fix] Reduce Triton autotune configs for faster first-time server launch  `[source-pr]`
+- [pr-sglang-25821](sources/prs/sglang/PR-25821.md) — [Refactor] Rename NSA → DSA: user-facing aliases, file/class/import rename  `[source-pr]`
+- [pr-sglang-25878](sources/prs/sglang/PR-25878.md) — amd/deepseek_v4 29/N Optimize Triton sparse MLA kernel dispatch for prefill, from separate gather+attention path to 1 fused kernel  `[source-pr]`
+- [pr-sglang-25898](sources/prs/sglang/PR-25898.md) — [AMD] Dsv4/pr1 fix run time issue  `[source-pr]`
+- [pr-sglang-25974](sources/prs/sglang/PR-25974.md) — [Fix]: Restrict Kimi-K2.5 shared-experts fusion to Quark MXFP4 checkpoints  `[source-pr]`
+- [pr-sglang-25977](sources/prs/sglang/PR-25977.md) — amd/deepseek_v4 30/N Enable fused nosplitk attention dispatch for extend, from separate gather+attention to 1 fused kernel  `[source-pr]`
+- [pr-sglang-25983](sources/prs/sglang/PR-25983.md) — feat(model_runner): remove pool/backend refs from ForwardBatch via ForwardContext  `[source-pr]`
+- [pr-sglang-26014](sources/prs/sglang/PR-26014.md) — amd/deepseek_v4 31/N enable Triton fused mhc_post_pre for low concurrency  `[source-pr]`
+- [pr-sglang-26208](sources/prs/sglang/PR-26208.md) — [AMD] Dsv4/pr2 compressor opt  `[source-pr]`
+- [pr-sglang-26247](sources/prs/sglang/PR-26247.md) — [diffusion] Fix diffusion serve warmup defaults  `[source-pr]`
+- [pr-sglang-26272](sources/prs/sglang/PR-26272.md) — amd/deepseek_v4 33/N remove BF16-to-FP32 elementwise cast from compressor GEMM on HIP  `[source-pr]`
+- [pr-sglang-26318](sources/prs/sglang/PR-26318.md) — [diffusion][jit_kernel] perf: varlen FA fast path for USPAttention masked branch  `[source-pr]`
+- [pr-sglang-26383](sources/prs/sglang/PR-26383.md) — [AMD][DSV4] DSV4 MTP graph + sparse triton attn optimizations  `[source-pr]`
+- [pr-sglang-26722](sources/prs/sglang/PR-26722.md) — amd/deepseek_v4 35/N refactor Triton sparse MLA decode dispatch kernel to always run in a fused kernel  `[source-pr]`
+- [pr-triton-137](sources/prs/triton/PR-137.md) — Triton mlir ifu 02232023  `[source-pr]`
+- [pr-triton-156](sources/prs/triton/PR-156.md) — Some warp64 related fixes.  `[source-pr]`
+- [pr-triton-195](sources/prs/triton/PR-195.md) — Pytorch whl builds  `[source-pr]`
+- [pr-triton-226](sources/prs/triton/PR-226.md) — [MFMA] Enabled fused attention forward pass.  `[source-pr]`
+- [pr-triton-247](sources/prs/triton/PR-247.md) — [FA OPTIMIZATION] Keep results of FA dot operations in registers  `[source-pr]`
+- [pr-triton-282](sources/prs/triton/PR-282.md) — Enable backward pass in FA tutorial test  `[source-pr]`
+- [pr-triton-301](sources/prs/triton/PR-301.md) — Enable usage of block pointer semantics for AMD gpus  `[source-pr]`
+- [pr-triton-303](sources/prs/triton/PR-303.md) — Enable split kernel in bwd pass  `[source-pr]`
+- [pr-triton-319](sources/prs/triton/PR-319.md) — Add waves_per_eu as kernel parameter  `[source-pr]`
+- [pr-triton-328](sources/prs/triton/PR-328.md) — [FA] Upstream FA qk initialization  `[source-pr]`
+- [pr-triton-336](sources/prs/triton/PR-336.md) — [FA] Fix bug from IFU merge  `[source-pr]`
+- [pr-triton-340](sources/prs/triton/PR-340.md) — [FA fwd D=128] Reduce LDS usage in epilogue  `[source-pr]`
+- [pr-triton-346](sources/prs/triton/PR-346.md) — Add OptimizeEpilogue pass.  `[source-pr]`
+- [pr-triton-349](sources/prs/triton/PR-349.md) — Remove redundant fp32->fp16 conversion in FA  `[source-pr]`
+- [pr-triton-356](sources/prs/triton/PR-356.md) — Improve FA fwd kernel with causal=True  `[source-pr]`
+- [pr-triton-357](sources/prs/triton/PR-357.md) — fp8 type support  `[source-pr]`
+- [pr-triton-374](sources/prs/triton/PR-374.md) — [FRONTEND] Add input dtypes to autotuning key (#2534)  `[source-pr]`
+- [pr-triton-379](sources/prs/triton/PR-379.md) — flexible data types in flash attention  `[source-pr]`
+- [pr-triton-385](sources/prs/triton/PR-385.md) — [FA] Add FA tutorial with transV  `[source-pr]`
+- [pr-triton-387](sources/prs/triton/PR-387.md) — Move fa-transV to the new perf-kernels dir  `[source-pr]`
+- [pr-triton-393](sources/prs/triton/PR-393.md) — Benchmark FA fwd on 2 GCDs  `[source-pr]`
+- [pr-triton-398](sources/prs/triton/PR-398.md) — [Tutorial] Fix post IFU issues with FA  `[source-pr]`
+- [pr-triton-440](sources/prs/triton/PR-440.md) — Dot slicing pass  `[source-pr]`
+- [pr-triton-444](sources/prs/triton/PR-444.md) — Merge changes from upstream FA bwd kernel  `[source-pr]`
+- [pr-triton-450](sources/prs/triton/PR-450.md) — [tool] Added a script to print occupancy info  `[source-pr]`
+- [pr-triton-475](sources/prs/triton/PR-475.md) — [FA-qk-fp8] Add fp8 FA to 06-fused-attention-fwd-transV.py  `[source-pr]`
+- [pr-triton-483](sources/prs/triton/PR-483.md) — AMD specific scheduling pass for TTGIR instructions  `[source-pr]`
+- [pr-triton-485](sources/prs/triton/PR-485.md) — Fix FA tutorial  `[source-pr]`
+- [pr-triton-513](sources/prs/triton/PR-513.md) — added bf16 support for perf-kernels  `[source-pr]`
+- [pr-triton-527](sources/prs/triton/PR-527.md) — Fixed issues with testing and an issue with amax_o  `[source-pr]`
+- [pr-triton-685](sources/prs/triton/PR-685.md) — Tianxing/moe gemm  `[source-pr]`
+- [pr-triton-701](sources/prs/triton/PR-701.md) — EVEN_K when K is divisible by BLOCK_SIZE_K  `[source-pr]`
+- [pr-triton-702](sources/prs/triton/PR-702.md) — moe quantization support int8 and fp8  `[source-pr]`
+- [pr-triton-731](sources/prs/triton/PR-731.md) — Tianxing/rope latent attention  `[source-pr]`
+- [pr-triton-755](sources/prs/triton/PR-755.md) — remove production name  `[source-pr]`
+- [pr-triton-765](sources/prs/triton/PR-765.md) — Tianxing/moe int8 w8a8  `[source-pr]`
+- [pr-triton-849](sources/prs/triton/PR-849.md) — Use the MoE kernel in commit 7f341eb95 to avoid regression  `[source-pr]`
+- [pr-triton-876](sources/prs/triton/PR-876.md) — fix some syntax errors of the kernel in 06-fused-attention-transV.py  `[source-pr]`
+- [pr-vllm-35786](sources/prs/vllm/PR-35786.md) — Enable RoPE+KV cache fusion for ROCm AITER FA (non-shuffle layout)  `[source-pr]`
+- [pr-vllm-35893](sources/prs/vllm/PR-35893.md) — [ROCm][Bugfix] Fall back from CK MXFP4 MoE when GEMM dimensions are unsupported  `[source-pr]`
+- [pr-vllm-35970](sources/prs/vllm/PR-35970.md) — In-Tree AMD Zen CPU Backend via zentorch [1/N]  `[source-pr]`
+- [pr-vllm-36022](sources/prs/vllm/PR-36022.md) — [Kernel] Add FlashInfer MoE A2A Kernel  `[source-pr]`
+- [pr-vllm-36092](sources/prs/vllm/PR-36092.md) — [ROCm] Fix AITER ops fake impl and minor bugs  `[source-pr]`
+- [pr-vllm-36100](sources/prs/vllm/PR-36100.md) — [ROCm] Fix fused_moe_fake signature mismatch and other AITER bugs  `[source-pr]`
+- [pr-vllm-36247](sources/prs/vllm/PR-36247.md) — [Bugfix] Fix compressed-tensors quantization failure for DeepSeek-R1 on MI300x  `[source-pr]`
+- [pr-vllm-36253](sources/prs/vllm/PR-36253.md) — [ROCM] Optimize the fused_topk_bias to use aiter instead of fallback torch ops.  `[source-pr]`
+- [pr-vllm-36286](sources/prs/vllm/PR-36286.md) — [MoE Refactor] Migrate Unquantized to Full Oracle Flow  `[source-pr]`
+- [pr-vllm-36320](sources/prs/vllm/PR-36320.md) — [Quantization] Support Quark W8A8 INT8 MoE inference  `[source-pr]`
+- [pr-vllm-36574](sources/prs/vllm/PR-36574.md) — [ROCm] Utilize persistent MLA kernel from AITER  `[source-pr]`
+- [pr-vllm-36716](sources/prs/vllm/PR-36716.md) — [ROCm]: Update rope+kvcache fusion conditions and disable custom op by default  `[source-pr]`
+- [pr-vllm-36823](sources/prs/vllm/PR-36823.md) — [vLLM IR] 2/N fused_add_rms_norm and maybe_inplace overload  `[source-pr]`
+- [pr-vllm-36927](sources/prs/vllm/PR-36927.md) — [ROCm][Quantization] add fp8xfp8 attn support for rocm_aiter_unified_attn  `[source-pr]`
+- [pr-vllm-36965](sources/prs/vllm/PR-36965.md) — [Model][Quantization] Add GGUF support for MiniMax-M2.1  `[source-pr]`
+- [pr-vllm-37128](sources/prs/vllm/PR-37128.md) — [MoE Refactor] Mxfp4 oracle rebased  `[source-pr]`
+- [pr-vllm-37418](sources/prs/vllm/PR-37418.md) — [Bugfix][ROCm] Fix MoRI + AITER FP8 dispatch compatibility for defer_input_quant  `[source-pr]`
+- [pr-vllm-37487](sources/prs/vllm/PR-37487.md) — [V0 Deprecation] Refactor kv cache from list to element  `[source-pr]`
+- [pr-vllm-37529](sources/prs/vllm/PR-37529.md) — [ROCm] Enable MORI EP for unquantized MoE with AITER backend  `[source-pr]`
+- [pr-vllm-37566](sources/prs/vllm/PR-37566.md) — refactor hard coded device string in test files under tests/v1 and tests/lora  `[source-pr]`
+- [pr-vllm-37640](sources/prs/vllm/PR-37640.md) — [ROCm][Test] Fix ROCM_AITER_UNIFIED_ATTN attn+quant fusion test  `[source-pr]`
+- [pr-vllm-37646](sources/prs/vllm/PR-37646.md) — [ROCm][FEAT] AITER Fused Allreduce + RMSNorm  `[source-pr]`
+- [pr-vllm-37787](sources/prs/vllm/PR-37787.md) — [Bugfix][ROCm][MoE] Fix mxfp4 oracle regressions from #37128  `[source-pr]`
+- [pr-vllm-37826](sources/prs/vllm/PR-37826.md) — [ROCm] Widen OAI Triton MoE capability range to include gfx12 (RDNA4)  `[source-pr]`
+- [pr-vllm-37833](sources/prs/vllm/PR-37833.md) — [ROCm] Fix MoE kernel test failures on gfx950  `[source-pr]`
+- [pr-vllm-38043](sources/prs/vllm/PR-38043.md) — {ROCm]: gpt-oss fusion/padding fixes  `[source-pr]`
+- [pr-vllm-38086](sources/prs/vllm/PR-38086.md) — [ROCm] Enable VLLM triton FP8 moe for gfx1201, tuned for Qwen3-30B-A3B-FP8 tp=2 and Qwen/Qwen3.5-35B-A3B-FP8 tp=2  `[source-pr]`
+- [pr-vllm-38123](sources/prs/vllm/PR-38123.md) — [compile] Allow strings in custom ops without regressing compilation times  `[source-pr]`
+- [pr-vllm-38288](sources/prs/vllm/PR-38288.md) — [Quant] Consolidate GPTQ: rename gptq_marlin.py to auto_gptq.py  `[source-pr]`
+- [pr-vllm-38468](sources/prs/vllm/PR-38468.md) — Add platform manual_seed_all API  `[source-pr]`
+- [pr-vllm-38504](sources/prs/vllm/PR-38504.md) — [Kernels][MoE] Fix legacy_routing to use bitmatrix-based routing path  `[source-pr]`
+- [pr-vllm-38659](sources/prs/vllm/PR-38659.md) — [1/N][Cleanup] Standardize on use of `is_quantized_kv_cache`  `[source-pr]`
+- [pr-vllm-38774](sources/prs/vllm/PR-38774.md) — [ROCm][Quantization][1/N] Refactor quark_moe w_mxfp4 w/ oracle  `[source-pr]`
+- [pr-vllm-38817](sources/prs/vllm/PR-38817.md) — [ROCm] Enable fused_silu_mul_block_quant on ROCm  `[source-pr]`
+- [pr-vllm-38901](sources/prs/vllm/PR-38901.md) — refactor hard coded device string in test files under tests/compile tests/quantization tests/models and tests/model_executor  `[source-pr]`
+- [pr-vllm-39014](sources/prs/vllm/PR-39014.md) — [vLLM IR] rework gemma_rms_norm  `[source-pr]`
+- [pr-vllm-39083](sources/prs/vllm/PR-39083.md) — [FEAT] [Perf] [Gemma4] Fused Gemma4 Routing Function Triton  `[source-pr]`
+- [pr-vllm-39136](sources/prs/vllm/PR-39136.md) — [ROCm][Quantization][2/N] Refactor quark_moe w4a8 w/ oracle  `[source-pr]`
+- [pr-vllm-39177](sources/prs/vllm/PR-39177.md) — [ROCm][Perf] Expose AITER MoE sorting dispatch policy via env var  `[source-pr]`
+- [pr-vllm-39242](sources/prs/vllm/PR-39242.md) — [ROCm] Add MLA dual RMS norm fusion (Q, KV) pass for DeepSeek/Kimi-K2  `[source-pr]`
+- [pr-vllm-39280](sources/prs/vllm/PR-39280.md) — [ROCm][Perf] Add Fused Shared Expert (FSE) support for Qwen3-Next  `[source-pr]`
+- [pr-vllm-39387](sources/prs/vllm/PR-39387.md) — [ROCm] Disable fused_silu_mul_block_quant on ROCm  `[source-pr]`
+- [pr-vllm-39684](sources/prs/vllm/PR-39684.md) — [Compilation] Refactor SiluMul activation+quant Fusion Pass  `[source-pr]`
+- [pr-vllm-39688](sources/prs/vllm/PR-39688.md) — [fix][MOE] Fix MOE experts `intermediate_size` dimension not being narrowed before weight loading  `[source-pr]`
+- [pr-vllm-39721](sources/prs/vllm/PR-39721.md) — [ROCm] ROCm DeepEP API updated to latest  `[source-pr]`
+- [pr-vllm-39944](sources/prs/vllm/PR-39944.md) — [Kernel][Helion] Fix inductor fusion of Helion HOP  `[source-pr]`
+- [pr-vllm-39999](sources/prs/vllm/PR-39999.md) — [ROCm] Cast score correction bias tensor during model construction for DeepSeek/Kimi-K2  `[source-pr]`
+- [pr-vllm-40033](sources/prs/vllm/PR-40033.md) — [NVFP4][Hopper/AMD Instinct] Add Triton kernels for NVFP4 dequantization and QDQ emulation  `[source-pr]`
+- [pr-vllm-40132](sources/prs/vllm/PR-40132.md) — [xpu][rocm] Update `current_platform.supports_fp8()` for TritonExperts  `[source-pr]`
+- [pr-vllm-40159](sources/prs/vllm/PR-40159.md) — [MyPy] Enable mypy for `vllm/model_executor/layers/`  `[source-pr]`
+- [pr-vllm-40338](sources/prs/vllm/PR-40338.md) — [LoRA] MoE LoRA Refactor  `[source-pr]`
+- [pr-vllm-40386](sources/prs/vllm/PR-40386.md) — [ROCm] Hotfix: guard MLA dual RMS norm fusion against older AITer versions  `[source-pr]`
+- [pr-vllm-40390](sources/prs/vllm/PR-40390.md) — [Bugfix][Rocm]Aiter MoE re-uses existing tensor addresses after weight update.  `[source-pr]`
+- [pr-vllm-40392](sources/prs/vllm/PR-40392.md) — [Performance][DSR1]: Fused RoPE+KVCache+q_concat for MLA  `[source-pr]`
+- [pr-vllm-40710](sources/prs/vllm/PR-40710.md) — [Aiter][ROCm] RMSNormGated+GroupedQuantFP8 fusion  `[source-pr]`
+- [pr-vllm-40711](sources/prs/vllm/PR-40711.md) — [Aiter][ROCm] gdn_linear_attn kernel fusion  `[source-pr]`
+- [pr-vllm-40808](sources/prs/vllm/PR-40808.md) — [Bugfix] Disable FlashInfer CUTLASS MoE on SM110 (Jetson Thor AGX)  `[source-pr]`
+- [pr-vllm-40871](sources/prs/vllm/PR-40871.md) — [New Model][ROCm] Add AMD support for DeepSeek V4  `[source-pr]`
+- [pr-vllm-41055](sources/prs/vllm/PR-41055.md) — [MoE Refactor]  EPLB refactoring for FusedMoE  `[source-pr]`
+- [pr-vllm-41175](sources/prs/vllm/PR-41175.md) — [ROCm][Bugfix]: W4A4 MOE using emulation instead of AITER on MXFP4-supported hardware  `[source-pr]`
+- [pr-vllm-41428](sources/prs/vllm/PR-41428.md) — [DSv4] Improved fused Indexer Q quant kernel  `[source-pr]`
+- [pr-vllm-41436](sources/prs/vllm/PR-41436.md) — [ROCm][Quantization][3/N] Refactor quark_moe w4a4 w/ oracle  `[source-pr]`
+- [pr-vllm-41713](sources/prs/vllm/PR-41713.md) — Eliminate redundant MoE buffer copies in AITER fused experts (without dependency on AITER changes)  `[source-pr]`
+- [pr-vllm-41751](sources/prs/vllm/PR-41751.md) — [ROCm] mori: add InterNodeV1LL inter-node kernel selection via VLLM_MORI_INTERNODE_KERNEL  `[source-pr]`
+- [pr-vllm-41825](sources/prs/vllm/PR-41825.md) — [ROCm][Perf] Fix RMSNorm+Quant fusion for gfx950 (non-fnuz)  `[source-pr]`
+- [pr-vllm-41892](sources/prs/vllm/PR-41892.md) — [Bugfix][Quark] Fix W8A8 INT8 garbage outputs on Step-3.5-Flash (and other 3-key fused-MoE Quark exports)  `[source-pr]`
+- [pr-vllm-41901](sources/prs/vllm/PR-41901.md) — [Model] Use AutoWeightsLoader for AXK1  `[source-pr]`
+- [pr-vllm-41972](sources/prs/vllm/PR-41972.md) — [ROCm] Fix AITER AR+RMSNorm no-residual fusion  `[source-pr]`
+- [pr-vllm-41979](sources/prs/vllm/PR-41979.md) — [MoE] Move various experts classes to fused_moe/experts/  `[source-pr]`
+- [pr-vllm-42061](sources/prs/vllm/PR-42061.md) — [ROCm][Bugfix] Re-tag AITER MoE weights as preshuffled after replace_parameter  `[source-pr]`
+- [pr-vllm-42072](sources/prs/vllm/PR-42072.md) — [ROCm] Restore fast top_k_per_row kernels for sparse MLA when topk_tokens=2048  `[source-pr]`
+- [pr-vllm-42098](sources/prs/vllm/PR-42098.md) — Use hidden_pad and intermediate_pad from vLLM #34301  `[source-pr]`
+- [pr-vllm-42373](sources/prs/vllm/PR-42373.md) — fix: MoE model using shared routed experts crashes on AMD GPUs  `[source-pr]`
+- [pr-vllm-42409](sources/prs/vllm/PR-42409.md) — [ROCm] Widen AITER fused AR RMSNorm 1-stage gate  `[source-pr]`
+- [pr-vllm-42411](sources/prs/vllm/PR-42411.md) — [ROCm] Run AITER RMSNorm pad fusion before AR RMS fusion  `[source-pr]`
+- [pr-vllm-42521](sources/prs/vllm/PR-42521.md) — [Fix]  Weight loading for qwen3_5 using runai_streamer  `[source-pr]`
+- [pr-vllm-42595](sources/prs/vllm/PR-42595.md) — [Bugfix] [ROCm] [DSV4] Fix AITER MXFP4 MoE weight loading and shuffle…  `[source-pr]`
+- [pr-vllm-42604](sources/prs/vllm/PR-42604.md) — DeepSeekV4-Pro enable cuda graph full and piecewise mode  `[source-pr]`
+- [pr-vllm-42606](sources/prs/vllm/PR-42606.md) — [ROCm][Bugfix] Fix fused_mla_dual_rms_norm for AITER API rename _fused_qk_rmsnorm  `[source-pr]`
+- [pr-vllm-42880](sources/prs/vllm/PR-42880.md) — [ROCm] Guard AITER GDN decode fast path by layout  `[source-pr]`
+- [pr-vllm-42950](sources/prs/vllm/PR-42950.md) — [XPU]fix: add XPU platform guards to DeepSeek-V4 ops  `[source-pr]`
+- [pr-vllm-43073](sources/prs/vllm/PR-43073.md) — [Model Refactoring] Move deepseek_v4_ops to models/deepseek_v4 [3/N]  `[source-pr]`
+- [pr-vllm-43108](sources/prs/vllm/PR-43108.md) — [MoE Refactor] Remove supports_expert_map  `[source-pr]`
+- [pr-vllm-43135](sources/prs/vllm/PR-43135.md) — [Perf][gpt-oss] Downgrade triton_kernels to v3.5.1  `[source-pr]`
+- [pr-vllm-43149](sources/prs/vllm/PR-43149.md) — [Refactor] Extract DeepSeek V4 sparse MLA impl into model folder  `[source-pr]`
+- [pr-vllm-43162](sources/prs/vllm/PR-43162.md) — [Feat][DSV4] Fuse q pad into deepseek v4 fused kernel  `[source-pr]`
+- [pr-vllm-43385](sources/prs/vllm/PR-43385.md) — [ROCm] [DSv4] [Perf] Support DeepSeek v4 MTP  `[source-pr]`
+- [pr-vllm-43486](sources/prs/vllm/PR-43486.md) — [ROCm][Critical] Fix the GDN import bug  `[source-pr]`
+- [pr-vllm-43554](sources/prs/vllm/PR-43554.md) — [Kernel] Remove NormGateLinear  `[source-pr]`
+- [pr-vllm-43679](sources/prs/vllm/PR-43679.md) — [ROCm][DSV4] Enable Tilelang MHC replacing torch/triton mhc  `[source-pr]`
+- [pr-vllm-43710](sources/prs/vllm/PR-43710.md) — [DSv4] Refactor compressor & Fix ROCm compatibility  `[source-pr]`
+- [pr-vllm-43717](sources/prs/vllm/PR-43717.md) — [9/n] Migrate attention and cache kernels to torch stable ABI (continued)  `[source-pr]`
+- [pr-vllm-43727](sources/prs/vllm/PR-43727.md) — [MoE] Remove inplace fused experts mechanism  `[source-pr]`
+- [pr-vllm-43746](sources/prs/vllm/PR-43746.md) — [Model Refactoring] Remove torch compile dependency in DSv4  `[source-pr]`
 - [kernel-flash-attention-ck](wiki/kernels/flash-attention-ck.md) — FlashAttention-2 via CK-tile on CDNA (MI300X)  `[wiki-kernel]`
 - [kernel-rmsnorm](wiki/kernels/rmsnorm.md) — Fused RMSNorm (+ residual / quant) on CDNA  `[wiki-kernel]`
 
 ## lds-double-buffering
 
+- [pr-FlyDSL-225](sources/prs/FlyDSL/PR-225.md) — Add FMHA kernel  `[source-pr]`
+- [pr-FlyDSL-250](sources/prs/FlyDSL/PR-250.md) — 【2/N】add support wmma kernels for RDNA4(GFX1201)  `[source-pr]`
+- [pr-FlyDSL-388](sources/prs/FlyDSL/PR-388.md) — [Perf] Port mixed_moe kernel optimizations for stage1/stage2  `[source-pr]`
+- [pr-FlyDSL-465](sources/prs/FlyDSL/PR-465.md) — some optimization about smoothquant moe  `[source-pr]`
+- [pr-FlyDSL-525](sources/prs/FlyDSL/PR-525.md) — FP8 GEMM 8wave ping-pong kernel  `[source-pr]`
+- [pr-FlyDSL-567](sources/prs/FlyDSL/PR-567.md) — Enable gfx1151 (RDNA3.5 / Strix Halo): LDS, FP8 guards, f16/bf16 WMMA GEMM  `[source-pr]`
+- [pr-FlyDSL-60](sources/prs/FlyDSL/PR-60.md) — Dev/fp16 gemm  `[source-pr]`
+- [pr-FlyDSL-79](sources/prs/FlyDSL/PR-79.md) — [FP4] preshuffle gemm a8w4&a4w4 moe gemm a8w4  `[source-pr]`
+- [pr-Tensile-1288](sources/prs/Tensile/PR-1288.md) — rename replacement kernels for MFMA Int8 GEMM  `[source-pr]`
+- [pr-Tensile-1529](sources/prs/Tensile/PR-1529.md) — merge staging 3c17e5a into master on GO from CQE  `[source-pr]`
+- [pr-Tensile-81](sources/prs/Tensile/PR-81.md) — prefetching support  `[source-pr]`
+- [pr-aiter-1242](sources/prs/aiter/PR-1242.md) — [Triton] [355_wip_triton] AOT fix  `[source-pr]`
+- [pr-aiter-1479](sources/prs/aiter/PR-1479.md) — Jacchang/pa ragged experimental  `[source-pr]`
+- [pr-aiter-1578](sources/prs/aiter/PR-1578.md) — feat: Adaptive topk algorithm selection based on input characteristics  `[source-pr]`
+- [pr-aiter-2064](sources/prs/aiter/PR-2064.md) — Adding double buffer option to cross_device_reduce_1stage  `[source-pr]`
+- [pr-aiter-2685](sources/prs/aiter/PR-2685.md) — [Triton]Integrate mla_decode_gluon kernel  `[source-pr]`
+- [pr-aiter-2723](sources/prs/aiter/PR-2723.md) — Fix Triton MoE GEMM shared memory exhaustion by reducing stage count  `[source-pr]`
+- [pr-aiter-2784](sources/prs/aiter/PR-2784.md) — Fix LDS Exhaustion in `fused_gemm_afp4wfp4_a16w16` for ASYNC_COPY Enabled  `[source-pr]`
+- [pr-aiter-2867](sources/prs/aiter/PR-2867.md) — Fix Correction Issues in `batched_gemm_a8w8` for ASYNC_COPY Enabled  `[source-pr]`
+- [pr-aiter-3018](sources/prs/aiter/PR-3018.md) — Remove async copy override from Triton test workflow  `[source-pr]`
+- [pr-aiter-3372](sources/prs/aiter/PR-3372.md) — LDS-aware num_stages selection for gfx950 MoE GEMM  `[source-pr]`
+- [pr-aiter-817](sources/prs/aiter/PR-817.md) — LeanAttention optimization  `[source-pr]`
+- [pr-composable_kernel-1052](sources/prs/composable_kernel/PR-1052.md) — Add support for double buffering in direct load GEMM kernel  `[source-pr]`
+- [pr-composable_kernel-2246](sources/prs/composable_kernel/PR-2246.md) — [CK_TILE] Support for elementwise kernel  `[source-pr]`
+- [pr-composable_kernel-2267](sources/prs/composable_kernel/PR-2267.md) — [CK Tile] Int8 Support on CK Tile GEMM  `[source-pr]`
+- [pr-composable_kernel-2276](sources/prs/composable_kernel/PR-2276.md) — Code drop for 2 warp ping pong scheduler along K dimension.  `[source-pr]`
+- [pr-composable_kernel-2858](sources/prs/composable_kernel/PR-2858.md) — Add gemm weight preshuffle pk_int_t support  `[source-pr]`
+- [pr-composable_kernel-2949](sources/prs/composable_kernel/PR-2949.md) — Add a new gemm pipeline based on ComputeV4 which utilizes async copy API  `[source-pr]`
+- [pr-composable_kernel-2963](sources/prs/composable_kernel/PR-2963.md) — Lwpck 3550: Implement and test fixed precision fp8 x bf8  `[source-pr]`
+- [pr-composable_kernel-31](sources/prs/composable_kernel/PR-31.md) — [MIOpen Downstream] Dynamic Reduction PR  `[source-pr]`
+- [pr-composable_kernel-3493](sources/prs/composable_kernel/PR-3493.md) — Refactor weight preshuffled pipeline and unify LDS buffer management API  `[source-pr]`
+- [pr-triton-794](sources/prs/triton/PR-794.md) — Add support for tilesPerWarp  `[source-pr]`
+- [pr-triton-796](sources/prs/triton/PR-796.md) — [AMD] Enable async pingpong for F16 GEMMs  `[source-pr]`
+- [pr-triton-801](sources/prs/triton/PR-801.md) — Add skinny pingpong transform  `[source-pr]`
+- [pr-triton-806](sources/prs/triton/PR-806.md) — Aweinrau/mn slicing  `[source-pr]`
+- [pr-triton-808](sources/prs/triton/PR-808.md) — Aweinrau/mn slicing  `[source-pr]`
+- [pr-triton-811](sources/prs/triton/PR-811.md) — Aweinrau/mn slicing  `[source-pr]`
+- [pr-triton-812](sources/prs/triton/PR-812.md) — [AMD] Improve Scheduling for Async BF16 GEMM  `[source-pr]`
+- [pr-triton-815](sources/prs/triton/PR-815.md) — Add non-slicing 2step pingpong  `[source-pr]`
+- [pr-triton-867](sources/prs/triton/PR-867.md) — [moe] Improved tile size and ping pong strategy for NW=4  `[source-pr]`
+- [pr-triton-872](sources/prs/triton/PR-872.md) — Shared/oai oss bf16mx4 moe launch  `[source-pr]`
+- [pr-triton-905](sources/prs/triton/PR-905.md) — replace copysign to avoid potential LLVM opt  `[source-pr]`
 - [kernel-flash-attention-ck](wiki/kernels/flash-attention-ck.md) — FlashAttention-2 via CK-tile on CDNA (MI300X)  `[wiki-kernel]`
 - [kernel-flydsl-preshuffle-gemm](wiki/kernels/flydsl-preshuffle-gemm.md) — FlyDSL Preshuffle GEMM (layout-DSL example)  `[wiki-kernel]`
 - [kernel-vector-add-asm](wiki/kernels/vector-add-asm.md) — Persistent Vector Add in GCN Assembly (async direct-to-LDS, double-buffered)  `[wiki-kernel]`
 
+## lds-swizzling
+
+- [pr-FlyDSL-153](sources/prs/FlyDSL/PR-153.md) — Pre v0.1 gemm fix  `[source-pr]`
+- [pr-FlyDSL-191](sources/prs/FlyDSL/PR-191.md) — Refine code  `[source-pr]`
+- [pr-FlyDSL-197](sources/prs/FlyDSL/PR-197.md) — clean codes and wrap numerics in bufferops  `[source-pr]`
+- [pr-FlyDSL-225](sources/prs/FlyDSL/PR-225.md) — Add FMHA kernel  `[source-pr]`
+- [pr-FlyDSL-250](sources/prs/FlyDSL/PR-250.md) — 【2/N】add support wmma kernels for RDNA4(GFX1201)  `[source-pr]`
+- [pr-FlyDSL-27](sources/prs/FlyDSL/PR-27.md) — Dev/gemm flir  `[source-pr]`
+- [pr-FlyDSL-270](sources/prs/FlyDSL/PR-270.md) — Refine kernel code  `[source-pr]`
+- [pr-FlyDSL-32](sources/prs/FlyDSL/PR-32.md) — Dev/gemm refactor  `[source-pr]`
+- [pr-FlyDSL-388](sources/prs/FlyDSL/PR-388.md) — [Perf] Port mixed_moe kernel optimizations for stage1/stage2  `[source-pr]`
+- [pr-FlyDSL-427](sources/prs/FlyDSL/PR-427.md) — [OPT] Add fly-int-swizzle-simplify pass  `[source-pr]`
+- [pr-FlyDSL-465](sources/prs/FlyDSL/PR-465.md) — some optimization about smoothquant moe  `[source-pr]`
+- [pr-FlyDSL-473](sources/prs/FlyDSL/PR-473.md) — [Feat] Add CoordSwizzle and support composedLayout as outer in the layout chain  `[source-pr]`
+- [pr-FlyDSL-541](sources/prs/FlyDSL/PR-541.md) — [Refactor] Migrate kernels from SmemAllocator to SharedAllocator  `[source-pr]`
+- [pr-FlyDSL-567](sources/prs/FlyDSL/PR-567.md) — Enable gfx1151 (RDNA3.5 / Strix Halo): LDS, FP8 guards, f16/bf16 WMMA GEMM  `[source-pr]`
+- [pr-FlyDSL-579](sources/prs/FlyDSL/PR-579.md) — [Enh] Port AITER FlyDSL kernels  `[source-pr]`
+- [pr-FlyDSL-60](sources/prs/FlyDSL/PR-60.md) — Dev/fp16 gemm  `[source-pr]`
+- [pr-FlyDSL-79](sources/prs/FlyDSL/PR-79.md) — [FP4] preshuffle gemm a8w4&a4w4 moe gemm a8w4  `[source-pr]`
+- [pr-Tensile-1383](sources/prs/Tensile/PR-1383.md) — ROCm 4.5 merge staging into master  `[source-pr]`
+- [pr-Tensile-810](sources/prs/Tensile/PR-810.md) — Exact conv  `[source-pr]`
+- [pr-Tensile-865](sources/prs/Tensile/PR-865.md) — Reduce tuning options  `[source-pr]`
+- [pr-aiter-1078](sources/prs/aiter/PR-1078.md) — Revert 'add hipblaslt swizzle and its unitest'  `[source-pr]`
+- [pr-aiter-1081](sources/prs/aiter/PR-1081.md) — Add block_m=16 for a8w8_ck_moe_blockscale  `[source-pr]`
+- [pr-aiter-1169](sources/prs/aiter/PR-1169.md) — add hipblaslt swizzle feature  `[source-pr]`
+- [pr-aiter-1258](sources/prs/aiter/PR-1258.md) — Fix rowwise a8w8 gemm in swizzled hipb_mm  `[source-pr]`
+- [pr-aiter-1266](sources/prs/aiter/PR-1266.md) — moe mxfp4 block_m = 64/128  `[source-pr]`
+- [pr-aiter-1291](sources/prs/aiter/PR-1291.md) — [FEAT] [Triton] Add transpose scale to the triton fused_rms_fp8_group_quant  `[source-pr]`
+- [pr-aiter-1292](sources/prs/aiter/PR-1292.md) — [TRITON] GEMM kernels nomenclature changes  `[source-pr]`
+- [pr-aiter-1326](sources/prs/aiter/PR-1326.md) — [TRITON] Simplify and optimize triton_kernels moe code and move it into aiter  `[source-pr]`
+- [pr-aiter-1356](sources/prs/aiter/PR-1356.md) — [TRITON] Add MoE GEMM a8w8 kernel  `[source-pr]`
+- [pr-aiter-1483](sources/prs/aiter/PR-1483.md) — [TRITON] Add a8w8 blockscale MoE  `[source-pr]`
+- [pr-aiter-1564](sources/prs/aiter/PR-1564.md) — Wjx/opt a4w4  `[source-pr]`
+- [pr-aiter-1654](sources/prs/aiter/PR-1654.md) — support moe a8w8 splitk  `[source-pr]`
+- [pr-aiter-1667](sources/prs/aiter/PR-1667.md) — Dev/a8w4 and a8w8splitk  `[source-pr]`
+- [pr-aiter-1729](sources/prs/aiter/PR-1729.md) — Wjx/ck tile moe merge  `[source-pr]`
+- [pr-aiter-1814](sources/prs/aiter/PR-1814.md) — rebase and init optimization  `[source-pr]`
+- [pr-aiter-2113](sources/prs/aiter/PR-2113.md) — [FlyDSL] import flydsl implement of a4w4 moe  `[source-pr]`
+- [pr-aiter-2119](sources/prs/aiter/PR-2119.md) — [mi450] [gluon] UA3D updates  `[source-pr]`
+- [pr-aiter-2136](sources/prs/aiter/PR-2136.md) — add mhc_pre hip kernel (mhc_pre_gemm_sqrsum, mhc_pre_big_fuse)  `[source-pr]`
+- [pr-aiter-2262](sources/prs/aiter/PR-2262.md) — Introduce asm fmoe kernels that do not require bf16->fp8 quantization  `[source-pr]`
+- [pr-aiter-2326](sources/prs/aiter/PR-2326.md) — [HIP] Optimized fused split GDR decode  `[source-pr]`
+- [pr-aiter-2332](sources/prs/aiter/PR-2332.md) — [Gluon][gfx1250] Gemm MXFP4 preshuffled  `[source-pr]`
+- [pr-aiter-2390](sources/prs/aiter/PR-2390.md) — [FlyDSL] Add FlyDSL MoE a4w4 support and update kernels  `[source-pr]`
+- [pr-aiter-2491](sources/prs/aiter/PR-2491.md) — [TRITON] Fix unit tests on `gfx950` - part 2  `[source-pr]`
+- [pr-aiter-2497](sources/prs/aiter/PR-2497.md) — Wjx/upgrade flydsl fused  `[source-pr]`
+- [pr-aiter-2581](sources/prs/aiter/PR-2581.md) — [FlyDSL] Optimize a4w4 MOE kernels  `[source-pr]`
+- [pr-aiter-2583](sources/prs/aiter/PR-2583.md) — [TRITON] Swiglu and reduce refactor  `[source-pr]`
+- [pr-aiter-2658](sources/prs/aiter/PR-2658.md) — [Perf]support ck fp8 blockscale splitk in moe tunner  `[source-pr]`
+- [pr-aiter-2726](sources/prs/aiter/PR-2726.md) — [FlyDSL MOE] update a8w4 moe  `[source-pr]`
+- [pr-aiter-2734](sources/prs/aiter/PR-2734.md) — add tuner test suite  `[source-pr]`
+- [pr-aiter-29](sources/prs/aiter/PR-29.md) — update transpose_operator.cu : using swizzle method to avoid cacheline  `[source-pr]`
+- [pr-aiter-2972](sources/prs/aiter/PR-2972.md) — add swiglu a4w4 moe path for gpt-oss model  `[source-pr]`
+- [pr-aiter-3001](sources/prs/aiter/PR-3001.md) — Remove sorting for fmoe  `[source-pr]`
+- [pr-aiter-3071](sources/prs/aiter/PR-3071.md) — So/a8w8 bpreshuflle flydsl xcd remap  `[source-pr]`
+- [pr-aiter-3107](sources/prs/aiter/PR-3107.md) — Revert 'So/a8w8 bpreshuflle flydsl xcd remap'  `[source-pr]`
+- [pr-aiter-3134](sources/prs/aiter/PR-3134.md) — So/flydsl xcd remap v2  `[source-pr]`
+- [pr-aiter-3312](sources/prs/aiter/PR-3312.md) — [MOE] Add fused dynamic MXFP8 quant + moe_sort HIP path  `[source-pr]`
+- [pr-aiter-3313](sources/prs/aiter/PR-3313.md) — Zhimding/fix aot moe pad 0522  `[source-pr]`
+- [pr-aiter-3317](sources/prs/aiter/PR-3317.md) — [GLUON] Moe a8w4 optimizations  `[source-pr]`
+- [pr-aiter-3318](sources/prs/aiter/PR-3318.md) — Revert '[Gluon][gfx1250] Gemm MXFP4 preshuffled'  `[source-pr]`
+- [pr-aiter-3341](sources/prs/aiter/PR-3341.md) — [MoE] Optimize qwen3.5 397B ptpc fp8 moe prefill and decoding  `[source-pr]`
+- [pr-aiter-3342](sources/prs/aiter/PR-3342.md) — Revert 'Zhimding/fix aot moe pad 0522'  `[source-pr]`
+- [pr-aiter-3373](sources/prs/aiter/PR-3373.md) — Flydsl update fix dynmaic layout; use fx.ptr for kernels not using layout  `[source-pr]`
+- [pr-aiter-531](sources/prs/aiter/PR-531.md) — format kernel list python  `[source-pr]`
+- [pr-aiter-580](sources/prs/aiter/PR-580.md) — merge moe from 350 launch  `[source-pr]`
+- [pr-aiter-743](sources/prs/aiter/PR-743.md) — [TRITON]: Clear cache allocator in Triton tests  `[source-pr]`
+- [pr-aiter-758](sources/prs/aiter/PR-758.md) — fix quant_type=1x128(128x128) can't use tuned_fmoe cfg  `[source-pr]`
+- [pr-aiter-790](sources/prs/aiter/PR-790.md) — [TRITON] Moe fp8 tuning mi350  `[source-pr]`
+- [pr-aiter-837](sources/prs/aiter/PR-837.md) — add moe 1stage implementation to tune  `[source-pr]`
+- [pr-aiter-852](sources/prs/aiter/PR-852.md) — [TRITON]: Reduce usage of hardcoded XCD  `[source-pr]`
+- [pr-aiter-866](sources/prs/aiter/PR-866.md) — refine moe codegen  `[source-pr]`
+- [pr-aiter-936](sources/prs/aiter/PR-936.md) — add hipblaslt swizzle and its unitest  `[source-pr]`
+- [pr-composable_kernel-1246](sources/prs/composable_kernel/PR-1246.md) — Small refactor  `[source-pr]`
+- [pr-composable_kernel-1607](sources/prs/composable_kernel/PR-1607.md) — [CK_TILE] add generic_permute  `[source-pr]`
+- [pr-composable_kernel-1634](sources/prs/composable_kernel/PR-1634.md) — [CK_TILE] fused-moe first version  `[source-pr]`
+- [pr-composable_kernel-1900](sources/prs/composable_kernel/PR-1900.md) — fix nswizzle = true  `[source-pr]`
+- [pr-composable_kernel-1936](sources/prs/composable_kernel/PR-1936.md) — ck moe gemm implement  `[source-pr]`
+- [pr-composable_kernel-2026](sources/prs/composable_kernel/PR-2026.md) — Moe gemm activation  `[source-pr]`
+- [pr-composable_kernel-2040](sources/prs/composable_kernel/PR-2040.md) — fuse moe activation  `[source-pr]`
+- [pr-composable_kernel-2094](sources/prs/composable_kernel/PR-2094.md) — enable do top k weights in moe stage1 gemm  `[source-pr]`
+- [pr-composable_kernel-2136](sources/prs/composable_kernel/PR-2136.md) — Add Matrix A and Matrix B Swizzle for LDS in Computev4 policy  `[source-pr]`
+- [pr-composable_kernel-2158](sources/prs/composable_kernel/PR-2158.md) — [CK_TILE] Add type traits to detect tile window types at compile time  `[source-pr]`
+- [pr-composable_kernel-2172](sources/prs/composable_kernel/PR-2172.md) — Support for swizzle and transpose for MFMA_16x16x32_F16/BF16  `[source-pr]`
+- [pr-composable_kernel-2267](sources/prs/composable_kernel/PR-2267.md) — [CK Tile] Int8 Support on CK Tile GEMM  `[source-pr]`
+- [pr-composable_kernel-2320](sources/prs/composable_kernel/PR-2320.md) — Do not use warpSize as compile time constant as it is removed  `[source-pr]`
+- [pr-composable_kernel-2417](sources/prs/composable_kernel/PR-2417.md) — Tests for CK tile Permute and MOE Sorting  `[source-pr]`
+- [pr-composable_kernel-2455](sources/prs/composable_kernel/PR-2455.md) — [CK] Mxfp4 moe blockscale buf2lds version support  `[source-pr]`
+- [pr-composable_kernel-2490](sources/prs/composable_kernel/PR-2490.md) — [CK_TILE] fix mfma32x32 dispatch  `[source-pr]`
+- [pr-composable_kernel-2536](sources/prs/composable_kernel/PR-2536.md) — Switch to C++20 standard for all CMake targets.  `[source-pr]`
+- [pr-composable_kernel-2594](sources/prs/composable_kernel/PR-2594.md) — Support Wave32 in CK_TILE - Part 1  `[source-pr]`
+- [pr-composable_kernel-2622](sources/prs/composable_kernel/PR-2622.md) — [CK_Tile] Refactor Permute and MOE Smoothquant ctests to gtests  `[source-pr]`
+- [pr-composable_kernel-2704](sources/prs/composable_kernel/PR-2704.md) — First look at mfma / wmma unification  `[source-pr]`
+- [pr-composable_kernel-2810](sources/prs/composable_kernel/PR-2810.md) — [CK_TILE] fix example reduces, permute and elementwise on gfx11 & gfx12  `[source-pr]`
+- [pr-composable_kernel-2905](sources/prs/composable_kernel/PR-2905.md) — [CK_TILE] Share partition index across threads and specify offset in load_tile()/async_load_tile()/load_tile_transpose()  `[source-pr]`
+- [pr-composable_kernel-3036](sources/prs/composable_kernel/PR-3036.md) — [CK_TILE] Fix noreturn compiler error on gfx950  `[source-pr]`
+- [pr-composable_kernel-3098](sources/prs/composable_kernel/PR-3098.md) — Ck moe mxfp4 blockm32  `[source-pr]`
+- [pr-composable_kernel-3202](sources/prs/composable_kernel/PR-3202.md) — [CK_TILE] Remove Old CK Tile Stream-K Artifacts  `[source-pr]`
+- [pr-composable_kernel-3204](sources/prs/composable_kernel/PR-3204.md) — remove usage of tile partitioner's full gemm shape  `[source-pr]`
+- [pr-composable_kernel-3440](sources/prs/composable_kernel/PR-3440.md) — Ck moe bs splitk pr  `[source-pr]`
+- [pr-composable_kernel-3447](sources/prs/composable_kernel/PR-3447.md) — Dev/a8w4 and a8w8splitk  `[source-pr]`
+- [pr-triton-1](sources/prs/triton/PR-1.md) — Enable rocm  `[source-pr]`
+- [pr-triton-245](sources/prs/triton/PR-245.md) — [MFMA][Dot] Swizzle mfma dot operands  `[source-pr]`
+- [pr-triton-269](sources/prs/triton/PR-269.md) — [MFMA] Introduce dot operand loading fast path  `[source-pr]`
+- [pr-triton-285](sources/prs/triton/PR-285.md) — [MFMA] Swizzle k-major dot operands  `[source-pr]`
+- [pr-triton-340](sources/prs/triton/PR-340.md) — [FA fwd D=128] Reduce LDS usage in epilogue  `[source-pr]`
+- [pr-triton-407](sources/prs/triton/PR-407.md) — Add a cute tool to plot blocked, dotOperand, and mfma layout  `[source-pr]`
+- [pr-triton-418](sources/prs/triton/PR-418.md) — Replace inline assembly in commonShflSync with intrinsics  `[source-pr]`
+- [pr-triton-439](sources/prs/triton/PR-439.md) — [Backend] Refactor sharedToDotOperandMFMA lowering  `[source-pr]`
+- [pr-triton-533](sources/prs/triton/PR-533.md) — [AMD] Refactor SharedToDotOperandMFMA  `[source-pr]`
+- [pr-triton-635](sources/prs/triton/PR-635.md) — Move utility tools from triton-mlir to main_perf branch  `[source-pr]`
+- [pr-triton-775](sources/prs/triton/PR-775.md) — plot_layout.py Refactoring  `[source-pr]`
+- [pr-triton-798](sources/prs/triton/PR-798.md) — merge from shared  `[source-pr]`
+- [pr-triton-833](sources/prs/triton/PR-833.md) — Improve shared layout for Wmma's operands  `[source-pr]`
+- [pr-triton-889](sources/prs/triton/PR-889.md) — [AMD] Improve shared layout for Wmma's operands (#7319)  `[source-pr]`
+- [pr-vllm-37128](sources/prs/vllm/PR-37128.md) — [MoE Refactor] Mxfp4 oracle rebased  `[source-pr]`
+- [pr-vllm-38504](sources/prs/vllm/PR-38504.md) — [Kernels][MoE] Fix legacy_routing to use bitmatrix-based routing path  `[source-pr]`
+- [pr-vllm-42061](sources/prs/vllm/PR-42061.md) — [ROCm][Bugfix] Re-tag AITER MoE weights as preshuffled after replace_parameter  `[source-pr]`
+
 ## loop-unrolling
 
+- [pr-FlyDSL-346](sources/prs/FlyDSL/PR-346.md) — [FLYDSL]: if dispatch dynamic tests refactor  `[source-pr]`
+- [pr-FlyDSL-37](sources/prs/FlyDSL/PR-37.md) — Dev/int4 moe  `[source-pr]`
+- [pr-FlyDSL-567](sources/prs/FlyDSL/PR-567.md) — Enable gfx1151 (RDNA3.5 / Strix Halo): LDS, FP8 guards, f16/bf16 WMMA GEMM  `[source-pr]`
+- [pr-FlyDSL-60](sources/prs/FlyDSL/PR-60.md) — Dev/fp16 gemm  `[source-pr]`
+- [pr-Tensile-100](sources/prs/Tensile/PR-100.md) — Assembly Generator  `[source-pr]`
+- [pr-Tensile-1059](sources/prs/Tensile/PR-1059.md) — Move fp16 code entirely to components  `[source-pr]`
+- [pr-Tensile-1091](sources/prs/Tensile/PR-1091.md) — GSU for BF16/FP16 high precision accumulation  `[source-pr]`
+- [pr-Tensile-1125](sources/prs/Tensile/PR-1125.md) — PersistentKernel with Prefetch  `[source-pr]`
+- [pr-Tensile-1132](sources/prs/Tensile/PR-1132.md) — BF16/FP16 HPA GSU with per GSU temp buffer  `[source-pr]`
+- [pr-Tensile-1167](sources/prs/Tensile/PR-1167.md) — Prefetch Global Read 2  `[source-pr]`
+- [pr-Tensile-1179](sources/prs/Tensile/PR-1179.md) — ROCm 3.10 merge develop into master  `[source-pr]`
+- [pr-Tensile-1184](sources/prs/Tensile/PR-1184.md) — develop merged in  `[source-pr]`
+- [pr-Tensile-1185](sources/prs/Tensile/PR-1185.md) — MatrixInstruction for general int8  `[source-pr]`
+- [pr-Tensile-1248](sources/prs/Tensile/PR-1248.md) — Fix bugs of tail-loop branch label, and LR addr restore  `[source-pr]`
+- [pr-Tensile-1339](sources/prs/Tensile/PR-1339.md) — Store optimization between workgroups  `[source-pr]`
+- [pr-Tensile-1355](sources/prs/Tensile/PR-1355.md) — Split LDS optimization  `[source-pr]`
+- [pr-Tensile-1361](sources/prs/Tensile/PR-1361.md) — Aldebaran dgemm misc optimization  `[source-pr]`
+- [pr-Tensile-1383](sources/prs/Tensile/PR-1383.md) — ROCm 4.5 merge staging into master  `[source-pr]`
+- [pr-Tensile-1406](sources/prs/Tensile/PR-1406.md) — merge staging 998f23ee into master with GO from CQE  `[source-pr]`
+- [pr-Tensile-1421](sources/prs/Tensile/PR-1421.md) — StoreCInUnroll support and fix for PrefetchAcrossPersistent + DirectToLds  `[source-pr]`
+- [pr-Tensile-1441](sources/prs/Tensile/PR-1441.md) — StoreCInUnroll additional optimizations + adaptive K support(K>=512 and K is multiple of 32) + some bug fixes  `[source-pr]`
+- [pr-Tensile-1454](sources/prs/Tensile/PR-1454.md) — Fix for HSA_STATUS_ERROR_MEMORY_APERTURE_VIOLATION with rocHPL NN DGEMM test and add code for SPO and SSO for StoreCInUnrollPostLoop  `[source-pr]`
+- [pr-Tensile-1489](sources/prs/Tensile/PR-1489.md) — DGEMM optimizations + some bug fixes  `[source-pr]`
+- [pr-Tensile-1503](sources/prs/Tensile/PR-1503.md) — DGEMM/ZGEMM DirectToVgpr for TN support + fix for Tensile ticket #1500 and some more  `[source-pr]`
+- [pr-Tensile-1521](sources/prs/Tensile/PR-1521.md) — Support Tensile for gfx11 series platform  `[source-pr]`
+- [pr-Tensile-1548](sources/prs/Tensile/PR-1548.md) — DirectToVgpr support for CGEMM + bug fixes  `[source-pr]`
+- [pr-Tensile-1562](sources/prs/Tensile/PR-1562.md) — MIArchVgpr support for CGEMM + small changes for StoreCInUnroll  `[source-pr]`
+- [pr-Tensile-1564](sources/prs/Tensile/PR-1564.md) — fix for dgemm opt, MIArchVgpr + cgemm support  `[source-pr]`
+- [pr-Tensile-1602](sources/prs/Tensile/PR-1602.md) — Unify SplitGlobalRead into ThreadSeparateGlobalRead and small fixes  `[source-pr]`
+- [pr-Tensile-1604](sources/prs/Tensile/PR-1604.md) — Fixed issues with large array sizes  `[source-pr]`
+- [pr-Tensile-1616](sources/prs/Tensile/PR-1616.md) — Fixed mismatch issue with StoreCInUnroll + PrefetchGlobalRead=2 and warning message with source kernel generation.  `[source-pr]`
+- [pr-Tensile-1646](sources/prs/Tensile/PR-1646.md) — Fix AssertSummationElementMultiple + GlobalSplitU issues, the issue with InitAccVgprOpt improvement  `[source-pr]`
+- [pr-Tensile-1647](sources/prs/Tensile/PR-1647.md) — Change the second kernel to improve the performance of multiple-buffer implementaion when GSU is enabled.…  `[source-pr]`
+- [pr-Tensile-1656](sources/prs/Tensile/PR-1656.md) — MFMA + LocalSplitU(LSU) support  `[source-pr]`
+- [pr-Tensile-1682](sources/prs/Tensile/PR-1682.md) — Fix mismatch issue with StoreCInUnroll + DirectToVgpr + no useInitAccVgprOpt  `[source-pr]`
+- [pr-Tensile-1702](sources/prs/Tensile/PR-1702.md) — DirectToVgpr + TailLoop support, plus small fixes  `[source-pr]`
+- [pr-Tensile-1732](sources/prs/Tensile/PR-1732.md) — Fix boundary check for mirror dims  `[source-pr]`
+- [pr-Tensile-1751](sources/prs/Tensile/PR-1751.md) — DirectToLds issue fixes  `[source-pr]`
+- [pr-Tensile-1767](sources/prs/Tensile/PR-1767.md) — sgpr allocation optimization  `[source-pr]`
+- [pr-Tensile-1782](sources/prs/Tensile/PR-1782.md) — Enable wider local read + pack with v_perm for 8or16bit + UnrollMajorLDS=false  `[source-pr]`
+- [pr-Tensile-1796](sources/prs/Tensile/PR-1796.md) — postGSU code optimization  `[source-pr]`
+- [pr-Tensile-1803](sources/prs/Tensile/PR-1803.md) — LdsPad optimization + new parameters for local read related optimizations  `[source-pr]`
+- [pr-Tensile-1858](sources/prs/Tensile/PR-1858.md) — Fix mismatch issue with InitAccOpt + InnerUnroll  `[source-pr]`
+- [pr-Tensile-233](sources/prs/Tensile/PR-233.md) — Feature inner unroll2  `[source-pr]`
+- [pr-Tensile-330](sources/prs/Tensile/PR-330.md) — Opt store addr5  `[source-pr]`
+- [pr-Tensile-347](sources/prs/Tensile/PR-347.md) — More dot2 fixes  `[source-pr]`
+- [pr-Tensile-380](sources/prs/Tensile/PR-380.md) — Fix v20 testing  `[source-pr]`
+- [pr-Tensile-381](sources/prs/Tensile/PR-381.md) — Suppress special loop iter  `[source-pr]`
+- [pr-Tensile-387](sources/prs/Tensile/PR-387.md) — Suppress special loop iter3  `[source-pr]`
+- [pr-Tensile-390](sources/prs/Tensile/PR-390.md) — Reject invalid DOT2 states.  `[source-pr]`
+- [pr-Tensile-43](sources/prs/Tensile/PR-43.md) — fixing kernels for unroll=1  `[source-pr]`
+- [pr-Tensile-55](sources/prs/Tensile/PR-55.md) — Develop  `[source-pr]`
+- [pr-Tensile-553](sources/prs/Tensile/PR-553.md) — Small K optimization changes  `[source-pr]`
+- [pr-Tensile-592](sources/prs/Tensile/PR-592.md) — Support float complex gemm by hip solutions  `[source-pr]`
+- [pr-Tensile-65](sources/prs/Tensile/PR-65.md) — applying unroll fix to exact-only branch  `[source-pr]`
+- [pr-Tensile-752](sources/prs/Tensile/PR-752.md) — Adding mfma generator  `[source-pr]`
+- [pr-Tensile-817](sources/prs/Tensile/PR-817.md) — Zero pad  `[source-pr]`
+- [pr-Tensile-82](sources/prs/Tensile/PR-82.md) — kernels with LoopUnroll<2 are invalid  `[source-pr]`
+- [pr-Tensile-826](sources/prs/Tensile/PR-826.md) — Zero pad asm  `[source-pr]`
+- [pr-Tensile-852](sources/prs/Tensile/PR-852.md) — Summation dimension mirroring  `[source-pr]`
+- [pr-Tensile-87](sources/prs/Tensile/PR-87.md) — unroll mem_fence is configurable and off by default  `[source-pr]`
+- [pr-Tensile-880](sources/prs/Tensile/PR-880.md) — TransposeLDS update for f32  `[source-pr]`
+- [pr-Tensile-92](sources/prs/Tensile/PR-92.md) — Semantic Versioning and GlobalSplitU  `[source-pr]`
+- [pr-Tensile-93](sources/prs/Tensile/PR-93.md) — fixed recursive solution selection logic  `[source-pr]`
+- [pr-Tensile-94](sources/prs/Tensile/PR-94.md) — explicitly define work-group  `[source-pr]`
+- [pr-Tensile-940](sources/prs/Tensile/PR-940.md) — Reuse C-tile VGPR in unrolled loop  `[source-pr]`
+- [pr-Tensile-949](sources/prs/Tensile/PR-949.md) — Implement StaggerUMapping based on workgroup serial index  `[source-pr]`
+- [pr-Tensile-972](sources/prs/Tensile/PR-972.md) — re-factory Tensile to support all Matrix Instruction  `[source-pr]`
+- [pr-Tensile-994](sources/prs/Tensile/PR-994.md) — Fix kernel segfaults using staggerU with tensor sizes > 2^32  `[source-pr]`
+- [pr-aiter-1057](sources/prs/aiter/PR-1057.md) — fix mla metadata&reduce perf  `[source-pr]`
+- [pr-aiter-2039](sources/prs/aiter/PR-2039.md) — Introduce HipKittens based nhead=128 MLA Kernel  `[source-pr]`
+- [pr-aiter-2113](sources/prs/aiter/PR-2113.md) — [FlyDSL] import flydsl implement of a4w4 moe  `[source-pr]`
+- [pr-aiter-2136](sources/prs/aiter/PR-2136.md) — add mhc_pre hip kernel (mhc_pre_gemm_sqrsum, mhc_pre_big_fuse)  `[source-pr]`
+- [pr-aiter-2441](sources/prs/aiter/PR-2441.md) — [Triton MoE]: Add optimized Gluon kernel for AMD CDNA3 with K-dimension unrolling  `[source-pr]`
+- [pr-aiter-2479](sources/prs/aiter/PR-2479.md) — mhc：add mhc_post hip kernel  `[source-pr]`
+- [pr-aiter-2564](sources/prs/aiter/PR-2564.md) — fix(hip): launch FMHA Philox, sampling, and MM kernels on current stream  `[source-pr]`
+- [pr-aiter-262](sources/prs/aiter/PR-262.md) — [feat]: support elementwise (m,n,1) and (n,1) broadcast case  `[source-pr]`
+- [pr-aiter-2775](sources/prs/aiter/PR-2775.md) — Xiaobing/gptoss small m  `[source-pr]`
+- [pr-aiter-3100](sources/prs/aiter/PR-3100.md) — feat(topk): optimized topk_gating kernel with sigmoid/softmax support  `[source-pr]`
+- [pr-aiter-3148](sources/prs/aiter/PR-3148.md) — Rchamber/optimised dynamic per group scaled quant v2  `[source-pr]`
+- [pr-aiter-3190](sources/prs/aiter/PR-3190.md) — [Triton] [ATOM] DSV4 fusion phase2  `[source-pr]`
+- [pr-aiter-62](sources/prs/aiter/PR-62.md) — Fmoe g1u1 a8w8  `[source-pr]`
+- [pr-aiter-744](sources/prs/aiter/PR-744.md) — [TRITON]: LeanAttention implement loop unrolling to reduce VGPR usage  `[source-pr]`
+- [pr-composable_kernel-1335](sources/prs/composable_kernel/PR-1335.md) — Switch to universal gemm in grouped gemm tile loop  `[source-pr]`
+- [pr-composable_kernel-1338](sources/prs/composable_kernel/PR-1338.md) — [CK_TILE] fmha forward split-kv + combine kernels  `[source-pr]`
+- [pr-composable_kernel-1387](sources/prs/composable_kernel/PR-1387.md) — [CK_TILE] Add PagedAttention kernels  `[source-pr]`
+- [pr-composable_kernel-1588](sources/prs/composable_kernel/PR-1588.md) — [CK_TILE] More fmha splitkv optimizations  `[source-pr]`
+- [pr-composable_kernel-1608](sources/prs/composable_kernel/PR-1608.md) — [CK_TILE] Add fmha fwd headdim96 support  `[source-pr]`
+- [pr-composable_kernel-1624](sources/prs/composable_kernel/PR-1624.md) — Ck tile/moe sorting  `[source-pr]`
+- [pr-composable_kernel-1840](sources/prs/composable_kernel/PR-1840.md) — [CK_TILE] moe sorting ex kernel to support expert > 128  `[source-pr]`
+- [pr-composable_kernel-1910](sources/prs/composable_kernel/PR-1910.md) — [CK_TILE] add moe-sorting MP kernel  `[source-pr]`
+- [pr-composable_kernel-2108](sources/prs/composable_kernel/PR-2108.md) — [CK_TILE] Allow specifying logits soft-caping through fMHA forwawrd APIs  `[source-pr]`
+- [pr-composable_kernel-2153](sources/prs/composable_kernel/PR-2153.md) — [CK_TILE] optimize moe sorting kernel, boost large context case up to 20x  `[source-pr]`
+- [pr-composable_kernel-2163](sources/prs/composable_kernel/PR-2163.md) — [CK_TILE] Add logits soft-capping & customization support to the FMHA forward kernel/pipelines  `[source-pr]`
+- [pr-composable_kernel-2335](sources/prs/composable_kernel/PR-2335.md) — [CK_TILE] moe_sorting support 'local_tokens' feature for EP case  `[source-pr]`
+- [pr-composable_kernel-2405](sources/prs/composable_kernel/PR-2405.md) — ck tile pagedkv prefill  `[source-pr]`
+- [pr-composable_kernel-2417](sources/prs/composable_kernel/PR-2417.md) — Tests for CK tile Permute and MOE Sorting  `[source-pr]`
+- [pr-composable_kernel-2955](sources/prs/composable_kernel/PR-2955.md) — [CK_TILE] Blockwise GEMM pipeline v6 - port of v5 from old CK  `[source-pr]`
+- [pr-composable_kernel-3341](sources/prs/composable_kernel/PR-3341.md) — [CK_TILE][FMHA] Add sparse attention VSA  `[source-pr]`
+- [pr-composable_kernel-541](sources/prs/composable_kernel/PR-541.md) — [Navi3x-LWPCK-545] Block-wise GEMM + Real GEMM_WMMA_FP16  `[source-pr]`
+- [pr-rocBLAS-207](sources/prs/rocBLAS/PR-207.md) — add MIOpen sizes for TN with k high multiple of 2  `[source-pr]`
+- [pr-sglang-25463](sources/prs/sglang/PR-25463.md) — [ROCm] Eliminate redundant contiguous copy in MLA attention on ROCm MXFP4  `[source-pr]`
+- [pr-sglang-25898](sources/prs/sglang/PR-25898.md) — [AMD] Dsv4/pr1 fix run time issue  `[source-pr]`
+- [pr-triton-136](sources/prs/triton/PR-136.md) — [dotOp] [rocMLIR] Replace `tt.dot` with `rock.blockwise_gemm_v2`  `[source-pr]`
+- [pr-triton-216](sources/prs/triton/PR-216.md) — [dotOp] [rocMLIR] [Upstream] Upstream sync after IFU04262023  `[source-pr]`
+- [pr-vllm-40871](sources/prs/vllm/PR-40871.md) — [New Model][ROCm] Add AMD support for DeepSeek V4  `[source-pr]`
 - [kernel-bandwidth-microbench](wiki/kernels/bandwidth-microbench.md) — HBM Bandwidth Microbenchmark (float4 non-temporal persistent read)  `[wiki-kernel]`
 
 ## mfma-pipelining
 
+- [pr-FlyDSL-11](sources/prs/FlyDSL/PR-11.md) — change memref.GetGlobalOp to SmemAllocator in mfma  `[source-pr]`
+- [pr-FlyDSL-116](sources/prs/FlyDSL/PR-116.md) — [MLIR][python]Migrate Python bindings to PyConcreteType<> and fix TypeID ODR violation  `[source-pr]`
+- [pr-FlyDSL-13](sources/prs/FlyDSL/PR-13.md) — Dev/gemm opt  `[source-pr]`
+- [pr-FlyDSL-131](sources/prs/FlyDSL/PR-131.md) — Fix test coverage  `[source-pr]`
+- [pr-FlyDSL-139](sources/prs/FlyDSL/PR-139.md) — optimize buffer_load lds pipeline. Now it can interleave with mfma.  `[source-pr]`
+- [pr-FlyDSL-14](sources/prs/FlyDSL/PR-14.md) — Dev/gemm opt decode  `[source-pr]`
+- [pr-FlyDSL-143](sources/prs/FlyDSL/PR-143.md) — W4a16 bf16 fp8 bf16 moe  `[source-pr]`
+- [pr-FlyDSL-145](sources/prs/FlyDSL/PR-145.md) — Pre v0.1 gemm  `[source-pr]`
+- [pr-FlyDSL-153](sources/prs/FlyDSL/PR-153.md) — Pre v0.1 gemm fix  `[source-pr]`
+- [pr-FlyDSL-158](sources/prs/FlyDSL/PR-158.md) — use abs import for correct importing kernels from wheel  `[source-pr]`
+- [pr-FlyDSL-16](sources/prs/FlyDSL/PR-16.md) — Dev layout algebra  `[source-pr]`
+- [pr-FlyDSL-18](sources/prs/FlyDSL/PR-18.md) — Dev layout algebra  `[source-pr]`
+- [pr-FlyDSL-19](sources/prs/FlyDSL/PR-19.md) — improve softmax/rmsnorm/layernorm performance  `[source-pr]`
+- [pr-FlyDSL-191](sources/prs/FlyDSL/PR-191.md) — Refine code  `[source-pr]`
+- [pr-FlyDSL-196](sources/prs/FlyDSL/PR-196.md) — refine kernel code  `[source-pr]`
+- [pr-FlyDSL-197](sources/prs/FlyDSL/PR-197.md) — clean codes and wrap numerics in bufferops  `[source-pr]`
+- [pr-FlyDSL-21](sources/prs/FlyDSL/PR-21.md) — Felix/dev  `[source-pr]`
+- [pr-FlyDSL-225](sources/prs/FlyDSL/PR-225.md) — Add FMHA kernel  `[source-pr]`
+- [pr-FlyDSL-27](sources/prs/FlyDSL/PR-27.md) — Dev/gemm flir  `[source-pr]`
+- [pr-FlyDSL-270](sources/prs/FlyDSL/PR-270.md) — Refine kernel code  `[source-pr]`
+- [pr-FlyDSL-278](sources/prs/FlyDSL/PR-278.md) — [Compiler][Kernel][MI450]Rebase gfx1250 WMMA/mcast/mxfp4 support onto main  `[source-pr]`
+- [pr-FlyDSL-288](sources/prs/FlyDSL/PR-288.md) — add(rocdl): Support pointer casts and bf16 16x16x16 MFMA  `[source-pr]`
+- [pr-FlyDSL-30](sources/prs/FlyDSL/PR-30.md) — Python wrapper refine  `[source-pr]`
+- [pr-FlyDSL-300](sources/prs/FlyDSL/PR-300.md) — [FlyDSL] fused RoPE kernel with layout APIs  `[source-pr]`
+- [pr-FlyDSL-306](sources/prs/FlyDSL/PR-306.md) — blockscale optimize for 355  `[source-pr]`
+- [pr-FlyDSL-31](sources/prs/FlyDSL/PR-31.md) — Python wrapper refine  `[source-pr]`
+- [pr-FlyDSL-313](sources/prs/FlyDSL/PR-313.md) — prune(capi): remove FlyROCDL type wrappers, bind C++ directly  `[source-pr]`
+- [pr-FlyDSL-318](sources/prs/FlyDSL/PR-318.md) — feat(moe): Add MoE FP4 GEMM 2-stage kernel with benchmark and perf optimizations  `[source-pr]`
+- [pr-FlyDSL-32](sources/prs/FlyDSL/PR-32.md) — Dev/gemm refactor  `[source-pr]`
+- [pr-FlyDSL-346](sources/prs/FlyDSL/PR-346.md) — [FLYDSL]: if dispatch dynamic tests refactor  `[source-pr]`
+- [pr-FlyDSL-37](sources/prs/FlyDSL/PR-37.md) — Dev/int4 moe  `[source-pr]`
+- [pr-FlyDSL-370](sources/prs/FlyDSL/PR-370.md) — Pr/a16wi4 group  `[source-pr]`
+- [pr-FlyDSL-388](sources/prs/FlyDSL/PR-388.md) — [Perf] Port mixed_moe kernel optimizations for stage1/stage2  `[source-pr]`
+- [pr-FlyDSL-412](sources/prs/FlyDSL/PR-412.md) — Adds Grouped GEMM kernels matching DeepGEMM API  `[source-pr]`
+- [pr-FlyDSL-417](sources/prs/FlyDSL/PR-417.md) — [ROCDL] Add CDNA4_MFMAScaleType  `[source-pr]`
+- [pr-FlyDSL-447](sources/prs/FlyDSL/PR-447.md) — Port kernels internal types except moe  `[source-pr]`
+- [pr-FlyDSL-465](sources/prs/FlyDSL/PR-465.md) — some optimization about smoothquant moe  `[source-pr]`
+- [pr-FlyDSL-466](sources/prs/FlyDSL/PR-466.md) — add xcd remap  `[source-pr]`
+- [pr-FlyDSL-52](sources/prs/FlyDSL/PR-52.md) — add mfma_scale instruction and cshuffle opt for MI355  `[source-pr]`
+- [pr-FlyDSL-541](sources/prs/FlyDSL/PR-541.md) — [Refactor] Migrate kernels from SmemAllocator to SharedAllocator  `[source-pr]`
+- [pr-FlyDSL-544](sources/prs/FlyDSL/PR-544.md) — [Feat] Add GFX11 WMMA atom (RDNA3 / RDNA3.5, wave32)  `[source-pr]`
+- [pr-FlyDSL-554](sources/prs/FlyDSL/PR-554.md) — [Feat] Add TensorAdaptor.mark_static for shape-aware JIT cache keys  `[source-pr]`
+- [pr-FlyDSL-579](sources/prs/FlyDSL/PR-579.md) — [Enh] Port AITER FlyDSL kernels  `[source-pr]`
+- [pr-FlyDSL-591](sources/prs/FlyDSL/PR-591.md) — Update kernel-trace-analysis, lds-optimization, prefetch-data-load sk…  `[source-pr]`
+- [pr-FlyDSL-60](sources/prs/FlyDSL/PR-60.md) — Dev/fp16 gemm  `[source-pr]`
+- [pr-FlyDSL-67](sources/prs/FlyDSL/PR-67.md) — Moe dynamic all  `[source-pr]`
+- [pr-FlyDSL-7](sources/prs/FlyDSL/PR-7.md) — use rocir in softmax/layernorm/rmsnorm ops  `[source-pr]`
+- [pr-FlyDSL-79](sources/prs/FlyDSL/PR-79.md) — [FP4] preshuffle gemm a8w4&a4w4 moe gemm a8w4  `[source-pr]`
+- [pr-FlyDSL-91](sources/prs/FlyDSL/PR-91.md) — fix lds bug  `[source-pr]`
+- [pr-Tensile-1010](sources/prs/Tensile/PR-1010.md) — ROCm 3.6 merge develop into master  `[source-pr]`
+- [pr-Tensile-1025](sources/prs/Tensile/PR-1025.md) — SIA3 support to schedule more GR,LW instructions between mfma  `[source-pr]`
+- [pr-Tensile-1030](sources/prs/Tensile/PR-1030.md) — Add new predicates and run-time settings  `[source-pr]`
+- [pr-Tensile-1044](sources/prs/Tensile/PR-1044.md) — More tuning script changes  `[source-pr]`
+- [pr-Tensile-1049](sources/prs/Tensile/PR-1049.md) — wider local read and use 1 LDS buffer with prefetch global read  `[source-pr]`
+- [pr-Tensile-1059](sources/prs/Tensile/PR-1059.md) — Move fp16 code entirely to components  `[source-pr]`
+- [pr-Tensile-1060](sources/prs/Tensile/PR-1060.md) — Pipelined store for MI kernels  `[source-pr]`
+- [pr-Tensile-1096](sources/prs/Tensile/PR-1096.md) — schedule local instruction  `[source-pr]`
+- [pr-Tensile-1099](sources/prs/Tensile/PR-1099.md) — Update marks for mfma tests  `[source-pr]`
+- [pr-Tensile-1124](sources/prs/Tensile/PR-1124.md) — XDLOPS single complex gemm CGEMM  `[source-pr]`
+- [pr-Tensile-1125](sources/prs/Tensile/PR-1125.md) — PersistentKernel with Prefetch  `[source-pr]`
+- [pr-Tensile-1132](sources/prs/Tensile/PR-1132.md) — BF16/FP16 HPA GSU with per GSU temp buffer  `[source-pr]`
+- [pr-Tensile-1149](sources/prs/Tensile/PR-1149.md) — Fix master tuning script  `[source-pr]`
+- [pr-Tensile-1155](sources/prs/Tensile/PR-1155.md) — Add parameters to help training with BF16/FP16 GSU  `[source-pr]`
+- [pr-Tensile-1160](sources/prs/Tensile/PR-1160.md) — ROCm 3.9 merge develop into master  `[source-pr]`
+- [pr-Tensile-1169](sources/prs/Tensile/PR-1169.md) — Refactor codes for data-type. Reserve the possibility of <H,H,S> version HPA  `[source-pr]`
+- [pr-Tensile-1174](sources/prs/Tensile/PR-1174.md) — Add support for hpa fp16 in fp32 out  `[source-pr]`
+- [pr-Tensile-1179](sources/prs/Tensile/PR-1179.md) — ROCm 3.10 merge develop into master  `[source-pr]`
+- [pr-Tensile-1184](sources/prs/Tensile/PR-1184.md) — develop merged in  `[source-pr]`
+- [pr-Tensile-1185](sources/prs/Tensile/PR-1185.md) — MatrixInstruction for general int8  `[source-pr]`
+- [pr-Tensile-1192](sources/prs/Tensile/PR-1192.md) — amd-feature-targetid merged into develop  `[source-pr]`
+- [pr-Tensile-1195](sources/prs/Tensile/PR-1195.md) — targetid-related test fixes  `[source-pr]`
+- [pr-Tensile-1214](sources/prs/Tensile/PR-1214.md) — Instruction scheduling to reduce LDS by half in TN problems  `[source-pr]`
+- [pr-Tensile-1227](sources/prs/Tensile/PR-1227.md) — Hotfix for PR #1214: count the right instruction type under different scheduling  `[source-pr]`
+- [pr-Tensile-1228](sources/prs/Tensile/PR-1228.md) — implement General Batch GEMM in Tensile  `[source-pr]`
+- [pr-Tensile-1248](sources/prs/Tensile/PR-1248.md) — Fix bugs of tail-loop branch label, and LR addr restore  `[source-pr]`
+- [pr-Tensile-1259](sources/prs/Tensile/PR-1259.md) — ROCm 4.1 merge staging into master  `[source-pr]`
+- [pr-Tensile-1277](sources/prs/Tensile/PR-1277.md) — merge staging 7f365fa2 into master with GO from CQE  `[source-pr]`
+- [pr-Tensile-1286](sources/prs/Tensile/PR-1286.md) — Refactoring VALU/MFMA code into components  `[source-pr]`
+- [pr-Tensile-1288](sources/prs/Tensile/PR-1288.md) — rename replacement kernels for MFMA Int8 GEMM  `[source-pr]`
+- [pr-Tensile-1300](sources/prs/Tensile/PR-1300.md) — Initial implementation support for aldebaran  `[source-pr]`
+- [pr-Tensile-1313](sources/prs/Tensile/PR-1313.md) — Swap MFMA source A and B to optimize store code  `[source-pr]`
+- [pr-Tensile-1316](sources/prs/Tensile/PR-1316.md) — Update to merge script allowing mfma and non-mfma solution for sizes  `[source-pr]`
+- [pr-Tensile-1327](sources/prs/Tensile/PR-1327.md) — Few fixes for PAP - waitcnt optimize, last tile, and StaggerU=0  `[source-pr]`
+- [pr-Tensile-1346](sources/prs/Tensile/PR-1346.md) — VectorWidth with MFMA SourceSwap  `[source-pr]`
+- [pr-Tensile-1350](sources/prs/Tensile/PR-1350.md) — ZGEMM mfma instruction support  `[source-pr]`
+- [pr-Tensile-1351](sources/prs/Tensile/PR-1351.md) — Instruction Scheduling  `[source-pr]`
+- [pr-Tensile-1355](sources/prs/Tensile/PR-1355.md) — Split LDS optimization  `[source-pr]`
+- [pr-Tensile-1360](sources/prs/Tensile/PR-1360.md) — let mfma half and i8 use vectorwidth 1  `[source-pr]`
+- [pr-Tensile-1383](sources/prs/Tensile/PR-1383.md) — ROCm 4.5 merge staging into master  `[source-pr]`
+- [pr-Tensile-1390](sources/prs/Tensile/PR-1390.md) — Initial version of DirectToVgpr support for DGEMM  `[source-pr]`
+- [pr-Tensile-1399](sources/prs/Tensile/PR-1399.md) — Waitcnt optimization for DirectToVgpr support  `[source-pr]`
+- [pr-Tensile-1402](sources/prs/Tensile/PR-1402.md) — Remove unused old client code  `[source-pr]`
+- [pr-Tensile-1406](sources/prs/Tensile/PR-1406.md) — merge staging 998f23ee into master with GO from CQE  `[source-pr]`
+- [pr-Tensile-1417](sources/prs/Tensile/PR-1417.md) — Format-9 for dgemm, dgemm mfma tests for pre_checkin  `[source-pr]`
+- [pr-Tensile-1420](sources/prs/Tensile/PR-1420.md) — merge staging 2849fad6 into master on GO from CQE  `[source-pr]`
+- [pr-Tensile-1470](sources/prs/Tensile/PR-1470.md) — ZGEMM optimizations + some bug fixes  `[source-pr]`
+- [pr-Tensile-1474](sources/prs/Tensile/PR-1474.md) — merge staging db22912d into master on GO from CQE  `[source-pr]`
+- [pr-Tensile-1475](sources/prs/Tensile/PR-1475.md) — Add Denorm testing for Assembly Kernels  `[source-pr]`
+- [pr-Tensile-1484](sources/prs/Tensile/PR-1484.md) — ROCm 5.2 merge staging into master  `[source-pr]`
+- [pr-Tensile-1489](sources/prs/Tensile/PR-1489.md) — DGEMM optimizations + some bug fixes  `[source-pr]`
+- [pr-Tensile-1495](sources/prs/Tensile/PR-1495.md) — Fix for NN ZGEMM optimizations  `[source-pr]`
+- [pr-Tensile-1509](sources/prs/Tensile/PR-1509.md) — updating HHS tests - LWPTENSILE-29  `[source-pr]`
+- [pr-Tensile-1519](sources/prs/Tensile/PR-1519.md) — Add DirectToLds tests for dgemm (with mfma)  `[source-pr]`
+- [pr-Tensile-1521](sources/prs/Tensile/PR-1521.md) — Support Tensile for gfx11 series platform  `[source-pr]`
+- [pr-Tensile-1529](sources/prs/Tensile/PR-1529.md) — merge staging 3c17e5a into master on GO from CQE  `[source-pr]`
+- [pr-Tensile-1533](sources/prs/Tensile/PR-1533.md) — DirectToVgpr support for SGEMM + bug fixes  `[source-pr]`
+- [pr-Tensile-1619](sources/prs/Tensile/PR-1619.md) — The assembly kernel with disabling MFMA supports localsplitU for HGEMM+HPA  `[source-pr]`
+- [pr-Tensile-1628](sources/prs/Tensile/PR-1628.md) — InitAccVgprOpt improvement  `[source-pr]`
+- [pr-Tensile-1656](sources/prs/Tensile/PR-1656.md) — MFMA + LocalSplitU(LSU) support  `[source-pr]`
+- [pr-Tensile-1661](sources/prs/Tensile/PR-1661.md) — Optimizations for TailLoop, complex MFMA, removing extra moves for MIArchVgpr, etc.  `[source-pr]`
+- [pr-Tensile-1664](sources/prs/Tensile/PR-1664.md) — Fix for DGEMM 4x4 MatrixInst mismatch issue  `[source-pr]`
+- [pr-Tensile-1666](sources/prs/Tensile/PR-1666.md) — Support for MFMA + LocalSplitU + DirectToVgprA+B  `[source-pr]`
+- [pr-Tensile-1668](sources/prs/Tensile/PR-1668.md) — Fix for ZGEMM 4x4 MatrixInst mismatch issue  `[source-pr]`
+- [pr-Tensile-1670](sources/prs/Tensile/PR-1670.md) — Fix for DirectToVgpr + LocalSplitU + FractionalLoad mismatch issue  `[source-pr]`
+- [pr-Tensile-1671](sources/prs/Tensile/PR-1671.md) — Fix for 0 division in local write scheduling  `[source-pr]`
+- [pr-Tensile-1675](sources/prs/Tensile/PR-1675.md) — Update master  `[source-pr]`
+- [pr-Tensile-1679](sources/prs/Tensile/PR-1679.md) — GlobalSplitU + SingleBuffer improvement + BufferLoad, BufferStore=0 issue fixes  `[source-pr]`
+- [pr-Tensile-1684](sources/prs/Tensile/PR-1684.md) — Fix offset calculation to prevent overflow if offset is really large  `[source-pr]`
+- [pr-Tensile-1685](sources/prs/Tensile/PR-1685.md) — DirectToVgpr support for small data types + TN  `[source-pr]`
+- [pr-Tensile-1686](sources/prs/Tensile/PR-1686.md) — Add option for GSU+ SingleBuffer + AtomicAdd and small improvement on width of load C for GSU  `[source-pr]`
+- [pr-Tensile-1687](sources/prs/Tensile/PR-1687.md) — Hotfix: Fix offset calculation to prevent overflow if offset is really large  `[source-pr]`
+- [pr-Tensile-1688](sources/prs/Tensile/PR-1688.md) — Update kernels to have 64-bit offset arguments  `[source-pr]`
+- [pr-Tensile-1693](sources/prs/Tensile/PR-1693.md) — 64-bit offset parameters for post kernels  `[source-pr]`
+- [pr-Tensile-1695](sources/prs/Tensile/PR-1695.md) — Fix tmp sgpr allocation to avoid over-writing values (alpha)  `[source-pr]`
+- [pr-Tensile-1702](sources/prs/Tensile/PR-1702.md) — DirectToVgpr + TailLoop support, plus small fixes  `[source-pr]`
+- [pr-Tensile-1703](sources/prs/Tensile/PR-1703.md) — Generate TailLoop code in NoLoadLoop to support prefetch for TailLoop, plus more TailLoop optimization for mfma  `[source-pr]`
+- [pr-Tensile-1704](sources/prs/Tensile/PR-1704.md) — Fix BufferStore=0 and Ldc != Ldd case  `[source-pr]`
+- [pr-Tensile-1708](sources/prs/Tensile/PR-1708.md) — Fix for sgemm + LocalSplitU mismatch issue  `[source-pr]`
+- [pr-Tensile-1709](sources/prs/Tensile/PR-1709.md) — Fix for rocblas precheckin test fail due to the previous tail loop optimization  `[source-pr]`
+- [pr-Tensile-1711](sources/prs/Tensile/PR-1711.md) — Enable MFMA + LocalSplitU + I8  `[source-pr]`
+- [pr-Tensile-1713](sources/prs/Tensile/PR-1713.md) — Cleanup some unused and deprecated code  `[source-pr]`
+- [pr-Tensile-1714](sources/prs/Tensile/PR-1714.md) — Adding support for FP16 Alt Round Near Zero Mode  `[source-pr]`
+- [pr-Tensile-1721](sources/prs/Tensile/PR-1721.md) — Hotfix for fp16alt round near zero mode for rocm 5.6  `[source-pr]`
+- [pr-Tensile-1726](sources/prs/Tensile/PR-1726.md) — ROCm 5.7 merge staging into master  `[source-pr]`
+- [pr-Tensile-1734](sources/prs/Tensile/PR-1734.md) — Initial commit for aquavanjaram support  `[source-pr]`
+- [pr-Tensile-1736](sources/prs/Tensile/PR-1736.md) — Initial commit for aquavanjaram support  `[source-pr]`
+- [pr-Tensile-1738](sources/prs/Tensile/PR-1738.md) — Adjust miLatency for gfx940 + MFMA for specific data types  `[source-pr]`
+- [pr-Tensile-1742](sources/prs/Tensile/PR-1742.md) — Fix merge error affecting i8 with wmma  `[source-pr]`
+- [pr-Tensile-1743](sources/prs/Tensile/PR-1743.md) — Fix merge error affecting i8 with wmma  `[source-pr]`
+- [pr-Tensile-1751](sources/prs/Tensile/PR-1751.md) — DirectToLds issue fixes  `[source-pr]`
+- [pr-Tensile-1754](sources/prs/Tensile/PR-1754.md) — Skip gfx940 tests on gfx11xx  `[source-pr]`
+- [pr-Tensile-1763](sources/prs/Tensile/PR-1763.md) — ROCm 6.0 merge staging into master  `[source-pr]`
+- [pr-Tensile-1766](sources/prs/Tensile/PR-1766.md) — Re-enable miLatency opt for MI16x16 and instruction scheduling fixes  `[source-pr]`
+- [pr-Tensile-1773](sources/prs/Tensile/PR-1773.md) — Enable dedicated vgpr allocation for local read + pack  `[source-pr]`
+- [pr-Tensile-1792](sources/prs/Tensile/PR-1792.md) — enable MFMA + LocalSplitU=4 for MT16x16  `[source-pr]`
+- [pr-Tensile-1803](sources/prs/Tensile/PR-1803.md) — LdsPad optimization + new parameters for local read related optimizations  `[source-pr]`
+- [pr-Tensile-1818](sources/prs/Tensile/PR-1818.md) — ROCm 6.1 merge staging into master  `[source-pr]`
+- [pr-Tensile-1821](sources/prs/Tensile/PR-1821.md) — Enhance maximum value of DepthU to 1024  `[source-pr]`
+- [pr-Tensile-1823](sources/prs/Tensile/PR-1823.md) — reverse MFMA order in inner loop for odd outer iteration  `[source-pr]`
+- [pr-Tensile-1838](sources/prs/Tensile/PR-1838.md) — Re-enable negative values for WorkGroupMapping (asm kernel only)  `[source-pr]`
+- [pr-Tensile-1859](sources/prs/Tensile/PR-1859.md) — VectorWidthB support, VectorWidth + non SourceSwap support, small bug fix for ClusterLocalRead  `[source-pr]`
+- [pr-Tensile-1873](sources/prs/Tensile/PR-1873.md) — Skip DTV, DTL, LSU+MFMA tests for gfx908  `[source-pr]`
+- [pr-Tensile-1878](sources/prs/Tensile/PR-1878.md) — skip sgemm 64bit offset tests for gfx94x  `[source-pr]`
+- [pr-Tensile-1882](sources/prs/Tensile/PR-1882.md) — Reduce extended test time  `[source-pr]`
+- [pr-Tensile-1991](sources/prs/Tensile/PR-1991.md) — Restore original behavior of filter processing errors  `[source-pr]`
+- [pr-Tensile-2013](sources/prs/Tensile/PR-2013.md) — Add gfx1151 support  `[source-pr]`
+- [pr-Tensile-2020](sources/prs/Tensile/PR-2020.md) — Add gfx1151 support  `[source-pr]`
+- [pr-Tensile-2026](sources/prs/Tensile/PR-2026.md) — Adding gfx1151 to 6.2  `[source-pr]`
+- [pr-Tensile-2064](sources/prs/Tensile/PR-2064.md) — Updating release branch for ROCm 6.3  `[source-pr]`
+- [pr-Tensile-2074](sources/prs/Tensile/PR-2074.md) — Fix argument list too long error  `[source-pr]`
+- [pr-Tensile-2097](sources/prs/Tensile/PR-2097.md) — Drop gfx940 and gfx941 support  `[source-pr]`
+- [pr-Tensile-2107](sources/prs/Tensile/PR-2107.md) — ROCm 6.5 merge staging into master  `[source-pr]`
+- [pr-Tensile-2113](sources/prs/Tensile/PR-2113.md) — Adding initial support for gfx950  `[source-pr]`
+- [pr-Tensile-2114](sources/prs/Tensile/PR-2114.md) — Adding initial support for gfx950  `[source-pr]`
+- [pr-Tensile-2154](sources/prs/Tensile/PR-2154.md) — Add gfx1150 and complete gfx1151 support  `[source-pr]`
+- [pr-Tensile-752](sources/prs/Tensile/PR-752.md) — Adding mfma generator  `[source-pr]`
+- [pr-Tensile-767](sources/prs/Tensile/PR-767.md) — ROCm 3.1 merge develop into master  `[source-pr]`
+- [pr-Tensile-769](sources/prs/Tensile/PR-769.md) — Mfma bf16 kgen pr1  `[source-pr]`
+- [pr-Tensile-796](sources/prs/Tensile/PR-796.md) — Add call count and other parameters to tuning scripts  `[source-pr]`
+- [pr-Tensile-803](sources/prs/Tensile/PR-803.md) — ROCm 3.2 merge developer into master  `[source-pr]`
+- [pr-Tensile-806](sources/prs/Tensile/PR-806.md) — Mfma scaling fix  `[source-pr]`
+- [pr-Tensile-809](sources/prs/Tensile/PR-809.md) — MFMA bfloat16 support for odd problem size (m- & k-dimension)  `[source-pr]`
+- [pr-Tensile-831](sources/prs/Tensile/PR-831.md) — Multi TT mfma  `[source-pr]`
+- [pr-Tensile-855](sources/prs/Tensile/PR-855.md) — Pr2 bf16 optimize  `[source-pr]`
+- [pr-Tensile-857](sources/prs/Tensile/PR-857.md) — Modify store code for mfma 16x16x1x4  `[source-pr]`
+- [pr-Tensile-880](sources/prs/Tensile/PR-880.md) — TransposeLDS update for f32  `[source-pr]`
+- [pr-Tensile-883](sources/prs/Tensile/PR-883.md) — Add pre_checkin tests for working mfma fp32 configurations  `[source-pr]`
+- [pr-Tensile-896](sources/prs/Tensile/PR-896.md) — transposeLDS support for NN format  `[source-pr]`
+- [pr-Tensile-900](sources/prs/Tensile/PR-900.md) — remove sgemm_transposeLDS.yaml for now; taking way toooo long  `[source-pr]`
+- [pr-Tensile-903](sources/prs/Tensile/PR-903.md) — fix for store code in optNLL=1  for non-mfma case  `[source-pr]`
+- [pr-Tensile-910](sources/prs/Tensile/PR-910.md) — Pr fp16 optimize  `[source-pr]`
+- [pr-Tensile-913](sources/prs/Tensile/PR-913.md) — add arcturus FP32 NT 5760/7744 kernel  `[source-pr]`
+- [pr-Tensile-916](sources/prs/Tensile/PR-916.md) — arcturus SGEMM NT HPL sizes for k=384 and n=m,2*m,m/2  `[source-pr]`
+- [pr-Tensile-920](sources/prs/Tensile/PR-920.md) — Add master tuning script and other changes  `[source-pr]`
+- [pr-Tensile-922](sources/prs/Tensile/PR-922.md) — ROCm 3.4 milestone merge develop into master  `[source-pr]`
+- [pr-Tensile-940](sources/prs/Tensile/PR-940.md) — Reuse C-tile VGPR in unrolled loop  `[source-pr]`
+- [pr-Tensile-972](sources/prs/Tensile/PR-972.md) — re-factory Tensile to support all Matrix Instruction  `[source-pr]`
+- [pr-aiter-1261](sources/prs/aiter/PR-1261.md) — [TRITON] Instruction shape fix for Gluon gemm_a8w8_blockscale kernel  `[source-pr]`
+- [pr-aiter-1383](sources/prs/aiter/PR-1383.md) — Add paged attention decode with Gluon JIT/AOT for AMD CDNA3  `[source-pr]`
+- [pr-aiter-1422](sources/prs/aiter/PR-1422.md) — [TRITON] FP8 MQA optimizations  `[source-pr]`
+- [pr-aiter-1479](sources/prs/aiter/PR-1479.md) — Jacchang/pa ragged experimental  `[source-pr]`
+- [pr-aiter-1564](sources/prs/aiter/PR-1564.md) — Wjx/opt a4w4  `[source-pr]`
+- [pr-aiter-1774](sources/prs/aiter/PR-1774.md) — [PA] Optimization: Remove Query/Output Transpose Kernels by Direct 5D Tensor Access in PA Decode Gluon  `[source-pr]`
+- [pr-aiter-1798](sources/prs/aiter/PR-1798.md) — [OPUS] update multi-k mfma, update utility  `[source-pr]`
+- [pr-aiter-1866](sources/prs/aiter/PR-1866.md) — Fix code style after updating Black to 26.1.0  `[source-pr]`
+- [pr-aiter-1924](sources/prs/aiter/PR-1924.md) — Explicit itt for mla decode without rope  `[source-pr]`
+- [pr-aiter-2017](sources/prs/aiter/PR-2017.md) — [OPUS] add opus UT  `[source-pr]`
+- [pr-aiter-2040](sources/prs/aiter/PR-2040.md) — [OPUS] enhance opus UT by adding more tests  `[source-pr]`
+- [pr-aiter-2070](sources/prs/aiter/PR-2070.md) — [OPUS] Add f32 MFMA support  `[source-pr]`
+- [pr-aiter-2113](sources/prs/aiter/PR-2113.md) — [FlyDSL] import flydsl implement of a4w4 moe  `[source-pr]`
+- [pr-aiter-2127](sources/prs/aiter/PR-2127.md) — [OPUS] opus device test speed up  `[source-pr]`
+- [pr-aiter-2136](sources/prs/aiter/PR-2136.md) — add mhc_pre hip kernel (mhc_pre_gemm_sqrsum, mhc_pre_big_fuse)  `[source-pr]`
+- [pr-aiter-2384](sources/prs/aiter/PR-2384.md) — [OPUS] tiled scaled MFMA and mfma_adaptor_swap_ab fixes  `[source-pr]`
+- [pr-aiter-2390](sources/prs/aiter/PR-2390.md) — [FlyDSL] Add FlyDSL MoE a4w4 support and update kernels  `[source-pr]`
+- [pr-aiter-2394](sources/prs/aiter/PR-2394.md) — [OPUS] enable gfx1250 support for OPUS tests  `[source-pr]`
+- [pr-aiter-2441](sources/prs/aiter/PR-2441.md) — [Triton MoE]: Add optimized Gluon kernel for AMD CDNA3 with K-dimension unrolling  `[source-pr]`
+- [pr-aiter-2480](sources/prs/aiter/PR-2480.md) — [OPUS] Add gfx950 smem transpose load  `[source-pr]`
+- [pr-aiter-2491](sources/prs/aiter/PR-2491.md) — [TRITON] Fix unit tests on `gfx950` - part 2  `[source-pr]`
+- [pr-aiter-2497](sources/prs/aiter/PR-2497.md) — Wjx/upgrade flydsl fused  `[source-pr]`
+- [pr-aiter-2525](sources/prs/aiter/PR-2525.md) — add WARP_SIZE define in csrc/include/aiter_hip_common.h  for host and device  &&   rm hip_compat.h  `[source-pr]`
+- [pr-aiter-2546](sources/prs/aiter/PR-2546.md) — So/a8w8 bpreshuffle flydsl  `[source-pr]`
+- [pr-aiter-2575](sources/prs/aiter/PR-2575.md) — Fix _gluon_deepgemm_fp8_paged_mqa_logits instr_shape compatibility  `[source-pr]`
+- [pr-aiter-2581](sources/prs/aiter/PR-2581.md) — [FlyDSL] Optimize a4w4 MOE kernels  `[source-pr]`
+- [pr-aiter-2584](sources/prs/aiter/PR-2584.md) — [TRITON] Reduce GEMM unit tests  `[source-pr]`
+- [pr-aiter-2646](sources/prs/aiter/PR-2646.md) — [TRITON] mHC-pre: Manifold-constrained Hyper Connection  `[source-pr]`
+- [pr-aiter-2695](sources/prs/aiter/PR-2695.md) — [Triton] Declare triton>=3.6.0 dependency  `[source-pr]`
+- [pr-aiter-2701](sources/prs/aiter/PR-2701.md) — [OPUS] Optimize opus.hpp compile time: 70% reduction  `[source-pr]`
+- [pr-aiter-2726](sources/prs/aiter/PR-2726.md) — [FlyDSL MOE] update a8w4 moe  `[source-pr]`
+- [pr-aiter-2856](sources/prs/aiter/PR-2856.md) — Dev/aot fix  `[source-pr]`
+- [pr-aiter-2863](sources/prs/aiter/PR-2863.md) — kimi a16wi4 moe support  `[source-pr]`
+- [pr-aiter-2879](sources/prs/aiter/PR-2879.md) — Support preshuffled layout in indexer_k_quant_and_cache / cp_gather_indexer_k_quant_cache  `[source-pr]`
+- [pr-aiter-2911](sources/prs/aiter/PR-2911.md) — F8 fmha ASM gfx950  `[source-pr]`
+- [pr-aiter-2945](sources/prs/aiter/PR-2945.md) — [OPUS]bf16 opus gemm support  `[source-pr]`
+- [pr-aiter-2999](sources/prs/aiter/PR-2999.md) — Replace QH16 bf16 kernel with a new one that does not use ptr_RP  `[source-pr]`
+- [pr-aiter-3033](sources/prs/aiter/PR-3033.md) — Fix sqrsum store race condition in mhc_pre_gemm_sqrsum_kernel  `[source-pr]`
+- [pr-aiter-3068](sources/prs/aiter/PR-3068.md) — sync branch fix_cp_gather_indexer_cache with main  `[source-pr]`
+- [pr-aiter-3071](sources/prs/aiter/PR-3071.md) — So/a8w8 bpreshuflle flydsl xcd remap  `[source-pr]`
+- [pr-aiter-3072](sources/prs/aiter/PR-3072.md) — HK MLA: MI35x m16x8 retune, new m16x4 kernel, page_size + mask support  `[source-pr]`
+- [pr-aiter-3107](sources/prs/aiter/PR-3107.md) — Revert 'So/a8w8 bpreshuflle flydsl xcd remap'  `[source-pr]`
+- [pr-aiter-3128](sources/prs/aiter/PR-3128.md) — hsa/gfx942/mla: fix BF16 mla_qh8 LDS size + add FP8 mla_qh8 kernel  `[source-pr]`
+- [pr-aiter-3134](sources/prs/aiter/PR-3134.md) — So/flydsl xcd remap v2  `[source-pr]`
+- [pr-aiter-3357](sources/prs/aiter/PR-3357.md) — [Kernel] flydsl fused_compress_attn for V4-Pro/V4-Flash CSA+HCA  `[source-pr]`
+- [pr-aiter-432](sources/prs/aiter/PR-432.md) — gfx950: Use 16x16x32 MFMA instead of 16x16x16  `[source-pr]`
+- [pr-aiter-488](sources/prs/aiter/PR-488.md) — Change test to use the new preshuffle_scale API and change all mxfp config to use mfma16  `[source-pr]`
+- [pr-aiter-492](sources/prs/aiter/PR-492.md) — gfx950: Use 16x16x32 MFMA for regular tensor too  `[source-pr]`
+- [pr-aiter-508](sources/prs/aiter/PR-508.md) — Use 16x16x32 mfma for ragged tensor on gfx950  `[source-pr]`
+- [pr-aiter-580](sources/prs/aiter/PR-580.md) — merge moe from 350 launch  `[source-pr]`
+- [pr-aiter-694](sources/prs/aiter/PR-694.md) — Pa fp8 mfma  `[source-pr]`
+- [pr-composable_kernel-100](sources/prs/composable_kernel/PR-100.md) — [Bf16 & int8] [example & ckprofiler]  `[source-pr]`
+- [pr-composable_kernel-1052](sources/prs/composable_kernel/PR-1052.md) — Add support for double buffering in direct load GEMM kernel  `[source-pr]`
+- [pr-composable_kernel-1135](sources/prs/composable_kernel/PR-1135.md) — [GEMM] Optimization for MI200/300.  `[source-pr]`
+- [pr-composable_kernel-1152](sources/prs/composable_kernel/PR-1152.md) — Add support for more Navi2x and Navi3x models.  `[source-pr]`
+- [pr-composable_kernel-1195](sources/prs/composable_kernel/PR-1195.md) — Only call iglp_opt(1) on certain architectures (For ROCm 6.1)  `[source-pr]`
+- [pr-composable_kernel-1224](sources/prs/composable_kernel/PR-1224.md) — F8 quantization for FMHA forward  `[source-pr]`
+- [pr-composable_kernel-1246](sources/prs/composable_kernel/PR-1246.md) — Small refactor  `[source-pr]`
+- [pr-composable_kernel-1262](sources/prs/composable_kernel/PR-1262.md) — [GEMM] UniversalGemm update  `[source-pr]`
+- [pr-composable_kernel-1297](sources/prs/composable_kernel/PR-1297.md) — aggregate device macros in ck_tile config header.  `[source-pr]`
+- [pr-composable_kernel-1309](sources/prs/composable_kernel/PR-1309.md) — Add structural sparsity gemm instruction tests  `[source-pr]`
+- [pr-composable_kernel-1342](sources/prs/composable_kernel/PR-1342.md) — Fix cmake warnings  `[source-pr]`
+- [pr-composable_kernel-1362](sources/prs/composable_kernel/PR-1362.md) — Merging the gfx12 code into public repo.  `[source-pr]`
+- [pr-composable_kernel-1363](sources/prs/composable_kernel/PR-1363.md) — Add structural sparsity xdlops  `[source-pr]`
+- [pr-composable_kernel-1372](sources/prs/composable_kernel/PR-1372.md) — Fix issue with multiple targets and remove smfmac tests from unsupported test targets  `[source-pr]`
+- [pr-composable_kernel-1397](sources/prs/composable_kernel/PR-1397.md) — [CK_TILE] FA bwd kernels optimization  `[source-pr]`
+- [pr-composable_kernel-1429](sources/prs/composable_kernel/PR-1429.md) — Add compiler flags for ROCm versions 6.2+  `[source-pr]`
+- [pr-composable_kernel-1435](sources/prs/composable_kernel/PR-1435.md) — Added structural sparsity blockwise gemm  `[source-pr]`
+- [pr-composable_kernel-1484](sources/prs/composable_kernel/PR-1484.md) — Add gemm universal bf16 instances  `[source-pr]`
+- [pr-composable_kernel-1488](sources/prs/composable_kernel/PR-1488.md) — Ck tile gemm example  `[source-pr]`
+- [pr-composable_kernel-1558](sources/prs/composable_kernel/PR-1558.md) — [CK-Tile] Universal gemm memory bound pipeline  `[source-pr]`
+- [pr-composable_kernel-1607](sources/prs/composable_kernel/PR-1607.md) — [CK_TILE] add generic_permute  `[source-pr]`
+- [pr-composable_kernel-1676](sources/prs/composable_kernel/PR-1676.md) — CK-Tile first draft of universal block gemm with interwave & intrawave scheduler  `[source-pr]`
+- [pr-composable_kernel-1705](sources/prs/composable_kernel/PR-1705.md) — [CK_TILE] Add fmha fwd N-Warp S-Shuffle pipeline (fmha fwd splitkv pipeline variant)  `[source-pr]`
+- [pr-composable_kernel-1768](sources/prs/composable_kernel/PR-1768.md) — hot-fix missing flags  `[source-pr]`
+- [pr-composable_kernel-1770](sources/prs/composable_kernel/PR-1770.md) — Promote develop into amd-develop  `[source-pr]`
+- [pr-composable_kernel-1789](sources/prs/composable_kernel/PR-1789.md) — [CK_TILE] fmha fwd splitkv optimization for decode (seqlen_q=1)  `[source-pr]`
+- [pr-composable_kernel-1808](sources/prs/composable_kernel/PR-1808.md) — [CK_TILE] Fix mock token id, support g1u1/g1u0 through same inline code block  `[source-pr]`
+- [pr-composable_kernel-1838](sources/prs/composable_kernel/PR-1838.md) — Cka8w8 uc newpipe  `[source-pr]`
+- [pr-composable_kernel-1842](sources/prs/composable_kernel/PR-1842.md) — [CK TILE] Implement cschuflle algorithm  `[source-pr]`
+- [pr-composable_kernel-1867](sources/prs/composable_kernel/PR-1867.md) — CK Tile - small fix to hotloop scheduler & KPack value.  `[source-pr]`
+- [pr-composable_kernel-1871](sources/prs/composable_kernel/PR-1871.md) — Fix KPack and enable existing instances on gfx950  `[source-pr]`
+- [pr-composable_kernel-1891](sources/prs/composable_kernel/PR-1891.md) — Fix test_gemm_universal test_grouped_convnd_fwd and example_gemm_xdl_streamk on gfx950  `[source-pr]`
+- [pr-composable_kernel-1902](sources/prs/composable_kernel/PR-1902.md) — MX FP GEMM - Test MX FP8 MFMA Instructions  `[source-pr]`
+- [pr-composable_kernel-1913](sources/prs/composable_kernel/PR-1913.md) — [BlockScale GEMM] FP8 Blockscale GEMM optimization and ckProfiler  `[source-pr]`
+- [pr-composable_kernel-1933](sources/prs/composable_kernel/PR-1933.md) — Revert '[BlockScale GEMM] FP8 Blockscale GEMM optimization and ckProf…  `[source-pr]`
+- [pr-composable_kernel-1935](sources/prs/composable_kernel/PR-1935.md) — Remove CK_USE_AMD_MFMA_GFX950  `[source-pr]`
+- [pr-composable_kernel-1941](sources/prs/composable_kernel/PR-1941.md) — Ck tile/complete k prefetch  `[source-pr]`
+- [pr-composable_kernel-1950](sources/prs/composable_kernel/PR-1950.md) — [Block Scale GEMM] Optimized block scale gemm  `[source-pr]`
+- [pr-composable_kernel-1957](sources/prs/composable_kernel/PR-1957.md) — [CK_TILE] Add 2:4 structured sparsity support for fp16 gemm  `[source-pr]`
+- [pr-composable_kernel-2000](sources/prs/composable_kernel/PR-2000.md) — WIP: Introduce MX GEMM for FP8 data type  `[source-pr]`
+- [pr-composable_kernel-2059](sources/prs/composable_kernel/PR-2059.md) — MX GEMM - New GEMM pipeline for MX data types  `[source-pr]`
+- [pr-composable_kernel-2061](sources/prs/composable_kernel/PR-2061.md) — New instances for gemm_multiply_multiply_weightpreshuffle operator  `[source-pr]`
+- [pr-composable_kernel-2071](sources/prs/composable_kernel/PR-2071.md) — MX GEMM - Add MX BF8 example  `[source-pr]`
+- [pr-composable_kernel-2073](sources/prs/composable_kernel/PR-2073.md) — [CK-Tile] warp-gemm support for using V_MFMA_F32_16x16x32_BF16  `[source-pr]`
+- [pr-composable_kernel-2088](sources/prs/composable_kernel/PR-2088.md) — MX GEMM - Parameterized Test Template  `[source-pr]`
+- [pr-composable_kernel-2089](sources/prs/composable_kernel/PR-2089.md) — [flatmm] implement basic fp16 flatmm  `[source-pr]`
+- [pr-composable_kernel-2096](sources/prs/composable_kernel/PR-2096.md) — DeviceGemm_Wmma_CShuffleV3 with BlockGemmPipelineVersion::v3  `[source-pr]`
+- [pr-composable_kernel-2103](sources/prs/composable_kernel/PR-2103.md) — MFMA 16x16x32fp8  `[source-pr]`
+- [pr-composable_kernel-2110](sources/prs/composable_kernel/PR-2110.md) — [CK_TILE] support gfx950 matrix core in 01_fmha fwd  `[source-pr]`
+- [pr-composable_kernel-2121](sources/prs/composable_kernel/PR-2121.md) — MFMA_32x32x16 for gfx950  `[source-pr]`
+- [pr-composable_kernel-2125](sources/prs/composable_kernel/PR-2125.md) — Support for MFMA_16x16x128 for fp8/bf8  `[source-pr]`
+- [pr-composable_kernel-2138](sources/prs/composable_kernel/PR-2138.md) — [CK Tile] Fix the numerical issue for MFMA 16x16x128 for FP8  `[source-pr]`
+- [pr-composable_kernel-2140](sources/prs/composable_kernel/PR-2140.md) — Add grouped conv fwd 16x16 mfma instruction instances  `[source-pr]`
+- [pr-composable_kernel-2148](sources/prs/composable_kernel/PR-2148.md) — mfma_32x32x64_fp8/bf8  `[source-pr]`
+- [pr-composable_kernel-2151](sources/prs/composable_kernel/PR-2151.md) — Add FP4 MX MFMA tests  `[source-pr]`
+- [pr-composable_kernel-2152](sources/prs/composable_kernel/PR-2152.md) — MX GEMM - Add FP8 GEMM Tests for Different Layouts  `[source-pr]`
+- [pr-composable_kernel-2166](sources/prs/composable_kernel/PR-2166.md) — Improve the general performance of the Preshuffled GEMM V3 & delete the unnecessary instances  `[source-pr]`
+- [pr-composable_kernel-2168](sources/prs/composable_kernel/PR-2168.md) — Flatmm merge  `[source-pr]`
+- [pr-composable_kernel-2172](sources/prs/composable_kernel/PR-2172.md) — Support for swizzle and transpose for MFMA_16x16x32_F16/BF16  `[source-pr]`
+- [pr-composable_kernel-2174](sources/prs/composable_kernel/PR-2174.md) — Disable the SMFMA instruction for gfx90a.  `[source-pr]`
+- [pr-composable_kernel-2175](sources/prs/composable_kernel/PR-2175.md) — Revert 'Disable the SMFMA instruction for gfx90a.'  `[source-pr]`
+- [pr-composable_kernel-2182](sources/prs/composable_kernel/PR-2182.md) — Disable SMFMA for gfx90a  `[source-pr]`
+- [pr-composable_kernel-2184](sources/prs/composable_kernel/PR-2184.md) — Disable SMFMA gfx90a  `[source-pr]`
+- [pr-composable_kernel-2189](sources/prs/composable_kernel/PR-2189.md) — Adding validation for tile sizes in Tile Engine  `[source-pr]`
+- [pr-composable_kernel-2198](sources/prs/composable_kernel/PR-2198.md) — [CK_TILE] fMHA batch_prefill block index & logits soft-capping optimizations  `[source-pr]`
+- [pr-composable_kernel-2199](sources/prs/composable_kernel/PR-2199.md) — MX GEMM - Expand MX MFMA Testing to BF8, FP6, and BF6 Data Types  `[source-pr]`
+- [pr-composable_kernel-2202](sources/prs/composable_kernel/PR-2202.md) — Use new mfma instructions for FP8 on gfx950  `[source-pr]`
+- [pr-composable_kernel-2229](sources/prs/composable_kernel/PR-2229.md) — Convert CK (GeMM MulMul Weight Preshuffle) instances to use 16x16 xdl tile  `[source-pr]`
+- [pr-composable_kernel-2234](sources/prs/composable_kernel/PR-2234.md) — Add catch blocks in example GEMM apps to enable better error handling (Issue: 1928)  `[source-pr]`
+- [pr-composable_kernel-2239](sources/prs/composable_kernel/PR-2239.md) — [CK_TILE] Refine fp8 support in flatmm  `[source-pr]`
+- [pr-composable_kernel-2267](sources/prs/composable_kernel/PR-2267.md) — [CK Tile] Int8 Support on CK Tile GEMM  `[source-pr]`
+- [pr-composable_kernel-2294](sources/prs/composable_kernel/PR-2294.md) — Optimized GEMMs for MX FP4/8  `[source-pr]`
+- [pr-composable_kernel-2326](sources/prs/composable_kernel/PR-2326.md) — Fix on the MFMA instruction of the 16x16x32 for bf8  `[source-pr]`
+- [pr-composable_kernel-2393](sources/prs/composable_kernel/PR-2393.md) — [CK_TILE] Fix unmatched K size of WarpGemmMfmaBf16Bf16F32M16N16K32TransposedCDistribution on gfx950  `[source-pr]`
+- [pr-composable_kernel-2427](sources/prs/composable_kernel/PR-2427.md) — [ckProfiler] Add infrastructure and instances to profile gemm_universal with B preshuffle  `[source-pr]`
+- [pr-composable_kernel-2436](sources/prs/composable_kernel/PR-2436.md) — [CK_TILE] Use read_tr in universal gemm  `[source-pr]`
+- [pr-composable_kernel-2455](sources/prs/composable_kernel/PR-2455.md) — [CK] Mxfp4 moe blockscale buf2lds version support  `[source-pr]`
+- [pr-composable_kernel-2456](sources/prs/composable_kernel/PR-2456.md) — Fix build errors on windows  `[source-pr]`
+- [pr-composable_kernel-2466](sources/prs/composable_kernel/PR-2466.md) — [CK_TILE] CK_TILE GEMM WMMA Support for GFX11/GFX12  `[source-pr]`
+- [pr-composable_kernel-2473](sources/prs/composable_kernel/PR-2473.md) — ck_tile kernel for gemm with groupwise quantized A  tensor  `[source-pr]`
+- [pr-composable_kernel-2488](sources/prs/composable_kernel/PR-2488.md) — MX GEMM - Add FP6 GEMM Test  `[source-pr]`
+- [pr-composable_kernel-2490](sources/prs/composable_kernel/PR-2490.md) — [CK_TILE] fix mfma32x32 dispatch  `[source-pr]`
+- [pr-composable_kernel-2512](sources/prs/composable_kernel/PR-2512.md) — [CK] Fixed MPerBlock=32 build issue for MXFP4 GEMM decode  `[source-pr]`
+- [pr-composable_kernel-2516](sources/prs/composable_kernel/PR-2516.md) — Integration of a new pipeline for weight preshuffle into gemm examples  `[source-pr]`
+- [pr-composable_kernel-2528](sources/prs/composable_kernel/PR-2528.md) — [CK_TILE] Support WMMA (gfx12) in FMHA  `[source-pr]`
+- [pr-composable_kernel-2606](sources/prs/composable_kernel/PR-2606.md) — [CK] Extend XDL kernel to support RDNA3/4 (option 2)  `[source-pr]`
+- [pr-composable_kernel-2614](sources/prs/composable_kernel/PR-2614.md) — fix test_mx_mfma errors  `[source-pr]`
+- [pr-composable_kernel-265](sources/prs/composable_kernel/PR-265.md) — example for convnd bwd weight bf16 splitk  `[source-pr]`
+- [pr-composable_kernel-2662](sources/prs/composable_kernel/PR-2662.md) — Add gemm universal f8 f8 bf16 instances on gfx950  `[source-pr]`
+- [pr-composable_kernel-2663](sources/prs/composable_kernel/PR-2663.md) — ck_tile kernel for gemm with groupwise quantized B tensor.  `[source-pr]`
+- [pr-composable_kernel-2679](sources/prs/composable_kernel/PR-2679.md) — Support transposed C tile in Aquant  `[source-pr]`
+- [pr-composable_kernel-2704](sources/prs/composable_kernel/PR-2704.md) — First look at mfma / wmma unification  `[source-pr]`
+- [pr-composable_kernel-2713](sources/prs/composable_kernel/PR-2713.md) — [CK_TILE] Fix the Wrong Output Generated by Gemm Examples on GFX11/12  `[source-pr]`
+- [pr-composable_kernel-2722](sources/prs/composable_kernel/PR-2722.md) — Extend XDL kernel to Support RDNA3/4 - Part 2  `[source-pr]`
+- [pr-composable_kernel-2723](sources/prs/composable_kernel/PR-2723.md) — Extend XDL kernel to Support RDNA3/4 - Part 3  `[source-pr]`
+- [pr-composable_kernel-2738](sources/prs/composable_kernel/PR-2738.md) — [CK_TILE] Add fp4 warp gemm 16x16x128  `[source-pr]`
+- [pr-composable_kernel-2749](sources/prs/composable_kernel/PR-2749.md) — Fix merge mfma_wmma (part 1) regression  `[source-pr]`
+- [pr-composable_kernel-2751](sources/prs/composable_kernel/PR-2751.md) — Adding fix for the gfx908 to the GEMM MFMA implementaitons of WarpGem…  `[source-pr]`
+- [pr-composable_kernel-2772](sources/prs/composable_kernel/PR-2772.md) — [CK TILE GEMM] Fix Gemm AQuant gfx950 building issues  `[source-pr]`
+- [pr-composable_kernel-2817](sources/prs/composable_kernel/PR-2817.md) — [CK_TILE] Add unit test for fp4 warp gemm  `[source-pr]`
+- [pr-composable_kernel-2821](sources/prs/composable_kernel/PR-2821.md) — [CK_TILE] Enable ck_tile tests on gfx11 and gfx12  `[source-pr]`
+- [pr-composable_kernel-2836](sources/prs/composable_kernel/PR-2836.md) — [CK_TILE] Support f32 in FMHA (fwd and bwd)  `[source-pr]`
+- [pr-composable_kernel-2855](sources/prs/composable_kernel/PR-2855.md) — [CK_TILE] Add conv bwd weight two stage support  `[source-pr]`
+- [pr-composable_kernel-2867](sources/prs/composable_kernel/PR-2867.md) — Conv:TF32: add more instances - 1  `[source-pr]`
+- [pr-composable_kernel-2876](sources/prs/composable_kernel/PR-2876.md) — [CK_TILE] FMHA Fix synchronization issues in BWD pipelines  `[source-pr]`
+- [pr-composable_kernel-2877](sources/prs/composable_kernel/PR-2877.md) — Weight Preshuffle Block Scale gemm support  `[source-pr]`
+- [pr-composable_kernel-2911](sources/prs/composable_kernel/PR-2911.md) — Fix the gfx950 numerical errors  `[source-pr]`
+- [pr-composable_kernel-293](sources/prs/composable_kernel/PR-293.md) — Update the usage of builtin intrinsic sched_barrier  `[source-pr]`
+- [pr-composable_kernel-2949](sources/prs/composable_kernel/PR-2949.md) — Add a new gemm pipeline based on ComputeV4 which utilizes async copy API  `[source-pr]`
+- [pr-composable_kernel-2955](sources/prs/composable_kernel/PR-2955.md) — [CK_TILE] Blockwise GEMM pipeline v6 - port of v5 from old CK  `[source-pr]`
+- [pr-composable_kernel-2963](sources/prs/composable_kernel/PR-2963.md) — Lwpck 3550: Implement and test fixed precision fp8 x bf8  `[source-pr]`
+- [pr-composable_kernel-2975](sources/prs/composable_kernel/PR-2975.md) — supporting prefill shapes for preshuffle block scale gemm  `[source-pr]`
+- [pr-composable_kernel-2978](sources/prs/composable_kernel/PR-2978.md) — Update include path to break the cyclic dep issue  `[source-pr]`
+- [pr-composable_kernel-2981](sources/prs/composable_kernel/PR-2981.md) — [CK_TILE] Switch into universal gemms for conv bwds  `[source-pr]`
+- [pr-composable_kernel-3022](sources/prs/composable_kernel/PR-3022.md) — [CK_TILE] Update flatmm related kernels  `[source-pr]`
+- [pr-composable_kernel-3038](sources/prs/composable_kernel/PR-3038.md) — Add CK Tile Tutorials Folder with GEMM and COPY Kernel  `[source-pr]`
+- [pr-composable_kernel-3077](sources/prs/composable_kernel/PR-3077.md) — Fix reinterpret_cast UB build issue  `[source-pr]`
+- [pr-composable_kernel-3079](sources/prs/composable_kernel/PR-3079.md) — Fix quant scale matrix layout for block scale gemm  `[source-pr]`
+- [pr-composable_kernel-3080](sources/prs/composable_kernel/PR-3080.md) — [CK_TILE] Add mxfp4 flatmm  `[source-pr]`
+- [pr-composable_kernel-3098](sources/prs/composable_kernel/PR-3098.md) — Ck moe mxfp4 blockm32  `[source-pr]`
+- [pr-composable_kernel-3191](sources/prs/composable_kernel/PR-3191.md) — Fix test_gemm_multiply_multiply_wp_xdl_fp8 on gfx950  `[source-pr]`
+- [pr-composable_kernel-3197](sources/prs/composable_kernel/PR-3197.md) — [CK_TILE] Improve F8F6F4 Scaled WarpGemm  `[source-pr]`
+- [pr-composable_kernel-3245](sources/prs/composable_kernel/PR-3245.md) — Fix and improve the gemm quant pipeline infrastructure  `[source-pr]`
+- [pr-composable_kernel-3272](sources/prs/composable_kernel/PR-3272.md) — [CK_TILE] Refine warp_gemm_attribute_mfma  `[source-pr]`
+- [pr-composable_kernel-3315](sources/prs/composable_kernel/PR-3315.md) — Wmma support for gemm_blockscale_wp  `[source-pr]`
+- [pr-composable_kernel-3369](sources/prs/composable_kernel/PR-3369.md) — Add a workaround for a compiler issue for bwd on gfx90a and ROCm 7.1.1  `[source-pr]`
+- [pr-composable_kernel-3401](sources/prs/composable_kernel/PR-3401.md) — [CK_TILE] Add FP8xF4 Flatmm  `[source-pr]`
+- [pr-composable_kernel-3493](sources/prs/composable_kernel/PR-3493.md) — Refactor weight preshuffled pipeline and unify LDS buffer management API  `[source-pr]`
+- [pr-composable_kernel-3540](sources/prs/composable_kernel/PR-3540.md) — feat: Add Interwave scheduler for aquant memory pipeline  `[source-pr]`
+- [pr-composable_kernel-3601](sources/prs/composable_kernel/PR-3601.md) — Mx fp6 flatmm  `[source-pr]`
+- [pr-composable_kernel-3603](sources/prs/composable_kernel/PR-3603.md) — [CK_Tile] Support for a4w4 (fp4) in block scale gemm AB quant  `[source-pr]`
+- [pr-composable_kernel-3672](sources/prs/composable_kernel/PR-3672.md) — [CK_TILE] Fix incompatible vector type arguments for the intrinsic calls  `[source-pr]`
+- [pr-composable_kernel-53](sources/prs/composable_kernel/PR-53.md) — Use __builtin_memcpy to implement bit_cast and for accessing vector from pointer of scalars  `[source-pr]`
+- [pr-composable_kernel-602](sources/prs/composable_kernel/PR-602.md) — disable tensor contraction f64 on MI100  `[source-pr]`
+- [pr-composable_kernel-690](sources/prs/composable_kernel/PR-690.md) — Syncing up from internal repo to enable MI300.  `[source-pr]`
+- [pr-composable_kernel-79](sources/prs/composable_kernel/PR-79.md) — Batched GEMM for fp16  `[source-pr]`
+- [pr-composable_kernel-819](sources/prs/composable_kernel/PR-819.md) — Update tuning parameter & compilation options of DeviceGemmXdl<> instance (layout=TT)  `[source-pr]`
+- [pr-composable_kernel-865](sources/prs/composable_kernel/PR-865.md) — Fp16/fp8 mixed-precision Gemm with multiply+add fusion  `[source-pr]`
+- [pr-composable_kernel-933](sources/prs/composable_kernel/PR-933.md) — Add fp8 @ bf8 gemm support and example  `[source-pr]`
+- [pr-composable_kernel-98](sources/prs/composable_kernel/PR-98.md) — Allow distinct K0/K1 values for A/B block descriptor  `[source-pr]`
+- [pr-flash-attention-179](sources/prs/flash-attention/PR-179.md) — [CK_TILE] Fix NaN for FMHA BWD When seq_q=0  `[source-pr]`
+- [pr-rocBLAS-888](sources/prs/rocBLAS/PR-888.md) — arcturus SB logic files; must use mfma Tensile generator  `[source-pr]`
+- [pr-triton-135](sources/prs/triton/PR-135.md) — [dotOp] [rocMLIR] Add Rock dialect  `[source-pr]`
+- [pr-triton-136](sources/prs/triton/PR-136.md) — [dotOp] [rocMLIR] Replace `tt.dot` with `rock.blockwise_gemm_v2`  `[source-pr]`
+- [pr-triton-145](sources/prs/triton/PR-145.md) — [dotOp] [rocMLIR] Add MfmaEncodingAttr  `[source-pr]`
+- [pr-triton-147](sources/prs/triton/PR-147.md) — [dotOp] [rocMLIR] Add triton_gpu.memref_to_tensor  `[source-pr]`
+- [pr-triton-155](sources/prs/triton/PR-155.md) — [dotOP] [rocMLIR] Add unit tests for pull requests targeting the dot-rocMLIR branch  `[source-pr]`
+- [pr-triton-171](sources/prs/triton/PR-171.md) — [dotOp] [rocMLIR] Lower TritonGPU to LLVMIR in RockToLLVMPass  `[source-pr]`
+- [pr-triton-177](sources/prs/triton/PR-177.md) — [dotOp] [rocMLIR] Make test_dot.py work  `[source-pr]`
+- [pr-triton-180](sources/prs/triton/PR-180.md) — [MFMA] Implementation of MFMA DotOp pipeline  `[source-pr]`
+- [pr-triton-215](sources/prs/triton/PR-215.md) — Mfma support  `[source-pr]`
+- [pr-triton-221](sources/prs/triton/PR-221.md) — [dotOp] [rocMLIR] Support chained dot in test_dot (without k-loop)  `[source-pr]`
+- [pr-triton-226](sources/prs/triton/PR-226.md) — [MFMA] Enabled fused attention forward pass.  `[source-pr]`
+- [pr-triton-227](sources/prs/triton/PR-227.md) — [ROCM] Fix transposed operands processing in dot operation with MFMA.  `[source-pr]`
+- [pr-triton-228](sources/prs/triton/PR-228.md) — [Triton] Fix MFMA load indexing  `[source-pr]`
+- [pr-triton-241](sources/prs/triton/PR-241.md) — [Dot] Support slicing in dot operands  `[source-pr]`
+- [pr-triton-244](sources/prs/triton/PR-244.md) — Dynamic Warp Size to enable Navi 2x/3x support  `[source-pr]`
+- [pr-triton-245](sources/prs/triton/PR-245.md) — [MFMA][Dot] Swizzle mfma dot operands  `[source-pr]`
+- [pr-triton-247](sources/prs/triton/PR-247.md) — [FA OPTIMIZATION] Keep results of FA dot operations in registers  `[source-pr]`
+- [pr-triton-248](sources/prs/triton/PR-248.md) — [MFMA] Parameterize MFMA layout with non k dimension size  `[source-pr]`
+- [pr-triton-251](sources/prs/triton/PR-251.md) — [Triton] Mfma16 support  `[source-pr]`
+- [pr-triton-260](sources/prs/triton/PR-260.md) — [Dot] [MFMA] [FMA] Update Dot implementation to support upstream tests  `[source-pr]`
+- [pr-triton-265](sources/prs/triton/PR-265.md) — revert PR#245 and #241 for gemm performance regression  `[source-pr]`
+- [pr-triton-269](sources/prs/triton/PR-269.md) — [MFMA] Introduce dot operand loading fast path  `[source-pr]`
+- [pr-triton-273](sources/prs/triton/PR-273.md) — Favor dim 1 (N) when setting warpsPerCTA for non-FA mfma  `[source-pr]`
+- [pr-triton-275](sources/prs/triton/PR-275.md) — [MFMA] [Dot] Support vector loads in normal path  `[source-pr]`
+- [pr-triton-277](sources/prs/triton/PR-277.md) — add gfx940/941 to arch details, so MFMA is enabled in codegen  `[source-pr]`
+- [pr-triton-278](sources/prs/triton/PR-278.md) — [MFMA][Dot] Vector loads for fast path  `[source-pr]`
+- [pr-triton-285](sources/prs/triton/PR-285.md) — [MFMA] Swizzle k-major dot operands  `[source-pr]`
+- [pr-triton-286](sources/prs/triton/PR-286.md) — [MFMA] More optimal offset computation  `[source-pr]`
+- [pr-triton-288](sources/prs/triton/PR-288.md) — [Tests] Fix some tests in test_core_amd.py  `[source-pr]`
+- [pr-triton-294](sources/prs/triton/PR-294.md) — [MFMA] MI200 Enable mfma bfloat16  `[source-pr]`
+- [pr-triton-295](sources/prs/triton/PR-295.md) — [MFMA] Support BFloat16 on MI100  `[source-pr]`
+- [pr-triton-298](sources/prs/triton/PR-298.md) — [MFMA] [FA] Keep bf16 results of FA dot operations in registers  `[source-pr]`
+- [pr-triton-299](sources/prs/triton/PR-299.md) — [NFC] Rename `MMAv2kWidth` to `kWidth`  `[source-pr]`
+- [pr-triton-325](sources/prs/triton/PR-325.md) — Fix dangling gpu_has_mfma use  `[source-pr]`
+- [pr-triton-326](sources/prs/triton/PR-326.md) — [MFMA] Change kWidth parameter semantics  `[source-pr]`
+- [pr-triton-333](sources/prs/triton/PR-333.md) — support gemm fp8/fp16 mixed input  `[source-pr]`
+- [pr-triton-340](sources/prs/triton/PR-340.md) — [FA fwd D=128] Reduce LDS usage in epilogue  `[source-pr]`
+- [pr-triton-346](sources/prs/triton/PR-346.md) — Add OptimizeEpilogue pass.  `[source-pr]`
+- [pr-triton-349](sources/prs/triton/PR-349.md) — Remove redundant fp32->fp16 conversion in FA  `[source-pr]`
+- [pr-triton-350](sources/prs/triton/PR-350.md) — [GEMM] Tuning script v2  `[source-pr]`
+- [pr-triton-352](sources/prs/triton/PR-352.md) — [MFMA] Switch between MFMA types  `[source-pr]`
+- [pr-triton-355](sources/prs/triton/PR-355.md) — [MFMA] FP8 and BF8 support  `[source-pr]`
+- [pr-triton-366](sources/prs/triton/PR-366.md) — [GEMM] [Tuning] Parameterize mfma type  `[source-pr]`
+- [pr-triton-368](sources/prs/triton/PR-368.md) — use different int8 mfma instructions on different GPUs.  `[source-pr]`
+- [pr-triton-370](sources/prs/triton/PR-370.md) — set correct arch info for unit test  `[source-pr]`
+- [pr-triton-386](sources/prs/triton/PR-386.md) — use hw for fp8 type conversion  `[source-pr]`
+- [pr-triton-400](sources/prs/triton/PR-400.md) — [MFMA] Refactor dot pipeline to reduce code duplication  `[source-pr]`
+- [pr-triton-407](sources/prs/triton/PR-407.md) — Add a cute tool to plot blocked, dotOperand, and mfma layout  `[source-pr]`
+- [pr-triton-413](sources/prs/triton/PR-413.md) — [MFMA] Support tile size 4x4 version 1  `[source-pr]`
+- [pr-triton-418](sources/prs/triton/PR-418.md) — Replace inline assembly in commonShflSync with intrinsics  `[source-pr]`
+- [pr-triton-424](sources/prs/triton/PR-424.md) — [MFMA] Reenable removed CDNA3 int and fp8 support  `[source-pr]`
+- [pr-triton-429](sources/prs/triton/PR-429.md) — [MFMA] Remove CTA related code from layout  `[source-pr]`
+- [pr-triton-439](sources/prs/triton/PR-439.md) — [Backend] Refactor sharedToDotOperandMFMA lowering  `[source-pr]`
+- [pr-triton-440](sources/prs/triton/PR-440.md) — Dot slicing pass  `[source-pr]`
+- [pr-triton-441](sources/prs/triton/PR-441.md) — [Backend] Refactor mfma selection  `[source-pr]`
+- [pr-triton-442](sources/prs/triton/PR-442.md) — Add support for MFMA layout to view_slice instruction  `[source-pr]`
+- [pr-triton-453](sources/prs/triton/PR-453.md) — enable layout conversion from mfma to dot_op for mfma16.  `[source-pr]`
+- [pr-triton-466](sources/prs/triton/PR-466.md) — Fix vecSize for fp8 and int8 on MI300  `[source-pr]`
+- [pr-triton-469](sources/prs/triton/PR-469.md) — [MFMA] Support 64x4 and 4x64 tile size  `[source-pr]`
+- [pr-triton-470](sources/prs/triton/PR-470.md) — [Tuning] Add `matrix_instr_nonkdim` in the tuning space  `[source-pr]`
+- [pr-triton-472](sources/prs/triton/PR-472.md) — [MFMA][Test] Add scripts generating mfma related lit tests  `[source-pr]`
+- [pr-triton-476](sources/prs/triton/PR-476.md) — Add option for larger LDS vecSize  `[source-pr]`
+- [pr-triton-477](sources/prs/triton/PR-477.md) — [MFMA] Move operand casts to AccelerateMatMul pass  `[source-pr]`
+- [pr-triton-479](sources/prs/triton/PR-479.md) — [MFMA] Cleanup mfma pipeline  `[source-pr]`
+- [pr-triton-482](sources/prs/triton/PR-482.md) — Fix a bug in fastPath condition  `[source-pr]`
+- [pr-triton-496](sources/prs/triton/PR-496.md) — [MFMA] Remove redundant checks  `[source-pr]`
+- [pr-triton-500](sources/prs/triton/PR-500.md) — Revert '[MFMA] Move operand casts to AccelerateMatMul pass'  `[source-pr]`
+- [pr-triton-526](sources/prs/triton/PR-526.md) — [ReductionOp][MFMA] fix reduction of mfma64x4 layout  `[source-pr]`
+- [pr-triton-533](sources/prs/triton/PR-533.md) — [AMD] Refactor SharedToDotOperandMFMA  `[source-pr]`
+- [pr-triton-562](sources/prs/triton/PR-562.md) — add kpack and  matrix_instr_nonkdim for stream-k implementation  `[source-pr]`
+- [pr-triton-579](sources/prs/triton/PR-579.md) — new stream-k kernel implementations  `[source-pr]`
+- [pr-triton-598](sources/prs/triton/PR-598.md) — fix correctness test issue of tune_streamk  `[source-pr]`
+- [pr-triton-606](sources/prs/triton/PR-606.md) — [tuning] gemm tuning script v3.3  `[source-pr]`
+- [pr-triton-614](sources/prs/triton/PR-614.md) — Copy *tune_gemm* from `triton-mlir` branch to `main_perf` branch  `[source-pr]`
+- [pr-triton-624](sources/prs/triton/PR-624.md) — [plot tool] Add mfma16 support  `[source-pr]`
+- [pr-triton-629](sources/prs/triton/PR-629.md) — Clean up *tune_gemm* script from `main_perf` branch  `[source-pr]`
+- [pr-triton-635](sources/prs/triton/PR-635.md) — Move utility tools from triton-mlir to main_perf branch  `[source-pr]`
+- [pr-triton-660](sources/prs/triton/PR-660.md) — Streamk v0.3  `[source-pr]`
+- [pr-triton-683](sources/prs/triton/PR-683.md) — [CP] Many layout cherry picks for gemm perf  `[source-pr]`
+- [pr-triton-721](sources/prs/triton/PR-721.md) — Adding dot-tiling into decomposing dot.  `[source-pr]`
+- [pr-triton-754](sources/prs/triton/PR-754.md) — [AMD] fixed calculations in `fastPathComputeOffsets`  `[source-pr]`
+- [pr-triton-755](sources/prs/triton/PR-755.md) — remove production name  `[source-pr]`
+- [pr-triton-757](sources/prs/triton/PR-757.md) — [AMD] Added a script that computes TFLOP/s using perf. counters  `[source-pr]`
+- [pr-triton-767](sources/prs/triton/PR-767.md) — AMD perf cherry picks for release/internal/3.2.x  `[source-pr]`
+- [pr-triton-775](sources/prs/triton/PR-775.md) — plot_layout.py Refactoring  `[source-pr]`
+- [pr-triton-778](sources/prs/triton/PR-778.md) — Cherry-pick more performance improvmenet commits  `[source-pr]`
+- [pr-triton-787](sources/prs/triton/PR-787.md) — [AMD] Added `local_alloc` refinement  `[source-pr]`
+- [pr-triton-794](sources/prs/triton/PR-794.md) — Add support for tilesPerWarp  `[source-pr]`
+- [pr-triton-798](sources/prs/triton/PR-798.md) — merge from shared  `[source-pr]`
+- [pr-triton-805](sources/prs/triton/PR-805.md) — aaa  `[source-pr]`
+- [pr-triton-81](sources/prs/triton/PR-81.md) — [Triton-MLIR] IFU from 01/14/2023  `[source-pr]`
+- [pr-triton-810](sources/prs/triton/PR-810.md) — Shared/triton gfx950 launch fixed extract slice  `[source-pr]`
+- [pr-triton-813](sources/prs/triton/PR-813.md) — Preshuffling support  `[source-pr]`
+- [pr-triton-814](sources/prs/triton/PR-814.md) — Op_sel support for mxfp4  `[source-pr]`
+- [pr-triton-815](sources/prs/triton/PR-815.md) — Add non-slicing 2step pingpong  `[source-pr]`
+- [pr-triton-816](sources/prs/triton/PR-816.md) — Disable preshuffling for scale if nonK BLOCK size < 32  `[source-pr]`
+- [pr-triton-846](sources/prs/triton/PR-846.md) — [Cherry-Pick] gfx950 improvements and bug fixes  `[source-pr]`
+- [pr-triton-879](sources/prs/triton/PR-879.md) — Adding more support for machine model cycles per dot/mfma  `[source-pr]`
+- [pr-vllm-40161](sources/prs/vllm/PR-40161.md) — [bugfix] Use only onlines CPUs in lscpu  `[source-pr]`
 - [kernel-flash-attention-ck](wiki/kernels/flash-attention-ck.md) — FlashAttention-2 via CK-tile on CDNA (MI300X)  `[wiki-kernel]`
 
 ## nontemporal-loads
 
+- [pr-FlyDSL-250](sources/prs/FlyDSL/PR-250.md) — 【2/N】add support wmma kernels for RDNA4(GFX1201)  `[source-pr]`
+- [pr-FlyDSL-27](sources/prs/FlyDSL/PR-27.md) — Dev/gemm flir  `[source-pr]`
+- [pr-FlyDSL-33](sources/prs/FlyDSL/PR-33.md) — modify cpu golden data to pytorch golden data, fix v_cvt_pk_bf16_f32 issue and test more case compare to aiter ops  `[source-pr]`
+- [pr-Tensile-1386](sources/prs/Tensile/PR-1386.md) — NonTemporalD  `[source-pr]`
+- [pr-Tensile-1406](sources/prs/Tensile/PR-1406.md) — merge staging 998f23ee into master with GO from CQE  `[source-pr]`
+- [pr-aiter-1479](sources/prs/aiter/PR-1479.md) — Jacchang/pa ragged experimental  `[source-pr]`
+- [pr-aiter-3145](sources/prs/aiter/PR-3145.md) — add silu_and_mul_quant and Opt silu_and_mul  `[source-pr]`
+- [pr-composable_kernel-2041](sources/prs/composable_kernel/PR-2041.md) — Make buffer coherence configurable in tensor view  `[source-pr]`
+- [pr-rocBLAS-1443](sources/prs/rocBLAS/PR-1443.md) — Hotfix for 6.2  `[source-pr]`
 - [kernel-bandwidth-microbench](wiki/kernels/bandwidth-microbench.md) — HBM Bandwidth Microbenchmark (float4 non-temporal persistent read)  `[wiki-kernel]`
+
+## occupancy-tuning
+
+- [pr-FlyDSL-158](sources/prs/FlyDSL/PR-158.md) — use abs import for correct importing kernels from wheel  `[source-pr]`
+- [pr-FlyDSL-225](sources/prs/FlyDSL/PR-225.md) — Add FMHA kernel  `[source-pr]`
+- [pr-FlyDSL-278](sources/prs/FlyDSL/PR-278.md) — [Compiler][Kernel][MI450]Rebase gfx1250 WMMA/mcast/mxfp4 support onto main  `[source-pr]`
+- [pr-FlyDSL-331](sources/prs/FlyDSL/PR-331.md) — [gfx1250] Unified MXFP8/MXFP4/A8W4 GEMM kernel  `[source-pr]`
+- [pr-FlyDSL-340](sources/prs/FlyDSL/PR-340.md) — [gfx1250] optimize FP4 GEMM for large tile 256x256  `[source-pr]`
+- [pr-FlyDSL-346](sources/prs/FlyDSL/PR-346.md) — [FLYDSL]: if dispatch dynamic tests refactor  `[source-pr]`
+- [pr-FlyDSL-370](sources/prs/FlyDSL/PR-370.md) — Pr/a16wi4 group  `[source-pr]`
+- [pr-FlyDSL-402](sources/prs/FlyDSL/PR-402.md) — Gfx1250 moe  `[source-pr]`
+- [pr-FlyDSL-457](sources/prs/FlyDSL/PR-457.md) — Add unit/value_attrs params for KernelFunction  `[source-pr]`
+- [pr-FlyDSL-483](sources/prs/FlyDSL/PR-483.md) — [gfx1250] MoE 2-stage GEMM: MXScale rework + TDM K-loop hoist + build  `[source-pr]`
+- [pr-FlyDSL-591](sources/prs/FlyDSL/PR-591.md) — Update kernel-trace-analysis, lds-optimization, prefetch-data-load sk…  `[source-pr]`
+- [pr-Tensile-1060](sources/prs/Tensile/PR-1060.md) — Pipelined store for MI kernels  `[source-pr]`
+- [pr-Tensile-1100](sources/prs/Tensile/PR-1100.md) — Fix: reusable vgpr up to next occupancy threshold  `[source-pr]`
+- [pr-Tensile-1163](sources/prs/Tensile/PR-1163.md) — Fix: Hold back some kick-out rules for rocBLAS library  `[source-pr]`
+- [pr-Tensile-1174](sources/prs/Tensile/PR-1174.md) — Add support for hpa fp16 in fp32 out  `[source-pr]`
+- [pr-Tensile-1185](sources/prs/Tensile/PR-1185.md) — MatrixInstruction for general int8  `[source-pr]`
+- [pr-Tensile-120](sources/prs/Tensile/PR-120.md) — ready for release 3.2  `[source-pr]`
+- [pr-Tensile-1214](sources/prs/Tensile/PR-1214.md) — Instruction scheduling to reduce LDS by half in TN problems  `[source-pr]`
+- [pr-Tensile-1339](sources/prs/Tensile/PR-1339.md) — Store optimization between workgroups  `[source-pr]`
+- [pr-Tensile-1355](sources/prs/Tensile/PR-1355.md) — Split LDS optimization  `[source-pr]`
+- [pr-Tensile-1371](sources/prs/Tensile/PR-1371.md) — Refactor vgpr occupancy calculation for Aldebaran's new hardware capability Unified Register Files  `[source-pr]`
+- [pr-Tensile-1383](sources/prs/Tensile/PR-1383.md) — ROCm 4.5 merge staging into master  `[source-pr]`
+- [pr-Tensile-1529](sources/prs/Tensile/PR-1529.md) — merge staging 3c17e5a into master on GO from CQE  `[source-pr]`
+- [pr-Tensile-1803](sources/prs/Tensile/PR-1803.md) — LdsPad optimization + new parameters for local read related optimizations  `[source-pr]`
+- [pr-Tensile-1805](sources/prs/Tensile/PR-1805.md) — Add code to allow testing stream-k grid multipliers.  `[source-pr]`
+- [pr-Tensile-293](sources/prs/Tensile/PR-293.md) — Fix half gsu  `[source-pr]`
+- [pr-Tensile-311](sources/prs/Tensile/PR-311.md) — merge with develop branch as of 2018-08-06  `[source-pr]`
+- [pr-Tensile-752](sources/prs/Tensile/PR-752.md) — Adding mfma generator  `[source-pr]`
+- [pr-Tensile-92](sources/prs/Tensile/PR-92.md) — Semantic Versioning and GlobalSplitU  `[source-pr]`
+- [pr-Tensile-93](sources/prs/Tensile/PR-93.md) — fixed recursive solution selection logic  `[source-pr]`
+- [pr-Tensile-94](sources/prs/Tensile/PR-94.md) — explicitly define work-group  `[source-pr]`
+- [pr-Tensile-940](sources/prs/Tensile/PR-940.md) — Reuse C-tile VGPR in unrolled loop  `[source-pr]`
+- [pr-Tensile-972](sources/prs/Tensile/PR-972.md) — re-factory Tensile to support all Matrix Instruction  `[source-pr]`
+- [pr-aiter-1065](sources/prs/aiter/PR-1065.md) — [Triton] FA v3 API  `[source-pr]`
+- [pr-aiter-1233](sources/prs/aiter/PR-1233.md) — Mla splitkv enhance split alg inte  `[source-pr]`
+- [pr-aiter-1240](sources/prs/aiter/PR-1240.md) — [Triton] [355_wip] triton FP4 gemm AOT  `[source-pr]`
+- [pr-aiter-1242](sources/prs/aiter/PR-1242.md) — [Triton] [355_wip_triton] AOT fix  `[source-pr]`
+- [pr-aiter-1315](sources/prs/aiter/PR-1315.md) — [Triton] 355 wip Llama FP4 triton fusion + TP8 triton decode shape tunning  `[source-pr]`
+- [pr-aiter-1328](sources/prs/aiter/PR-1328.md) — [Triton] DS a16w8 GEMM and fused reduce_rms_fp8_group_quant  `[source-pr]`
+- [pr-aiter-1764](sources/prs/aiter/PR-1764.md) — [Triton] Triton FP8 bloscale GEMM preshuffle  `[source-pr]`
+- [pr-aiter-1778](sources/prs/aiter/PR-1778.md) — [Triton] Triton a16w8 gemm preshuffle  `[source-pr]`
+- [pr-aiter-1833](sources/prs/aiter/PR-1833.md) — [Triton] GEMM tunning script  `[source-pr]`
+- [pr-aiter-1942](sources/prs/aiter/PR-1942.md) — [Triton] Sync Flash Attention Package  `[source-pr]`
+- [pr-aiter-2000](sources/prs/aiter/PR-2000.md) — Add `FLASH_ATTENTION_FWD_TRITON_AMD_CONFIG_JSON` env var support  `[source-pr]`
+- [pr-aiter-2180](sources/prs/aiter/PR-2180.md) — [TRITON] Add support for splitk to A8W8 kernel  `[source-pr]`
+- [pr-aiter-2260](sources/prs/aiter/PR-2260.md) — [TRITON] Update config of MHA PE forward kernel on `gfx950`  `[source-pr]`
+- [pr-aiter-2315](sources/prs/aiter/PR-2315.md) — [TRITON] Add gfx1250 support: GFX_MAP + default GEMM/MHA configs  `[source-pr]`
+- [pr-aiter-2332](sources/prs/aiter/PR-2332.md) — [Gluon][gfx1250] Gemm MXFP4 preshuffled  `[source-pr]`
+- [pr-aiter-2441](sources/prs/aiter/PR-2441.md) — [Triton MoE]: Add optimized Gluon kernel for AMD CDNA3 with K-dimension unrolling  `[source-pr]`
+- [pr-aiter-2542](sources/prs/aiter/PR-2542.md) — [Triton] Bench mha dao_ai impl  `[source-pr]`
+- [pr-aiter-2584](sources/prs/aiter/PR-2584.md) — [TRITON] Reduce GEMM unit tests  `[source-pr]`
+- [pr-aiter-2701](sources/prs/aiter/PR-2701.md) — [OPUS] Optimize opus.hpp compile time: 70% reduction  `[source-pr]`
+- [pr-aiter-2775](sources/prs/aiter/PR-2775.md) — Xiaobing/gptoss small m  `[source-pr]`
+- [pr-aiter-2972](sources/prs/aiter/PR-2972.md) — add swiglu a4w4 moe path for gpt-oss model  `[source-pr]`
+- [pr-aiter-301](sources/prs/aiter/PR-301.md) — Fa moe tuning  `[source-pr]`
+- [pr-aiter-304](sources/prs/aiter/PR-304.md) — [TRITON]: GEMM, MoE  and Quants Kernel/Benchmark Updates  `[source-pr]`
+- [pr-aiter-3071](sources/prs/aiter/PR-3071.md) — So/a8w8 bpreshuflle flydsl xcd remap  `[source-pr]`
+- [pr-aiter-3072](sources/prs/aiter/PR-3072.md) — HK MLA: MI35x m16x8 retune, new m16x4 kernel, page_size + mask support  `[source-pr]`
+- [pr-aiter-3107](sources/prs/aiter/PR-3107.md) — Revert 'So/a8w8 bpreshuflle flydsl xcd remap'  `[source-pr]`
+- [pr-aiter-3117](sources/prs/aiter/PR-3117.md) — perf(flydsl): MXFP4 fused-MoE stage2 optimization for EP prefill  `[source-pr]`
+- [pr-aiter-3134](sources/prs/aiter/PR-3134.md) — So/flydsl xcd remap v2  `[source-pr]`
+- [pr-aiter-3228](sources/prs/aiter/PR-3228.md) — [TRITON] Add gfx1201 fp8 gemm configs  `[source-pr]`
+- [pr-aiter-3283](sources/prs/aiter/PR-3283.md) — Tune gfx950 batched GEMM configs and benchmarks  `[source-pr]`
+- [pr-aiter-3318](sources/prs/aiter/PR-3318.md) — Revert '[Gluon][gfx1250] Gemm MXFP4 preshuffled'  `[source-pr]`
+- [pr-aiter-3373](sources/prs/aiter/PR-3373.md) — Flydsl update fix dynmaic layout; use fx.ptr for kernels not using layout  `[source-pr]`
+- [pr-aiter-486](sources/prs/aiter/PR-486.md) — [TRITON] Triton tuning gemms  `[source-pr]`
+- [pr-aiter-488](sources/prs/aiter/PR-488.md) — Change test to use the new preshuffle_scale API and change all mxfp config to use mfma16  `[source-pr]`
+- [pr-aiter-490](sources/prs/aiter/PR-490.md) — Fix tests and benchmarking for preshuffled fp4  `[source-pr]`
+- [pr-aiter-533](sources/prs/aiter/PR-533.md) — [TRITON]: Fp4gemm m=256 tuning  `[source-pr]`
+- [pr-aiter-558](sources/prs/aiter/PR-558.md) — [TRITON]: Gemm refactor  `[source-pr]`
+- [pr-aiter-591](sources/prs/aiter/PR-591.md) — Pa rocm refresh4  `[source-pr]`
+- [pr-aiter-595](sources/prs/aiter/PR-595.md) — [TRITON]: add json config and refactor  `[source-pr]`
+- [pr-aiter-607](sources/prs/aiter/PR-607.md) — [Triton] DS fused custom ops  `[source-pr]`
+- [pr-aiter-610](sources/prs/aiter/PR-610.md) — [TRITON]: Moe tuning mi350  `[source-pr]`
+- [pr-aiter-650](sources/prs/aiter/PR-650.md) — [TRITON]: Benchmarking scripts updates  `[source-pr]`
+- [pr-aiter-652](sources/prs/aiter/PR-652.md) — Optimize topksoftmax WARPS_PER_TB for higher occupancy and remove redundant precision conversion  `[source-pr]`
+- [pr-aiter-669](sources/prs/aiter/PR-669.md) — Update CK  `[source-pr]`
+- [pr-aiter-709](sources/prs/aiter/PR-709.md) — [TRITON] shaoclee/triton gemm a8w8 dev  `[source-pr]`
+- [pr-aiter-720](sources/prs/aiter/PR-720.md) — [TRITON]: MLA and Lean Attention updates  `[source-pr]`
+- [pr-aiter-729](sources/prs/aiter/PR-729.md) — [TRITON]: Add logging info to Triton Kernels  `[source-pr]`
+- [pr-aiter-736](sources/prs/aiter/PR-736.md) — [TRITON]: Add fused GEMMs to optimize FF block  `[source-pr]`
+- [pr-aiter-743](sources/prs/aiter/PR-743.md) — [TRITON]: Clear cache allocator in Triton tests  `[source-pr]`
+- [pr-aiter-790](sources/prs/aiter/PR-790.md) — [TRITON] Moe fp8 tuning mi350  `[source-pr]`
+- [pr-composable_kernel-1152](sources/prs/composable_kernel/PR-1152.md) — Add support for more Navi2x and Navi3x models.  `[source-pr]`
+- [pr-composable_kernel-1262](sources/prs/composable_kernel/PR-1262.md) — [GEMM] UniversalGemm update  `[source-pr]`
+- [pr-composable_kernel-128](sources/prs/composable_kernel/PR-128.md) — Gemm+Reduce Fusion  `[source-pr]`
+- [pr-composable_kernel-1295](sources/prs/composable_kernel/PR-1295.md) — [CK_TILE] support group from cmdline  `[source-pr]`
+- [pr-composable_kernel-1297](sources/prs/composable_kernel/PR-1297.md) — aggregate device macros in ck_tile config header.  `[source-pr]`
+- [pr-composable_kernel-1338](sources/prs/composable_kernel/PR-1338.md) — [CK_TILE] fmha forward split-kv + combine kernels  `[source-pr]`
+- [pr-composable_kernel-1360](sources/prs/composable_kernel/PR-1360.md) — Universal streamk with atomics  `[source-pr]`
+- [pr-composable_kernel-1387](sources/prs/composable_kernel/PR-1387.md) — [CK_TILE] Add PagedAttention kernels  `[source-pr]`
+- [pr-composable_kernel-1397](sources/prs/composable_kernel/PR-1397.md) — [CK_TILE] FA bwd kernels optimization  `[source-pr]`
+- [pr-composable_kernel-1528](sources/prs/composable_kernel/PR-1528.md) — Add a gpu gemm reference kernel  `[source-pr]`
+- [pr-composable_kernel-1588](sources/prs/composable_kernel/PR-1588.md) — [CK_TILE] More fmha splitkv optimizations  `[source-pr]`
+- [pr-composable_kernel-1608](sources/prs/composable_kernel/PR-1608.md) — [CK_TILE] Add fmha fwd headdim96 support  `[source-pr]`
+- [pr-composable_kernel-1665](sources/prs/composable_kernel/PR-1665.md) — universal streamk fp8 changes  `[source-pr]`
+- [pr-composable_kernel-1705](sources/prs/composable_kernel/PR-1705.md) — [CK_TILE] Add fmha fwd N-Warp S-Shuffle pipeline (fmha fwd splitkv pipeline variant)  `[source-pr]`
+- [pr-composable_kernel-1770](sources/prs/composable_kernel/PR-1770.md) — Promote develop into amd-develop  `[source-pr]`
+- [pr-composable_kernel-1789](sources/prs/composable_kernel/PR-1789.md) — [CK_TILE] fmha fwd splitkv optimization for decode (seqlen_q=1)  `[source-pr]`
+- [pr-composable_kernel-2145](sources/prs/composable_kernel/PR-2145.md) — Stream-K Reduction option as Runtime parameter and Compilation Error Fix (SK- Reduction)  `[source-pr]`
+- [pr-composable_kernel-2146](sources/prs/composable_kernel/PR-2146.md) — [CK_TILE] Grouped GEMM tile loop  `[source-pr]`
+- [pr-composable_kernel-2163](sources/prs/composable_kernel/PR-2163.md) — [CK_TILE] Add logits soft-capping & customization support to the FMHA forward kernel/pipelines  `[source-pr]`
+- [pr-composable_kernel-2191](sources/prs/composable_kernel/PR-2191.md) — [CK_TILE] Tile loop persistent gemm kernel  `[source-pr]`
+- [pr-composable_kernel-2246](sources/prs/composable_kernel/PR-2246.md) — [CK_TILE] Support for elementwise kernel  `[source-pr]`
+- [pr-composable_kernel-2280](sources/prs/composable_kernel/PR-2280.md) — Merge 'amd-develop' till 29574f05f into amd-master  `[source-pr]`
+- [pr-composable_kernel-2293](sources/prs/composable_kernel/PR-2293.md) — Revert '[CK_TILE] Tile loop persistent gemm kernel'  `[source-pr]`
+- [pr-composable_kernel-2299](sources/prs/composable_kernel/PR-2299.md) — [CK_TILE] Tileloop persistent gemm - resubmit  `[source-pr]`
+- [pr-composable_kernel-2319](sources/prs/composable_kernel/PR-2319.md) — Implement batched gemm wmma (RDNA batched gemm) based on wmma cshuffle v3  `[source-pr]`
+- [pr-composable_kernel-2389](sources/prs/composable_kernel/PR-2389.md) — [CK_TILE] Eliminate fmha batch_prefill warning caused by failed to meet occupancy requirement  `[source-pr]`
+- [pr-composable_kernel-2405](sources/prs/composable_kernel/PR-2405.md) — ck tile pagedkv prefill  `[source-pr]`
+- [pr-composable_kernel-2434](sources/prs/composable_kernel/PR-2434.md) — Merge flatmm Operator with universal gemm  `[source-pr]`
+- [pr-composable_kernel-2491](sources/prs/composable_kernel/PR-2491.md) — Automatic deduction of split-K value for grouped convolution  `[source-pr]`
+- [pr-composable_kernel-2514](sources/prs/composable_kernel/PR-2514.md) — Revert '[CK_TILE] Eliminate fmha batch_prefill warning caused by failed to meet occupancy requirement'  `[source-pr]`
+- [pr-composable_kernel-2520](sources/prs/composable_kernel/PR-2520.md) — [CK_TILE] Introduces a new GEMM API that splits the existing basic GEMM class into multiple specialized classes.  `[source-pr]`
+- [pr-composable_kernel-2550](sources/prs/composable_kernel/PR-2550.md) — [CK_TILE] FMHA BWD Remove Unnecessary Padding  `[source-pr]`
+- [pr-composable_kernel-2628](sources/prs/composable_kernel/PR-2628.md) — [CK_TILE] FMHA BWD Optimization For GFX950  `[source-pr]`
+- [pr-composable_kernel-2643](sources/prs/composable_kernel/PR-2643.md) — [CK_TILE] FMHA BWD Decode Pipeline  `[source-pr]`
+- [pr-composable_kernel-2662](sources/prs/composable_kernel/PR-2662.md) — Add gemm universal f8 f8 bf16 instances on gfx950  `[source-pr]`
+- [pr-composable_kernel-2665](sources/prs/composable_kernel/PR-2665.md) — Add other layouts for FP8 block scaled gemm  `[source-pr]`
+- [pr-composable_kernel-2721](sources/prs/composable_kernel/PR-2721.md) — feat(grouped_gemm): add preshuffle v2 support to grouped gemm example  `[source-pr]`
+- [pr-composable_kernel-2781](sources/prs/composable_kernel/PR-2781.md) — [CK_TILE] Stream-K GEMM Implementation  `[source-pr]`
+- [pr-composable_kernel-2786](sources/prs/composable_kernel/PR-2786.md) — [CK_TILE] Implement Row/Col quant grouped gemm  `[source-pr]`
+- [pr-composable_kernel-2810](sources/prs/composable_kernel/PR-2810.md) — [CK_TILE] fix example reduces, permute and elementwise on gfx11 & gfx12  `[source-pr]`
+- [pr-composable_kernel-2825](sources/prs/composable_kernel/PR-2825.md) — implement device batched gemm b scale for wmma  `[source-pr]`
+- [pr-composable_kernel-2892](sources/prs/composable_kernel/PR-2892.md) — Add attn sink  `[source-pr]`
+- [pr-composable_kernel-2918](sources/prs/composable_kernel/PR-2918.md) — [CK_TILE] FMHA BWD Pad HDim to a Multiple of 8  `[source-pr]`
+- [pr-composable_kernel-2947](sources/prs/composable_kernel/PR-2947.md) — Wmma support for grouped convolution bwd weight  `[source-pr]`
+- [pr-composable_kernel-2964](sources/prs/composable_kernel/PR-2964.md) — Grouped convolution forward device implementation and base flavors for RDNA3/4  `[source-pr]`
+- [pr-composable_kernel-2989](sources/prs/composable_kernel/PR-2989.md) — WMMA gemm_add_relu_add_layernorm  `[source-pr]`
+- [pr-composable_kernel-3064](sources/prs/composable_kernel/PR-3064.md) — [CK_TILE] Stream-K operator() Reboot  `[source-pr]`
+- [pr-composable_kernel-3137](sources/prs/composable_kernel/PR-3137.md) — Fix splitk preshuffle  `[source-pr]`
+- [pr-composable_kernel-3145](sources/prs/composable_kernel/PR-3145.md) — Wmma support for gemm_reduce  `[source-pr]`
+- [pr-composable_kernel-3153](sources/prs/composable_kernel/PR-3153.md) — [CK_TILE][FMHA] Integrate FAv2 & FAv3 (WIP) in the single fmha_fwd() API  `[source-pr]`
+- [pr-composable_kernel-3202](sources/prs/composable_kernel/PR-3202.md) — [CK_TILE] Remove Old CK Tile Stream-K Artifacts  `[source-pr]`
+- [pr-composable_kernel-3206](sources/prs/composable_kernel/PR-3206.md) — Support fp8 dynamic quantization for fmha  `[source-pr]`
+- [pr-composable_kernel-3237](sources/prs/composable_kernel/PR-3237.md) — Add grouped gemm instances for RDNA4  `[source-pr]`
+- [pr-composable_kernel-3250](sources/prs/composable_kernel/PR-3250.md) — Revert 'Add attn sink'  `[source-pr]`
+- [pr-composable_kernel-3301](sources/prs/composable_kernel/PR-3301.md) — [CK_TILE] Port hw independent changes from internal repo to develop branch  `[source-pr]`
+- [pr-composable_kernel-3303](sources/prs/composable_kernel/PR-3303.md) — Implement grouped gemm fastgelu for RDNA4  `[source-pr]`
+- [pr-composable_kernel-3316](sources/prs/composable_kernel/PR-3316.md) — Wmma support for gemm_bias_add_reduce  `[source-pr]`
+- [pr-composable_kernel-3332](sources/prs/composable_kernel/PR-3332.md) — WMMA support for batched_gemm_reduce  `[source-pr]`
+- [pr-composable_kernel-3341](sources/prs/composable_kernel/PR-3341.md) — [CK_TILE][FMHA] Add sparse attention VSA  `[source-pr]`
+- [pr-composable_kernel-3351](sources/prs/composable_kernel/PR-3351.md) — [CK_TILE] Split-K autodeduction  `[source-pr]`
+- [pr-composable_kernel-3359](sources/prs/composable_kernel/PR-3359.md) — [CK-Tile] move out memory operation from cshuffle epilogue class  `[source-pr]`
+- [pr-composable_kernel-3368](sources/prs/composable_kernel/PR-3368.md) — Add attention sink support for FMHA FWD  `[source-pr]`
+- [pr-composable_kernel-3371](sources/prs/composable_kernel/PR-3371.md) — [CK_TILE] Stream-K Tree Reduction and Cache Skipping Integration  `[source-pr]`
+- [pr-composable_kernel-3442](sources/prs/composable_kernel/PR-3442.md) — [FMHA] Batch Prefill Support Improvements:  Change KV Cache Layout & Large Page Size Support  `[source-pr]`
+- [pr-composable_kernel-3452](sources/prs/composable_kernel/PR-3452.md) — [CKTILE] Support A/B Quantization in Blockscale Grouped Gemm  `[source-pr]`
+- [pr-composable_kernel-3465](sources/prs/composable_kernel/PR-3465.md) — Add support for direct store in epilogue and padding support for wave transfer without transpose  `[source-pr]`
+- [pr-composable_kernel-3512](sources/prs/composable_kernel/PR-3512.md) — [CK TILE] Refactor function amd_buffer_load_invalid_element_return_zero  `[source-pr]`
+- [pr-composable_kernel-3662](sources/prs/composable_kernel/PR-3662.md) — [CK_TILE] Stream-K Tile Engine Test Config File Generation  `[source-pr]`
+- [pr-composable_kernel-541](sources/prs/composable_kernel/PR-541.md) — [Navi3x-LWPCK-545] Block-wise GEMM + Real GEMM_WMMA_FP16  `[source-pr]`
+- [pr-composable_kernel-615](sources/prs/composable_kernel/PR-615.md) — Normalization/split k  `[source-pr]`
+- [pr-composable_kernel-783](sources/prs/composable_kernel/PR-783.md) — Split GEMM instance library & enable pipeline v2 optimization  `[source-pr]`
+- [pr-sglang-25898](sources/prs/sglang/PR-25898.md) — [AMD] Dsv4/pr1 fix run time issue  `[source-pr]`
+- [pr-sglang-26646](sources/prs/sglang/PR-26646.md) — [core] Make overlap-schedule WAR barrier CUDA-only  `[source-pr]`
+- [pr-triton-319](sources/prs/triton/PR-319.md) — Add waves_per_eu as kernel parameter  `[source-pr]`
+- [pr-triton-340](sources/prs/triton/PR-340.md) — [FA fwd D=128] Reduce LDS usage in epilogue  `[source-pr]`
+- [pr-triton-362](sources/prs/triton/PR-362.md) — [GEMM] [Tuning] Add `waves_per_eu` to gemm tuning  `[source-pr]`
+- [pr-triton-450](sources/prs/triton/PR-450.md) — [tool] Added a script to print occupancy info  `[source-pr]`
+- [pr-triton-614](sources/prs/triton/PR-614.md) — Copy *tune_gemm* from `triton-mlir` branch to `main_perf` branch  `[source-pr]`
+- [pr-triton-635](sources/prs/triton/PR-635.md) — Move utility tools from triton-mlir to main_perf branch  `[source-pr]`
+- [pr-triton-660](sources/prs/triton/PR-660.md) — Streamk v0.3  `[source-pr]`
+- [pr-triton-668](sources/prs/triton/PR-668.md) — rmsnorm optimization for M = 1  `[source-pr]`
+- [pr-triton-698](sources/prs/triton/PR-698.md) — Fold fp_to_fp op with zero constant input (#5007)  `[source-pr]`
+- [pr-triton-722](sources/prs/triton/PR-722.md) — Fix pid remapping logic when GRID_MN cannot divide NUM_XCDS  `[source-pr]`
 
 ## persistent-kernel
 
+- [pr-FlyDSL-454](sources/prs/FlyDSL/PR-454.md) — feat(pa): add persistent FP8 decode path  `[source-pr]`
+- [pr-Tensile-1091](sources/prs/Tensile/PR-1091.md) — GSU for BF16/FP16 high precision accumulation  `[source-pr]`
+- [pr-Tensile-1125](sources/prs/Tensile/PR-1125.md) — PersistentKernel with Prefetch  `[source-pr]`
+- [pr-Tensile-1132](sources/prs/Tensile/PR-1132.md) — BF16/FP16 HPA GSU with per GSU temp buffer  `[source-pr]`
+- [pr-Tensile-1163](sources/prs/Tensile/PR-1163.md) — Fix: Hold back some kick-out rules for rocBLAS library  `[source-pr]`
+- [pr-Tensile-1179](sources/prs/Tensile/PR-1179.md) — ROCm 3.10 merge develop into master  `[source-pr]`
+- [pr-Tensile-1181](sources/prs/Tensile/PR-1181.md) — Merging develop into gfx10  `[source-pr]`
+- [pr-Tensile-1184](sources/prs/Tensile/PR-1184.md) — develop merged in  `[source-pr]`
+- [pr-Tensile-1185](sources/prs/Tensile/PR-1185.md) — MatrixInstruction for general int8  `[source-pr]`
+- [pr-Tensile-1213](sources/prs/Tensile/PR-1213.md) — PersistentKernel Refine: Support PKn1, EPS, optimize LW-vmcnt, and sMagicDiv2  `[source-pr]`
+- [pr-Tensile-1228](sources/prs/Tensile/PR-1228.md) — implement General Batch GEMM in Tensile  `[source-pr]`
+- [pr-Tensile-1277](sources/prs/Tensile/PR-1277.md) — merge staging 7f365fa2 into master with GO from CQE  `[source-pr]`
+- [pr-Tensile-1327](sources/prs/Tensile/PR-1327.md) — Few fixes for PAP - waitcnt optimize, last tile, and StaggerU=0  `[source-pr]`
+- [pr-Tensile-1377](sources/prs/Tensile/PR-1377.md) — Add PrefetchAcrossPersistentMode  `[source-pr]`
+- [pr-Tensile-1383](sources/prs/Tensile/PR-1383.md) — ROCm 4.5 merge staging into master  `[source-pr]`
+- [pr-Tensile-1390](sources/prs/Tensile/PR-1390.md) — Initial version of DirectToVgpr support for DGEMM  `[source-pr]`
+- [pr-Tensile-1421](sources/prs/Tensile/PR-1421.md) — StoreCInUnroll support and fix for PrefetchAcrossPersistent + DirectToLds  `[source-pr]`
+- [pr-Tensile-1602](sources/prs/Tensile/PR-1602.md) — Unify SplitGlobalRead into ThreadSeparateGlobalRead and small fixes  `[source-pr]`
+- [pr-Tensile-1646](sources/prs/Tensile/PR-1646.md) — Fix AssertSummationElementMultiple + GlobalSplitU issues, the issue with InitAccVgprOpt improvement  `[source-pr]`
+- [pr-Tensile-1680](sources/prs/Tensile/PR-1680.md) — Speed up extended test runtime  `[source-pr]`
+- [pr-Tensile-1803](sources/prs/Tensile/PR-1803.md) — LdsPad optimization + new parameters for local read related optimizations  `[source-pr]`
+- [pr-Tensile-1934](sources/prs/Tensile/PR-1934.md) — Prediction model for optimal number of stream-k tiles to run  `[source-pr]`
+- [pr-Tensile-237](sources/prs/Tensile/PR-237.md) — Add PersistentKernel implementation  `[source-pr]`
+- [pr-Tensile-241](sources/prs/Tensile/PR-241.md) — Disable persistent by default  `[source-pr]`
+- [pr-Tensile-258](sources/prs/Tensile/PR-258.md) — Misc db  `[source-pr]`
+- [pr-Tensile-291](sources/prs/Tensile/PR-291.md) — Fix hpa beta  `[source-pr]`
+- [pr-Tensile-311](sources/prs/Tensile/PR-311.md) — merge with develop branch as of 2018-08-06  `[source-pr]`
+- [pr-Tensile-377](sources/prs/Tensile/PR-377.md) — Initial int8 code  `[source-pr]`
+- [pr-Tensile-462](sources/prs/Tensile/PR-462.md) — Feature persistent  `[source-pr]`
+- [pr-Tensile-470](sources/prs/Tensile/PR-470.md) — Smallk  `[source-pr]`
+- [pr-Tensile-484](sources/prs/Tensile/PR-484.md) — Fix nwgm  `[source-pr]`
+- [pr-Tensile-568](sources/prs/Tensile/PR-568.md) — OptNLL calls functionEnd instead of just s_endpgm  `[source-pr]`
+- [pr-Tensile-629](sources/prs/Tensile/PR-629.md) — Fixing builds for old YAML files without PersistentKernel parameter.  `[source-pr]`
+- [pr-Tensile-972](sources/prs/Tensile/PR-972.md) — re-factory Tensile to support all Matrix Instruction  `[source-pr]`
+- [pr-Tensile-981](sources/prs/Tensile/PR-981.md) — Reduce VGPR count for MI kernels  `[source-pr]`
+- [pr-Tensile-995](sources/prs/Tensile/PR-995.md) — disable pre_checkin/regression/persistent_kernel.yaml BoundsCheck for now  `[source-pr]`
+- [pr-aiter-1057](sources/prs/aiter/PR-1057.md) — fix mla metadata&reduce perf  `[source-pr]`
+- [pr-aiter-1233](sources/prs/aiter/PR-1233.md) — Mla splitkv enhance split alg inte  `[source-pr]`
+- [pr-aiter-1292](sources/prs/aiter/PR-1292.md) — [TRITON] GEMM kernels nomenclature changes  `[source-pr]`
+- [pr-aiter-1295](sources/prs/aiter/PR-1295.md) — [TRITON]  Apply config-aware naming (kernel_repr) to attention kernels  `[source-pr]`
+- [pr-aiter-1338](sources/prs/aiter/PR-1338.md) — Improve Memory Usage in MLA  `[source-pr]`
+- [pr-aiter-1357](sources/prs/aiter/PR-1357.md) — [Triton] Disable failing lean attention tests  `[source-pr]`
+- [pr-aiter-1390](sources/prs/aiter/PR-1390.md) — max mla splits perbatch  `[source-pr]`
+- [pr-aiter-1439](sources/prs/aiter/PR-1439.md) — fix_prebuiild_asm  `[source-pr]`
+- [pr-aiter-1450](sources/prs/aiter/PR-1450.md) — Fix issue: Add nhead=128 support to bf16 and align restrictions  `[source-pr]`
+- [pr-aiter-1472](sources/prs/aiter/PR-1472.md) — [MLA] fake non persistent feature for mi355  `[source-pr]`
+- [pr-aiter-1513](sources/prs/aiter/PR-1513.md) — Support PA persistent mode in AITER  `[source-pr]`
+- [pr-aiter-1541](sources/prs/aiter/PR-1541.md) — Add fused bias support for GMM and bias‑gradient/accumulate support for persistent TGMM  `[source-pr]`
+- [pr-aiter-1602](sources/prs/aiter/PR-1602.md) — [TRITON] Move triton_tests into respective folders  `[source-pr]`
+- [pr-aiter-1606](sources/prs/aiter/PR-1606.md) — Fix MLA issues in the case that nhead=128 and seqlen_q=2  `[source-pr]`
+- [pr-aiter-1616](sources/prs/aiter/PR-1616.md) — [fix]: Resolve perf regression of fused_ar_rms on MI300 and MI355  `[source-pr]`
+- [pr-aiter-1665](sources/prs/aiter/PR-1665.md) — [MLA] MLA conditions rewrite  `[source-pr]`
+- [pr-aiter-1677](sources/prs/aiter/PR-1677.md) — [MLA] fake non persistent fix dp causal  `[source-pr]`
+- [pr-aiter-1695](sources/prs/aiter/PR-1695.md) — add ntile 128 for a8 blkQ moe 1 stage  `[source-pr]`
+- [pr-aiter-1779](sources/prs/aiter/PR-1779.md) — Add nhead4 & nhead32 case to support `mla_reduce_v1` used in `pa_persistent_fwd`  `[source-pr]`
+- [pr-aiter-1787](sources/prs/aiter/PR-1787.md) — Support profiler pa and reduce kernel and remove p99 to use test_common  `[source-pr]`
+- [pr-aiter-1857](sources/prs/aiter/PR-1857.md) — feat(mla_prefill): enable asm mla_prefill with persistent mode for gfx950  `[source-pr]`
+- [pr-aiter-1866](sources/prs/aiter/PR-1866.md) — Fix code style after updating Black to 26.1.0  `[source-pr]`
+- [pr-aiter-1917](sources/prs/aiter/PR-1917.md) — mla ps support paged 64 and 3buffer layout for ds3.2  `[source-pr]`
+- [pr-aiter-1941](sources/prs/aiter/PR-1941.md) — Revert 'mla ps support paged 64 and 3buffer layout for ds3.2'  `[source-pr]`
+- [pr-aiter-1950](sources/prs/aiter/PR-1950.md) — mla ps support paged64 and 3buffer for ds3.2  `[source-pr]`
+- [pr-aiter-2025](sources/prs/aiter/PR-2025.md) — update ut  `[source-pr]`
+- [pr-aiter-2042](sources/prs/aiter/PR-2042.md) — upload mla_a8w8_qh64_qseqlen4_gqaratio16 co in MI300  `[source-pr]`
+- [pr-aiter-2106](sources/prs/aiter/PR-2106.md) — fix mla ps fp8 the kv_seq tail len < 4 nan error  `[source-pr]`
+- [pr-aiter-2128](sources/prs/aiter/PR-2128.md) — fix mla_a8w8_qh64_qseqlen4_gqaratio16_ps kv_len < 4 nan error in MI350  `[source-pr]`
+- [pr-aiter-2144](sources/prs/aiter/PR-2144.md) — mla ps mode -d fp8 -kvd fp8 -n 128,4 support return lse  `[source-pr]`
+- [pr-aiter-2149](sources/prs/aiter/PR-2149.md) — update MLA a8w8 qh32 kernel  `[source-pr]`
+- [pr-aiter-2215](sources/prs/aiter/PR-2215.md) — add decode_update_mla_metadata_v1 for quickly update mla_metadata  in the decoding  `[source-pr]`
+- [pr-aiter-2216](sources/prs/aiter/PR-2216.md) — [CK_TILE] FMHA BWD Use Persistent Kernels in Deterministic Mode  `[source-pr]`
+- [pr-aiter-228](sources/prs/aiter/PR-228.md) — Moe 2stages  `[source-pr]`
+- [pr-aiter-2316](sources/prs/aiter/PR-2316.md) — [TRITON]: Add gfx1250 arch enablement: fp8 support + test refactoring  `[source-pr]`
+- [pr-aiter-2378](sources/prs/aiter/PR-2378.md) — Add LSE-aware kernel dispatch for MLA  `[source-pr]`
+- [pr-aiter-2404](sources/prs/aiter/PR-2404.md) — Introduce asm 64x256 kernels for mi300  `[source-pr]`
+- [pr-aiter-2440](sources/prs/aiter/PR-2440.md) — Add LSE output support for MLA decode qseqlen=1 persistent kernel (gf…  `[source-pr]`
+- [pr-aiter-2461](sources/prs/aiter/PR-2461.md) — MI350 mla ps mode support nhead=8 mtp=4 feature  `[source-pr]`
+- [pr-aiter-2570](sources/prs/aiter/PR-2570.md) — MI350 MLA PS mode fold nhead64,2 to nhead32,4 kernel  `[source-pr]`
+- [pr-aiter-2581](sources/prs/aiter/PR-2581.md) — [FlyDSL] Optimize a4w4 MOE kernels  `[source-pr]`
+- [pr-aiter-2612](sources/prs/aiter/PR-2612.md) — [TRITON] Reduce MHA UTs  `[source-pr]`
+- [pr-aiter-2636](sources/prs/aiter/PR-2636.md) — Replace qseqlen fold with native qh64 kernel for nhead=64 decode on g…  `[source-pr]`
+- [pr-aiter-264](sources/prs/aiter/PR-264.md) — Add Triton MoE Persistent Kernel  `[source-pr]`
+- [pr-aiter-2676](sources/prs/aiter/PR-2676.md) — Add native qh32 qseqlen2 MLA PS kernel for gfx950 fp8 decode  `[source-pr]`
+- [pr-aiter-2727](sources/prs/aiter/PR-2727.md) — MI350 mla ps mode suppport nhead128,1 128,2 128,3 128,4 64,4 64,2 32,4 through kernel mla_a16w16_qh32_qseqlen4_gqaratio32_ps.co  `[source-pr]`
+- [pr-aiter-2729](sources/prs/aiter/PR-2729.md) — Add bf16 MLA decode kernel for gqa_ratio=64, qseqlen=1 (non-persistent)  `[source-pr]`
+- [pr-aiter-2775](sources/prs/aiter/PR-2775.md) — Xiaobing/gptoss small m  `[source-pr]`
+- [pr-aiter-2796](sources/prs/aiter/PR-2796.md) — Update gfx942&gfx950 PA PS kernels and write stride_scale_page in asm_pa  `[source-pr]`
+- [pr-aiter-284](sources/prs/aiter/PR-284.md) — xcd remapping utils and fixed accuracy issue when group_size_m = 8 persistent MoE  `[source-pr]`
+- [pr-aiter-2852](sources/prs/aiter/PR-2852.md) — MLA PS mode support nhead8,2 in MI308  `[source-pr]`
+- [pr-aiter-2917](sources/prs/aiter/PR-2917.md) — Add a new kernel that supports decode mla with sub_kv=64 and sub_qh=8  `[source-pr]`
+- [pr-aiter-2921](sources/prs/aiter/PR-2921.md) — [TRITON] Set RNG seed in Triton tests  `[source-pr]`
+- [pr-aiter-2927](sources/prs/aiter/PR-2927.md) — Re-enable the native qh128 fp8 kernel (mla_a8w8_qh128_m32x4_n16x2_msk…  `[source-pr]`
+- [pr-aiter-2967](sources/prs/aiter/PR-2967.md) — [TRITON] mHC-post: Apply post-stream and res-stream mixing  `[source-pr]`
+- [pr-aiter-2983](sources/prs/aiter/PR-2983.md) — [MLA] Fix nhead=32 non-persistent decode crash on gfx950  `[source-pr]`
+- [pr-aiter-301](sources/prs/aiter/PR-301.md) — Fa moe tuning  `[source-pr]`
+- [pr-aiter-3046](sources/prs/aiter/PR-3046.md) — Add nhead128,1 mask=1 to support mtp < 4, nhead128,4 fold to m16x4 kernel  `[source-pr]`
+- [pr-aiter-3063](sources/prs/aiter/PR-3063.md) — MI350 mla ps mode all bf16 cases no longer follow the folding logic and nhead64,1 use m16x4 kernel  `[source-pr]`
+- [pr-aiter-3072](sources/prs/aiter/PR-3072.md) — HK MLA: MI35x m16x8 retune, new m16x4 kernel, page_size + mask support  `[source-pr]`
+- [pr-aiter-3087](sources/prs/aiter/PR-3087.md) — perf(topk): optimize radix top-k kernel for MI308X and MI355X  `[source-pr]`
+- [pr-aiter-3117](sources/prs/aiter/PR-3117.md) — perf(flydsl): MXFP4 fused-MoE stage2 optimization for EP prefill  `[source-pr]`
+- [pr-aiter-3187](sources/prs/aiter/PR-3187.md) — [TRITON] Remove precision ieee from non-F32 tl.dots  `[source-pr]`
+- [pr-aiter-3233](sources/prs/aiter/PR-3233.md) — Fix TP4 bf16 MLA persistent dispatch  `[source-pr]`
+- [pr-aiter-3310](sources/prs/aiter/PR-3310.md) — Fix fp8 sparse MLA folded batch mapping  `[source-pr]`
+- [pr-aiter-3338](sources/prs/aiter/PR-3338.md) — Add GFX950 BF16 MLA persistent kernels for GQA 16/32 qseqlen4  `[source-pr]`
+- [pr-aiter-3365](sources/prs/aiter/PR-3365.md) — Revert 'Fix TP4 bf16 MLA persistent dispatch (#3233)'-MI355 mla bf16 nhead32,1 go through m32x4 kernel  `[source-pr]`
+- [pr-aiter-3386](sources/prs/aiter/PR-3386.md) — make a8w8 preshuffle gemm support zero bias input  `[source-pr]`
+- [pr-aiter-610](sources/prs/aiter/PR-610.md) — [TRITON]: Moe tuning mi350  `[source-pr]`
+- [pr-aiter-729](sources/prs/aiter/PR-729.md) — [TRITON]: Add logging info to Triton Kernels  `[source-pr]`
+- [pr-aiter-743](sources/prs/aiter/PR-743.md) — [TRITON]: Clear cache allocator in Triton tests  `[source-pr]`
+- [pr-aiter-837](sources/prs/aiter/PR-837.md) — add moe 1stage implementation to tune  `[source-pr]`
+- [pr-aiter-852](sources/prs/aiter/PR-852.md) — [TRITON]: Reduce usage of hardcoded XCD  `[source-pr]`
+- [pr-composable_kernel-1360](sources/prs/composable_kernel/PR-1360.md) — Universal streamk with atomics  `[source-pr]`
+- [pr-composable_kernel-2146](sources/prs/composable_kernel/PR-2146.md) — [CK_TILE] Grouped GEMM tile loop  `[source-pr]`
+- [pr-composable_kernel-2191](sources/prs/composable_kernel/PR-2191.md) — [CK_TILE] Tile loop persistent gemm kernel  `[source-pr]`
+- [pr-composable_kernel-2219](sources/prs/composable_kernel/PR-2219.md) — [CK_TILE] Multiple-D GEMM example  `[source-pr]`
+- [pr-composable_kernel-2222](sources/prs/composable_kernel/PR-2222.md) — [CK_TILE] Move GEMM pipeline tail handling logic to pipelines  `[source-pr]`
+- [pr-composable_kernel-2234](sources/prs/composable_kernel/PR-2234.md) — Add catch blocks in example GEMM apps to enable better error handling (Issue: 1928)  `[source-pr]`
+- [pr-composable_kernel-2276](sources/prs/composable_kernel/PR-2276.md) — Code drop for 2 warp ping pong scheduler along K dimension.  `[source-pr]`
+- [pr-composable_kernel-2293](sources/prs/composable_kernel/PR-2293.md) — Revert '[CK_TILE] Tile loop persistent gemm kernel'  `[source-pr]`
+- [pr-composable_kernel-2299](sources/prs/composable_kernel/PR-2299.md) — [CK_TILE] Tileloop persistent gemm - resubmit  `[source-pr]`
+- [pr-composable_kernel-2300](sources/prs/composable_kernel/PR-2300.md) — [CK_TILE] Enable persistent kernel and tail handler in tile_engine  `[source-pr]`
+- [pr-composable_kernel-2434](sources/prs/composable_kernel/PR-2434.md) — Merge flatmm Operator with universal gemm  `[source-pr]`
+- [pr-composable_kernel-2466](sources/prs/composable_kernel/PR-2466.md) — [CK_TILE] CK_TILE GEMM WMMA Support for GFX11/GFX12  `[source-pr]`
+- [pr-composable_kernel-2520](sources/prs/composable_kernel/PR-2520.md) — [CK_TILE] Introduces a new GEMM API that splits the existing basic GEMM class into multiple specialized classes.  `[source-pr]`
+- [pr-composable_kernel-2524](sources/prs/composable_kernel/PR-2524.md) — Update to gpu_timer for rotating_buffer  `[source-pr]`
+- [pr-composable_kernel-2593](sources/prs/composable_kernel/PR-2593.md) — [CK_Tile] Updating gpu timer when doing flush cache  `[source-pr]`
+- [pr-composable_kernel-2605](sources/prs/composable_kernel/PR-2605.md) — Persistent grouped gemm CompV4 Enablement & Polish  `[source-pr]`
+- [pr-composable_kernel-2631](sources/prs/composable_kernel/PR-2631.md) — Cleanups  `[source-pr]`
+- [pr-composable_kernel-2655](sources/prs/composable_kernel/PR-2655.md) — Finish the grouped gemm restructure with fp8 data type  `[source-pr]`
+- [pr-composable_kernel-2697](sources/prs/composable_kernel/PR-2697.md) — [CK Tile] gemm splitk two stage  `[source-pr]`
+- [pr-composable_kernel-2721](sources/prs/composable_kernel/PR-2721.md) — feat(grouped_gemm): add preshuffle v2 support to grouped gemm example  `[source-pr]`
+- [pr-composable_kernel-2786](sources/prs/composable_kernel/PR-2786.md) — [CK_TILE] Implement Row/Col quant grouped gemm  `[source-pr]`
+- [pr-composable_kernel-2821](sources/prs/composable_kernel/PR-2821.md) — [CK_TILE] Enable ck_tile tests on gfx11 and gfx12  `[source-pr]`
+- [pr-composable_kernel-2897](sources/prs/composable_kernel/PR-2897.md) — [CK TILE GEMM] Support Aquant GEMM with transposeC and preshuffle  `[source-pr]`
+- [pr-composable_kernel-2919](sources/prs/composable_kernel/PR-2919.md) — Ck tile engine preshuffle  `[source-pr]`
+- [pr-composable_kernel-2923](sources/prs/composable_kernel/PR-2923.md) — Integrate Multi D GEMMs into Grouped GEMMs along with unit tests  `[source-pr]`
+- [pr-composable_kernel-2933](sources/prs/composable_kernel/PR-2933.md) — Extend Grouped GEMM with MultiD (Single & Double Shared Memory) feature to use persistent kernel option  `[source-pr]`
+- [pr-composable_kernel-2941](sources/prs/composable_kernel/PR-2941.md) — tests: add unit tests for grouped_gemm_multi_d persistent kernels  `[source-pr]`
+- [pr-composable_kernel-2963](sources/prs/composable_kernel/PR-2963.md) — Lwpck 3550: Implement and test fixed precision fp8 x bf8  `[source-pr]`
+- [pr-composable_kernel-2974](sources/prs/composable_kernel/PR-2974.md) — Streamk functional tests  `[source-pr]`
+- [pr-composable_kernel-2977](sources/prs/composable_kernel/PR-2977.md) — Sync Barrier for persistent kernel  `[source-pr]`
+- [pr-composable_kernel-2981](sources/prs/composable_kernel/PR-2981.md) — [CK_TILE] Switch into universal gemms for conv bwds  `[source-pr]`
+- [pr-composable_kernel-2982](sources/prs/composable_kernel/PR-2982.md) — Ck tile engine gemm  `[source-pr]`
+- [pr-composable_kernel-2986](sources/prs/composable_kernel/PR-2986.md) — [CK_Tile] Merge multiple convolution groups into a single GEMM batch  `[source-pr]`
+- [pr-composable_kernel-3008](sources/prs/composable_kernel/PR-3008.md) — Handle JSON boolean values in gemm_instance_builder.py  `[source-pr]`
+- [pr-composable_kernel-3018](sources/prs/composable_kernel/PR-3018.md) — [CK_TILE] Stream-K Tile Partitioner Reboot  `[source-pr]`
+- [pr-composable_kernel-3022](sources/prs/composable_kernel/PR-3022.md) — [CK_TILE] Update flatmm related kernels  `[source-pr]`
+- [pr-composable_kernel-3041](sources/prs/composable_kernel/PR-3041.md) — [CK_TILE] Stream-K Gemm Example for fp8 and bf8  `[source-pr]`
+- [pr-composable_kernel-3064](sources/prs/composable_kernel/PR-3064.md) — [CK_TILE] Stream-K operator() Reboot  `[source-pr]`
+- [pr-composable_kernel-3080](sources/prs/composable_kernel/PR-3080.md) — [CK_TILE] Add mxfp4 flatmm  `[source-pr]`
+- [pr-composable_kernel-3107](sources/prs/composable_kernel/PR-3107.md) — Introduces the new partitioner to implement the reduction StreamK kernel.  `[source-pr]`
+- [pr-composable_kernel-3146](sources/prs/composable_kernel/PR-3146.md) — [CK_TILE] Move DataTypeTraits into a Common File  `[source-pr]`
+- [pr-composable_kernel-3151](sources/prs/composable_kernel/PR-3151.md) — [CK TILE] Refactor Conv configs and Conv Elementwise  `[source-pr]`
+- [pr-composable_kernel-3157](sources/prs/composable_kernel/PR-3157.md) — Tile engine for streamk  `[source-pr]`
+- [pr-composable_kernel-3183](sources/prs/composable_kernel/PR-3183.md) — [CK_BUILDER] Add grouped conv fwd ck tile traits  `[source-pr]`
+- [pr-composable_kernel-3186](sources/prs/composable_kernel/PR-3186.md) — [CK_TILE] Fix block_scale gemm on gfx12  `[source-pr]`
+- [pr-composable_kernel-3202](sources/prs/composable_kernel/PR-3202.md) — [CK_TILE] Remove Old CK Tile Stream-K Artifacts  `[source-pr]`
+- [pr-composable_kernel-3207](sources/prs/composable_kernel/PR-3207.md) — [CK_TILE] MX Flatmm Split kernel instances  `[source-pr]`
+- [pr-composable_kernel-3208](sources/prs/composable_kernel/PR-3208.md) — [CK_TILE] Add Flatmm MX FP8  `[source-pr]`
+- [pr-composable_kernel-3251](sources/prs/composable_kernel/PR-3251.md) — [CK-Tile] Refactor base pipeline usage  `[source-pr]`
+- [pr-composable_kernel-3301](sources/prs/composable_kernel/PR-3301.md) — [CK_TILE] Port hw independent changes from internal repo to develop branch  `[source-pr]`
+- [pr-composable_kernel-3311](sources/prs/composable_kernel/PR-3311.md) — [ck_tile] remove duplicate functions in ck_tile  `[source-pr]`
+- [pr-composable_kernel-3330](sources/prs/composable_kernel/PR-3330.md) — Fp8 block scale quantization for fmha  fwd  `[source-pr]`
+- [pr-composable_kernel-3337](sources/prs/composable_kernel/PR-3337.md) — [CK Tile] Grouped GEMM aquant mode and non-persistent kernel  `[source-pr]`
+- [pr-composable_kernel-3342](sources/prs/composable_kernel/PR-3342.md) — Merge some updates for ck_tile headers  `[source-pr]`
+- [pr-composable_kernel-3359](sources/prs/composable_kernel/PR-3359.md) — [CK-Tile] move out memory operation from cshuffle epilogue class  `[source-pr]`
+- [pr-composable_kernel-3401](sources/prs/composable_kernel/PR-3401.md) — [CK_TILE] Add FP8xF4 Flatmm  `[source-pr]`
+- [pr-composable_kernel-3414](sources/prs/composable_kernel/PR-3414.md) — [CK_TILE] Grouped gemm quant tensor layouts  `[source-pr]`
+- [pr-composable_kernel-3452](sources/prs/composable_kernel/PR-3452.md) — [CKTILE] Support A/B Quantization in Blockscale Grouped Gemm  `[source-pr]`
+- [pr-composable_kernel-3520](sources/prs/composable_kernel/PR-3520.md) — [CK-Tile] add persistent async input scheduler parameters to kernel device-side and host-side args  `[source-pr]`
+- [pr-composable_kernel-3601](sources/prs/composable_kernel/PR-3601.md) — Mx fp6 flatmm  `[source-pr]`
+- [pr-composable_kernel-3603](sources/prs/composable_kernel/PR-3603.md) — [CK_Tile] Support for a4w4 (fp4) in block scale gemm AB quant  `[source-pr]`
+- [pr-composable_kernel-3633](sources/prs/composable_kernel/PR-3633.md) — Revert ' Fp8 block scale quantization for fmha  fwd'  `[source-pr]`
+- [pr-composable_kernel-3635](sources/prs/composable_kernel/PR-3635.md) — Revert 'Revert ' Fp8 block scale quantization for fmha  fwd''  `[source-pr]`
+- [pr-composable_kernel-3662](sources/prs/composable_kernel/PR-3662.md) — [CK_TILE] Stream-K Tile Engine Test Config File Generation  `[source-pr]`
+- [pr-composable_kernel-915](sources/prs/composable_kernel/PR-915.md) — Use hipGraph capturing and replaying method for forward verification in examples/52_xxx  `[source-pr]`
+- [pr-sglang-23975](sources/prs/sglang/PR-23975.md) — Fix LFM2 ShortConv Mamba State Indexing  `[source-pr]`
+- [pr-triton-579](sources/prs/triton/PR-579.md) — new stream-k kernel implementations  `[source-pr]`
+- [pr-triton-607](sources/prs/triton/PR-607.md) — non atomic implementation of stream-k  `[source-pr]`
+- [pr-triton-619](sources/prs/triton/PR-619.md) — streamk v0.1  `[source-pr]`
+- [pr-triton-660](sources/prs/triton/PR-660.md) — Streamk v0.3  `[source-pr]`
+- [pr-triton-670](sources/prs/triton/PR-670.md) — persistent kernel version of the flash attention forward + FLOP calculation fix when seqlen_q != seqlen_k  `[source-pr]`
+- [pr-triton-676](sources/prs/triton/PR-676.md) — implement persistent loop based rmsnorm kernel  `[source-pr]`
+- [pr-triton-686](sources/prs/triton/PR-686.md) — enable stream pipeline for persistent rmsnorm kernel  `[source-pr]`
+- [pr-triton-689](sources/prs/triton/PR-689.md) — stream-k v0.4  `[source-pr]`
+- [pr-triton-843](sources/prs/triton/PR-843.md) — Fix perfCI for streamk/persistent gemm on gfx950  `[source-pr]`
+- [pr-vllm-36574](sources/prs/vllm/PR-36574.md) — [ROCm] Utilize persistent MLA kernel from AITER  `[source-pr]`
+- [pr-vllm-37128](sources/prs/vllm/PR-37128.md) — [MoE Refactor] Mxfp4 oracle rebased  `[source-pr]`
+- [pr-vllm-37833](sources/prs/vllm/PR-37833.md) — [ROCm] Fix MoE kernel test failures on gfx950  `[source-pr]`
+- [pr-vllm-38615](sources/prs/vllm/PR-38615.md) — [ROCm] Fix aiter persistent mode mla with q/o nhead<16 for kimi-k2.5 tp8  `[source-pr]`
+- [pr-vllm-40159](sources/prs/vllm/PR-40159.md) — [MyPy] Enable mypy for `vllm/model_executor/layers/`  `[source-pr]`
+- [pr-vllm-41990](sources/prs/vllm/PR-41990.md) — enable persistent mla for sparse mla backend  `[source-pr]`
+- [pr-vllm-42509](sources/prs/vllm/PR-42509.md) — [ROCm][MLA] FP8 ASM prefill for AITER dense MLA backend on gfx950  `[source-pr]`
 - [kernel-bandwidth-microbench](wiki/kernels/bandwidth-microbench.md) — HBM Bandwidth Microbenchmark (float4 non-temporal persistent read)  `[wiki-kernel]`
 - [kernel-vector-add-asm](wiki/kernels/vector-add-asm.md) — Persistent Vector Add in GCN Assembly (async direct-to-LDS, double-buffered)  `[wiki-kernel]`
 
 ## preshuffle-layout
 
+- [pr-FlyDSL-108](sources/prs/FlyDSL/PR-108.md) — enable async_copy  for preshuffled gemm and some refactor.  `[source-pr]`
+- [pr-FlyDSL-123](sources/prs/FlyDSL/PR-123.md) — support mi308 async load and fix bug  `[source-pr]`
+- [pr-FlyDSL-13](sources/prs/FlyDSL/PR-13.md) — Dev/gemm opt  `[source-pr]`
+- [pr-FlyDSL-131](sources/prs/FlyDSL/PR-131.md) — Fix test coverage  `[source-pr]`
+- [pr-FlyDSL-132](sources/prs/FlyDSL/PR-132.md) — fix a4w4 test  `[source-pr]`
+- [pr-FlyDSL-139](sources/prs/FlyDSL/PR-139.md) — optimize buffer_load lds pipeline. Now it can interleave with mfma.  `[source-pr]`
+- [pr-FlyDSL-14](sources/prs/FlyDSL/PR-14.md) — Dev/gemm opt decode  `[source-pr]`
+- [pr-FlyDSL-141](sources/prs/FlyDSL/PR-141.md) — mxfp4 preshuffled gemm optimize  `[source-pr]`
+- [pr-FlyDSL-143](sources/prs/FlyDSL/PR-143.md) — W4a16 bf16 fp8 bf16 moe  `[source-pr]`
+- [pr-FlyDSL-145](sources/prs/FlyDSL/PR-145.md) — Pre v0.1 gemm  `[source-pr]`
+- [pr-FlyDSL-153](sources/prs/FlyDSL/PR-153.md) — Pre v0.1 gemm fix  `[source-pr]`
+- [pr-FlyDSL-158](sources/prs/FlyDSL/PR-158.md) — use abs import for correct importing kernels from wheel  `[source-pr]`
+- [pr-FlyDSL-167](sources/prs/FlyDSL/PR-167.md) — So/a8w8 bpreshuffle  `[source-pr]`
+- [pr-FlyDSL-177](sources/prs/FlyDSL/PR-177.md) — Dev blockscale new api  `[source-pr]`
+- [pr-FlyDSL-179](sources/prs/FlyDSL/PR-179.md) — fix  `[source-pr]`
+- [pr-FlyDSL-191](sources/prs/FlyDSL/PR-191.md) — Refine code  `[source-pr]`
+- [pr-FlyDSL-196](sources/prs/FlyDSL/PR-196.md) — refine kernel code  `[source-pr]`
+- [pr-FlyDSL-197](sources/prs/FlyDSL/PR-197.md) — clean codes and wrap numerics in bufferops  `[source-pr]`
+- [pr-FlyDSL-204](sources/prs/FlyDSL/PR-204.md) — support bf16 for a8w8  `[source-pr]`
+- [pr-FlyDSL-21](sources/prs/FlyDSL/PR-21.md) — Felix/dev  `[source-pr]`
+- [pr-FlyDSL-234](sources/prs/FlyDSL/PR-234.md) — improve mxfp4 preshuffled gemm  `[source-pr]`
+- [pr-FlyDSL-248](sources/prs/FlyDSL/PR-248.md) — improved preshuffed gemm with async copy  `[source-pr]`
+- [pr-FlyDSL-250](sources/prs/FlyDSL/PR-250.md) — 【2/N】add support wmma kernels for RDNA4(GFX1201)  `[source-pr]`
+- [pr-FlyDSL-259](sources/prs/FlyDSL/PR-259.md) — preshuffled gemm iglp  `[source-pr]`
+- [pr-FlyDSL-26](sources/prs/FlyDSL/PR-26.md) — change gemm code style  `[source-pr]`
+- [pr-FlyDSL-261](sources/prs/FlyDSL/PR-261.md) — fix cache tag bug  `[source-pr]`
+- [pr-FlyDSL-262](sources/prs/FlyDSL/PR-262.md) — feat: support explicit kernel name in @flyc.kernel for profiler visib…  `[source-pr]`
+- [pr-FlyDSL-27](sources/prs/FlyDSL/PR-27.md) — Dev/gemm flir  `[source-pr]`
+- [pr-FlyDSL-270](sources/prs/FlyDSL/PR-270.md) — Refine kernel code  `[source-pr]`
+- [pr-FlyDSL-278](sources/prs/FlyDSL/PR-278.md) — [Compiler][Kernel][MI450]Rebase gfx1250 WMMA/mcast/mxfp4 support onto main  `[source-pr]`
+- [pr-FlyDSL-28](sources/prs/FlyDSL/PR-28.md) — Dev/gemm flir  `[source-pr]`
+- [pr-FlyDSL-297](sources/prs/FlyDSL/PR-297.md) — [FEAT] Add ir.Value caster for dsl types  `[source-pr]`
+- [pr-FlyDSL-299](sources/prs/FlyDSL/PR-299.md) — add flyc.compile to optimize launch  `[source-pr]`
+- [pr-FlyDSL-30](sources/prs/FlyDSL/PR-30.md) — Python wrapper refine  `[source-pr]`
+- [pr-FlyDSL-300](sources/prs/FlyDSL/PR-300.md) — [FlyDSL] fused RoPE kernel with layout APIs  `[source-pr]`
+- [pr-FlyDSL-31](sources/prs/FlyDSL/PR-31.md) — Python wrapper refine  `[source-pr]`
+- [pr-FlyDSL-318](sources/prs/FlyDSL/PR-318.md) — feat(moe): Add MoE FP4 GEMM 2-stage kernel with benchmark and perf optimizations  `[source-pr]`
+- [pr-FlyDSL-32](sources/prs/FlyDSL/PR-32.md) — Dev/gemm refactor  `[source-pr]`
+- [pr-FlyDSL-331](sources/prs/FlyDSL/PR-331.md) — [gfx1250] Unified MXFP8/MXFP4/A8W4 GEMM kernel  `[source-pr]`
+- [pr-FlyDSL-346](sources/prs/FlyDSL/PR-346.md) — [FLYDSL]: if dispatch dynamic tests refactor  `[source-pr]`
+- [pr-FlyDSL-350](sources/prs/FlyDSL/PR-350.md) — [FEAT] Export TileType to python level, remove MakeTileOp  `[source-pr]`
+- [pr-FlyDSL-36](sources/prs/FlyDSL/PR-36.md) — fix unittest on MI355  `[source-pr]`
+- [pr-FlyDSL-369](sources/prs/FlyDSL/PR-369.md) — [FEAT] Update BufferCopy has a soffset as state  `[source-pr]`
+- [pr-FlyDSL-37](sources/prs/FlyDSL/PR-37.md) — Dev/int4 moe  `[source-pr]`
+- [pr-FlyDSL-370](sources/prs/FlyDSL/PR-370.md) — Pr/a16wi4 group  `[source-pr]`
+- [pr-FlyDSL-388](sources/prs/FlyDSL/PR-388.md) — [Perf] Port mixed_moe kernel optimizations for stage1/stage2  `[source-pr]`
+- [pr-FlyDSL-399](sources/prs/FlyDSL/PR-399.md) — Add MakeFragmentLayoutLikeOp, improve robustness of prim funcs  `[source-pr]`
+- [pr-FlyDSL-404](sources/prs/FlyDSL/PR-404.md) — Add fused epilogue support to preshuffle GEMM: bias + ReLU/SiLU/GeLU  `[source-pr]`
+- [pr-FlyDSL-410](sources/prs/FlyDSL/PR-410.md) — [OPT] Add pass promote-regmem-to-vectorssa  `[source-pr]`
+- [pr-FlyDSL-412](sources/prs/FlyDSL/PR-412.md) — Adds Grouped GEMM kernels matching DeepGEMM API  `[source-pr]`
+- [pr-FlyDSL-422](sources/prs/FlyDSL/PR-422.md) — Port v2 gemm to main  `[source-pr]`
+- [pr-FlyDSL-427](sources/prs/FlyDSL/PR-427.md) — [OPT] Add fly-int-swizzle-simplify pass  `[source-pr]`
+- [pr-FlyDSL-435](sources/prs/FlyDSL/PR-435.md) — Refine hgemm split-k kernel  `[source-pr]`
+- [pr-FlyDSL-437](sources/prs/FlyDSL/PR-437.md) — [FlyOp] Add stages args for MmaMakeFragment to simplify multi-stages allocation  `[source-pr]`
+- [pr-FlyDSL-439](sources/prs/FlyDSL/PR-439.md) — fix gemm type to internal  `[source-pr]`
+- [pr-FlyDSL-445](sources/prs/FlyDSL/PR-445.md) — Use internal types in RDNA GEMM kernels  `[source-pr]`
+- [pr-FlyDSL-447](sources/prs/FlyDSL/PR-447.md) — Port kernels internal types except moe  `[source-pr]`
+- [pr-FlyDSL-448](sources/prs/FlyDSL/PR-448.md) — Reduce redundant FlyDSL numeric wrappers  `[source-pr]`
+- [pr-FlyDSL-457](sources/prs/FlyDSL/PR-457.md) — Add unit/value_attrs params for KernelFunction  `[source-pr]`
+- [pr-FlyDSL-465](sources/prs/FlyDSL/PR-465.md) — some optimization about smoothquant moe  `[source-pr]`
+- [pr-FlyDSL-466](sources/prs/FlyDSL/PR-466.md) — add xcd remap  `[source-pr]`
+- [pr-FlyDSL-477](sources/prs/FlyDSL/PR-477.md) — use layout to calculate num_ds_load and num_gmem_load  `[source-pr]`
+- [pr-FlyDSL-480](sources/prs/FlyDSL/PR-480.md) — [Bugfix] [Test] add missing argument to test_blockscale_preshuffle_gemm  `[source-pr]`
+- [pr-FlyDSL-505](sources/prs/FlyDSL/PR-505.md) — [Kernel] Add 4 Wave Interleave FP8 GEMM  `[source-pr]`
+- [pr-FlyDSL-52](sources/prs/FlyDSL/PR-52.md) — add mfma_scale instruction and cshuffle opt for MI355  `[source-pr]`
+- [pr-FlyDSL-520](sources/prs/FlyDSL/PR-520.md) — Preshuffle fp8 4wave main  `[source-pr]`
+- [pr-FlyDSL-523](sources/prs/FlyDSL/PR-523.md) — [Enh] enable numRecords field in the bufferRsrc for dynamic tensor  `[source-pr]`
+- [pr-FlyDSL-524](sources/prs/FlyDSL/PR-524.md) — [Enh] Add shortcut make_rmem_tensor for allocate register tensor  `[source-pr]`
+- [pr-FlyDSL-541](sources/prs/FlyDSL/PR-541.md) — [Refactor] Migrate kernels from SmemAllocator to SharedAllocator  `[source-pr]`
+- [pr-FlyDSL-554](sources/prs/FlyDSL/PR-554.md) — [Feat] Add TensorAdaptor.mark_static for shape-aware JIT cache keys  `[source-pr]`
+- [pr-FlyDSL-567](sources/prs/FlyDSL/PR-567.md) — Enable gfx1151 (RDNA3.5 / Strix Halo): LDS, FP8 guards, f16/bf16 WMMA GEMM  `[source-pr]`
+- [pr-FlyDSL-579](sources/prs/FlyDSL/PR-579.md) — [Enh] Port AITER FlyDSL kernels  `[source-pr]`
+- [pr-FlyDSL-58](sources/prs/FlyDSL/PR-58.md) — use dynamic shape for memref  `[source-pr]`
+- [pr-FlyDSL-59](sources/prs/FlyDSL/PR-59.md) — fix dynamic m  `[source-pr]`
+- [pr-FlyDSL-60](sources/prs/FlyDSL/PR-60.md) — Dev/fp16 gemm  `[source-pr]`
+- [pr-FlyDSL-64](sources/prs/FlyDSL/PR-64.md) — Dev a16w4  `[source-pr]`
+- [pr-FlyDSL-65](sources/prs/FlyDSL/PR-65.md) — Revert 'Dev a16w4'  `[source-pr]`
+- [pr-FlyDSL-71](sources/prs/FlyDSL/PR-71.md) — remove useless compile param  `[source-pr]`
+- [pr-FlyDSL-79](sources/prs/FlyDSL/PR-79.md) — [FP4] preshuffle gemm a8w4&a4w4 moe gemm a8w4  `[source-pr]`
+- [pr-FlyDSL-80](sources/prs/FlyDSL/PR-80.md) — gemm a4w4 3300T  `[source-pr]`
+- [pr-FlyDSL-89](sources/prs/FlyDSL/PR-89.md) — [e2e] enable runtime async_dependencies  `[source-pr]`
+- [pr-FlyDSL-98](sources/prs/FlyDSL/PR-98.md) — fix a4w4 gemm precision  `[source-pr]`
+- [pr-aiter-1030](sources/prs/aiter/PR-1030.md) — [MI308][config] tune a8w8 gemm with preshuffle weight for qwen3 480b  `[source-pr]`
+- [pr-aiter-1079](sources/prs/aiter/PR-1079.md) — fix a8w8_blockscale_bpreshuffle tune result and add summary results  `[source-pr]`
+- [pr-aiter-1090](sources/prs/aiter/PR-1090.md) — minor fix --preshuffle, in  test_gemm_a8w8_blockscale  `[source-pr]`
+- [pr-aiter-1092](sources/prs/aiter/PR-1092.md) — [MI300X] tune Gemm performance for llama 70b/405b  `[source-pr]`
+- [pr-aiter-1102](sources/prs/aiter/PR-1102.md) — Tuning Utility update  `[source-pr]`
+- [pr-aiter-1112](sources/prs/aiter/PR-1112.md) — add tuning summary of shapes that are tuned successfully or failed.  `[source-pr]`
+- [pr-aiter-1159](sources/prs/aiter/PR-1159.md) — not do hipify by default  `[source-pr]`
+- [pr-aiter-1161](sources/prs/aiter/PR-1161.md) — A8w8 asm codegen and tune  `[source-pr]`
+- [pr-aiter-1185](sources/prs/aiter/PR-1185.md) — [Triton] triton fp4 gemm preshuffle PR to 355_wip  `[source-pr]`
+- [pr-aiter-1187](sources/prs/aiter/PR-1187.md) — [Triton] triton fp4 gemm preshuffle PR to 355_wip_triton  `[source-pr]`
+- [pr-aiter-1233](sources/prs/aiter/PR-1233.md) — Mla splitkv enhance split alg inte  `[source-pr]`
+- [pr-aiter-1240](sources/prs/aiter/PR-1240.md) — [Triton] [355_wip] triton FP4 gemm AOT  `[source-pr]`
+- [pr-aiter-1241](sources/prs/aiter/PR-1241.md) — Revert '[Triton] triton fp4 gemm preshuffle PR to 355_wip'  `[source-pr]`
+- [pr-aiter-1242](sources/prs/aiter/PR-1242.md) — [Triton] [355_wip_triton] AOT fix  `[source-pr]`
+- [pr-aiter-1256](sources/prs/aiter/PR-1256.md) — Fix build bdist wheel error  `[source-pr]`
+- [pr-aiter-1258](sources/prs/aiter/PR-1258.md) — Fix rowwise a8w8 gemm in swizzled hipb_mm  `[source-pr]`
+- [pr-aiter-1265](sources/prs/aiter/PR-1265.md) — integrate deep gemm  `[source-pr]`
+- [pr-aiter-1266](sources/prs/aiter/PR-1266.md) — moe mxfp4 block_m = 64/128  `[source-pr]`
+- [pr-aiter-1283](sources/prs/aiter/PR-1283.md) — [TRITON] GEMM kernels nomenclature changes  `[source-pr]`
+- [pr-aiter-1287](sources/prs/aiter/PR-1287.md) — [Update] update dev/perf branch to main branch commit 02b6c7f419  `[source-pr]`
+- [pr-aiter-1291](sources/prs/aiter/PR-1291.md) — [FEAT] [Triton] Add transpose scale to the triton fused_rms_fp8_group_quant  `[source-pr]`
+- [pr-aiter-1315](sources/prs/aiter/PR-1315.md) — [Triton] 355 wip Llama FP4 triton fusion + TP8 triton decode shape tunning  `[source-pr]`
+- [pr-aiter-1326](sources/prs/aiter/PR-1326.md) — [TRITON] Simplify and optimize triton_kernels moe code and move it into aiter  `[source-pr]`
+- [pr-aiter-1331](sources/prs/aiter/PR-1331.md) — [Triton] add gemm tune check utility function  `[source-pr]`
+- [pr-aiter-1342](sources/prs/aiter/PR-1342.md) — fix tune error caused by merge tuned_file  `[source-pr]`
+- [pr-aiter-1347](sources/prs/aiter/PR-1347.md) — Add a8w8_bpreshuffle configs  `[source-pr]`
+- [pr-aiter-1355](sources/prs/aiter/PR-1355.md) — add config  `[source-pr]`
+- [pr-aiter-1356](sources/prs/aiter/PR-1356.md) — [TRITON] Add MoE GEMM a8w8 kernel  `[source-pr]`
+- [pr-aiter-1371](sources/prs/aiter/PR-1371.md) — [Triton] DS FP4 triton fusion  `[source-pr]`
+- [pr-aiter-1382](sources/prs/aiter/PR-1382.md) — add a8w8 ptpc gemm config for dsv3  `[source-pr]`
+- [pr-aiter-1392](sources/prs/aiter/PR-1392.md) — Revert '[Triton] DS FP4 triton fusion'  `[source-pr]`
+- [pr-aiter-1400](sources/prs/aiter/PR-1400.md) — cktile weight preshuffle test and auto tuning for a8w8  `[source-pr]`
+- [pr-aiter-1418](sources/prs/aiter/PR-1418.md) — [Bugfix] [Config] Retune ptpc fmoe deepseek-r1 for MI308  `[source-pr]`
+- [pr-aiter-1424](sources/prs/aiter/PR-1424.md) — Feat: pa_mqa_logits performance optimization & support kv_preshuffle + blocksize16/64  `[source-pr]`
+- [pr-aiter-1430](sources/prs/aiter/PR-1430.md) — fix fmoe tune preshuffle error  `[source-pr]`
+- [pr-aiter-1434](sources/prs/aiter/PR-1434.md) — [Triton] DS FP4 fusions redo  `[source-pr]`
+- [pr-aiter-1439](sources/prs/aiter/PR-1439.md) — fix_prebuiild_asm  `[source-pr]`
+- [pr-aiter-1443](sources/prs/aiter/PR-1443.md) — fix merging aiter config  `[source-pr]`
+- [pr-aiter-1444](sources/prs/aiter/PR-1444.md) — tune a8w8_blockscale&bpreshuffle for tencent  `[source-pr]`
+- [pr-aiter-1456](sources/prs/aiter/PR-1456.md) — add gen_fake for 4 gemm operators  `[source-pr]`
+- [pr-aiter-1489](sources/prs/aiter/PR-1489.md) — [TRITON] change all MI350 config file names to gfx950*  `[source-pr]`
+- [pr-aiter-1490](sources/prs/aiter/PR-1490.md) — Enable bf16 asm bpreshuffle tune  `[source-pr]`
+- [pr-aiter-1503](sources/prs/aiter/PR-1503.md) — Merge cktile ck gemm tune  `[source-pr]`
+- [pr-aiter-1504](sources/prs/aiter/PR-1504.md) — [FEAT] add fp8 blockscale asm kernel  `[source-pr]`
+- [pr-aiter-1509](sources/prs/aiter/PR-1509.md) — [TRITON] Change all MI300 references to gfx942  `[source-pr]`
+- [pr-aiter-1514](sources/prs/aiter/PR-1514.md) — bf16gemm_asm_tune  `[source-pr]`
+- [pr-aiter-1561](sources/prs/aiter/PR-1561.md) — [moe] moe NT type opt & preshuffle layout tuning  `[source-pr]`
+- [pr-aiter-1585](sources/prs/aiter/PR-1585.md) — [Config][Qwen] tune gemm and moe  `[source-pr]`
+- [pr-aiter-1588](sources/prs/aiter/PR-1588.md) — workaroud for prebuild error  `[source-pr]`
+- [pr-aiter-1591](sources/prs/aiter/PR-1591.md) — Prebuild_pro_max  `[source-pr]`
+- [pr-aiter-1602](sources/prs/aiter/PR-1602.md) — [TRITON] Move triton_tests into respective folders  `[source-pr]`
+- [pr-aiter-1614](sources/prs/aiter/PR-1614.md) — refactor fmoe tuner profile  `[source-pr]`
+- [pr-aiter-1654](sources/prs/aiter/PR-1654.md) — support moe a8w8 splitk  `[source-pr]`
+- [pr-aiter-1656](sources/prs/aiter/PR-1656.md) — [Triton] Shaoclee/triton fp4 gemm cat preshuffle  `[source-pr]`
+- [pr-aiter-1660](sources/prs/aiter/PR-1660.md) — [dev/perf][Update] update dev/perf branch to main branch commit d0c313d  `[source-pr]`
+- [pr-aiter-1676](sources/prs/aiter/PR-1676.md) — [GEMM & FMOE][Config & Bugfix] add a8w8 ptpc tuned config for qwen3vl…  `[source-pr]`
+- [pr-aiter-1680](sources/prs/aiter/PR-1680.md) — add dealing with memory access fault in Mp tuner  `[source-pr]`
+- [pr-aiter-1684](sources/prs/aiter/PR-1684.md) — [TRITON] ahmed-bsod/gemm a8w8 gluon  `[source-pr]`
+- [pr-aiter-1686](sources/prs/aiter/PR-1686.md) — fixing the fp4 gemm tune script Exception caused by csv title inconsistency with code  `[source-pr]`
+- [pr-aiter-1700](sources/prs/aiter/PR-1700.md) — bf16_gemm_clean_in_kl  `[source-pr]`
+- [pr-aiter-1709](sources/prs/aiter/PR-1709.md) — [Fix] retune bpreshuffle_gemm to fit new version aiter  `[source-pr]`
+- [pr-aiter-1722](sources/prs/aiter/PR-1722.md) — add a8w8 ptpc tuning for deepseek v3 tp2/tp4  `[source-pr]`
+- [pr-aiter-1729](sources/prs/aiter/PR-1729.md) — Wjx/ck tile moe merge  `[source-pr]`
+- [pr-aiter-1745](sources/prs/aiter/PR-1745.md) — [Triton] skip_reduce for gemm_afp4wfp4_preshuffle  `[source-pr]`
+- [pr-aiter-1764](sources/prs/aiter/PR-1764.md) — [Triton] Triton FP8 bloscale GEMM preshuffle  `[source-pr]`
+- [pr-aiter-1767](sources/prs/aiter/PR-1767.md) — fix tune error when N is large  `[source-pr]`
+- [pr-aiter-1770](sources/prs/aiter/PR-1770.md) — New tuning configs  `[source-pr]`
+- [pr-aiter-1777](sources/prs/aiter/PR-1777.md) — [Triton] Triton A16WFP4 GEMM prequant  `[source-pr]`
+- [pr-aiter-1778](sources/prs/aiter/PR-1778.md) — [Triton] Triton a16w8 gemm preshuffle  `[source-pr]`
+- [pr-aiter-1786](sources/prs/aiter/PR-1786.md) — maybe fix build  `[source-pr]`
+- [pr-aiter-1790](sources/prs/aiter/PR-1790.md) — Move moe tune to csrc  `[source-pr]`
+- [pr-aiter-1833](sources/prs/aiter/PR-1833.md) — [Triton] GEMM tunning script  `[source-pr]`
+- [pr-aiter-1902](sources/prs/aiter/PR-1902.md) — Update tuning status  `[source-pr]`
+- [pr-aiter-1927](sources/prs/aiter/PR-1927.md) — fix aot fp4 moe  `[source-pr]`
+- [pr-aiter-1954](sources/prs/aiter/PR-1954.md) — feat(ck_tile): add a8w8 blockscale gemm with preshuffleB support  `[source-pr]`
+- [pr-aiter-1968](sources/prs/aiter/PR-1968.md) — add igemm tile size 16mx128  `[source-pr]`
+- [pr-aiter-2006](sources/prs/aiter/PR-2006.md) — [MI325] Support gfx942 i8gemm tilesize 112x256  `[source-pr]`
+- [pr-aiter-2049](sources/prs/aiter/PR-2049.md) — [TRITON] Add smoothquant int8 MoE kernel  `[source-pr]`
+- [pr-aiter-2069](sources/prs/aiter/PR-2069.md) — Add compiler configurations for bpreshuffle_cktile modules  `[source-pr]`
+- [pr-aiter-2078](sources/prs/aiter/PR-2078.md) — [TRITON] MXFP4 GEMM fixes  `[source-pr]`
+- [pr-aiter-2095](sources/prs/aiter/PR-2095.md) — [Triton] fix config selection bug for FP4 preshuffled GEMM  `[source-pr]`
+- [pr-aiter-2113](sources/prs/aiter/PR-2113.md) — [FlyDSL] import flydsl implement of a4w4 moe  `[source-pr]`
+- [pr-aiter-2118](sources/prs/aiter/PR-2118.md) — [MI308] add fp8 blockscale asm kernel  `[source-pr]`
+- [pr-aiter-2125](sources/prs/aiter/PR-2125.md) — [MI325][TUNE] igemm asm  `[source-pr]`
+- [pr-aiter-2131](sources/prs/aiter/PR-2131.md) — Revert '[MI308] add fp8 blockscale asm kernel'  `[source-pr]`
+- [pr-aiter-2136](sources/prs/aiter/PR-2136.md) — add mhc_pre hip kernel (mhc_pre_gemm_sqrsum, mhc_pre_big_fuse)  `[source-pr]`
+- [pr-aiter-2142](sources/prs/aiter/PR-2142.md) — [FP8_BS_GEMM] add fp8 blockscale asm kernel  `[source-pr]`
+- [pr-aiter-2169](sources/prs/aiter/PR-2169.md) — Fix LRU cache pollution causing BLOCK_SIZE_S3 KeyError in gemm_afp4wfp4  `[source-pr]`
+- [pr-aiter-2209](sources/prs/aiter/PR-2209.md) — workaround for cktile issue, by revert to ck impl  `[source-pr]`
+- [pr-aiter-2219](sources/prs/aiter/PR-2219.md) — rm duplicate tuned configs  `[source-pr]`
+- [pr-aiter-2221](sources/prs/aiter/PR-2221.md) — Replace unsafe uses of std::unordered_map with SynchronizedCache  `[source-pr]`
+- [pr-aiter-2232](sources/prs/aiter/PR-2232.md) — [CK][GEMM] update ck eightwarps pipleline name  `[source-pr]`
+- [pr-aiter-2252](sources/prs/aiter/PR-2252.md) — add hipblaslt error log  `[source-pr]`
+- [pr-aiter-2253](sources/prs/aiter/PR-2253.md) — update dsv3 ptpc a8w8 gemm config  `[source-pr]`
+- [pr-aiter-2288](sources/prs/aiter/PR-2288.md) — Feat gen kv prefix preshuffle1  `[source-pr]`
+- [pr-aiter-2313](sources/prs/aiter/PR-2313.md) — Add blockPerCu support for CKTile GEMMs and CKTile MOE tuning  `[source-pr]`
+- [pr-aiter-2315](sources/prs/aiter/PR-2315.md) — [TRITON] Add gfx1250 support: GFX_MAP + default GEMM/MHA configs  `[source-pr]`
+- [pr-aiter-2332](sources/prs/aiter/PR-2332.md) — [Gluon][gfx1250] Gemm MXFP4 preshuffled  `[source-pr]`
+- [pr-aiter-2335](sources/prs/aiter/PR-2335.md) — fix(gemm_a8w8_bpreshuffle): pass splitK/KBatch to CK kernels  `[source-pr]`
+- [pr-aiter-2358](sources/prs/aiter/PR-2358.md) — Fix use-after-free in cktile blockscale GEMM x_scale handling  `[source-pr]`
+- [pr-aiter-2373](sources/prs/aiter/PR-2373.md) — [FIX] fix igemm 4GB oob bug  `[source-pr]`
+- [pr-aiter-2375](sources/prs/aiter/PR-2375.md) — Add run_config and compare in tuner  `[source-pr]`
+- [pr-aiter-2382](sources/prs/aiter/PR-2382.md) — [FEAT] exclude torch.h in a8w8 cu files  `[source-pr]`
+- [pr-aiter-2390](sources/prs/aiter/PR-2390.md) — [FlyDSL] Add FlyDSL MoE a4w4 support and update kernels  `[source-pr]`
+- [pr-aiter-2425](sources/prs/aiter/PR-2425.md) — rm gemm_common  bind  `[source-pr]`
+- [pr-aiter-2434](sources/prs/aiter/PR-2434.md) — Fix GEMM test failures and retune with latest triton  `[source-pr]`
+- [pr-aiter-2438](sources/prs/aiter/PR-2438.md) — fix moe stage2 tune config  `[source-pr]`
+- [pr-aiter-2439](sources/prs/aiter/PR-2439.md) — Assembly kernel cleanup work  `[source-pr]`
+- [pr-aiter-2441](sources/prs/aiter/PR-2441.md) — [Triton MoE]: Add optimized Gluon kernel for AMD CDNA3 with K-dimension unrolling  `[source-pr]`
+- [pr-aiter-2479](sources/prs/aiter/PR-2479.md) — mhc：add mhc_post hip kernel  `[source-pr]`
+- [pr-aiter-2485](sources/prs/aiter/PR-2485.md) — add tuned qwen3.5 gemm config  `[source-pr]`
+- [pr-aiter-2491](sources/prs/aiter/PR-2491.md) — [TRITON] Fix unit tests on `gfx950` - part 2  `[source-pr]`
+- [pr-aiter-2496](sources/prs/aiter/PR-2496.md) — Rebase to main  `[source-pr]`
+- [pr-aiter-2497](sources/prs/aiter/PR-2497.md) — Wjx/upgrade flydsl fused  `[source-pr]`
+- [pr-aiter-2498](sources/prs/aiter/PR-2498.md) — Add ctypes C-ABI error bridging to prevent worker crashes during kern…  `[source-pr]`
+- [pr-aiter-2503](sources/prs/aiter/PR-2503.md) — assert when found duplicated shape  `[source-pr]`
+- [pr-aiter-2506](sources/prs/aiter/PR-2506.md) — add more configs  `[source-pr]`
+- [pr-aiter-2518](sources/prs/aiter/PR-2518.md) — [Misc][Bugfix][Perf] Remove redundant bpreshuffle tuner, fix type hints warnings, add GLM-5 tuned configs  `[source-pr]`
+- [pr-aiter-2526](sources/prs/aiter/PR-2526.md) — [FIX] fix a8w8 asm kernel  ks>1 mismatch  `[source-pr]`
+- [pr-aiter-2536](sources/prs/aiter/PR-2536.md) — add flydsl splitk gemm and update kimi-2 bf16 tunned config  `[source-pr]`
+- [pr-aiter-2539](sources/prs/aiter/PR-2539.md) — test  `[source-pr]`
+- [pr-aiter-2545](sources/prs/aiter/PR-2545.md) — refactor hip kernel -- remove torch from csrc  `[source-pr]`
+- [pr-aiter-2546](sources/prs/aiter/PR-2546.md) — So/a8w8 bpreshuffle flydsl  `[source-pr]`
+- [pr-aiter-2581](sources/prs/aiter/PR-2581.md) — [FlyDSL] Optimize a4w4 MOE kernels  `[source-pr]`
+- [pr-aiter-2584](sources/prs/aiter/PR-2584.md) — [TRITON] Reduce GEMM unit tests  `[source-pr]`
+- [pr-aiter-2590](sources/prs/aiter/PR-2590.md) — tune i8gemm in MI308  `[source-pr]`
+- [pr-aiter-2616](sources/prs/aiter/PR-2616.md) — [Perf] Add DSv3-MXFP4 tuned configs for MI355X  `[source-pr]`
+- [pr-aiter-2645](sources/prs/aiter/PR-2645.md) — fix(ck_gemm): fix multi-arch build targeting and kernel dispatch across all CK GEMM modules  `[source-pr]`
+- [pr-aiter-2657](sources/prs/aiter/PR-2657.md) — add triton fallback for mi455 gptoss & dsfp4  `[source-pr]`
+- [pr-aiter-2671](sources/prs/aiter/PR-2671.md) — Alizaidy/issue 2656  `[source-pr]`
+- [pr-aiter-2679](sources/prs/aiter/PR-2679.md) — fix hip_call for launch  and  asm a8w8 splitk  `[source-pr]`
+- [pr-aiter-2683](sources/prs/aiter/PR-2683.md) — rm cu=80 configs and update dsv3 bpreshuffle configs  `[source-pr]`
+- [pr-aiter-2695](sources/prs/aiter/PR-2695.md) — [Triton] Declare triton>=3.6.0 dependency  `[source-pr]`
+- [pr-aiter-2710](sources/prs/aiter/PR-2710.md) — add signature and refine lru cache  `[source-pr]`
+- [pr-aiter-2712](sources/prs/aiter/PR-2712.md) — update  `[source-pr]`
+- [pr-aiter-2726](sources/prs/aiter/PR-2726.md) — [FlyDSL MOE] update a8w4 moe  `[source-pr]`
+- [pr-aiter-2732](sources/prs/aiter/PR-2732.md) — Make FlyDSL LDS checks architecture-aware and reduce tuner failure noise  `[source-pr]`
+- [pr-aiter-2734](sources/prs/aiter/PR-2734.md) — add tuner test suite  `[source-pr]`
+- [pr-aiter-2741](sources/prs/aiter/PR-2741.md) — Add FlyDSL GEMM AOT precompile support  `[source-pr]`
+- [pr-aiter-2775](sources/prs/aiter/PR-2775.md) — Xiaobing/gptoss small m  `[source-pr]`
+- [pr-aiter-2776](sources/prs/aiter/PR-2776.md) — [FLYDSL]: aiter flydsl if const_expr  `[source-pr]`
+- [pr-aiter-2784](sources/prs/aiter/PR-2784.md) — Fix LDS Exhaustion in `fused_gemm_afp4wfp4_a16w16` for ASYNC_COPY Enabled  `[source-pr]`
+- [pr-aiter-2809](sources/prs/aiter/PR-2809.md) — Fix a8w8 flydsl tune  `[source-pr]`
+- [pr-aiter-2811](sources/prs/aiter/PR-2811.md) — [CK_TILE] Fix bpreshuffle compile failure due to stale CShuffleEpilogueProblem arg  `[source-pr]`
+- [pr-aiter-2863](sources/prs/aiter/PR-2863.md) — kimi a16wi4 moe support  `[source-pr]`
+- [pr-aiter-2874](sources/prs/aiter/PR-2874.md) — [release/v0.1.12] Cherry-pick #2645 (multi-arch CK GEMM dispatch) + SynchronizedCache backport for v0.1.12.post2  `[source-pr]`
+- [pr-aiter-2877](sources/prs/aiter/PR-2877.md) — Fix FlyDSL split-k barrier synchronization issue  `[source-pr]`
+- [pr-aiter-2879](sources/prs/aiter/PR-2879.md) — Support preshuffled layout in indexer_k_quant_and_cache / cp_gather_indexer_k_quant_cache  `[source-pr]`
+- [pr-aiter-2896](sources/prs/aiter/PR-2896.md) — retune a8w8_blockscale_bpreshuffle_gemm for MI308  `[source-pr]`
+- [pr-aiter-2935](sources/prs/aiter/PR-2935.md) — [FLYDSL]: 0.1.5  `[source-pr]`
+- [pr-aiter-2945](sources/prs/aiter/PR-2945.md) — [OPUS]bf16 opus gemm support  `[source-pr]`
+- [pr-aiter-2972](sources/prs/aiter/PR-2972.md) — add swiglu a4w4 moe path for gpt-oss model  `[source-pr]`
+- [pr-aiter-3071](sources/prs/aiter/PR-3071.md) — So/a8w8 bpreshuflle flydsl xcd remap  `[source-pr]`
+- [pr-aiter-3075](sources/prs/aiter/PR-3075.md) — blockscale gemm: dispatch by kernelName, strict tuned-CSV validation  `[source-pr]`
+- [pr-aiter-3103](sources/prs/aiter/PR-3103.md) — [MOE] Special path for moe ptpc fp8, batch 1~32 with hsaco  `[source-pr]`
+- [pr-aiter-3107](sources/prs/aiter/PR-3107.md) — Revert 'So/a8w8 bpreshuflle flydsl xcd remap'  `[source-pr]`
+- [pr-aiter-3108](sources/prs/aiter/PR-3108.md) — [Misc] Add pid/pname to JIT build logs + DSv4-Pro a8w8 blockscale tuned configs  `[source-pr]`
+- [pr-aiter-3134](sources/prs/aiter/PR-3134.md) — So/flydsl xcd remap v2  `[source-pr]`
+- [pr-aiter-3187](sources/prs/aiter/PR-3187.md) — [TRITON] Remove precision ieee from non-F32 tl.dots  `[source-pr]`
+- [pr-aiter-3190](sources/prs/aiter/PR-3190.md) — [Triton] [ATOM] DSV4 fusion phase2  `[source-pr]`
+- [pr-aiter-3220](sources/prs/aiter/PR-3220.md) — Fix checkclose and refactor tuner  `[source-pr]`
+- [pr-aiter-3223](sources/prs/aiter/PR-3223.md) — fix mi350 bf16gemm issue when m is not multiple of 16  `[source-pr]`
+- [pr-aiter-3230](sources/prs/aiter/PR-3230.md) — [TRITON] Make splitk reduce common  `[source-pr]`
+- [pr-aiter-3238](sources/prs/aiter/PR-3238.md) — [Misc] Add DSv4-Pro MTP spec-decoding tuned GEMM (a8w8 N=7168 K=7168 up to M=65536, bf16 N=384 K=7168)  `[source-pr]`
+- [pr-aiter-3255](sources/prs/aiter/PR-3255.md) — perf(gemm_dispatch): POD lookup key + raw fn-ptr value, compile time …  `[source-pr]`
+- [pr-aiter-3284](sources/prs/aiter/PR-3284.md) — add deepseek V3.2 TP4 a8w8 tuned config  `[source-pr]`
+- [pr-aiter-3318](sources/prs/aiter/PR-3318.md) — Revert '[Gluon][gfx1250] Gemm MXFP4 preshuffled'  `[source-pr]`
+- [pr-aiter-3324](sources/prs/aiter/PR-3324.md) — ck_gemm_a8w8_blockscale: add tuned configs for Qwen3-VL-235B, Qwen3-VL-32B, Qwen3.6-27B (gfx942)  `[source-pr]`
+- [pr-aiter-3339](sources/prs/aiter/PR-3339.md) — [DSv4] Tune FP8 a8w8 blockscale bpreshuffle GEMM for all batch sizes  `[source-pr]`
+- [pr-aiter-3341](sources/prs/aiter/PR-3341.md) — [MoE] Optimize qwen3.5 397B ptpc fp8 moe prefill and decoding  `[source-pr]`
+- [pr-aiter-3346](sources/prs/aiter/PR-3346.md) — Unify gemm solution function signatures in tuned_gemm.py  `[source-pr]`
+- [pr-aiter-3357](sources/prs/aiter/PR-3357.md) — [Kernel] flydsl fused_compress_attn for V4-Pro/V4-Flash CSA+HCA  `[source-pr]`
+- [pr-aiter-3371](sources/prs/aiter/PR-3371.md) — [tune] enhance glm47 tune file for both gemm and moe  `[source-pr]`
+- [pr-aiter-3373](sources/prs/aiter/PR-3373.md) — Flydsl update fix dynmaic layout; use fx.ptr for kernels not using layout  `[source-pr]`
+- [pr-aiter-3383](sources/prs/aiter/PR-3383.md) — [Perf] tune a8w8_blockscale_bpreshuffle for DSv4-Pro shapes on MI355X  `[source-pr]`
+- [pr-aiter-3386](sources/prs/aiter/PR-3386.md) — make a8w8 preshuffle gemm support zero bias input  `[source-pr]`
+- [pr-aiter-488](sources/prs/aiter/PR-488.md) — Change test to use the new preshuffle_scale API and change all mxfp config to use mfma16  `[source-pr]`
+- [pr-aiter-490](sources/prs/aiter/PR-490.md) — Fix tests and benchmarking for preshuffled fp4  `[source-pr]`
+- [pr-aiter-513](sources/prs/aiter/PR-513.md) — Gemm weightpreshuffle  `[source-pr]`
+- [pr-aiter-539](sources/prs/aiter/PR-539.md) — add asm pa for GQA=16  `[source-pr]`
+- [pr-aiter-547](sources/prs/aiter/PR-547.md) — Gemm_f4_bpreshuffle  `[source-pr]`
+- [pr-aiter-569](sources/prs/aiter/PR-569.md) — update tune config file  `[source-pr]`
+- [pr-aiter-597](sources/prs/aiter/PR-597.md) — [TRITON]: Standardize GEMM weight shape to (N, K) and TN memory layout (by default)  `[source-pr]`
+- [pr-aiter-621](sources/prs/aiter/PR-621.md) — Refine ck instance and update a8w8_bpreshuffle_tuned_gemm.csv  `[source-pr]`
+- [pr-aiter-625](sources/prs/aiter/PR-625.md) — enable parallel tuning on CK kernels  `[source-pr]`
+- [pr-aiter-649](sources/prs/aiter/PR-649.md) — A4w4_asm_pro  `[source-pr]`
+- [pr-aiter-662](sources/prs/aiter/PR-662.md) — enable gemm_a4w4 asm kernel to tune splitk  `[source-pr]`
+- [pr-aiter-682](sources/prs/aiter/PR-682.md) — Gemm a8w8 bpreshuffle api fix  `[source-pr]`
+- [pr-aiter-711](sources/prs/aiter/PR-711.md) — Batch gemm tuning in parallel  `[source-pr]`
+- [pr-aiter-719](sources/prs/aiter/PR-719.md) — update ptpc bpreshuffle gemm tune  `[source-pr]`
+- [pr-aiter-733](sources/prs/aiter/PR-733.md) — fix multiprocess tuning problem  `[source-pr]`
+- [pr-aiter-741](sources/prs/aiter/PR-741.md) — A4w4_asm_pro_max_v2  `[source-pr]`
+- [pr-aiter-743](sources/prs/aiter/PR-743.md) — [TRITON]: Clear cache allocator in Triton tests  `[source-pr]`
+- [pr-aiter-747](sources/prs/aiter/PR-747.md) — add more bpreshuffle instances  `[source-pr]`
+- [pr-aiter-751](sources/prs/aiter/PR-751.md) — fix random precision issues:192/224x256 tile asm so files  `[source-pr]`
+- [pr-aiter-783](sources/prs/aiter/PR-783.md) — Make Gemm and other ops return Tesnor And graph break fix  `[source-pr]`
+- [pr-aiter-824](sources/prs/aiter/PR-824.md) — [TRITON] Add non-TN layout tests to Triton GEMMs  `[source-pr]`
+- [pr-aiter-838](sources/prs/aiter/PR-838.md) — Add Quick Gemm Performance Tuning for The Popular Workloads  `[source-pr]`
+- [pr-aiter-877](sources/prs/aiter/PR-877.md) — fix splitk kernel precision issues  `[source-pr]`
+- [pr-aiter-901](sources/prs/aiter/PR-901.md) — [Port][355_wip] Port 2 PRs into 355_wip branch(quick gemm, unit8 compatibility)  `[source-pr]`
+- [pr-aiter-907](sources/prs/aiter/PR-907.md) — add kernels from general tilemxtilen 32x{1...8}x128x{1...8}  `[source-pr]`
+- [pr-aiter-928](sources/prs/aiter/PR-928.md) — enable splitk0 asm of 256x256 and 128x512 tile shape  `[source-pr]`
+- [pr-aiter-953](sources/prs/aiter/PR-953.md) — refactor tuner to support more features  `[source-pr]`
+- [pr-aiter-955](sources/prs/aiter/PR-955.md) — Add aiter.gemm_a8w8_blockscale_bpreshuffle  `[source-pr]`
+- [pr-aiter-988](sources/prs/aiter/PR-988.md) — [MI35x]for shape mnk 4096,57344,16384 with 256x256 asm kernel  `[source-pr]`
+- [pr-composable_kernel-1838](sources/prs/composable_kernel/PR-1838.md) — Cka8w8 uc newpipe  `[source-pr]`
+- [pr-composable_kernel-1862](sources/prs/composable_kernel/PR-1862.md) — [A8W8 GEMM] Optimized weight-preshuffled implementation & add quantization datatype for CK TILE rms_norm  `[source-pr]`
+- [pr-composable_kernel-1901](sources/prs/composable_kernel/PR-1901.md) — enable pipeline v3.  `[source-pr]`
+- [pr-composable_kernel-1923](sources/prs/composable_kernel/PR-1923.md) — MIGraphX hipRTC fix  `[source-pr]`
+- [pr-composable_kernel-1936](sources/prs/composable_kernel/PR-1936.md) — ck moe gemm implement  `[source-pr]`
+- [pr-composable_kernel-1949](sources/prs/composable_kernel/PR-1949.md) — Ck int4 moe develop  `[source-pr]`
+- [pr-composable_kernel-1950](sources/prs/composable_kernel/PR-1950.md) — [Block Scale GEMM] Optimized block scale gemm  `[source-pr]`
+- [pr-composable_kernel-1956](sources/prs/composable_kernel/PR-1956.md) — Small fix on the a8w8 pipeline  `[source-pr]`
+- [pr-composable_kernel-2010](sources/prs/composable_kernel/PR-2010.md) — Make sure gemm_fp8_pk_i4 examples only build and run on gfx942/950.  `[source-pr]`
+- [pr-composable_kernel-2026](sources/prs/composable_kernel/PR-2026.md) — Moe gemm activation  `[source-pr]`
+- [pr-composable_kernel-2036](sources/prs/composable_kernel/PR-2036.md) — add preshuffle gemm fp16  `[source-pr]`
+- [pr-composable_kernel-2040](sources/prs/composable_kernel/PR-2040.md) — fuse moe activation  `[source-pr]`
+- [pr-composable_kernel-2060](sources/prs/composable_kernel/PR-2060.md) — Merge moe act to testx  `[source-pr]`
+- [pr-composable_kernel-2061](sources/prs/composable_kernel/PR-2061.md) — New instances for gemm_multiply_multiply_weightpreshuffle operator  `[source-pr]`
+- [pr-composable_kernel-2075](sources/prs/composable_kernel/PR-2075.md) — CK pk_i4_t test failures fix  `[source-pr]`
+- [pr-composable_kernel-2094](sources/prs/composable_kernel/PR-2094.md) — enable do top k weights in moe stage1 gemm  `[source-pr]`
+- [pr-composable_kernel-2122](sources/prs/composable_kernel/PR-2122.md) — fix moe pipeline and change to compute tile  `[source-pr]`
+- [pr-composable_kernel-2166](sources/prs/composable_kernel/PR-2166.md) — Improve the general performance of the Preshuffled GEMM V3 & delete the unnecessary instances  `[source-pr]`
+- [pr-composable_kernel-2194](sources/prs/composable_kernel/PR-2194.md) — Narrowing error fix for codegen compilation  `[source-pr]`
+- [pr-composable_kernel-2202](sources/prs/composable_kernel/PR-2202.md) — Use new mfma instructions for FP8 on gfx950  `[source-pr]`
+- [pr-composable_kernel-2212](sources/prs/composable_kernel/PR-2212.md) — Add the instances for small sized GEMM in preshuffle and improve CMake Flag  `[source-pr]`
+- [pr-composable_kernel-2229](sources/prs/composable_kernel/PR-2229.md) — Convert CK (GeMM MulMul Weight Preshuffle) instances to use 16x16 xdl tile  `[source-pr]`
+- [pr-composable_kernel-2280](sources/prs/composable_kernel/PR-2280.md) — Merge 'amd-develop' till 29574f05f into amd-master  `[source-pr]`
+- [pr-composable_kernel-2294](sources/prs/composable_kernel/PR-2294.md) — Optimized GEMMs for MX FP4/8  `[source-pr]`
+- [pr-composable_kernel-2297](sources/prs/composable_kernel/PR-2297.md) — Add MoE & FP8 Blockscale WP Kernels for GFX950  `[source-pr]`
+- [pr-composable_kernel-2320](sources/prs/composable_kernel/PR-2320.md) — Do not use warpSize as compile time constant as it is removed  `[source-pr]`
+- [pr-composable_kernel-2339](sources/prs/composable_kernel/PR-2339.md) — fix moe i4 bug from aiter  `[source-pr]`
+- [pr-composable_kernel-2425](sources/prs/composable_kernel/PR-2425.md) — Enable Async Copy for MI355  `[source-pr]`
+- [pr-composable_kernel-2427](sources/prs/composable_kernel/PR-2427.md) — [ckProfiler] Add infrastructure and instances to profile gemm_universal with B preshuffle  `[source-pr]`
+- [pr-composable_kernel-2434](sources/prs/composable_kernel/PR-2434.md) — Merge flatmm Operator with universal gemm  `[source-pr]`
+- [pr-composable_kernel-2437](sources/prs/composable_kernel/PR-2437.md) — fix KPerBlock = 64 a8w8 bpreshuffle gemm build fail in gfx950  `[source-pr]`
+- [pr-composable_kernel-2455](sources/prs/composable_kernel/PR-2455.md) — [CK] Mxfp4 moe blockscale buf2lds version support  `[source-pr]`
+- [pr-composable_kernel-2458](sources/prs/composable_kernel/PR-2458.md) — Tests for CK Tile Flatmm and MOE Smoothquant  `[source-pr]`
+- [pr-composable_kernel-2471](sources/prs/composable_kernel/PR-2471.md) — Add templates for fp16 and unsigned short atomic add to fix FBGEMM builds.  `[source-pr]`
+- [pr-composable_kernel-2473](sources/prs/composable_kernel/PR-2473.md) — ck_tile kernel for gemm with groupwise quantized A  tensor  `[source-pr]`
+- [pr-composable_kernel-2474](sources/prs/composable_kernel/PR-2474.md) — Revert 'Add templates for fp16 and unsigned short atomic add to fix FBGEMM builds.'  `[source-pr]`
+- [pr-composable_kernel-2483](sources/prs/composable_kernel/PR-2483.md) — Add declarations for atomic add for fp16 and unsigned short.  `[source-pr]`
+- [pr-composable_kernel-2496](sources/prs/composable_kernel/PR-2496.md) — Replace obsolete warpSize system variable with the new one  `[source-pr]`
+- [pr-composable_kernel-2505](sources/prs/composable_kernel/PR-2505.md) — Cherry picking for 7.0  `[source-pr]`
+- [pr-composable_kernel-2507](sources/prs/composable_kernel/PR-2507.md) — Cherry Picking for 7.0RC1  `[source-pr]`
+- [pr-composable_kernel-2508](sources/prs/composable_kernel/PR-2508.md) — Cherrypicking for ROCm 7.0RC1  `[source-pr]`
+- [pr-composable_kernel-2512](sources/prs/composable_kernel/PR-2512.md) — [CK] Fixed MPerBlock=32 build issue for MXFP4 GEMM decode  `[source-pr]`
+- [pr-composable_kernel-2515](sources/prs/composable_kernel/PR-2515.md) — [CK_Tile] Numerical error fix for weight_preshuffle Gemm  `[source-pr]`
+- [pr-composable_kernel-2516](sources/prs/composable_kernel/PR-2516.md) — Integration of a new pipeline for weight preshuffle into gemm examples  `[source-pr]`
+- [pr-composable_kernel-2520](sources/prs/composable_kernel/PR-2520.md) — [CK_TILE] Introduces a new GEMM API that splits the existing basic GEMM class into multiple specialized classes.  `[source-pr]`
+- [pr-composable_kernel-2524](sources/prs/composable_kernel/PR-2524.md) — Update to gpu_timer for rotating_buffer  `[source-pr]`
+- [pr-composable_kernel-2592](sources/prs/composable_kernel/PR-2592.md) — Disable fp8 instances on unsupported targets  `[source-pr]`
+- [pr-composable_kernel-2593](sources/prs/composable_kernel/PR-2593.md) — [CK_Tile] Updating gpu timer when doing flush cache  `[source-pr]`
+- [pr-composable_kernel-2594](sources/prs/composable_kernel/PR-2594.md) — Support Wave32 in CK_TILE - Part 1  `[source-pr]`
+- [pr-composable_kernel-2624](sources/prs/composable_kernel/PR-2624.md) — Preshuffle AQ matrix in block scale gemm  `[source-pr]`
+- [pr-composable_kernel-2631](sources/prs/composable_kernel/PR-2631.md) — Cleanups  `[source-pr]`
+- [pr-composable_kernel-2638](sources/prs/composable_kernel/PR-2638.md) — Mirchen/gemm blockscale wp segfault fix  `[source-pr]`
+- [pr-composable_kernel-2663](sources/prs/composable_kernel/PR-2663.md) — ck_tile kernel for gemm with groupwise quantized B tensor.  `[source-pr]`
+- [pr-composable_kernel-2679](sources/prs/composable_kernel/PR-2679.md) — Support transposed C tile in Aquant  `[source-pr]`
+- [pr-composable_kernel-2690](sources/prs/composable_kernel/PR-2690.md) — feat(gemm_wp): add two new configs for gemm weight preshuffle in gemm_utils.h  `[source-pr]`
+- [pr-composable_kernel-2693](sources/prs/composable_kernel/PR-2693.md) — Preshuffle Decode Prefill config fix  `[source-pr]`
+- [pr-composable_kernel-2697](sources/prs/composable_kernel/PR-2697.md) — [CK Tile] gemm splitk two stage  `[source-pr]`
+- [pr-composable_kernel-2700](sources/prs/composable_kernel/PR-2700.md) — [CK TILE] Fix bugs in AQuant preshuffle  `[source-pr]`
+- [pr-composable_kernel-2712](sources/prs/composable_kernel/PR-2712.md) — [CK TILE ENGINE] Adding GEMM Preshuffle to CK Tile Engine  `[source-pr]`
+- [pr-composable_kernel-2721](sources/prs/composable_kernel/PR-2721.md) — feat(grouped_gemm): add preshuffle v2 support to grouped gemm example  `[source-pr]`
+- [pr-composable_kernel-2722](sources/prs/composable_kernel/PR-2722.md) — Extend XDL kernel to Support RDNA3/4 - Part 2  `[source-pr]`
+- [pr-composable_kernel-2724](sources/prs/composable_kernel/PR-2724.md) — Extend XDL kernel to Support RDNA3/4 - Part 4  `[source-pr]`
+- [pr-composable_kernel-2729](sources/prs/composable_kernel/PR-2729.md) — [CK_TILE] Row/Col quant gemm  `[source-pr]`
+- [pr-composable_kernel-2739](sources/prs/composable_kernel/PR-2739.md) — [CK_TILE] add atomic IGLP scheduler for wp gemm  `[source-pr]`
+- [pr-composable_kernel-2781](sources/prs/composable_kernel/PR-2781.md) — [CK_TILE] Stream-K GEMM Implementation  `[source-pr]`
+- [pr-composable_kernel-2786](sources/prs/composable_kernel/PR-2786.md) — [CK_TILE] Implement Row/Col quant grouped gemm  `[source-pr]`
+- [pr-composable_kernel-2790](sources/prs/composable_kernel/PR-2790.md) — [CK_TILE] Fix flatmm on gfx11 and gfx12  `[source-pr]`
+- [pr-composable_kernel-2801](sources/prs/composable_kernel/PR-2801.md) — Bf16*fp4 gemm  `[source-pr]`
+- [pr-composable_kernel-2808](sources/prs/composable_kernel/PR-2808.md) — [CK_TILE] Fix example batched_gemm, grouped_gemm, gemm_multi_d, convolution on gfx11 & gfx12  `[source-pr]`
+- [pr-composable_kernel-2811](sources/prs/composable_kernel/PR-2811.md) — test(grouped_gemm): add gtests for the example/grouped_gemm_preshuffle to ensure its integrity  `[source-pr]`
+- [pr-composable_kernel-2813](sources/prs/composable_kernel/PR-2813.md) — [CK-Tile] Fix quant example code  `[source-pr]`
+- [pr-composable_kernel-2816](sources/prs/composable_kernel/PR-2816.md) — Fix multiple Ds  `[source-pr]`
+- [pr-composable_kernel-2821](sources/prs/composable_kernel/PR-2821.md) — [CK_TILE] Enable ck_tile tests on gfx11 and gfx12  `[source-pr]`
+- [pr-composable_kernel-2839](sources/prs/composable_kernel/PR-2839.md) — [CK TILE GEMM] Fixed permutation error in shuffle_b_permuteN  `[source-pr]`
+- [pr-composable_kernel-2842](sources/prs/composable_kernel/PR-2842.md) — [CK Tile Engine] k_block_per_cu changes in Preshuffle  `[source-pr]`
+- [pr-composable_kernel-2846](sources/prs/composable_kernel/PR-2846.md) — [CK_TILE] Tensor-wise scaled quant gemm kernel  `[source-pr]`
+- [pr-composable_kernel-2858](sources/prs/composable_kernel/PR-2858.md) — Add gemm weight preshuffle pk_int_t support  `[source-pr]`
+- [pr-composable_kernel-2873](sources/prs/composable_kernel/PR-2873.md) — Congma/ck tile/remove cpp 20 code  `[source-pr]`
+- [pr-composable_kernel-2877](sources/prs/composable_kernel/PR-2877.md) — Weight Preshuffle Block Scale gemm support  `[source-pr]`
+- [pr-composable_kernel-2878](sources/prs/composable_kernel/PR-2878.md) — [CK-Tile] Add the API to load SGPR with any byte size  `[source-pr]`
+- [pr-composable_kernel-2897](sources/prs/composable_kernel/PR-2897.md) — [CK TILE GEMM] Support Aquant GEMM with transposeC and preshuffle  `[source-pr]`
+- [pr-composable_kernel-2904](sources/prs/composable_kernel/PR-2904.md) — Revert '[CK-Tile] Add the API to load SGPR '  `[source-pr]`
+- [pr-composable_kernel-2913](sources/prs/composable_kernel/PR-2913.md) — Fix the compilation error of #2878  `[source-pr]`
+- [pr-composable_kernel-2919](sources/prs/composable_kernel/PR-2919.md) — Ck tile engine preshuffle  `[source-pr]`
+- [pr-composable_kernel-2923](sources/prs/composable_kernel/PR-2923.md) — Integrate Multi D GEMMs into Grouped GEMMs along with unit tests  `[source-pr]`
+- [pr-composable_kernel-2935](sources/prs/composable_kernel/PR-2935.md) — fix wp gemm bug when permuteN is false  `[source-pr]`
+- [pr-composable_kernel-2949](sources/prs/composable_kernel/PR-2949.md) — Add a new gemm pipeline based on ComputeV4 which utilizes async copy API  `[source-pr]`
+- [pr-composable_kernel-2950](sources/prs/composable_kernel/PR-2950.md) — fix: nil performance results for gemm examples  `[source-pr]`
+- [pr-composable_kernel-2955](sources/prs/composable_kernel/PR-2955.md) — [CK_TILE] Blockwise GEMM pipeline v6 - port of v5 from old CK  `[source-pr]`
+- [pr-composable_kernel-2963](sources/prs/composable_kernel/PR-2963.md) — Lwpck 3550: Implement and test fixed precision fp8 x bf8  `[source-pr]`
+- [pr-composable_kernel-2965](sources/prs/composable_kernel/PR-2965.md) — [CK TILE GEMM] Refactor the code of transposeC and quantpreshuffle of AQuant Gemm  `[source-pr]`
+- [pr-composable_kernel-2975](sources/prs/composable_kernel/PR-2975.md) — supporting prefill shapes for preshuffle block scale gemm  `[source-pr]`
+- [pr-composable_kernel-2981](sources/prs/composable_kernel/PR-2981.md) — [CK_TILE] Switch into universal gemms for conv bwds  `[source-pr]`
+- [pr-composable_kernel-2986](sources/prs/composable_kernel/PR-2986.md) — [CK_Tile] Merge multiple convolution groups into a single GEMM batch  `[source-pr]`
+- [pr-composable_kernel-2993](sources/prs/composable_kernel/PR-2993.md) — Added Support for tile_grouped_gemm_preshuffle example  `[source-pr]`
+- [pr-composable_kernel-3007](sources/prs/composable_kernel/PR-3007.md) — [CK_TILE] add tensorwise quant in grouped gemm  `[source-pr]`
+- [pr-composable_kernel-3019](sources/prs/composable_kernel/PR-3019.md) — [CK_TILE] Adding support for TiledPermuteN on preshuffle Block Scale Gemm  `[source-pr]`
+- [pr-composable_kernel-3055](sources/prs/composable_kernel/PR-3055.md) — [CK TILE ENGINE] Code changes to finding GPU id from TARGET  `[source-pr]`
+- [pr-composable_kernel-3063](sources/prs/composable_kernel/PR-3063.md) — [CK_TILE] Add Bquant to Grouped Gemm  `[source-pr]`
+- [pr-composable_kernel-3074](sources/prs/composable_kernel/PR-3074.md) — [CK_TILE] B matrix 2D block scale gemm  `[source-pr]`
+- [pr-composable_kernel-3079](sources/prs/composable_kernel/PR-3079.md) — Fix quant scale matrix layout for block scale gemm  `[source-pr]`
+- [pr-composable_kernel-3080](sources/prs/composable_kernel/PR-3080.md) — [CK_TILE] Add mxfp4 flatmm  `[source-pr]`
+- [pr-composable_kernel-3085](sources/prs/composable_kernel/PR-3085.md) — Excluding Tile engine from build  `[source-pr]`
+- [pr-composable_kernel-3098](sources/prs/composable_kernel/PR-3098.md) — Ck moe mxfp4 blockm32  `[source-pr]`
+- [pr-composable_kernel-3117](sources/prs/composable_kernel/PR-3117.md) — [CK_TILE] Replace GEMM Pipeline Macros in Examples with a Common Enum.  `[source-pr]`
+- [pr-composable_kernel-3119](sources/prs/composable_kernel/PR-3119.md) — test(grouped_gemm): add unit tests for grouped_gemm bquant with preshuffleB true  `[source-pr]`
+- [pr-composable_kernel-3121](sources/prs/composable_kernel/PR-3121.md) — [CK TILE ENGINE] GEMM Multi D Restructure  `[source-pr]`
+- [pr-composable_kernel-3132](sources/prs/composable_kernel/PR-3132.md) — refactor: remove gemm preshuffle pipeline v1 by removing all references from codebase  `[source-pr]`
+- [pr-composable_kernel-3137](sources/prs/composable_kernel/PR-3137.md) — Fix splitk preshuffle  `[source-pr]`
+- [pr-composable_kernel-3146](sources/prs/composable_kernel/PR-3146.md) — [CK_TILE] Move DataTypeTraits into a Common File  `[source-pr]`
+- [pr-composable_kernel-3151](sources/prs/composable_kernel/PR-3151.md) — [CK TILE] Refactor Conv configs and Conv Elementwise  `[source-pr]`
+- [pr-composable_kernel-3157](sources/prs/composable_kernel/PR-3157.md) — Tile engine for streamk  `[source-pr]`
+- [pr-composable_kernel-3165](sources/prs/composable_kernel/PR-3165.md) — [CK_Tile] Support for preshuffle weight(B) quant tensor for block scale gemm  `[source-pr]`
+- [pr-composable_kernel-3166](sources/prs/composable_kernel/PR-3166.md) — Ck tile engine commons  `[source-pr]`
+- [pr-composable_kernel-3170](sources/prs/composable_kernel/PR-3170.md) — [CK] fix MX bpreshuffle gemm B grid descriptor dimension error  `[source-pr]`
+- [pr-composable_kernel-3175](sources/prs/composable_kernel/PR-3175.md) — [CK_Tile] fixing ambiguous shuffle definitions for preshuffle kernels  `[source-pr]`
+- [pr-composable_kernel-3178](sources/prs/composable_kernel/PR-3178.md) — fix ck fp4 moe static assert  `[source-pr]`
+- [pr-composable_kernel-3181](sources/prs/composable_kernel/PR-3181.md) — [CK TILE GEMM] Refactor block_scale_gemm examples  `[source-pr]`
+- [pr-composable_kernel-3186](sources/prs/composable_kernel/PR-3186.md) — [CK_TILE] Fix block_scale gemm on gfx12  `[source-pr]`
+- [pr-composable_kernel-3193](sources/prs/composable_kernel/PR-3193.md) — feat(block_scale_gemm): Support RRR-R, CRR-R and CCR-C layout for aquant quant mode  `[source-pr]`
+- [pr-composable_kernel-3204](sources/prs/composable_kernel/PR-3204.md) — remove usage of tile partitioner's full gemm shape  `[source-pr]`
+- [pr-composable_kernel-3208](sources/prs/composable_kernel/PR-3208.md) — [CK_TILE] Add Flatmm MX FP8  `[source-pr]`
+- [pr-composable_kernel-3213](sources/prs/composable_kernel/PR-3213.md) — Add new gemm multiply multiply instances on gfx950  `[source-pr]`
+- [pr-composable_kernel-3225](sources/prs/composable_kernel/PR-3225.md) — feat: add support for bf16 for grouped_gemm & grouped_gemm_preshuffle…  `[source-pr]`
+- [pr-composable_kernel-3227](sources/prs/composable_kernel/PR-3227.md) — Ck tile/gemm blockscale opt  `[source-pr]`
+- [pr-composable_kernel-3251](sources/prs/composable_kernel/PR-3251.md) — [CK-Tile] Refactor base pipeline usage  `[source-pr]`
+- [pr-composable_kernel-3259](sources/prs/composable_kernel/PR-3259.md) — [CK Tile] enable building examples by default  `[source-pr]`
+- [pr-composable_kernel-3277](sources/prs/composable_kernel/PR-3277.md) — Extend pk_int4_t support for block_scale_gemm aquant CR and RR layout  `[source-pr]`
+- [pr-composable_kernel-3278](sources/prs/composable_kernel/PR-3278.md) — Wmma support for gemm_multiply_multiply_wp  `[source-pr]`
+- [pr-composable_kernel-3283](sources/prs/composable_kernel/PR-3283.md) — [CK_Tile] Enable block scale gemm for gfx1201  `[source-pr]`
+- [pr-composable_kernel-3298](sources/prs/composable_kernel/PR-3298.md) — [CK_Tile] Enable PreshuffleB for 2d block scale Gemm  `[source-pr]`
+- [pr-composable_kernel-3300](sources/prs/composable_kernel/PR-3300.md) — Adding dispatcher architecture  `[source-pr]`
+- [pr-composable_kernel-3301](sources/prs/composable_kernel/PR-3301.md) — [CK_TILE] Port hw independent changes from internal repo to develop branch  `[source-pr]`
+- [pr-composable_kernel-3311](sources/prs/composable_kernel/PR-3311.md) — [ck_tile] remove duplicate functions in ck_tile  `[source-pr]`
+- [pr-composable_kernel-3314](sources/prs/composable_kernel/PR-3314.md) — Wmma support for gemm_ab_scale  `[source-pr]`
+- [pr-composable_kernel-3315](sources/prs/composable_kernel/PR-3315.md) — Wmma support for gemm_blockscale_wp  `[source-pr]`
+- [pr-composable_kernel-3318](sources/prs/composable_kernel/PR-3318.md) — feat(block_scale_gemm): Add layout Col-Col-Row-Col (ABC-Aquant) for tensors in aquant  `[source-pr]`
+- [pr-composable_kernel-3319](sources/prs/composable_kernel/PR-3319.md) — refactor: break test instances into multiple cpp files to reduce build time  `[source-pr]`
+- [pr-composable_kernel-3320](sources/prs/composable_kernel/PR-3320.md) — [CK_TILE] Fix Quant GEMM build  `[source-pr]`
+- [pr-composable_kernel-3325](sources/prs/composable_kernel/PR-3325.md) — Make CK TILE GEMM Aquant support block tile 128x128x128  `[source-pr]`
+- [pr-composable_kernel-3337](sources/prs/composable_kernel/PR-3337.md) — [CK Tile] Grouped GEMM aquant mode and non-persistent kernel  `[source-pr]`
+- [pr-composable_kernel-3343](sources/prs/composable_kernel/PR-3343.md) — Support A/B Quantization in Blockscale GEMM  `[source-pr]`
+- [pr-composable_kernel-3349](sources/prs/composable_kernel/PR-3349.md) — [CK_TILE] Support more layouts for BQuant GEMM  `[source-pr]`
+- [pr-composable_kernel-3350](sources/prs/composable_kernel/PR-3350.md) — Add the gfx1011 support on CK Tile with the SGPR builtin reading protection  `[source-pr]`
+- [pr-composable_kernel-3359](sources/prs/composable_kernel/PR-3359.md) — [CK-Tile] move out memory operation from cshuffle epilogue class  `[source-pr]`
+- [pr-composable_kernel-3377](sources/prs/composable_kernel/PR-3377.md) — [CK_TILE MOE] add NT & preshuffle permute to cktile MOE  `[source-pr]`
+- [pr-composable_kernel-3383](sources/prs/composable_kernel/PR-3383.md) — [CK-Tile] fixup codegen for tile engine ops gemm multid and gemm preshuffle  `[source-pr]`
+- [pr-composable_kernel-3392](sources/prs/composable_kernel/PR-3392.md) — refactor: remove duplicate MakeALdsBlockDescriptor using CRTP pattern  `[source-pr]`
+- [pr-composable_kernel-3395](sources/prs/composable_kernel/PR-3395.md) — build: reduce build time for bquant tests by splitting into multiple cpp & support on other gfx10 case  `[source-pr]`
+- [pr-composable_kernel-3401](sources/prs/composable_kernel/PR-3401.md) — [CK_TILE] Add FP8xF4 Flatmm  `[source-pr]`
+- [pr-composable_kernel-3414](sources/prs/composable_kernel/PR-3414.md) — [CK_TILE] Grouped gemm quant tensor layouts  `[source-pr]`
+- [pr-composable_kernel-3420](sources/prs/composable_kernel/PR-3420.md) — Disable test_tile_gemm_quant_bquant_preshuffle.  `[source-pr]`
+- [pr-composable_kernel-3429](sources/prs/composable_kernel/PR-3429.md) — Implement device_gemm_universal_preshuffle_instance for RDNA4  `[source-pr]`
+- [pr-composable_kernel-3434](sources/prs/composable_kernel/PR-3434.md) — [TILE ENGINE] Restructure to Base class of GEMM  `[source-pr]`
+- [pr-composable_kernel-3440](sources/prs/composable_kernel/PR-3440.md) — Ck moe bs splitk pr  `[source-pr]`
+- [pr-composable_kernel-3445](sources/prs/composable_kernel/PR-3445.md) — [CK_Tile] Support for various group sizes Preshuffle quant for 2d block scale gemm  `[source-pr]`
+- [pr-composable_kernel-3447](sources/prs/composable_kernel/PR-3447.md) — Dev/a8w4 and a8w8splitk  `[source-pr]`
+- [pr-composable_kernel-3452](sources/prs/composable_kernel/PR-3452.md) — [CKTILE] Support A/B Quantization in Blockscale Grouped Gemm  `[source-pr]`
+- [pr-composable_kernel-3453](sources/prs/composable_kernel/PR-3453.md) — Enable padding blockscale for abquant  `[source-pr]`
+- [pr-composable_kernel-3462](sources/prs/composable_kernel/PR-3462.md) — [CK_Tile]  Support for group size 128 for Preshuffle quant for 2d block scale gemm  `[source-pr]`
+- [pr-composable_kernel-3465](sources/prs/composable_kernel/PR-3465.md) — Add support for direct store in epilogue and padding support for wave transfer without transpose  `[source-pr]`
+- [pr-composable_kernel-3488](sources/prs/composable_kernel/PR-3488.md) — enable f8 tests  `[source-pr]`
+- [pr-composable_kernel-3490](sources/prs/composable_kernel/PR-3490.md) — [CK_TILE][FMHA] Enable gpt-oss sink  `[source-pr]`
+- [pr-composable_kernel-3491](sources/prs/composable_kernel/PR-3491.md) — Shuffle fix for gfx950  `[source-pr]`
+- [pr-composable_kernel-3493](sources/prs/composable_kernel/PR-3493.md) — Refactor weight preshuffled pipeline and unify LDS buffer management API  `[source-pr]`
+- [pr-composable_kernel-3495](sources/prs/composable_kernel/PR-3495.md) — [CK_TILE] add preshuffleB mode for ABQuant GEMM  `[source-pr]`
+- [pr-composable_kernel-3520](sources/prs/composable_kernel/PR-3520.md) — [CK-Tile] add persistent async input scheduler parameters to kernel device-side and host-side args  `[source-pr]`
+- [pr-composable_kernel-3578](sources/prs/composable_kernel/PR-3578.md) — Multi AB support for wave transfer  `[source-pr]`
+- [pr-composable_kernel-3601](sources/prs/composable_kernel/PR-3601.md) — Mx fp6 flatmm  `[source-pr]`
+- [pr-composable_kernel-3603](sources/prs/composable_kernel/PR-3603.md) — [CK_Tile] Support for a4w4 (fp4) in block scale gemm AB quant  `[source-pr]`
+- [pr-composable_kernel-3620](sources/prs/composable_kernel/PR-3620.md) — GEMM Blockscale ABQuant Optimization  `[source-pr]`
+- [pr-composable_kernel-3629](sources/prs/composable_kernel/PR-3629.md) — [CK_Tile] Adding support for preshuffleQuant in AB quant Block Scale Gemm  `[source-pr]`
+- [pr-composable_kernel-3638](sources/prs/composable_kernel/PR-3638.md) — [CK_TILE] ABQuant New Preshuffle  `[source-pr]`
+- [pr-composable_kernel-3653](sources/prs/composable_kernel/PR-3653.md) — feat: add split_k support for block scale gemm bquant mode.  `[source-pr]`
+- [pr-sglang-23319](sources/prs/sglang/PR-23319.md) — [AMD] Use bpreshuffle FP8 blockscale GEMM to replace ABScale GEMM  `[source-pr]`
+- [pr-sglang-23562](sources/prs/sglang/PR-23562.md) — [AMD] Enable preshuffle paged MQA and page_size=64 for NSA indexer  `[source-pr]`
+- [pr-sglang-23671](sources/prs/sglang/PR-23671.md) — [AMD][bugfix] add gate rocm >= 7.2 for bpreshuffle  `[source-pr]`
+- [pr-sglang-25205](sources/prs/sglang/PR-25205.md) — [AMD]  Auto-fallback NSA indexer to page_size=1 when aiter preshuffle gluon kernel is unavailable (Deepseek v3.2)  `[source-pr]`
+- [pr-sglang-26337](sources/prs/sglang/PR-26337.md) — amd/deepseek_v4 32/N Use CK bpreshuffle for wo_b GEMM (7168, 2048) instead of Triton  `[source-pr]`
+- [pr-triton-851](sources/prs/triton/PR-851.md) — Bf16mx4 moe launch  `[source-pr]`
+- [pr-triton-880](sources/prs/triton/PR-880.md) — [Triton=kernels] mi300 MoE preshuffle flag change  `[source-pr]`
+- [pr-vllm-40754](sources/prs/vllm/PR-40754.md) — [Bugfix][ROCm] Fix gemm_a4w4 call to use updated AITER API signature  `[source-pr]`
+- [pr-vllm-42061](sources/prs/vllm/PR-42061.md) — [ROCm][Bugfix] Re-tag AITER MoE weights as preshuffled after replace_parameter  `[source-pr]`
+- [pr-vllm-42062](sources/prs/vllm/PR-42062.md) — [ROCm] Enable gluon paged MQA logits on gfx950 (MI355X)  `[source-pr]`
 - [kernel-flydsl-preshuffle-gemm](wiki/kernels/flydsl-preshuffle-gemm.md) — FlyDSL Preshuffle GEMM (layout-DSL example)  `[wiki-kernel]`
+
+## register-blocking
+
+- [pr-FlyDSL-116](sources/prs/FlyDSL/PR-116.md) — [MLIR][python]Migrate Python bindings to PyConcreteType<> and fix TypeID ODR violation  `[source-pr]`
+- [pr-FlyDSL-152](sources/prs/FlyDSL/PR-152.md) — [Tool][fly-opt] Add fly-opt tool and lit-based test suite  `[source-pr]`
+- [pr-FlyDSL-153](sources/prs/FlyDSL/PR-153.md) — Pre v0.1 gemm fix  `[source-pr]`
+- [pr-FlyDSL-161](sources/prs/FlyDSL/PR-161.md) — [Pass][fly-gpu-to-llvm]  Add fly-gpu-to-llvm pass to preserve asyncObject for graph capture  `[source-pr]`
+- [pr-FlyDSL-19](sources/prs/FlyDSL/PR-19.md) — improve softmax/rmsnorm/layernorm performance  `[source-pr]`
+- [pr-FlyDSL-191](sources/prs/FlyDSL/PR-191.md) — Refine code  `[source-pr]`
+- [pr-FlyDSL-216](sources/prs/FlyDSL/PR-216.md) — [Prune] Remove fly-gpu-to-llvm pass in favor of upstream gpu-to-llvm, use async_dependency to track stream argument  `[source-pr]`
+- [pr-FlyDSL-250](sources/prs/FlyDSL/PR-250.md) — 【2/N】add support wmma kernels for RDNA4(GFX1201)  `[source-pr]`
+- [pr-FlyDSL-27](sources/prs/FlyDSL/PR-27.md) — Dev/gemm flir  `[source-pr]`
+- [pr-FlyDSL-276](sources/prs/FlyDSL/PR-276.md) — Refactor: extract pluggable compile-backend system  `[source-pr]`
+- [pr-FlyDSL-277](sources/prs/FlyDSL/PR-277.md) — feat(runtime): implement device runtime layer (Python)  `[source-pr]`
+- [pr-FlyDSL-278](sources/prs/FlyDSL/PR-278.md) — [Compiler][Kernel][MI450]Rebase gfx1250 WMMA/mcast/mxfp4 support onto main  `[source-pr]`
+- [pr-FlyDSL-285](sources/prs/FlyDSL/PR-285.md) — Register Python float to fx.Float32 and bool to fx.Boolean  `[source-pr]`
+- [pr-FlyDSL-288](sources/prs/FlyDSL/PR-288.md) — add(rocdl): Support pointer casts and bf16 16x16x16 MFMA  `[source-pr]`
+- [pr-FlyDSL-313](sources/prs/FlyDSL/PR-313.md) — prune(capi): remove FlyROCDL type wrappers, bind C++ directly  `[source-pr]`
+- [pr-FlyDSL-33](sources/prs/FlyDSL/PR-33.md) — modify cpu golden data to pytorch golden data, fix v_cvt_pk_bf16_f32 issue and test more case compare to aiter ops  `[source-pr]`
+- [pr-FlyDSL-340](sources/prs/FlyDSL/PR-340.md) — [gfx1250] optimize FP4 GEMM for large tile 256x256  `[source-pr]`
+- [pr-FlyDSL-342](sources/prs/FlyDSL/PR-342.md) — [FEAT] Add math dialect DSL wrappers  `[source-pr]`
+- [pr-FlyDSL-359](sources/prs/FlyDSL/PR-359.md) — [Refactor] Convert norm/softmax kernels from raw buffer_ops to layout…  `[source-pr]`
+- [pr-FlyDSL-37](sources/prs/FlyDSL/PR-37.md) — Dev/int4 moe  `[source-pr]`
+- [pr-FlyDSL-370](sources/prs/FlyDSL/PR-370.md) — Pr/a16wi4 group  `[source-pr]`
+- [pr-FlyDSL-404](sources/prs/FlyDSL/PR-404.md) — Add fused epilogue support to preshuffle GEMM: bias + ReLU/SiLU/GeLU  `[source-pr]`
+- [pr-FlyDSL-418](sources/prs/FlyDSL/PR-418.md) — feat: support mori IR JIT compilation with shmem  `[source-pr]`
+- [pr-FlyDSL-475](sources/prs/FlyDSL/PR-475.md) — Add backend support  `[source-pr]`
+- [pr-FlyDSL-488](sources/prs/FlyDSL/PR-488.md) — test: preserve default ROCm backend behavior  `[source-pr]`
+- [pr-FlyDSL-503](sources/prs/FlyDSL/PR-503.md) — Fix/fly opt gpu llvm translations  `[source-pr]`
+- [pr-FlyDSL-509](sources/prs/FlyDSL/PR-509.md) — fix: import PA metadata helpers from aiter attention  `[source-pr]`
+- [pr-FlyDSL-524](sources/prs/FlyDSL/PR-524.md) — [Enh] Add shortcut make_rmem_tensor for allocate register tensor  `[source-pr]`
+- [pr-FlyDSL-533](sources/prs/FlyDSL/PR-533.md) — [gfx1250] Optimize FP8/FP4 GEMM kernel and tests  `[source-pr]`
+- [pr-FlyDSL-59](sources/prs/FlyDSL/PR-59.md) — fix dynamic m  `[source-pr]`
+- [pr-FlyDSL-591](sources/prs/FlyDSL/PR-591.md) — Update kernel-trace-analysis, lds-optimization, prefetch-data-load sk…  `[source-pr]`
+- [pr-Tensile-1049](sources/prs/Tensile/PR-1049.md) — wider local read and use 1 LDS buffer with prefetch global read  `[source-pr]`
+- [pr-Tensile-1060](sources/prs/Tensile/PR-1060.md) — Pipelined store for MI kernels  `[source-pr]`
+- [pr-Tensile-1091](sources/prs/Tensile/PR-1091.md) — GSU for BF16/FP16 high precision accumulation  `[source-pr]`
+- [pr-Tensile-1132](sources/prs/Tensile/PR-1132.md) — BF16/FP16 HPA GSU with per GSU temp buffer  `[source-pr]`
+- [pr-Tensile-1214](sources/prs/Tensile/PR-1214.md) — Instruction scheduling to reduce LDS by half in TN problems  `[source-pr]`
+- [pr-Tensile-1300](sources/prs/Tensile/PR-1300.md) — Initial implementation support for aldebaran  `[source-pr]`
+- [pr-Tensile-1319](sources/prs/Tensile/PR-1319.md) — Fix an error: invalid register class: vgpr tuples must be 64 bit aligned  `[source-pr]`
+- [pr-Tensile-1361](sources/prs/Tensile/PR-1361.md) — Aldebaran dgemm misc optimization  `[source-pr]`
+- [pr-Tensile-1371](sources/prs/Tensile/PR-1371.md) — Refactor vgpr occupancy calculation for Aldebaran's new hardware capability Unified Register Files  `[source-pr]`
+- [pr-Tensile-1383](sources/prs/Tensile/PR-1383.md) — ROCm 4.5 merge staging into master  `[source-pr]`
+- [pr-Tensile-1406](sources/prs/Tensile/PR-1406.md) — merge staging 998f23ee into master with GO from CQE  `[source-pr]`
+- [pr-Tensile-1489](sources/prs/Tensile/PR-1489.md) — DGEMM optimizations + some bug fixes  `[source-pr]`
+- [pr-Tensile-1492](sources/prs/Tensile/PR-1492.md) — Code generator refactors  `[source-pr]`
+- [pr-Tensile-1506](sources/prs/Tensile/PR-1506.md) — merge staging f6364759 into master on Conditional GO from CQE  `[source-pr]`
+- [pr-Tensile-1529](sources/prs/Tensile/PR-1529.md) — merge staging 3c17e5a into master on GO from CQE  `[source-pr]`
+- [pr-Tensile-1598](sources/prs/Tensile/PR-1598.md) — Assembly syntax and coverage for DirectToLds has changed  `[source-pr]`
+- [pr-Tensile-1613](sources/prs/Tensile/PR-1613.md) — type cast localMemory to a pointer to COMPUTE_DATA_TYPE in LDS to avoid precision loss and modify the code fragment to compute lldsNumElementsReduction  `[source-pr]`
+- [pr-Tensile-1630](sources/prs/Tensile/PR-1630.md) — WMMA: fix h beta vectorwidth4 correctness issue  `[source-pr]`
+- [pr-Tensile-1668](sources/prs/Tensile/PR-1668.md) — Fix for ZGEMM 4x4 MatrixInst mismatch issue  `[source-pr]`
+- [pr-Tensile-1691](sources/prs/Tensile/PR-1691.md) — Reduce max sgpr usage by improving temporary register re-use  `[source-pr]`
+- [pr-Tensile-1703](sources/prs/Tensile/PR-1703.md) — Generate TailLoop code in NoLoadLoop to support prefetch for TailLoop, plus more TailLoop optimization for mfma  `[source-pr]`
+- [pr-Tensile-1767](sources/prs/Tensile/PR-1767.md) — sgpr allocation optimization  `[source-pr]`
+- [pr-Tensile-1768](sources/prs/Tensile/PR-1768.md) — init code optimization  `[source-pr]`
+- [pr-Tensile-1803](sources/prs/Tensile/PR-1803.md) — LdsPad optimization + new parameters for local read related optimizations  `[source-pr]`
+- [pr-Tensile-1843](sources/prs/Tensile/PR-1843.md) — Kernarg preloading  `[source-pr]`
+- [pr-Tensile-188](sources/prs/Tensile/PR-188.md) — Add DirectToLDS option [Initial Checkin]  `[source-pr]`
+- [pr-Tensile-1890](sources/prs/Tensile/PR-1890.md) — more init code optimizations  `[source-pr]`
+- [pr-Tensile-191](sources/prs/Tensile/PR-191.md) — Refactor sgpr allocation  `[source-pr]`
+- [pr-Tensile-1919](sources/prs/Tensile/PR-1919.md) — Default value for long jump positive and negative  `[source-pr]`
+- [pr-Tensile-1927](sources/prs/Tensile/PR-1927.md) — adds tPrint and reconciles printing options  `[source-pr]`
+- [pr-Tensile-2014](sources/prs/Tensile/PR-2014.md) — Linearize asm register search  `[source-pr]`
+- [pr-Tensile-2047](sources/prs/Tensile/PR-2047.md) — ROCm 6.4 merge staging into master  `[source-pr]`
+- [pr-Tensile-2113](sources/prs/Tensile/PR-2113.md) — Adding initial support for gfx950  `[source-pr]`
+- [pr-Tensile-2114](sources/prs/Tensile/PR-2114.md) — Adding initial support for gfx950  `[source-pr]`
+- [pr-Tensile-291](sources/prs/Tensile/PR-291.md) — Fix hpa beta  `[source-pr]`
+- [pr-Tensile-293](sources/prs/Tensile/PR-293.md) — Fix half gsu  `[source-pr]`
+- [pr-Tensile-299](sources/prs/Tensile/PR-299.md) — merge with develop branch as of 2018-07-29  `[source-pr]`
+- [pr-Tensile-381](sources/prs/Tensile/PR-381.md) — Suppress special loop iter  `[source-pr]`
+- [pr-Tensile-403](sources/prs/Tensile/PR-403.md) — enabling GSU for i8 gemm  `[source-pr]`
+- [pr-Tensile-70](sources/prs/Tensile/PR-70.md) — filter out failing solution  `[source-pr]`
+- [pr-Tensile-723](sources/prs/Tensile/PR-723.md) — Replace std::call_once() with local static variables  `[source-pr]`
+- [pr-Tensile-797](sources/prs/Tensile/PR-797.md) — Fix vgpr aliasing in kernel generator  `[source-pr]`
+- [pr-Tensile-806](sources/prs/Tensile/PR-806.md) — Mfma scaling fix  `[source-pr]`
+- [pr-Tensile-81](sources/prs/Tensile/PR-81.md) — prefetching support  `[source-pr]`
+- [pr-Tensile-85](sources/prs/Tensile/PR-85.md) — short-vectors use verbose register initialization  `[source-pr]`
+- [pr-Tensile-88](sources/prs/Tensile/PR-88.md) — re-enabling large thread tile since register spilling bug no longer a…  `[source-pr]`
+- [pr-Tensile-887](sources/prs/Tensile/PR-887.md) — TransposeLds fixes  `[source-pr]`
+- [pr-Tensile-972](sources/prs/Tensile/PR-972.md) — re-factory Tensile to support all Matrix Instruction  `[source-pr]`
+- [pr-Tensile-981](sources/prs/Tensile/PR-981.md) — Reduce VGPR count for MI kernels  `[source-pr]`
+- [pr-aiter-1233](sources/prs/aiter/PR-1233.md) — Mla splitkv enhance split alg inte  `[source-pr]`
+- [pr-aiter-1297](sources/prs/aiter/PR-1297.md) — Fix how to update accumulator for dot_scaled  `[source-pr]`
+- [pr-aiter-1479](sources/prs/aiter/PR-1479.md) — Jacchang/pa ragged experimental  `[source-pr]`
+- [pr-aiter-1691](sources/prs/aiter/PR-1691.md) — [PA] Optimize PA Decode Gluon Performance for BF16/FP16 with KV_BLOCK_SIZE=64 and Fix ROCm 7.0 AOT Compilation  `[source-pr]`
+- [pr-aiter-1712](sources/prs/aiter/PR-1712.md) — [Fix] Add mutates_args to flash_attn_backward to fix AOTAutograd DDP …  `[source-pr]`
+- [pr-aiter-1774](sources/prs/aiter/PR-1774.md) — [PA] Optimization: Remove Query/Output Transpose Kernels by Direct 5D Tensor Access in PA Decode Gluon  `[source-pr]`
+- [pr-aiter-1866](sources/prs/aiter/PR-1866.md) — Fix code style after updating Black to 26.1.0  `[source-pr]`
+- [pr-aiter-2096](sources/prs/aiter/PR-2096.md) — Hipgraph support for fav3 kvcache  `[source-pr]`
+- [pr-aiter-2110](sources/prs/aiter/PR-2110.md) — [OPUS] enhance cast(), add numeric_limits, add missing test files  `[source-pr]`
+- [pr-aiter-2189](sources/prs/aiter/PR-2189.md) — [FIX] address overflow fix on fmha_bwd of gfx942/gfx950  `[source-pr]`
+- [pr-aiter-2332](sources/prs/aiter/PR-2332.md) — [Gluon][gfx1250] Gemm MXFP4 preshuffled  `[source-pr]`
+- [pr-aiter-2394](sources/prs/aiter/PR-2394.md) — [OPUS] enable gfx1250 support for OPUS tests  `[source-pr]`
+- [pr-aiter-2414](sources/prs/aiter/PR-2414.md) — perf: optimize _moe_mxfp4_sort_kernel — reduce recompilation and improve throughput  `[source-pr]`
+- [pr-aiter-2441](sources/prs/aiter/PR-2441.md) — [Triton MoE]: Add optimized Gluon kernel for AMD CDNA3 with K-dimension unrolling  `[source-pr]`
+- [pr-aiter-2480](sources/prs/aiter/PR-2480.md) — [OPUS] Add gfx950 smem transpose load  `[source-pr]`
+- [pr-aiter-2487](sources/prs/aiter/PR-2487.md) — Expose AQLayout as tunable parameter for CKTile blockscale 8-warp GEMM kernels  `[source-pr]`
+- [pr-aiter-2507](sources/prs/aiter/PR-2507.md) — Fix data overwrite problem in asm fmoe 1stage kernels for mi350  `[source-pr]`
+- [pr-aiter-2545](sources/prs/aiter/PR-2545.md) — refactor hip kernel -- remove torch from csrc  `[source-pr]`
+- [pr-aiter-2638](sources/prs/aiter/PR-2638.md) — fix(car): craph capture err  `[source-pr]`
+- [pr-aiter-2676](sources/prs/aiter/PR-2676.md) — Add native qh32 qseqlen2 MLA PS kernel for gfx950 fp8 decode  `[source-pr]`
+- [pr-aiter-2686](sources/prs/aiter/PR-2686.md) — add optimized prefill gdn kernels for qwen3_5  `[source-pr]`
+- [pr-aiter-2702](sources/prs/aiter/PR-2702.md) — Fix release workflow: runner labels, Docker username, setuptools_scm  `[source-pr]`
+- [pr-aiter-2723](sources/prs/aiter/PR-2723.md) — Fix Triton MoE GEMM shared memory exhaustion by reducing stage count  `[source-pr]`
+- [pr-aiter-2729](sources/prs/aiter/PR-2729.md) — Add bf16 MLA decode kernel for gqa_ratio=64, qseqlen=1 (non-persistent)  `[source-pr]`
+- [pr-aiter-2852](sources/prs/aiter/PR-2852.md) — MLA PS mode support nhead8,2 in MI308  `[source-pr]`
+- [pr-aiter-2967](sources/prs/aiter/PR-2967.md) — [TRITON] mHC-post: Apply post-stream and res-stream mixing  `[source-pr]`
+- [pr-aiter-3014](sources/prs/aiter/PR-3014.md) — Add fp8 mla decode kernel for sub_kv=64, sub_qh=8 (gqa_ratio=8, qseql…  `[source-pr]`
+- [pr-aiter-3075](sources/prs/aiter/PR-3075.md) — blockscale gemm: dispatch by kernelName, strict tuned-CSV validation  `[source-pr]`
+- [pr-aiter-3100](sources/prs/aiter/PR-3100.md) — feat(topk): optimized topk_gating kernel with sigmoid/softmax support  `[source-pr]`
+- [pr-aiter-3127](sources/prs/aiter/PR-3127.md) — AiterAsmKernel: add init-time sanity checks for .co registration  `[source-pr]`
+- [pr-aiter-3148](sources/prs/aiter/PR-3148.md) — Rchamber/optimised dynamic per group scaled quant v2  `[source-pr]`
+- [pr-aiter-3166](sources/prs/aiter/PR-3166.md) — [Bugfix][Triton] Honor `transpose_bm` in batched_gemm_a16wfp4_ fake tensor  `[source-pr]`
+- [pr-aiter-3190](sources/prs/aiter/PR-3190.md) — [Triton] [ATOM] DSV4 fusion phase2  `[source-pr]`
+- [pr-aiter-3225](sources/prs/aiter/PR-3225.md) — [OPUS] [ATOM] Add pa_sparse_prefill_opus kernel for DeepSeek-V4 prefill on gfx950  `[source-pr]`
+- [pr-aiter-325](sources/prs/aiter/PR-325.md) — [Triton] [mha] Remove if-else block in the causal loop  `[source-pr]`
+- [pr-aiter-3293](sources/prs/aiter/PR-3293.md) — Moe gfx1250 optimizations  `[source-pr]`
+- [pr-aiter-3313](sources/prs/aiter/PR-3313.md) — Zhimding/fix aot moe pad 0522  `[source-pr]`
+- [pr-aiter-3318](sources/prs/aiter/PR-3318.md) — Revert '[Gluon][gfx1250] Gemm MXFP4 preshuffled'  `[source-pr]`
+- [pr-aiter-3338](sources/prs/aiter/PR-3338.md) — Add GFX950 BF16 MLA persistent kernels for GQA 16/32 qseqlen4  `[source-pr]`
+- [pr-aiter-3342](sources/prs/aiter/PR-3342.md) — Revert 'Zhimding/fix aot moe pad 0522'  `[source-pr]`
+- [pr-aiter-466](sources/prs/aiter/PR-466.md) — Add aiter namespace to avoid symbol conflict with vllm  `[source-pr]`
+- [pr-aiter-480](sources/prs/aiter/PR-480.md) — integrate fa bwd asm kernel  `[source-pr]`
+- [pr-aiter-488](sources/prs/aiter/PR-488.md) — Change test to use the new preshuffle_scale API and change all mxfp config to use mfma16  `[source-pr]`
+- [pr-aiter-490](sources/prs/aiter/PR-490.md) — Fix tests and benchmarking for preshuffled fp4  `[source-pr]`
+- [pr-aiter-591](sources/prs/aiter/PR-591.md) — Pa rocm refresh4  `[source-pr]`
+- [pr-aiter-740](sources/prs/aiter/PR-740.md) — Enable custom op and avoid graph breaks  `[source-pr]`
+- [pr-aiter-773](sources/prs/aiter/PR-773.md) — Support torch.library.infer_schema for torch < 2.5  `[source-pr]`
+- [pr-aiter-783](sources/prs/aiter/PR-783.md) — Make Gemm and other ops return Tesnor And graph break fix  `[source-pr]`
+- [pr-composable_kernel-1052](sources/prs/composable_kernel/PR-1052.md) — Add support for double buffering in direct load GEMM kernel  `[source-pr]`
+- [pr-composable_kernel-1338](sources/prs/composable_kernel/PR-1338.md) — [CK_TILE] fmha forward split-kv + combine kernels  `[source-pr]`
+- [pr-composable_kernel-1387](sources/prs/composable_kernel/PR-1387.md) — [CK_TILE] Add PagedAttention kernels  `[source-pr]`
+- [pr-composable_kernel-1453](sources/prs/composable_kernel/PR-1453.md) — [GEMM] gemm_universal related optimization  `[source-pr]`
+- [pr-composable_kernel-1604](sources/prs/composable_kernel/PR-1604.md) — [CK_TILE] layernorm support fused-quant/fused-add  `[source-pr]`
+- [pr-composable_kernel-1705](sources/prs/composable_kernel/PR-1705.md) — [CK_TILE] Add fmha fwd N-Warp S-Shuffle pipeline (fmha fwd splitkv pipeline variant)  `[source-pr]`
+- [pr-composable_kernel-1725](sources/prs/composable_kernel/PR-1725.md) — [CK_TILE] Undo padding-flag changes in fmha_fwd_kernel.hpp  `[source-pr]`
+- [pr-composable_kernel-1776](sources/prs/composable_kernel/PR-1776.md) — CK Tile GEMM CICD fixed & register block method refactor  `[source-pr]`
+- [pr-composable_kernel-1786](sources/prs/composable_kernel/PR-1786.md) — Implement the fp16xint4 scale weight only kernel for Ali  `[source-pr]`
+- [pr-composable_kernel-1807](sources/prs/composable_kernel/PR-1807.md) — enable int4 scale (weight only) kernel  `[source-pr]`
+- [pr-composable_kernel-184](sources/prs/composable_kernel/PR-184.md) — Manual control of MAC cluster for improved interwave performance  `[source-pr]`
+- [pr-composable_kernel-1871](sources/prs/composable_kernel/PR-1871.md) — Fix KPack and enable existing instances on gfx950  `[source-pr]`
+- [pr-composable_kernel-194](sources/prs/composable_kernel/PR-194.md) — Profiler: fix fp32 c-shuffle gemm tuning parameter  `[source-pr]`
+- [pr-composable_kernel-2136](sources/prs/composable_kernel/PR-2136.md) — Add Matrix A and Matrix B Swizzle for LDS in Computev4 policy  `[source-pr]`
+- [pr-composable_kernel-2163](sources/prs/composable_kernel/PR-2163.md) — [CK_TILE] Add logits soft-capping & customization support to the FMHA forward kernel/pipelines  `[source-pr]`
+- [pr-composable_kernel-2276](sources/prs/composable_kernel/PR-2276.md) — Code drop for 2 warp ping pong scheduler along K dimension.  `[source-pr]`
+- [pr-composable_kernel-2405](sources/prs/composable_kernel/PR-2405.md) — ck tile pagedkv prefill  `[source-pr]`
+- [pr-composable_kernel-2425](sources/prs/composable_kernel/PR-2425.md) — Enable Async Copy for MI355  `[source-pr]`
+- [pr-composable_kernel-2550](sources/prs/composable_kernel/PR-2550.md) — [CK_TILE] FMHA BWD Remove Unnecessary Padding  `[source-pr]`
+- [pr-composable_kernel-2615](sources/prs/composable_kernel/PR-2615.md) — fix build for test_ck_tile_fp8 on rhel8  `[source-pr]`
+- [pr-composable_kernel-2628](sources/prs/composable_kernel/PR-2628.md) — [CK_TILE] FMHA BWD Optimization For GFX950  `[source-pr]`
+- [pr-composable_kernel-2641](sources/prs/composable_kernel/PR-2641.md) — Optimize fmha fwd decode & prefill for gfx950  `[source-pr]`
+- [pr-composable_kernel-2643](sources/prs/composable_kernel/PR-2643.md) — [CK_TILE] FMHA BWD Decode Pipeline  `[source-pr]`
+- [pr-composable_kernel-2663](sources/prs/composable_kernel/PR-2663.md) — ck_tile kernel for gemm with groupwise quantized B tensor.  `[source-pr]`
+- [pr-composable_kernel-2665](sources/prs/composable_kernel/PR-2665.md) — Add other layouts for FP8 block scaled gemm  `[source-pr]`
+- [pr-composable_kernel-2670](sources/prs/composable_kernel/PR-2670.md) — Revert 'Optimize fmha fwd decode & prefill for gfx950'  `[source-pr]`
+- [pr-composable_kernel-2671](sources/prs/composable_kernel/PR-2671.md) — Re-enable optimization for gfx950 fmha fwd  `[source-pr]`
+- [pr-composable_kernel-2836](sources/prs/composable_kernel/PR-2836.md) — [CK_TILE] Support f32 in FMHA (fwd and bwd)  `[source-pr]`
+- [pr-composable_kernel-2878](sources/prs/composable_kernel/PR-2878.md) — [CK-Tile] Add the API to load SGPR with any byte size  `[source-pr]`
+- [pr-composable_kernel-2904](sources/prs/composable_kernel/PR-2904.md) — Revert '[CK-Tile] Add the API to load SGPR '  `[source-pr]`
+- [pr-composable_kernel-2913](sources/prs/composable_kernel/PR-2913.md) — Fix the compilation error of #2878  `[source-pr]`
+- [pr-composable_kernel-2949](sources/prs/composable_kernel/PR-2949.md) — Add a new gemm pipeline based on ComputeV4 which utilizes async copy API  `[source-pr]`
+- [pr-composable_kernel-2955](sources/prs/composable_kernel/PR-2955.md) — [CK_TILE] Blockwise GEMM pipeline v6 - port of v5 from old CK  `[source-pr]`
+- [pr-composable_kernel-2964](sources/prs/composable_kernel/PR-2964.md) — Grouped convolution forward device implementation and base flavors for RDNA3/4  `[source-pr]`
+- [pr-composable_kernel-3027](sources/prs/composable_kernel/PR-3027.md) — Wave Tile Transfer supporting global load with transpose  `[source-pr]`
+- [pr-composable_kernel-3038](sources/prs/composable_kernel/PR-3038.md) — Add CK Tile Tutorials Folder with GEMM and COPY Kernel  `[source-pr]`
+- [pr-composable_kernel-3153](sources/prs/composable_kernel/PR-3153.md) — [CK_TILE][FMHA] Integrate FAv2 & FAv3 (WIP) in the single fmha_fwd() API  `[source-pr]`
+- [pr-composable_kernel-3164](sources/prs/composable_kernel/PR-3164.md) — Fix compilation errors with clang22.  `[source-pr]`
+- [pr-composable_kernel-3245](sources/prs/composable_kernel/PR-3245.md) — Fix and improve the gemm quant pipeline infrastructure  `[source-pr]`
+- [pr-composable_kernel-3301](sources/prs/composable_kernel/PR-3301.md) — [CK_TILE] Port hw independent changes from internal repo to develop branch  `[source-pr]`
+- [pr-composable_kernel-3359](sources/prs/composable_kernel/PR-3359.md) — [CK-Tile] move out memory operation from cshuffle epilogue class  `[source-pr]`
+- [pr-composable_kernel-3442](sources/prs/composable_kernel/PR-3442.md) — [FMHA] Batch Prefill Support Improvements:  Change KV Cache Layout & Large Page Size Support  `[source-pr]`
+- [pr-composable_kernel-3446](sources/prs/composable_kernel/PR-3446.md) — [CK_TILE] MX Flatmm Use Byte Pointer Arithmetic for A Tensor  `[source-pr]`
+- [pr-composable_kernel-3493](sources/prs/composable_kernel/PR-3493.md) — Refactor weight preshuffled pipeline and unify LDS buffer management API  `[source-pr]`
+- [pr-composable_kernel-3512](sources/prs/composable_kernel/PR-3512.md) — [CK TILE] Refactor function amd_buffer_load_invalid_element_return_zero  `[source-pr]`
+- [pr-composable_kernel-3537](sources/prs/composable_kernel/PR-3537.md) — Padding support for wave transfer  `[source-pr]`
+- [pr-composable_kernel-3603](sources/prs/composable_kernel/PR-3603.md) — [CK_Tile] Support for a4w4 (fp4) in block scale gemm AB quant  `[source-pr]`
+- [pr-composable_kernel-3607](sources/prs/composable_kernel/PR-3607.md) — [CK Tile] multi reduce improvements  `[source-pr]`
+- [pr-composable_kernel-381](sources/prs/composable_kernel/PR-381.md) — Add pipeline v1/v2 selector, add more instances  `[source-pr]`
+- [pr-composable_kernel-395](sources/prs/composable_kernel/PR-395.md) — Fused attention instances & padding tests  `[source-pr]`
+- [pr-composable_kernel-41](sources/prs/composable_kernel/PR-41.md) — FP16 data in-register transpose  `[source-pr]`
+- [pr-composable_kernel-47](sources/prs/composable_kernel/PR-47.md) — Merge develop into master  `[source-pr]`
+- [pr-composable_kernel-514](sources/prs/composable_kernel/PR-514.md) — Modularize ckProfiler operations  `[source-pr]`
+- [pr-composable_kernel-53](sources/prs/composable_kernel/PR-53.md) — Use __builtin_memcpy to implement bit_cast and for accessing vector from pointer of scalars  `[source-pr]`
+- [pr-composable_kernel-707](sources/prs/composable_kernel/PR-707.md) — Multiple fixes to GroupedGemm+SplitK  `[source-pr]`
+- [pr-composable_kernel-733](sources/prs/composable_kernel/PR-733.md) — Fix flash attn mask bug  `[source-pr]`
+- [pr-composable_kernel-76](sources/prs/composable_kernel/PR-76.md) — GEMM+Bias+ReLU+Add  `[source-pr]`
+- [pr-composable_kernel-783](sources/prs/composable_kernel/PR-783.md) — Split GEMM instance library & enable pipeline v2 optimization  `[source-pr]`
+- [pr-composable_kernel-826](sources/prs/composable_kernel/PR-826.md) — Implement DPP8-based GEMM for Navi21  `[source-pr]`
+- [pr-composable_kernel-863](sources/prs/composable_kernel/PR-863.md) — Redesign the DPP8 GEMM kernel to use warp-wise component  `[source-pr]`
+- [pr-composable_kernel-94](sources/prs/composable_kernel/PR-94.md) — Conv3d new  `[source-pr]`
+- [pr-composable_kernel-999](sources/prs/composable_kernel/PR-999.md) — Add basic support for direct loads from global to LDS  `[source-pr]`
+- [pr-flash-attention-179](sources/prs/flash-attention/PR-179.md) — [CK_TILE] Fix NaN for FMHA BWD When seq_q=0  `[source-pr]`
+- [pr-rocBLAS-299](sources/prs/rocBLAS/PR-299.md) — add m chunking so offset fits in 32 bit register  `[source-pr]`
+- [pr-rocBLAS-304](sources/prs/rocBLAS/PR-304.md) — gfx9 half precision support; fix for dgemm memory access fault  `[source-pr]`
+- [pr-rocBLAS-338](sources/prs/rocBLAS/PR-338.md) — gemm_ex: call tensile api, add blocking,add tests  `[source-pr]`
+- [pr-rocBLAS-779](sources/prs/rocBLAS/PR-779.md) — New Tensile client plus extensive rocBLAS refactoring changes  `[source-pr]`
+- [pr-sglang-20999](sources/prs/sglang/PR-20999.md) — Replace clamp_position with JIT kernel + platform dispatch  `[source-pr]`
+- [pr-sglang-21040](sources/prs/sglang/PR-21040.md) — [AMD][MoRI] Auto-select dispatch quantization type from MoE weight dtype.  `[source-pr]`
+- [pr-sglang-21062](sources/prs/sglang/PR-21062.md) — Use spec v2 by default  `[source-pr]`
+- [pr-sglang-21125](sources/prs/sglang/PR-21125.md) — [HiCache] feat: add draft KV cache backing for L2/L3  `[source-pr]`
+- [pr-sglang-21213](sources/prs/sglang/PR-21213.md) — [AMD]: Support MLA with nhead<16 and FP8 KV cache for TP=8 (Kimi K2.5…  `[source-pr]`
+- [pr-sglang-21243](sources/prs/sglang/PR-21243.md) — [Spec][Ngram] 5/N: Store and advance anchor match state across decode steps  `[source-pr]`
+- [pr-sglang-21271](sources/prs/sglang/PR-21271.md) — Fix disaggregation test bootstrap port conflict  `[source-pr]`
+- [pr-sglang-21342](sources/prs/sglang/PR-21342.md) — [Score API] Implement EngineScoreMixin for scoring functionality and refactor Tok…  `[source-pr]`
+- [pr-sglang-21388](sources/prs/sglang/PR-21388.md) — Multi platform Plugin  `[source-pr]`
+- [pr-sglang-21463](sources/prs/sglang/PR-21463.md) — Migrate all callers from /get_server_info to /server_info  `[source-pr]`
+- [pr-sglang-21524](sources/prs/sglang/PR-21524.md) — [AMD] Add MiniMax-M2.5 nightly perf benchmarks for MI30x and MI35x  `[source-pr]`
+- [pr-sglang-21620](sources/prs/sglang/PR-21620.md) — fix: Mistral Small 4 fails to start due to config/weight format mismatch  `[source-pr]`
+- [pr-sglang-21669](sources/prs/sglang/PR-21669.md) — [AMD] Add Qwen3.5-397B FP8 nightly perf benchmarks for MI30x and MI35x  `[source-pr]`
+- [pr-sglang-21710](sources/prs/sglang/PR-21710.md) — [AMD] Add GLM-5-FP8 nightly performance benchmarks for MI30x and MI35x  `[source-pr]`
+- [pr-sglang-21875](sources/prs/sglang/PR-21875.md) — fix: streaming session race condition + some metrics  `[source-pr]`
+- [pr-sglang-21986](sources/prs/sglang/PR-21986.md) — [AMD] Simplify fused allreduce + RMSNorm and remove hidden_dim allowlist  `[source-pr]`
+- [pr-sglang-22188](sources/prs/sglang/PR-22188.md) — [AMD] Fix test_kimi_k25_mxfp4.py : stage-c-test-large-8-gpu-amd-mi35x (linux-mi35x-gpu-8, 1)  `[source-pr]`
+- [pr-sglang-22329](sources/prs/sglang/PR-22329.md) — [AMD] Add prealloc token env for mori-ep  `[source-pr]`
+- [pr-sglang-22336](sources/prs/sglang/PR-22336.md) — [AMD] Add GLM-5.1-FP8 nightly accuracy and performance benchmarks for MI30x and MI35x  `[source-pr]`
+- [pr-sglang-22338](sources/prs/sglang/PR-22338.md) — :sparkles: [diffusion][npu][quant] Add MXFP4 quantization support for Wan2.2 Diffusion on Ascend NPU  `[source-pr]`
+- [pr-sglang-22363](sources/prs/sglang/PR-22363.md) — [AMD] Fix `aiter` import failure in ROCm Docker images  `[source-pr]`
+- [pr-sglang-22598](sources/prs/sglang/PR-22598.md) — [AMD] fix tbo runtime error when initializing metadata for cuda graph  `[source-pr]`
+- [pr-sglang-22665](sources/prs/sglang/PR-22665.md) — [PD] MORI-IO: Add state transfer, inline transfer model, and high-concurrency fixes  `[source-pr]`
+- [pr-sglang-22722](sources/prs/sglang/PR-22722.md) — [AMD] Add MiniMax-M2.7 accuracy and performance nightly tests  `[source-pr]`
+- [pr-sglang-22848](sources/prs/sglang/PR-22848.md) — [Feature] WebSocket streaming audio input for ASR  `[source-pr]`
+- [pr-sglang-23146](sources/prs/sglang/PR-23146.md) — [AMD] Enable EAGLE speculative decoding for Qwen3.5 FP8 and MXFP4 models with aiter's unified attention  `[source-pr]`
+- [pr-sglang-23156](sources/prs/sglang/PR-23156.md) — [AMD] prepare for MI300x PR runner pool: registry mirror, runner routing, threshold tuning  `[source-pr]`
+- [pr-sglang-23178](sources/prs/sglang/PR-23178.md) — [LoRA] Fix EP + per-expert MoE LoRA illegal memory access  `[source-pr]`
+- [pr-sglang-23336](sources/prs/sglang/PR-23336.md) — [SPEC V2][2/N] feat: adaptive spec support spec v2  `[source-pr]`
+- [pr-sglang-23382](sources/prs/sglang/PR-23382.md) — [AMD] skip deterministic inference for MLA FP8 test  `[source-pr]`
+- [pr-sglang-23455](sources/prs/sglang/PR-23455.md) — [AMD] Restore test_zimage_turbo.py and test_int4fp8_moe.py with __main__ entry  `[source-pr]`
+- [pr-sglang-23633](sources/prs/sglang/PR-23633.md) — [MUSA] Use MUSA-optimized operators in piecewise CUDA graph  `[source-pr]`
+- [pr-sglang-23848](sources/prs/sglang/PR-23848.md) — [AMD] Add Kimi-K2.6 in nightly tests for MI30x and MI35x  `[source-pr]`
+- [pr-sglang-23954](sources/prs/sglang/PR-23954.md) — [Bench] Fix bench_serving missing reasoning_content stream chunks  `[source-pr]`
+- [pr-sglang-23955](sources/prs/sglang/PR-23955.md) — [AMD] Add AMD FP8 MLA attention test for Wan2.2-T2V-A14B  `[source-pr]`
+- [pr-sglang-23958](sources/prs/sglang/PR-23958.md) — support asymmetric pd-mtp via mock spec hidden  `[source-pr]`
+- [pr-sglang-24203](sources/prs/sglang/PR-24203.md) — [AMD] Deepseek v4 Flash  / Pro nightly tests for MI35x ROCm 7.2  `[source-pr]`
+- [pr-sglang-24259](sources/prs/sglang/PR-24259.md) — [AMD] enable sdma for moriep unittest  `[source-pr]`
+- [pr-sglang-24375](sources/prs/sglang/PR-24375.md) — [SMG] Expand K8s integration tests: cross-namespace, lifecycle, multi-model  `[source-pr]`
+- [pr-sglang-24462](sources/prs/sglang/PR-24462.md) — [fix] /pause_generation and /continue_generation wrong for --tokenizer-worker-num > 1  `[source-pr]`
+- [pr-sglang-24535](sources/prs/sglang/PR-24535.md) — amd/deepseek_v4 integration 12/N enable triton swa prepare kernel 0506  `[source-pr]`
+- [pr-sglang-24677](sources/prs/sglang/PR-24677.md) — [AMD] Intro SGLANG_DIFFUSION_AITER_FP8_ATTN  `[source-pr]`
+- [pr-sglang-24726](sources/prs/sglang/PR-24726.md) — env: add SGLANG_RADIX_FORCE_MISS to force radix prefix-cache miss  `[source-pr]`
+- [pr-sglang-24799](sources/prs/sglang/PR-24799.md) — [AMD] Fix DeepSeek import cascade by supporting both pre- and post-#2958 aiter `fused_qk_rmsnorm` APIs  `[source-pr]`
+- [pr-sglang-24816](sources/prs/sglang/PR-24816.md) — Add FlashInfer SM90 cutlass MXFP4 MoE backend (W4A16) for GPT-OSS + DeepSeek-V4  `[source-pr]`
+- [pr-sglang-24930](sources/prs/sglang/PR-24930.md) — amd/deepseek_v4 integration 16/N Triton sparse MLA kernel 0508  `[source-pr]`
+- [pr-sglang-24933](sources/prs/sglang/PR-24933.md) — Amd/deepseek v4 rebase main 0509  `[source-pr]`
+- [pr-sglang-24987](sources/prs/sglang/PR-24987.md) — [AMD] Run jit kernel PR test through run_suite.py register mechanism  `[source-pr]`
+- [pr-sglang-25039](sources/prs/sglang/PR-25039.md) — [AMD] Disable unittest fail-fast for deepseekv4 perf test  `[source-pr]`
+- [pr-sglang-25191](sources/prs/sglang/PR-25191.md) — [Apple Silicon] [MLX] Auto-detect MLX-format quantization_config dict  `[source-pr]`
+- [pr-sglang-25251](sources/prs/sglang/PR-25251.md) — [AMD] amd/deepseek_v4 integration 28/N use aiter greedy_sample for all-greedy sampling on ROCm  `[source-pr]`
+- [pr-sglang-25284](sources/prs/sglang/PR-25284.md) — Support Gemma4 Pipeline Parallelism  `[source-pr]`
+- [pr-sglang-25629](sources/prs/sglang/PR-25629.md) — Add SchedulerMetricsReporter and route metrics state through it  `[source-pr]`
+- [pr-sglang-25676](sources/prs/sglang/PR-25676.md) — Upgrade xgrammar to 0.2.1  `[source-pr]`
+- [pr-sglang-25974](sources/prs/sglang/PR-25974.md) — [Fix]: Restrict Kimi-K2.5 shared-experts fusion to Quark MXFP4 checkpoints  `[source-pr]`
+- [pr-sglang-26012](sources/prs/sglang/PR-26012.md) — refactor(attn): init hisparse_coordinator before attn_backend; replace lazy property with init-time capture  `[source-pr]`
+- [pr-sglang-26383](sources/prs/sglang/PR-26383.md) — [AMD][DSV4] DSV4 MTP graph + sparse triton attn optimizations  `[source-pr]`
+- [pr-sglang-26437](sources/prs/sglang/PR-26437.md) — [MUSA] Fix startup with patched torchada  `[source-pr]`
+- [pr-sglang-26539](sources/prs/sglang/PR-26539.md) — [PD][MoRI] Align hybrid state transfer with per-component schema  `[source-pr]`
+- [pr-sglang-26665](sources/prs/sglang/PR-26665.md) — [refactor] unify cuda-graph capture/replay across attention backends  `[source-pr]`
+- [pr-sglang-26669](sources/prs/sglang/PR-26669.md) — test: add trtllm_mha EAGLE-draft CG runner coverage (chain)  `[source-pr]`
+- [pr-triton-200](sources/prs/triton/PR-200.md) — Ifu 4 26 2023  `[source-pr]`
+- [pr-triton-216](sources/prs/triton/PR-216.md) — [dotOp] [rocMLIR] [Upstream] Upstream sync after IFU04262023  `[source-pr]`
+- [pr-triton-247](sources/prs/triton/PR-247.md) — [FA OPTIMIZATION] Keep results of FA dot operations in registers  `[source-pr]`
+- [pr-triton-267](sources/prs/triton/PR-267.md) — [FA] Keep Q tensor in registers.  `[source-pr]`
+- [pr-triton-286](sources/prs/triton/PR-286.md) — [MFMA] More optimal offset computation  `[source-pr]`
+- [pr-triton-298](sources/prs/triton/PR-298.md) — [MFMA] [FA] Keep bf16 results of FA dot operations in registers  `[source-pr]`
+- [pr-triton-347](sources/prs/triton/PR-347.md) — Ifu230908 2  `[source-pr]`
+- [pr-triton-36](sources/prs/triton/PR-36.md) — Implement triton::LoadOp and triton::StoreOp using LLVM load and store  `[source-pr]`
+- [pr-triton-382](sources/prs/triton/PR-382.md) — Ifu231005  `[source-pr]`
+- [pr-triton-427](sources/prs/triton/PR-427.md) — Add view_slice ttgir instruction  `[source-pr]`
+- [pr-triton-536](sources/prs/triton/PR-536.md) — enable register usage and spill for AMD backend  `[source-pr]`
+- [pr-triton-660](sources/prs/triton/PR-660.md) — Streamk v0.3  `[source-pr]`
+- [pr-triton-683](sources/prs/triton/PR-683.md) — [CP] Many layout cherry picks for gemm perf  `[source-pr]`
+- [pr-triton-695](sources/prs/triton/PR-695.md) — Triton bypassLDS changes  `[source-pr]`
+- [pr-triton-767](sources/prs/triton/PR-767.md) — AMD perf cherry picks for release/internal/3.2.x  `[source-pr]`
+- [pr-triton-778](sources/prs/triton/PR-778.md) — Cherry-pick more performance improvmenet commits  `[source-pr]`
+- [pr-triton-815](sources/prs/triton/PR-815.md) — Add non-slicing 2step pingpong  `[source-pr]`
+- [pr-triton-918](sources/prs/triton/PR-918.md) — [AMD][TRITON_KERNELS] Improve matmul ogs config on RDNA  `[source-pr]`
+- [pr-triton-931](sources/prs/triton/PR-931.md) — [AMD][TRITON_KERNELS] Improve matmul ogs config on RDNA  `[source-pr]`
+- [pr-vllm-36022](sources/prs/vllm/PR-36022.md) — [Kernel] Add FlashInfer MoE A2A Kernel  `[source-pr]`
+- [pr-vllm-36100](sources/prs/vllm/PR-36100.md) — [ROCm] Fix fused_moe_fake signature mismatch and other AITER bugs  `[source-pr]`
+- [pr-vllm-36505](sources/prs/vllm/PR-36505.md) — [ROCm][Refactor] Enable AWQMarlinConfig on ROCm to use choose_mp_linear_kernel  `[source-pr]`
+- [pr-vllm-36965](sources/prs/vllm/PR-36965.md) — [Model][Quantization] Add GGUF support for MiniMax-M2.1  `[source-pr]`
+- [pr-vllm-37352](sources/prs/vllm/PR-37352.md) — [Kernel][Hardware][AMD] Add TritonW4A16LinearKernel for ROCm  `[source-pr]`
+- [pr-vllm-37646](sources/prs/vllm/PR-37646.md) — [ROCm][FEAT] AITER Fused Allreduce + RMSNorm  `[source-pr]`
+- [pr-vllm-38659](sources/prs/vllm/PR-38659.md) — [1/N][Cleanup] Standardize on use of `is_quantized_kv_cache`  `[source-pr]`
+- [pr-vllm-39242](sources/prs/vllm/PR-39242.md) — [ROCm] Add MLA dual RMS norm fusion (Q, KV) pass for DeepSeek/Kimi-K2  `[source-pr]`
+- [pr-vllm-39944](sources/prs/vllm/PR-39944.md) — [Kernel][Helion] Fix inductor fusion of Helion HOP  `[source-pr]`
+- [pr-vllm-40033](sources/prs/vllm/PR-40033.md) — [NVFP4][Hopper/AMD Instinct] Add Triton kernels for NVFP4 dequantization and QDQ emulation  `[source-pr]`
+- [pr-vllm-41394](sources/prs/vllm/PR-41394.md) — [Kernel][ROCm] Native W4A16 kernel for AMD RDNA3 (gfx1100) — fp16 + bf16  `[source-pr]`
+- [pr-vllm-41979](sources/prs/vllm/PR-41979.md) — [MoE] Move various experts classes to fused_moe/experts/  `[source-pr]`
+- [pr-vllm-42604](sources/prs/vllm/PR-42604.md) — DeepSeekV4-Pro enable cuda graph full and piecewise mode  `[source-pr]`
+- [pr-vllm-42833](sources/prs/vllm/PR-42833.md) — [ROCm][GPT-OSS] Avoid repeated compile-time `cos_sin_cache.to(bf16)` casts in rotary path  `[source-pr]`
+- [pr-vllm-42952](sources/prs/vllm/PR-42952.md) — [XPU]feat: enable FP8 block-scaled quantization on XPU  `[source-pr]`
+- [pr-vllm-43108](sources/prs/vllm/PR-43108.md) — [MoE Refactor] Remove supports_expert_map  `[source-pr]`
+- [pr-vllm-43660](sources/prs/vllm/PR-43660.md) — [Attention][AMD] Standardize kv layout to blocks first for AMD  `[source-pr]`
+- [pr-vllm-43727](sources/prs/vllm/PR-43727.md) — [MoE] Remove inplace fused experts mechanism  `[source-pr]`
+
+## software-pipelining
+
+- [pr-FlyDSL-13](sources/prs/FlyDSL/PR-13.md) — Dev/gemm opt  `[source-pr]`
+- [pr-FlyDSL-131](sources/prs/FlyDSL/PR-131.md) — Fix test coverage  `[source-pr]`
+- [pr-FlyDSL-139](sources/prs/FlyDSL/PR-139.md) — optimize buffer_load lds pipeline. Now it can interleave with mfma.  `[source-pr]`
+- [pr-FlyDSL-143](sources/prs/FlyDSL/PR-143.md) — W4a16 bf16 fp8 bf16 moe  `[source-pr]`
+- [pr-FlyDSL-145](sources/prs/FlyDSL/PR-145.md) — Pre v0.1 gemm  `[source-pr]`
+- [pr-FlyDSL-153](sources/prs/FlyDSL/PR-153.md) — Pre v0.1 gemm fix  `[source-pr]`
+- [pr-FlyDSL-158](sources/prs/FlyDSL/PR-158.md) — use abs import for correct importing kernels from wheel  `[source-pr]`
+- [pr-FlyDSL-16](sources/prs/FlyDSL/PR-16.md) — Dev layout algebra  `[source-pr]`
+- [pr-FlyDSL-168](sources/prs/FlyDSL/PR-168.md) — [Compiler][CacheKey] improve JIT cache key to hash entire compiler to…  `[source-pr]`
+- [pr-FlyDSL-191](sources/prs/FlyDSL/PR-191.md) — Refine code  `[source-pr]`
+- [pr-FlyDSL-196](sources/prs/FlyDSL/PR-196.md) — refine kernel code  `[source-pr]`
+- [pr-FlyDSL-197](sources/prs/FlyDSL/PR-197.md) — clean codes and wrap numerics in bufferops  `[source-pr]`
+- [pr-FlyDSL-220](sources/prs/FlyDSL/PR-220.md) — Tune launch overhead  `[source-pr]`
+- [pr-FlyDSL-222](sources/prs/FlyDSL/PR-222.md) — [Test] Add multi-stream async dependency and diamond pipeline tests  `[source-pr]`
+- [pr-FlyDSL-225](sources/prs/FlyDSL/PR-225.md) — Add FMHA kernel  `[source-pr]`
+- [pr-FlyDSL-242](sources/prs/FlyDSL/PR-242.md) — Add CONTRIBUTING.md with project-specific guidelines  `[source-pr]`
+- [pr-FlyDSL-244](sources/prs/FlyDSL/PR-244.md) — add claude skills  `[source-pr]`
+- [pr-FlyDSL-247](sources/prs/FlyDSL/PR-247.md) — change version tag  `[source-pr]`
+- [pr-FlyDSL-250](sources/prs/FlyDSL/PR-250.md) — 【2/N】add support wmma kernels for RDNA4(GFX1201)  `[source-pr]`
+- [pr-FlyDSL-27](sources/prs/FlyDSL/PR-27.md) — Dev/gemm flir  `[source-pr]`
+- [pr-FlyDSL-270](sources/prs/FlyDSL/PR-270.md) — Refine kernel code  `[source-pr]`
+- [pr-FlyDSL-276](sources/prs/FlyDSL/PR-276.md) — Refactor: extract pluggable compile-backend system  `[source-pr]`
+- [pr-FlyDSL-278](sources/prs/FlyDSL/PR-278.md) — [Compiler][Kernel][MI450]Rebase gfx1250 WMMA/mcast/mxfp4 support onto main  `[source-pr]`
+- [pr-FlyDSL-30](sources/prs/FlyDSL/PR-30.md) — Python wrapper refine  `[source-pr]`
+- [pr-FlyDSL-300](sources/prs/FlyDSL/PR-300.md) — [FlyDSL] fused RoPE kernel with layout APIs  `[source-pr]`
+- [pr-FlyDSL-306](sources/prs/FlyDSL/PR-306.md) — blockscale optimize for 355  `[source-pr]`
+- [pr-FlyDSL-31](sources/prs/FlyDSL/PR-31.md) — Python wrapper refine  `[source-pr]`
+- [pr-FlyDSL-318](sources/prs/FlyDSL/PR-318.md) — feat(moe): Add MoE FP4 GEMM 2-stage kernel with benchmark and perf optimizations  `[source-pr]`
+- [pr-FlyDSL-32](sources/prs/FlyDSL/PR-32.md) — Dev/gemm refactor  `[source-pr]`
+- [pr-FlyDSL-33](sources/prs/FlyDSL/PR-33.md) — modify cpu golden data to pytorch golden data, fix v_cvt_pk_bf16_f32 issue and test more case compare to aiter ops  `[source-pr]`
+- [pr-FlyDSL-331](sources/prs/FlyDSL/PR-331.md) — [gfx1250] Unified MXFP8/MXFP4/A8W4 GEMM kernel  `[source-pr]`
+- [pr-FlyDSL-340](sources/prs/FlyDSL/PR-340.md) — [gfx1250] optimize FP4 GEMM for large tile 256x256  `[source-pr]`
+- [pr-FlyDSL-346](sources/prs/FlyDSL/PR-346.md) — [FLYDSL]: if dispatch dynamic tests refactor  `[source-pr]`
+- [pr-FlyDSL-364](sources/prs/FlyDSL/PR-364.md) — [Build] Prefer Ninja over Make in build.sh  `[source-pr]`
+- [pr-FlyDSL-37](sources/prs/FlyDSL/PR-37.md) — Dev/int4 moe  `[source-pr]`
+- [pr-FlyDSL-370](sources/prs/FlyDSL/PR-370.md) — Pr/a16wi4 group  `[source-pr]`
+- [pr-FlyDSL-388](sources/prs/FlyDSL/PR-388.md) — [Perf] Port mixed_moe kernel optimizations for stage1/stage2  `[source-pr]`
+- [pr-FlyDSL-402](sources/prs/FlyDSL/PR-402.md) — Gfx1250 moe  `[source-pr]`
+- [pr-FlyDSL-427](sources/prs/FlyDSL/PR-427.md) — [OPT] Add fly-int-swizzle-simplify pass  `[source-pr]`
+- [pr-FlyDSL-447](sources/prs/FlyDSL/PR-447.md) — Port kernels internal types except moe  `[source-pr]`
+- [pr-FlyDSL-465](sources/prs/FlyDSL/PR-465.md) — some optimization about smoothquant moe  `[source-pr]`
+- [pr-FlyDSL-466](sources/prs/FlyDSL/PR-466.md) — add xcd remap  `[source-pr]`
+- [pr-FlyDSL-498](sources/prs/FlyDSL/PR-498.md) — [gfx1250] Modernize GEMM kernels to high-level Vector API  `[source-pr]`
+- [pr-FlyDSL-502](sources/prs/FlyDSL/PR-502.md) — test(compiler): generalize attach-target link helpers  `[source-pr]`
+- [pr-FlyDSL-521](sources/prs/FlyDSL/PR-521.md) — fix(python): lazily load ROCDL expr modules  `[source-pr]`
+- [pr-FlyDSL-533](sources/prs/FlyDSL/PR-533.md) — [gfx1250] Optimize FP8/FP4 GEMM kernel and tests  `[source-pr]`
+- [pr-FlyDSL-567](sources/prs/FlyDSL/PR-567.md) — Enable gfx1151 (RDNA3.5 / Strix Halo): LDS, FP8 guards, f16/bf16 WMMA GEMM  `[source-pr]`
+- [pr-FlyDSL-579](sources/prs/FlyDSL/PR-579.md) — [Enh] Port AITER FlyDSL kernels  `[source-pr]`
+- [pr-FlyDSL-588](sources/prs/FlyDSL/PR-588.md) — hgemm_spk: add multi-stage lds pipeline  `[source-pr]`
+- [pr-FlyDSL-591](sources/prs/FlyDSL/PR-591.md) — Update kernel-trace-analysis, lds-optimization, prefetch-data-load sk…  `[source-pr]`
+- [pr-FlyDSL-60](sources/prs/FlyDSL/PR-60.md) — Dev/fp16 gemm  `[source-pr]`
+- [pr-FlyDSL-79](sources/prs/FlyDSL/PR-79.md) — [FP4] preshuffle gemm a8w4&a4w4 moe gemm a8w4  `[source-pr]`
+- [pr-Tensile-100](sources/prs/Tensile/PR-100.md) — Assembly Generator  `[source-pr]`
+- [pr-Tensile-1049](sources/prs/Tensile/PR-1049.md) — wider local read and use 1 LDS buffer with prefetch global read  `[source-pr]`
+- [pr-Tensile-1060](sources/prs/Tensile/PR-1060.md) — Pipelined store for MI kernels  `[source-pr]`
+- [pr-Tensile-1091](sources/prs/Tensile/PR-1091.md) — GSU for BF16/FP16 high precision accumulation  `[source-pr]`
+- [pr-Tensile-1125](sources/prs/Tensile/PR-1125.md) — PersistentKernel with Prefetch  `[source-pr]`
+- [pr-Tensile-1146](sources/prs/Tensile/PR-1146.md) — Tensile integration test  `[source-pr]`
+- [pr-Tensile-1167](sources/prs/Tensile/PR-1167.md) — Prefetch Global Read 2  `[source-pr]`
+- [pr-Tensile-1185](sources/prs/Tensile/PR-1185.md) — MatrixInstruction for general int8  `[source-pr]`
+- [pr-Tensile-1228](sources/prs/Tensile/PR-1228.md) — implement General Batch GEMM in Tensile  `[source-pr]`
+- [pr-Tensile-1277](sources/prs/Tensile/PR-1277.md) — merge staging 7f365fa2 into master with GO from CQE  `[source-pr]`
+- [pr-Tensile-1377](sources/prs/Tensile/PR-1377.md) — Add PrefetchAcrossPersistentMode  `[source-pr]`
+- [pr-Tensile-1383](sources/prs/Tensile/PR-1383.md) — ROCm 4.5 merge staging into master  `[source-pr]`
+- [pr-Tensile-1390](sources/prs/Tensile/PR-1390.md) — Initial version of DirectToVgpr support for DGEMM  `[source-pr]`
+- [pr-Tensile-1406](sources/prs/Tensile/PR-1406.md) — merge staging 998f23ee into master with GO from CQE  `[source-pr]`
+- [pr-Tensile-1421](sources/prs/Tensile/PR-1421.md) — StoreCInUnroll support and fix for PrefetchAcrossPersistent + DirectToLds  `[source-pr]`
+- [pr-Tensile-1449](sources/prs/Tensile/PR-1449.md) — DGEMM NN optimizations with PrefetchGlobalRead(PGR)=2 support and some more small optimizations  `[source-pr]`
+- [pr-Tensile-1471](sources/prs/Tensile/PR-1471.md) — Optimize MessagePackLoadLibraryFile  `[source-pr]`
+- [pr-Tensile-1503](sources/prs/Tensile/PR-1503.md) — DGEMM/ZGEMM DirectToVgpr for TN support + fix for Tensile ticket #1500 and some more  `[source-pr]`
+- [pr-Tensile-1529](sources/prs/Tensile/PR-1529.md) — merge staging 3c17e5a into master on GO from CQE  `[source-pr]`
+- [pr-Tensile-1593](sources/prs/Tensile/PR-1593.md) — Small fixes for ThreadSeparateGlobalRead and DirectToLds  `[source-pr]`
+- [pr-Tensile-1602](sources/prs/Tensile/PR-1602.md) — Unify SplitGlobalRead into ThreadSeparateGlobalRead and small fixes  `[source-pr]`
+- [pr-Tensile-1604](sources/prs/Tensile/PR-1604.md) — Fixed issues with large array sizes  `[source-pr]`
+- [pr-Tensile-1616](sources/prs/Tensile/PR-1616.md) — Fixed mismatch issue with StoreCInUnroll + PrefetchGlobalRead=2 and warning message with source kernel generation.  `[source-pr]`
+- [pr-Tensile-1627](sources/prs/Tensile/PR-1627.md) — Use global_load/store for BufferLoad/Store=0 and enable scheduling  `[source-pr]`
+- [pr-Tensile-1685](sources/prs/Tensile/PR-1685.md) — DirectToVgpr support for small data types + TN  `[source-pr]`
+- [pr-Tensile-1702](sources/prs/Tensile/PR-1702.md) — DirectToVgpr + TailLoop support, plus small fixes  `[source-pr]`
+- [pr-Tensile-1703](sources/prs/Tensile/PR-1703.md) — Generate TailLoop code in NoLoadLoop to support prefetch for TailLoop, plus more TailLoop optimization for mfma  `[source-pr]`
+- [pr-Tensile-1709](sources/prs/Tensile/PR-1709.md) — Fix for rocblas precheckin test fail due to the previous tail loop optimization  `[source-pr]`
+- [pr-Tensile-1751](sources/prs/Tensile/PR-1751.md) — DirectToLds issue fixes  `[source-pr]`
+- [pr-Tensile-1803](sources/prs/Tensile/PR-1803.md) — LdsPad optimization + new parameters for local read related optimizations  `[source-pr]`
+- [pr-Tensile-1864](sources/prs/Tensile/PR-1864.md) — enable VgprForLocalReadPacking + PrefetchLocalRead=1  `[source-pr]`
+- [pr-Tensile-1890](sources/prs/Tensile/PR-1890.md) — more init code optimizations  `[source-pr]`
+- [pr-Tensile-1892](sources/prs/Tensile/PR-1892.md) — Add reject conditions for SourceKernel + PrefetchGlobalRead/LoopDoWhile  `[source-pr]`
+- [pr-Tensile-1926](sources/prs/Tensile/PR-1926.md) — Add architecture management functions to TensileCreateLibrary  `[source-pr]`
+- [pr-Tensile-1930](sources/prs/Tensile/PR-1930.md) — Update verifyManifest function  `[source-pr]`
+- [pr-Tensile-1931](sources/prs/Tensile/PR-1931.md) — Refactor logic file discovery  `[source-pr]`
+- [pr-Tensile-1932](sources/prs/Tensile/PR-1932.md) — Add Python unit test coverage report  `[source-pr]`
+- [pr-Tensile-1952](sources/prs/Tensile/PR-1952.md) — Format TensileCreateLibrary  `[source-pr]`
+- [pr-Tensile-2004](sources/prs/Tensile/PR-2004.md) — Don't add fallbacks if they weren't requested  `[source-pr]`
+- [pr-Tensile-2007](sources/prs/Tensile/PR-2007.md) — Add logic to remove temporary build artifacts  `[source-pr]`
+- [pr-Tensile-2019](sources/prs/Tensile/PR-2019.md) — Cache asm capabilities for reuse  `[source-pr]`
+- [pr-Tensile-2041](sources/prs/Tensile/PR-2041.md) — Guard against inconsistent state  `[source-pr]`
+- [pr-Tensile-215](sources/prs/Tensile/PR-215.md) — Fix sync with DirectToLds when PrefetchLocalRead=0  `[source-pr]`
+- [pr-Tensile-264](sources/prs/Tensile/PR-264.md) — Feature plr2  `[source-pr]`
+- [pr-Tensile-299](sources/prs/Tensile/PR-299.md) — merge with develop branch as of 2018-07-29  `[source-pr]`
+- [pr-Tensile-311](sources/prs/Tensile/PR-311.md) — merge with develop branch as of 2018-08-06  `[source-pr]`
+- [pr-Tensile-330](sources/prs/Tensile/PR-330.md) — Opt store addr5  `[source-pr]`
+- [pr-Tensile-380](sources/prs/Tensile/PR-380.md) — Fix v20 testing  `[source-pr]`
+- [pr-Tensile-381](sources/prs/Tensile/PR-381.md) — Suppress special loop iter  `[source-pr]`
+- [pr-Tensile-403](sources/prs/Tensile/PR-403.md) — enabling GSU for i8 gemm  `[source-pr]`
+- [pr-Tensile-516](sources/prs/Tensile/PR-516.md) — Prefetch across pk  `[source-pr]`
+- [pr-Tensile-592](sources/prs/Tensile/PR-592.md) — Support float complex gemm by hip solutions  `[source-pr]`
+- [pr-Tensile-752](sources/prs/Tensile/PR-752.md) — Adding mfma generator  `[source-pr]`
+- [pr-Tensile-792](sources/prs/Tensile/PR-792.md) — Use LLVM shared libraries if LLVMObjectYAML static library is missing  `[source-pr]`
+- [pr-Tensile-81](sources/prs/Tensile/PR-81.md) — prefetching support  `[source-pr]`
+- [pr-Tensile-90](sources/prs/Tensile/PR-90.md) — fixed bug for global read prefetch for NN, TT  `[source-pr]`
+- [pr-Tensile-92](sources/prs/Tensile/PR-92.md) — Semantic Versioning and GlobalSplitU  `[source-pr]`
+- [pr-Tensile-93](sources/prs/Tensile/PR-93.md) — fixed recursive solution selection logic  `[source-pr]`
+- [pr-Tensile-94](sources/prs/Tensile/PR-94.md) — explicitly define work-group  `[source-pr]`
+- [pr-Tensile-96](sources/prs/Tensile/PR-96.md) — fixing GSU with prefetching  `[source-pr]`
+- [pr-Tensile-972](sources/prs/Tensile/PR-972.md) — re-factory Tensile to support all Matrix Instruction  `[source-pr]`
+- [pr-aiter-1065](sources/prs/aiter/PR-1065.md) — [Triton] FA v3 API  `[source-pr]`
+- [pr-aiter-1233](sources/prs/aiter/PR-1233.md) — Mla splitkv enhance split alg inte  `[source-pr]`
+- [pr-aiter-1240](sources/prs/aiter/PR-1240.md) — [Triton] [355_wip] triton FP4 gemm AOT  `[source-pr]`
+- [pr-aiter-1242](sources/prs/aiter/PR-1242.md) — [Triton] [355_wip_triton] AOT fix  `[source-pr]`
+- [pr-aiter-1265](sources/prs/aiter/PR-1265.md) — integrate deep gemm  `[source-pr]`
+- [pr-aiter-1266](sources/prs/aiter/PR-1266.md) — moe mxfp4 block_m = 64/128  `[source-pr]`
+- [pr-aiter-1292](sources/prs/aiter/PR-1292.md) — [TRITON] GEMM kernels nomenclature changes  `[source-pr]`
+- [pr-aiter-1315](sources/prs/aiter/PR-1315.md) — [Triton] 355 wip Llama FP4 triton fusion + TP8 triton decode shape tunning  `[source-pr]`
+- [pr-aiter-1328](sources/prs/aiter/PR-1328.md) — [Triton] DS a16w8 GEMM and fused reduce_rms_fp8_group_quant  `[source-pr]`
+- [pr-aiter-1562](sources/prs/aiter/PR-1562.md) — Enhance MLA Reduce for Prefill  `[source-pr]`
+- [pr-aiter-1564](sources/prs/aiter/PR-1564.md) — Wjx/opt a4w4  `[source-pr]`
+- [pr-aiter-1654](sources/prs/aiter/PR-1654.md) — support moe a8w8 splitk  `[source-pr]`
+- [pr-aiter-172](sources/prs/aiter/PR-172.md) — Add a8w8 CK Batched GEMM  `[source-pr]`
+- [pr-aiter-1733](sources/prs/aiter/PR-1733.md) — [MLA] Update 950 MLA FP8 Kernel with Optimized V3 Pipeline  `[source-pr]`
+- [pr-aiter-1764](sources/prs/aiter/PR-1764.md) — [Triton] Triton FP8 bloscale GEMM preshuffle  `[source-pr]`
+- [pr-aiter-1778](sources/prs/aiter/PR-1778.md) — [Triton] Triton a16w8 gemm preshuffle  `[source-pr]`
+- [pr-aiter-1833](sources/prs/aiter/PR-1833.md) — [Triton] GEMM tunning script  `[source-pr]`
+- [pr-aiter-186](sources/prs/aiter/PR-186.md) — Add CK batched Gemm for BF16  `[source-pr]`
+- [pr-aiter-1896](sources/prs/aiter/PR-1896.md) — Refactor MLA Reduce  `[source-pr]`
+- [pr-aiter-1942](sources/prs/aiter/PR-1942.md) — [Triton] Sync Flash Attention Package  `[source-pr]`
+- [pr-aiter-1975](sources/prs/aiter/PR-1975.md) — [CK_TILE][FMHA] Add FP8 KV_BLOCKSCALE support for batch prefill  `[source-pr]`
+- [pr-aiter-2000](sources/prs/aiter/PR-2000.md) — Add `FLASH_ATTENTION_FWD_TRITON_AMD_CONFIG_JSON` env var support  `[source-pr]`
+- [pr-aiter-2030](sources/prs/aiter/PR-2030.md) — fix: correct duplicate knl_name in mla_asm.csv causing PP8 failure  `[source-pr]`
+- [pr-aiter-2113](sources/prs/aiter/PR-2113.md) — [FlyDSL] import flydsl implement of a4w4 moe  `[source-pr]`
+- [pr-aiter-2136](sources/prs/aiter/PR-2136.md) — add mhc_pre hip kernel (mhc_pre_gemm_sqrsum, mhc_pre_big_fuse)  `[source-pr]`
+- [pr-aiter-2180](sources/prs/aiter/PR-2180.md) — [TRITON] Add support for splitk to A8W8 kernel  `[source-pr]`
+- [pr-aiter-2216](sources/prs/aiter/PR-2216.md) — [CK_TILE] FMHA BWD Use Persistent Kernels in Deterministic Mode  `[source-pr]`
+- [pr-aiter-2232](sources/prs/aiter/PR-2232.md) — [CK][GEMM] update ck eightwarps pipleline name  `[source-pr]`
+- [pr-aiter-2240](sources/prs/aiter/PR-2240.md) — [TRITON] Sagev2 patch  `[source-pr]`
+- [pr-aiter-2260](sources/prs/aiter/PR-2260.md) — [TRITON] Update config of MHA PE forward kernel on `gfx950`  `[source-pr]`
+- [pr-aiter-2302](sources/prs/aiter/PR-2302.md) — Improve batch prefill test coverage  `[source-pr]`
+- [pr-aiter-2315](sources/prs/aiter/PR-2315.md) — [TRITON] Add gfx1250 support: GFX_MAP + default GEMM/MHA configs  `[source-pr]`
+- [pr-aiter-2332](sources/prs/aiter/PR-2332.md) — [Gluon][gfx1250] Gemm MXFP4 preshuffled  `[source-pr]`
+- [pr-aiter-2335](sources/prs/aiter/PR-2335.md) — fix(gemm_a8w8_bpreshuffle): pass splitK/KBatch to CK kernels  `[source-pr]`
+- [pr-aiter-2358](sources/prs/aiter/PR-2358.md) — Fix use-after-free in cktile blockscale GEMM x_scale handling  `[source-pr]`
+- [pr-aiter-2390](sources/prs/aiter/PR-2390.md) — [FlyDSL] Add FlyDSL MoE a4w4 support and update kernels  `[source-pr]`
+- [pr-aiter-2399](sources/prs/aiter/PR-2399.md) — Fix build CK pipeline  `[source-pr]`
+- [pr-aiter-2441](sources/prs/aiter/PR-2441.md) — [Triton MoE]: Add optimized Gluon kernel for AMD CDNA3 with K-dimension unrolling  `[source-pr]`
+- [pr-aiter-2487](sources/prs/aiter/PR-2487.md) — Expose AQLayout as tunable parameter for CKTile blockscale 8-warp GEMM kernels  `[source-pr]`
+- [pr-aiter-2497](sources/prs/aiter/PR-2497.md) — Wjx/upgrade flydsl fused  `[source-pr]`
+- [pr-aiter-25](sources/prs/aiter/PR-25.md) — ad Gemm a8w8 tune  `[source-pr]`
+- [pr-aiter-2514](sources/prs/aiter/PR-2514.md) — feat: aiter whls nightly  `[source-pr]`
+- [pr-aiter-2542](sources/prs/aiter/PR-2542.md) — [Triton] Bench mha dao_ai impl  `[source-pr]`
+- [pr-aiter-2546](sources/prs/aiter/PR-2546.md) — So/a8w8 bpreshuffle flydsl  `[source-pr]`
+- [pr-aiter-2581](sources/prs/aiter/PR-2581.md) — [FlyDSL] Optimize a4w4 MOE kernels  `[source-pr]`
+- [pr-aiter-2584](sources/prs/aiter/PR-2584.md) — [TRITON] Reduce GEMM unit tests  `[source-pr]`
+- [pr-aiter-2590](sources/prs/aiter/PR-2590.md) — tune i8gemm in MI308  `[source-pr]`
+- [pr-aiter-2657](sources/prs/aiter/PR-2657.md) — add triton fallback for mi455 gptoss & dsfp4  `[source-pr]`
+- [pr-aiter-2685](sources/prs/aiter/PR-2685.md) — [Triton]Integrate mla_decode_gluon kernel  `[source-pr]`
+- [pr-aiter-2686](sources/prs/aiter/PR-2686.md) — add optimized prefill gdn kernels for qwen3_5  `[source-pr]`
+- [pr-aiter-2696](sources/prs/aiter/PR-2696.md) — Introduce 16x128 fused moe kernel with weigths prefetch  `[source-pr]`
+- [pr-aiter-2723](sources/prs/aiter/PR-2723.md) — Fix Triton MoE GEMM shared memory exhaustion by reducing stage count  `[source-pr]`
+- [pr-aiter-2726](sources/prs/aiter/PR-2726.md) — [FlyDSL MOE] update a8w4 moe  `[source-pr]`
+- [pr-aiter-2734](sources/prs/aiter/PR-2734.md) — add tuner test suite  `[source-pr]`
+- [pr-aiter-2784](sources/prs/aiter/PR-2784.md) — Fix LDS Exhaustion in `fused_gemm_afp4wfp4_a16w16` for ASYNC_COPY Enabled  `[source-pr]`
+- [pr-aiter-2794](sources/prs/aiter/PR-2794.md) — [CK] Add StreamLLM sink token support for batch_prefill pipeline  `[source-pr]`
+- [pr-aiter-2863](sources/prs/aiter/PR-2863.md) — kimi a16wi4 moe support  `[source-pr]`
+- [pr-aiter-2867](sources/prs/aiter/PR-2867.md) — Fix Correction Issues in `batched_gemm_a8w8` for ASYNC_COPY Enabled  `[source-pr]`
+- [pr-aiter-2893](sources/prs/aiter/PR-2893.md) — fix(fmha): support >4GB KV cache in batch prefill via runtime dispatch  `[source-pr]`
+- [pr-aiter-2940](sources/prs/aiter/PR-2940.md) — fix num_stages in `test_ff_a16w16_fused.py` to account for irregular shapes  `[source-pr]`
+- [pr-aiter-2945](sources/prs/aiter/PR-2945.md) — [OPUS]bf16 opus gemm support  `[source-pr]`
+- [pr-aiter-2969](sources/prs/aiter/PR-2969.md) — [FLYDSL] Add gfx1201 (RDNA4) flash_attn_func backend  `[source-pr]`
+- [pr-aiter-301](sources/prs/aiter/PR-301.md) — Fa moe tuning  `[source-pr]`
+- [pr-aiter-3018](sources/prs/aiter/PR-3018.md) — Remove async copy override from Triton test workflow  `[source-pr]`
+- [pr-aiter-304](sources/prs/aiter/PR-304.md) — [TRITON]: GEMM, MoE  and Quants Kernel/Benchmark Updates  `[source-pr]`
+- [pr-aiter-3071](sources/prs/aiter/PR-3071.md) — So/a8w8 bpreshuflle flydsl xcd remap  `[source-pr]`
+- [pr-aiter-3075](sources/prs/aiter/PR-3075.md) — blockscale gemm: dispatch by kernelName, strict tuned-CSV validation  `[source-pr]`
+- [pr-aiter-3107](sources/prs/aiter/PR-3107.md) — Revert 'So/a8w8 bpreshuflle flydsl xcd remap'  `[source-pr]`
+- [pr-aiter-3134](sources/prs/aiter/PR-3134.md) — So/flydsl xcd remap v2  `[source-pr]`
+- [pr-aiter-3136](sources/prs/aiter/PR-3136.md) — Add explicit num_stages to blockscale triton kernel to pipeline non-d…  `[source-pr]`
+- [pr-aiter-3150](sources/prs/aiter/PR-3150.md) — [CK_TILE] FMHA BWD: stream-async workspace prepare for group mode  `[source-pr]`
+- [pr-aiter-3190](sources/prs/aiter/PR-3190.md) — [Triton] [ATOM] DSV4 fusion phase2  `[source-pr]`
+- [pr-aiter-3228](sources/prs/aiter/PR-3228.md) — [TRITON] Add gfx1201 fp8 gemm configs  `[source-pr]`
+- [pr-aiter-3237](sources/prs/aiter/PR-3237.md) — Optimize mHC hip kernel performce(Adjust fp32 gemm pipeline and add NT cache policy to memory bound case)  `[source-pr]`
+- [pr-aiter-3283](sources/prs/aiter/PR-3283.md) — Tune gfx950 batched GEMM configs and benchmarks  `[source-pr]`
+- [pr-aiter-3293](sources/prs/aiter/PR-3293.md) — Moe gfx1250 optimizations  `[source-pr]`
+- [pr-aiter-3318](sources/prs/aiter/PR-3318.md) — Revert '[Gluon][gfx1250] Gemm MXFP4 preshuffled'  `[source-pr]`
+- [pr-aiter-3372](sources/prs/aiter/PR-3372.md) — LDS-aware num_stages selection for gfx950 MoE GEMM  `[source-pr]`
+- [pr-aiter-3382](sources/prs/aiter/PR-3382.md) — [OPUS]fix opus_gemm mono version m align assert error  `[source-pr]`
+- [pr-aiter-3387](sources/prs/aiter/PR-3387.md) — [CK] Fix Submodule Pin after CK Re-Syncing with rocm-libraries  `[source-pr]`
+- [pr-aiter-3398](sources/prs/aiter/PR-3398.md) — Opt prefill mxfp8 quant moe sort  `[source-pr]`
+- [pr-aiter-486](sources/prs/aiter/PR-486.md) — [TRITON] Triton tuning gemms  `[source-pr]`
+- [pr-aiter-488](sources/prs/aiter/PR-488.md) — Change test to use the new preshuffle_scale API and change all mxfp config to use mfma16  `[source-pr]`
+- [pr-aiter-490](sources/prs/aiter/PR-490.md) — Fix tests and benchmarking for preshuffled fp4  `[source-pr]`
+- [pr-aiter-512](sources/prs/aiter/PR-512.md) — [TRITON]: Triton moe refactor  `[source-pr]`
+- [pr-aiter-513](sources/prs/aiter/PR-513.md) — Gemm weightpreshuffle  `[source-pr]`
+- [pr-aiter-533](sources/prs/aiter/PR-533.md) — [TRITON]: Fp4gemm m=256 tuning  `[source-pr]`
+- [pr-aiter-558](sources/prs/aiter/PR-558.md) — [TRITON]: Gemm refactor  `[source-pr]`
+- [pr-aiter-580](sources/prs/aiter/PR-580.md) — merge moe from 350 launch  `[source-pr]`
+- [pr-aiter-591](sources/prs/aiter/PR-591.md) — Pa rocm refresh4  `[source-pr]`
+- [pr-aiter-595](sources/prs/aiter/PR-595.md) — [TRITON]: add json config and refactor  `[source-pr]`
+- [pr-aiter-607](sources/prs/aiter/PR-607.md) — [Triton] DS fused custom ops  `[source-pr]`
+- [pr-aiter-610](sources/prs/aiter/PR-610.md) — [TRITON]: Moe tuning mi350  `[source-pr]`
+- [pr-aiter-628](sources/prs/aiter/PR-628.md) — Zan merge seqlen qk ratio nblock16 async  `[source-pr]`
+- [pr-aiter-647](sources/prs/aiter/PR-647.md) — Add option to choose between CK RMSNorm pipelines  `[source-pr]`
+- [pr-aiter-650](sources/prs/aiter/PR-650.md) — [TRITON]: Benchmarking scripts updates  `[source-pr]`
+- [pr-aiter-656](sources/prs/aiter/PR-656.md) — Xiangxli support mla rope nope separation  `[source-pr]`
+- [pr-aiter-709](sources/prs/aiter/PR-709.md) — [TRITON] shaoclee/triton gemm a8w8 dev  `[source-pr]`
+- [pr-aiter-736](sources/prs/aiter/PR-736.md) — [TRITON]: Add fused GEMMs to optimize FF block  `[source-pr]`
+- [pr-aiter-790](sources/prs/aiter/PR-790.md) — [TRITON] Moe fp8 tuning mi350  `[source-pr]`
+- [pr-aiter-810](sources/prs/aiter/PR-810.md) — update CK to fix fa fwd build error  `[source-pr]`
+- [pr-aiter-852](sources/prs/aiter/PR-852.md) — [TRITON]: Reduce usage of hardcoded XCD  `[source-pr]`
+- [pr-aiter-866](sources/prs/aiter/PR-866.md) — refine moe codegen  `[source-pr]`
+- [pr-composable_kernel-1018](sources/prs/composable_kernel/PR-1018.md) — Add Gemm instances for performance improvement  `[source-pr]`
+- [pr-composable_kernel-1052](sources/prs/composable_kernel/PR-1052.md) — Add support for double buffering in direct load GEMM kernel  `[source-pr]`
+- [pr-composable_kernel-108](sources/prs/composable_kernel/PR-108.md) — Int8 qunatization gemm xdl  `[source-pr]`
+- [pr-composable_kernel-1084](sources/prs/composable_kernel/PR-1084.md) — disabling some fp8 gemm instances to reduce build time  `[source-pr]`
+- [pr-composable_kernel-1095](sources/prs/composable_kernel/PR-1095.md) — fix clang format  `[source-pr]`
+- [pr-composable_kernel-1135](sources/prs/composable_kernel/PR-1135.md) — [GEMM] Optimization for MI200/300.  `[source-pr]`
+- [pr-composable_kernel-1154](sources/prs/composable_kernel/PR-1154.md) — [GEMM] Gemm universal device operation  `[source-pr]`
+- [pr-composable_kernel-1159](sources/prs/composable_kernel/PR-1159.md) — Split-up instances to improve build times.  `[source-pr]`
+- [pr-composable_kernel-1172](sources/prs/composable_kernel/PR-1172.md) — Clip fp8 to +/-240 on all targets.  `[source-pr]`
+- [pr-composable_kernel-1195](sources/prs/composable_kernel/PR-1195.md) — Only call iglp_opt(1) on certain architectures (For ROCm 6.1)  `[source-pr]`
+- [pr-composable_kernel-1196](sources/prs/composable_kernel/PR-1196.md) — [Feature] Conflict/Padding free LDS access pattern  `[source-pr]`
+- [pr-composable_kernel-1197](sources/prs/composable_kernel/PR-1197.md) — [Gemm] Optimization Stage3  `[source-pr]`
+- [pr-composable_kernel-1212](sources/prs/composable_kernel/PR-1212.md) — Add Grouped Gemm Multiple D SplitK TwoStage  `[source-pr]`
+- [pr-composable_kernel-1224](sources/prs/composable_kernel/PR-1224.md) — F8 quantization for FMHA forward  `[source-pr]`
+- [pr-composable_kernel-1246](sources/prs/composable_kernel/PR-1246.md) — Small refactor  `[source-pr]`
+- [pr-composable_kernel-1247](sources/prs/composable_kernel/PR-1247.md) — Grouped GEMM Multiple D tile loop.  `[source-pr]`
+- [pr-composable_kernel-126](sources/prs/composable_kernel/PR-126.md) — Grouped GEMM for fp16  `[source-pr]`
+- [pr-composable_kernel-1262](sources/prs/composable_kernel/PR-1262.md) — [GEMM] UniversalGemm update  `[source-pr]`
+- [pr-composable_kernel-1269](sources/prs/composable_kernel/PR-1269.md) — [CK_TILE] support alibi  `[source-pr]`
+- [pr-composable_kernel-128](sources/prs/composable_kernel/PR-128.md) — Gemm+Reduce Fusion  `[source-pr]`
+- [pr-composable_kernel-1281](sources/prs/composable_kernel/PR-1281.md) — Change to make seqlen_k == 0 be considered  `[source-pr]`
+- [pr-composable_kernel-1285](sources/prs/composable_kernel/PR-1285.md) — Code clean-up  `[source-pr]`
+- [pr-composable_kernel-1295](sources/prs/composable_kernel/PR-1295.md) — [CK_TILE] support group from cmdline  `[source-pr]`
+- [pr-composable_kernel-1335](sources/prs/composable_kernel/PR-1335.md) — Switch to universal gemm in grouped gemm tile loop  `[source-pr]`
+- [pr-composable_kernel-1338](sources/prs/composable_kernel/PR-1338.md) — [CK_TILE] fmha forward split-kv + combine kernels  `[source-pr]`
+- [pr-composable_kernel-1339](sources/prs/composable_kernel/PR-1339.md) — layernorm2d forward  `[source-pr]`
+- [pr-composable_kernel-1342](sources/prs/composable_kernel/PR-1342.md) — Fix cmake warnings  `[source-pr]`
+- [pr-composable_kernel-1343](sources/prs/composable_kernel/PR-1343.md) — [CK_TILE][FA] using pk f16_f32  `[source-pr]`
+- [pr-composable_kernel-1344](sources/prs/composable_kernel/PR-1344.md) — Hacking  ck_tile fmha Dropout facility  `[source-pr]`
+- [pr-composable_kernel-1352](sources/prs/composable_kernel/PR-1352.md) — Fix FA bwd alibi+causal NaN errors  `[source-pr]`
+- [pr-composable_kernel-1356](sources/prs/composable_kernel/PR-1356.md) — [CK_TILE] wa prec, remove sgpr offset for inline asm  `[source-pr]`
+- [pr-composable_kernel-1360](sources/prs/composable_kernel/PR-1360.md) — Universal streamk with atomics  `[source-pr]`
+- [pr-composable_kernel-1362](sources/prs/composable_kernel/PR-1362.md) — Merging the gfx12 code into public repo.  `[source-pr]`
+- [pr-composable_kernel-1372](sources/prs/composable_kernel/PR-1372.md) — Fix issue with multiple targets and remove smfmac tests from unsupported test targets  `[source-pr]`
+- [pr-composable_kernel-1383](sources/prs/composable_kernel/PR-1383.md) — Merge ab_scale  `[source-pr]`
+- [pr-composable_kernel-1384](sources/prs/composable_kernel/PR-1384.md) — [GEMM] F8 GEMM, performance optimized.  `[source-pr]`
+- [pr-composable_kernel-1387](sources/prs/composable_kernel/PR-1387.md) — [CK_TILE] Add PagedAttention kernels  `[source-pr]`
+- [pr-composable_kernel-1396](sources/prs/composable_kernel/PR-1396.md) — Fixed some issue in GEMM_Reduce_MultiD  `[source-pr]`
+- [pr-composable_kernel-1397](sources/prs/composable_kernel/PR-1397.md) — [CK_TILE] FA bwd kernels optimization  `[source-pr]`
+- [pr-composable_kernel-1419](sources/prs/composable_kernel/PR-1419.md) — Remove duplicated codes for creating WarpGemm  `[source-pr]`
+- [pr-composable_kernel-1421](sources/prs/composable_kernel/PR-1421.md) — [CK_TILE][FA]workaround rocm-6.2 compiler issue  `[source-pr]`
+- [pr-composable_kernel-1430](sources/prs/composable_kernel/PR-1430.md) — [CK_TILE] Pick bugfixes for ROCm 6.2 compiler issues  `[source-pr]`
+- [pr-composable_kernel-1453](sources/prs/composable_kernel/PR-1453.md) — [GEMM] gemm_universal related optimization  `[source-pr]`
+- [pr-composable_kernel-1484](sources/prs/composable_kernel/PR-1484.md) — Add gemm universal bf16 instances  `[source-pr]`
+- [pr-composable_kernel-1488](sources/prs/composable_kernel/PR-1488.md) — Ck tile gemm example  `[source-pr]`
+- [pr-composable_kernel-1502](sources/prs/composable_kernel/PR-1502.md) — [CK_TILE] FA bwd repair  `[source-pr]`
+- [pr-composable_kernel-1512](sources/prs/composable_kernel/PR-1512.md) — [Ck tile] Support layernorm one pass  `[source-pr]`
+- [pr-composable_kernel-1516](sources/prs/composable_kernel/PR-1516.md) — Ck tile gemm padding dim  `[source-pr]`
+- [pr-composable_kernel-1524](sources/prs/composable_kernel/PR-1524.md) — [CK_TILE] Early return if seqlen_k=0 on group mode (qr pipeline)  `[source-pr]`
+- [pr-composable_kernel-1527](sources/prs/composable_kernel/PR-1527.md) — [CK_TILE] Change output accum tensor layout of fmha fwd split-kv & combine kernels  `[source-pr]`
+- [pr-composable_kernel-1530](sources/prs/composable_kernel/PR-1530.md) — [CK_TILE] Fix compiler related FA bwd issues  `[source-pr]`
+- [pr-composable_kernel-1532](sources/prs/composable_kernel/PR-1532.md) — [CK_TILE] Image to Column kernel  `[source-pr]`
+- [pr-composable_kernel-1533](sources/prs/composable_kernel/PR-1533.md) — Fix compilation errors with Clang20.0.  `[source-pr]`
+- [pr-composable_kernel-1535](sources/prs/composable_kernel/PR-1535.md) — Ck tile gemm cshuffle & CK Tile GEMM restructure  `[source-pr]`
+- [pr-composable_kernel-1541](sources/prs/composable_kernel/PR-1541.md) — BF16 GEMM Stream-K  `[source-pr]`
+- [pr-composable_kernel-1544](sources/prs/composable_kernel/PR-1544.md) — Fix compilation errors generated by forthcoming Clang changes  `[source-pr]`
+- [pr-composable_kernel-1549](sources/prs/composable_kernel/PR-1549.md) — [CK_TILE] Simplify the codes in splitkv_combine pipeline  `[source-pr]`
+- [pr-composable_kernel-1557](sources/prs/composable_kernel/PR-1557.md) — [CK_TILE] Add block universal gemm pipeline policy  `[source-pr]`
+- [pr-composable_kernel-1558](sources/prs/composable_kernel/PR-1558.md) — [CK-Tile] Universal gemm memory bound pipeline  `[source-pr]`
+- [pr-composable_kernel-156](sources/prs/composable_kernel/PR-156.md) — Batched gemm and reduction  `[source-pr]`
+- [pr-composable_kernel-1571](sources/prs/composable_kernel/PR-1571.md) — decouple the calling from gemm_pipeline  `[source-pr]`
+- [pr-composable_kernel-1573](sources/prs/composable_kernel/PR-1573.md) — [CK_TILE] Improve headdim96 performance for fmha-bwd  `[source-pr]`
+- [pr-composable_kernel-1577](sources/prs/composable_kernel/PR-1577.md) — [CK_TILE] Optimize fmha splitkv & splitkv combine kernels  `[source-pr]`
+- [pr-composable_kernel-1588](sources/prs/composable_kernel/PR-1588.md) — [CK_TILE] More fmha splitkv optimizations  `[source-pr]`
+- [pr-composable_kernel-159](sources/prs/composable_kernel/PR-159.md) — Tune & add conflict-free LDS gemm kernels  `[source-pr]`
+- [pr-composable_kernel-1591](sources/prs/composable_kernel/PR-1591.md) — add int8 gemm multiply multiply a8w8  `[source-pr]`
+- [pr-composable_kernel-1592](sources/prs/composable_kernel/PR-1592.md) — topk_softmax  `[source-pr]`
+- [pr-composable_kernel-1597](sources/prs/composable_kernel/PR-1597.md) — hot_fix epsilon pos  `[source-pr]`
+- [pr-composable_kernel-1604](sources/prs/composable_kernel/PR-1604.md) — [CK_TILE] layernorm support fused-quant/fused-add  `[source-pr]`
+- [pr-composable_kernel-1607](sources/prs/composable_kernel/PR-1607.md) — [CK_TILE] add generic_permute  `[source-pr]`
+- [pr-composable_kernel-1608](sources/prs/composable_kernel/PR-1608.md) — [CK_TILE] Add fmha fwd headdim96 support  `[source-pr]`
+- [pr-composable_kernel-161](sources/prs/composable_kernel/PR-161.md) — Test: Use single thread for tensor init  `[source-pr]`
+- [pr-composable_kernel-1610](sources/prs/composable_kernel/PR-1610.md) — Remove virtual destructors from unary ops  `[source-pr]`
+- [pr-composable_kernel-1615](sources/prs/composable_kernel/PR-1615.md) — Ck tile batched gemm example  `[source-pr]`
+- [pr-composable_kernel-1617](sources/prs/composable_kernel/PR-1617.md) — [Ck_tile] smoothquant  `[source-pr]`
+- [pr-composable_kernel-1620](sources/prs/composable_kernel/PR-1620.md) — [layernorm] hot fix  `[source-pr]`
+- [pr-composable_kernel-1623](sources/prs/composable_kernel/PR-1623.md) — [CK_TILE] layernorm have more accurate residual  `[source-pr]`
+- [pr-composable_kernel-1624](sources/prs/composable_kernel/PR-1624.md) — Ck tile/moe sorting  `[source-pr]`
+- [pr-composable_kernel-1634](sources/prs/composable_kernel/PR-1634.md) — [CK_TILE] fused-moe first version  `[source-pr]`
+- [pr-composable_kernel-1637](sources/prs/composable_kernel/PR-1637.md) — [Ck tile] layernorm2d fwd optimize  `[source-pr]`
+- [pr-composable_kernel-1644](sources/prs/composable_kernel/PR-1644.md) — [CK TILE] Update gemm universal pipeline  `[source-pr]`
+- [pr-composable_kernel-1647](sources/prs/composable_kernel/PR-1647.md) — Add interwave scheduler for gemm mem pipeline  `[source-pr]`
+- [pr-composable_kernel-1651](sources/prs/composable_kernel/PR-1651.md) — [CK Tile] Improve the Layout, Padding, and Alignment features of CK Tile GEMM  `[source-pr]`
+- [pr-composable_kernel-1654](sources/prs/composable_kernel/PR-1654.md) — support max3 in smoothquant and add+ rmsnorm + rdquant  `[source-pr]`
+- [pr-composable_kernel-1655](sources/prs/composable_kernel/PR-1655.md) — Batched GEMM Multiple D based on Universal GEMM  `[source-pr]`
+- [pr-composable_kernel-1657](sources/prs/composable_kernel/PR-1657.md) — [Ck_tile] hot fix, fix rpcf param setting err  `[source-pr]`
+- [pr-composable_kernel-1660](sources/prs/composable_kernel/PR-1660.md) — add batched_transpose implement  `[source-pr]`
+- [pr-composable_kernel-1661](sources/prs/composable_kernel/PR-1661.md) — [CK TILE] Add gemm compute pipeline v3  `[source-pr]`
+- [pr-composable_kernel-1665](sources/prs/composable_kernel/PR-1665.md) — universal streamk fp8 changes  `[source-pr]`
+- [pr-composable_kernel-1671](sources/prs/composable_kernel/PR-1671.md) — Add bf16 and int8 wmma gemms for Navi3x and Navi4x.  `[source-pr]`
+- [pr-composable_kernel-1676](sources/prs/composable_kernel/PR-1676.md) — CK-Tile first draft of universal block gemm with interwave & intrawave scheduler  `[source-pr]`
+- [pr-composable_kernel-1678](sources/prs/composable_kernel/PR-1678.md) — [CK_TILE] Add paged-kvcache support in group mode fmha fwd splitkv kernels  `[source-pr]`
+- [pr-composable_kernel-1688](sources/prs/composable_kernel/PR-1688.md) — [CK_TILE] Fix incorrect computation of group mode PagedAttention  `[source-pr]`
+- [pr-composable_kernel-1690](sources/prs/composable_kernel/PR-1690.md) — Change in fwd-splitkv kernel to support num_splits=1 case  `[source-pr]`
+- [pr-composable_kernel-1692](sources/prs/composable_kernel/PR-1692.md) — Change block gemm pipeline local prefill loop order.  `[source-pr]`
+- [pr-composable_kernel-1698](sources/prs/composable_kernel/PR-1698.md) — Add IsSupportedArgument() to gemm_kernel  `[source-pr]`
+- [pr-composable_kernel-1705](sources/prs/composable_kernel/PR-1705.md) — [CK_TILE] Add fmha fwd N-Warp S-Shuffle pipeline (fmha fwd splitkv pipeline variant)  `[source-pr]`
+- [pr-composable_kernel-1712](sources/prs/composable_kernel/PR-1712.md) — added moe interleaving pipeline  `[source-pr]`
+- [pr-composable_kernel-1713](sources/prs/composable_kernel/PR-1713.md) — Ck tile grouped GEMM example  `[source-pr]`
+- [pr-composable_kernel-1724](sources/prs/composable_kernel/PR-1724.md) — [CK TILE] GEMM and Batched GEMM SplitK support  `[source-pr]`
+- [pr-composable_kernel-1728](sources/prs/composable_kernel/PR-1728.md) — Added unit tests for CK Tile compute bound gemm pipeline  `[source-pr]`
+- [pr-composable_kernel-1730](sources/prs/composable_kernel/PR-1730.md) — [CK TILE] Refactor GemmKernel to be reused by other GEMM related operators  `[source-pr]`
+- [pr-composable_kernel-1741](sources/prs/composable_kernel/PR-1741.md) — enable bias feature that add bias before adding residual (for rtpllm project)  `[source-pr]`
+- [pr-composable_kernel-1750](sources/prs/composable_kernel/PR-1750.md) — Ck tile/gemm perf measure  `[source-pr]`
+- [pr-composable_kernel-1755](sources/prs/composable_kernel/PR-1755.md) — Use s_shuffling to replace p_shuffling which removes the needs of cross-warp reduction  `[source-pr]`
+- [pr-composable_kernel-1756](sources/prs/composable_kernel/PR-1756.md) — CK-Tile Grouped GEMM refactor and post PR fixes  `[source-pr]`
+- [pr-composable_kernel-1762](sources/prs/composable_kernel/PR-1762.md) — Jing's contribution: prototype of mixed precision gemm FP16/BF16xint4 GEMM  `[source-pr]`
+- [pr-composable_kernel-1765](sources/prs/composable_kernel/PR-1765.md) — [Draft] Revive QsKsVs FMHA pipeline  `[source-pr]`
+- [pr-composable_kernel-1767](sources/prs/composable_kernel/PR-1767.md) — Promote latest CK develop  `[source-pr]`
+- [pr-composable_kernel-1770](sources/prs/composable_kernel/PR-1770.md) — Promote develop into amd-develop  `[source-pr]`
+- [pr-composable_kernel-1771](sources/prs/composable_kernel/PR-1771.md) — [CK_TILE] optimize moe-sorting kernel  `[source-pr]`
+- [pr-composable_kernel-1774](sources/prs/composable_kernel/PR-1774.md) — Dev/merge u8w8  `[source-pr]`
+- [pr-composable_kernel-1776](sources/prs/composable_kernel/PR-1776.md) — CK Tile GEMM CICD fixed & register block method refactor  `[source-pr]`
+- [pr-composable_kernel-1778](sources/prs/composable_kernel/PR-1778.md) — Remove using partitioner for all fmha kernels  `[source-pr]`
+- [pr-composable_kernel-1784](sources/prs/composable_kernel/PR-1784.md) — Ck tile/layernorm:  implement naive reduce, opt performance  `[source-pr]`
+- [pr-composable_kernel-1786](sources/prs/composable_kernel/PR-1786.md) — Implement the fp16xint4 scale weight only kernel for Ali  `[source-pr]`
+- [pr-composable_kernel-1789](sources/prs/composable_kernel/PR-1789.md) — [CK_TILE] fmha fwd splitkv optimization for decode (seqlen_q=1)  `[source-pr]`
+- [pr-composable_kernel-1791](sources/prs/composable_kernel/PR-1791.md) — [CK_TILE] Add GetName for GEMM kernels  `[source-pr]`
+- [pr-composable_kernel-1802](sources/prs/composable_kernel/PR-1802.md) — [CK_TILE] Add Various Fusion Functions to RMSNorm  `[source-pr]`
+- [pr-composable_kernel-1807](sources/prs/composable_kernel/PR-1807.md) — enable int4 scale (weight only) kernel  `[source-pr]`
+- [pr-composable_kernel-1808](sources/prs/composable_kernel/PR-1808.md) — [CK_TILE] Fix mock token id, support g1u1/g1u0 through same inline code block  `[source-pr]`
+- [pr-composable_kernel-1810](sources/prs/composable_kernel/PR-1810.md) — Update for fmha_fwd qs_ks_vs pipeline  `[source-pr]`
+- [pr-composable_kernel-1835](sources/prs/composable_kernel/PR-1835.md) — [CK-Tile] Enable vectorized reads on all layouts & improve perf.  `[source-pr]`
+- [pr-composable_kernel-1838](sources/prs/composable_kernel/PR-1838.md) — Cka8w8 uc newpipe  `[source-pr]`
+- [pr-composable_kernel-1839](sources/prs/composable_kernel/PR-1839.md) — Added Int4 mixed batch gemm support  `[source-pr]`
+- [pr-composable_kernel-184](sources/prs/composable_kernel/PR-184.md) — Manual control of MAC cluster for improved interwave performance  `[source-pr]`
+- [pr-composable_kernel-1840](sources/prs/composable_kernel/PR-1840.md) — [CK_TILE] moe sorting ex kernel to support expert > 128  `[source-pr]`
+- [pr-composable_kernel-1842](sources/prs/composable_kernel/PR-1842.md) — [CK TILE] Implement cschuflle algorithm  `[source-pr]`
+- [pr-composable_kernel-1843](sources/prs/composable_kernel/PR-1843.md) — [CK Tile] Spatially local GEMM tile partitioner.  `[source-pr]`
+- [pr-composable_kernel-1845](sources/prs/composable_kernel/PR-1845.md) — Support for dtypes (fp8, bf8, bf16 and fp16) for the ck_tile/03_gemm example.  `[source-pr]`
+- [pr-composable_kernel-1851](sources/prs/composable_kernel/PR-1851.md) — Fix ck_tile gemm benchmarking scripts  `[source-pr]`
+- [pr-composable_kernel-1852](sources/prs/composable_kernel/PR-1852.md) — Add pre_softmax fnctor  `[source-pr]`
+- [pr-composable_kernel-1853](sources/prs/composable_kernel/PR-1853.md) — CK Tile GEMM Compute V2 (2 LDS Ping Pong mechanism)  `[source-pr]`
+- [pr-composable_kernel-1856](sources/prs/composable_kernel/PR-1856.md) — [CK-Tile] Enable vectorized reads on all layouts for universal gemm memory pipeline  `[source-pr]`
+- [pr-composable_kernel-1861](sources/prs/composable_kernel/PR-1861.md) — [CK_TILE] Improve RMS/Layer Normalization 2 Pass Pipeline Performance  `[source-pr]`
+- [pr-composable_kernel-1862](sources/prs/composable_kernel/PR-1862.md) — [A8W8 GEMM] Optimized weight-preshuffled implementation & add quantization datatype for CK TILE rms_norm  `[source-pr]`
+- [pr-composable_kernel-1867](sources/prs/composable_kernel/PR-1867.md) — CK Tile - small fix to hotloop scheduler & KPack value.  `[source-pr]`
+- [pr-composable_kernel-1876](sources/prs/composable_kernel/PR-1876.md) — Replace buffer load/store intrinsics with builtins  `[source-pr]`
+- [pr-composable_kernel-1879](sources/prs/composable_kernel/PR-1879.md) — f8/bf16 GEMM Stream-K  `[source-pr]`
+- [pr-composable_kernel-1885](sources/prs/composable_kernel/PR-1885.md) — [CK TILE] GEMM with packed i4  `[source-pr]`
+- [pr-composable_kernel-1886](sources/prs/composable_kernel/PR-1886.md) — [CK TILE] Check for num loop < Prefetch Stages in gemm  `[source-pr]`
+- [pr-composable_kernel-1888](sources/prs/composable_kernel/PR-1888.md) — Tiny Fix  `[source-pr]`
+- [pr-composable_kernel-1891](sources/prs/composable_kernel/PR-1891.md) — Fix test_gemm_universal test_grouped_convnd_fwd and example_gemm_xdl_streamk on gfx950  `[source-pr]`
+- [pr-composable_kernel-1901](sources/prs/composable_kernel/PR-1901.md) — enable pipeline v3.  `[source-pr]`
+- [pr-composable_kernel-1906](sources/prs/composable_kernel/PR-1906.md) — [CK TILE] Block universal gemm lds<->vgpr optimizations  `[source-pr]`
+- [pr-composable_kernel-1907](sources/prs/composable_kernel/PR-1907.md) — [CK TILE] Gemm pk_int4_t permute B  `[source-pr]`
+- [pr-composable_kernel-1913](sources/prs/composable_kernel/PR-1913.md) — [BlockScale GEMM] FP8 Blockscale GEMM optimization and ckProfiler  `[source-pr]`
+- [pr-composable_kernel-1919](sources/prs/composable_kernel/PR-1919.md) — [CK_TILE] Switch to universal gemm for batched and grouped gemms  `[source-pr]`
+- [pr-composable_kernel-1924](sources/prs/composable_kernel/PR-1924.md) — [CK TILE] Fix double lds in ck tile gemm  `[source-pr]`
+- [pr-composable_kernel-1933](sources/prs/composable_kernel/PR-1933.md) — Revert '[BlockScale GEMM] FP8 Blockscale GEMM optimization and ckProf…  `[source-pr]`
+- [pr-composable_kernel-1934](sources/prs/composable_kernel/PR-1934.md) — [CK TILE] Fix KIterPerInnerLoop for block gemm.  `[source-pr]`
+- [pr-composable_kernel-1936](sources/prs/composable_kernel/PR-1936.md) — ck moe gemm implement  `[source-pr]`
+- [pr-composable_kernel-1941](sources/prs/composable_kernel/PR-1941.md) — Ck tile/complete k prefetch  `[source-pr]`
+- [pr-composable_kernel-1949](sources/prs/composable_kernel/PR-1949.md) — Ck int4 moe develop  `[source-pr]`
+- [pr-composable_kernel-1950](sources/prs/composable_kernel/PR-1950.md) — [Block Scale GEMM] Optimized block scale gemm  `[source-pr]`
+- [pr-composable_kernel-1956](sources/prs/composable_kernel/PR-1956.md) — Small fix on the a8w8 pipeline  `[source-pr]`
+- [pr-composable_kernel-1957](sources/prs/composable_kernel/PR-1957.md) — [CK_TILE] Add 2:4 structured sparsity support for fp16 gemm  `[source-pr]`
+- [pr-composable_kernel-1961](sources/prs/composable_kernel/PR-1961.md) — [CK_TILE] support hdim=192/128 pair for deepseekv3  `[source-pr]`
+- [pr-composable_kernel-1969](sources/prs/composable_kernel/PR-1969.md) — Revert '[CK_TILE] support hdim=192/128 pair for deepseekv3'  `[source-pr]`
+- [pr-composable_kernel-1971](sources/prs/composable_kernel/PR-1971.md) — Reapply '[CK_TILE] support hdim=192/128 pair for deepseekv3 (#1961)' …  `[source-pr]`
+- [pr-composable_kernel-1988](sources/prs/composable_kernel/PR-1988.md) — fix ck_tile/basic_gemm build error  `[source-pr]`
+- [pr-composable_kernel-2000](sources/prs/composable_kernel/PR-2000.md) — WIP: Introduce MX GEMM for FP8 data type  `[source-pr]`
+- [pr-composable_kernel-2001](sources/prs/composable_kernel/PR-2001.md) — [CK_TILE] Remove scratch usage from universal gemm  `[source-pr]`
+- [pr-composable_kernel-2007](sources/prs/composable_kernel/PR-2007.md) — Fix A/B lds transform  `[source-pr]`
+- [pr-composable_kernel-2016](sources/prs/composable_kernel/PR-2016.md) — MX GEMM examples with FP8, FP16, and E8M0 scales  `[source-pr]`
+- [pr-composable_kernel-2026](sources/prs/composable_kernel/PR-2026.md) — Moe gemm activation  `[source-pr]`
+- [pr-composable_kernel-2034](sources/prs/composable_kernel/PR-2034.md) — [CK_TILE] Fix GEMM Memory Pipeline  `[source-pr]`
+- [pr-composable_kernel-2040](sources/prs/composable_kernel/PR-2040.md) — fuse moe activation  `[source-pr]`
+- [pr-composable_kernel-2046](sources/prs/composable_kernel/PR-2046.md) — Add the MI355 support for CK TILE GEMM  `[source-pr]`
+- [pr-composable_kernel-2059](sources/prs/composable_kernel/PR-2059.md) — MX GEMM - New GEMM pipeline for MX data types  `[source-pr]`
+- [pr-composable_kernel-2060](sources/prs/composable_kernel/PR-2060.md) — Merge moe act to testx  `[source-pr]`
+- [pr-composable_kernel-2071](sources/prs/composable_kernel/PR-2071.md) — MX GEMM - Add MX BF8 example  `[source-pr]`
+- [pr-composable_kernel-2088](sources/prs/composable_kernel/PR-2088.md) — MX GEMM - Parameterized Test Template  `[source-pr]`
+- [pr-composable_kernel-2089](sources/prs/composable_kernel/PR-2089.md) — [flatmm] implement basic fp16 flatmm  `[source-pr]`
+- [pr-composable_kernel-209](sources/prs/composable_kernel/PR-209.md) — Gemm reduce max  `[source-pr]`
+- [pr-composable_kernel-2094](sources/prs/composable_kernel/PR-2094.md) — enable do top k weights in moe stage1 gemm  `[source-pr]`
+- [pr-composable_kernel-2096](sources/prs/composable_kernel/PR-2096.md) — DeviceGemm_Wmma_CShuffleV3 with BlockGemmPipelineVersion::v3  `[source-pr]`
+- [pr-composable_kernel-2103](sources/prs/composable_kernel/PR-2103.md) — MFMA 16x16x32fp8  `[source-pr]`
+- [pr-composable_kernel-2108](sources/prs/composable_kernel/PR-2108.md) — [CK_TILE] Allow specifying logits soft-caping through fMHA forwawrd APIs  `[source-pr]`
+- [pr-composable_kernel-2110](sources/prs/composable_kernel/PR-2110.md) — [CK_TILE] support gfx950 matrix core in 01_fmha fwd  `[source-pr]`
+- [pr-composable_kernel-2114](sources/prs/composable_kernel/PR-2114.md) — [CK_TILE] FMHA Support hdim_v to as a Multiple of 32  `[source-pr]`
+- [pr-composable_kernel-2122](sources/prs/composable_kernel/PR-2122.md) — fix moe pipeline and change to compute tile  `[source-pr]`
+- [pr-composable_kernel-2125](sources/prs/composable_kernel/PR-2125.md) — Support for MFMA_16x16x128 for fp8/bf8  `[source-pr]`
+- [pr-composable_kernel-2126](sources/prs/composable_kernel/PR-2126.md) — Improve hdim=256 performance  `[source-pr]`
+- [pr-composable_kernel-213](sources/prs/composable_kernel/PR-213.md) — Update to gemm_reduce and batched_gemm_reduce  `[source-pr]`
+- [pr-composable_kernel-2130](sources/prs/composable_kernel/PR-2130.md) — [CK_TILE] FMHA bwd Support hdim as a Multiple of 32  `[source-pr]`
+- [pr-composable_kernel-2131](sources/prs/composable_kernel/PR-2131.md) — Vectorized Transpose for Batched Transpose CK Tile Operator  `[source-pr]`
+- [pr-composable_kernel-2133](sources/prs/composable_kernel/PR-2133.md) — [CK_TILE] Update attention customizaton interface: add LogitsMask()  `[source-pr]`
+- [pr-composable_kernel-2136](sources/prs/composable_kernel/PR-2136.md) — Add Matrix A and Matrix B Swizzle for LDS in Computev4 policy  `[source-pr]`
+- [pr-composable_kernel-2146](sources/prs/composable_kernel/PR-2146.md) — [CK_TILE] Grouped GEMM tile loop  `[source-pr]`
+- [pr-composable_kernel-2152](sources/prs/composable_kernel/PR-2152.md) — MX GEMM - Add FP8 GEMM Tests for Different Layouts  `[source-pr]`
+- [pr-composable_kernel-2158](sources/prs/composable_kernel/PR-2158.md) — [CK_TILE] Add type traits to detect tile window types at compile time  `[source-pr]`
+- [pr-composable_kernel-2159](sources/prs/composable_kernel/PR-2159.md) — [CK_Tile] Simplified Mem pipeline  `[source-pr]`
+- [pr-composable_kernel-2163](sources/prs/composable_kernel/PR-2163.md) — [CK_TILE] Add logits soft-capping & customization support to the FMHA forward kernel/pipelines  `[source-pr]`
+- [pr-composable_kernel-2166](sources/prs/composable_kernel/PR-2166.md) — Improve the general performance of the Preshuffled GEMM V3 & delete the unnecessary instances  `[source-pr]`
+- [pr-composable_kernel-2168](sources/prs/composable_kernel/PR-2168.md) — Flatmm merge  `[source-pr]`
+- [pr-composable_kernel-2177](sources/prs/composable_kernel/PR-2177.md) — transpose load api development  `[source-pr]`
+- [pr-composable_kernel-2181](sources/prs/composable_kernel/PR-2181.md) — Switch to v2 pipeline for grouped conv bwd data  `[source-pr]`
+- [pr-composable_kernel-2188](sources/prs/composable_kernel/PR-2188.md) — [CK TILE] Grouped Convolution Forward Kernel  `[source-pr]`
+- [pr-composable_kernel-2190](sources/prs/composable_kernel/PR-2190.md) — fix moe sorting build fail  `[source-pr]`
+- [pr-composable_kernel-2191](sources/prs/composable_kernel/PR-2191.md) — [CK_TILE] Tile loop persistent gemm kernel  `[source-pr]`
+- [pr-composable_kernel-2193](sources/prs/composable_kernel/PR-2193.md) — [Tile Engine] Add benchmark for tile engine gemm.  `[source-pr]`
+- [pr-composable_kernel-2194](sources/prs/composable_kernel/PR-2194.md) — Narrowing error fix for codegen compilation  `[source-pr]`
+- [pr-composable_kernel-2198](sources/prs/composable_kernel/PR-2198.md) — [CK_TILE] fMHA batch_prefill block index & logits soft-capping optimizations  `[source-pr]`
+- [pr-composable_kernel-2200](sources/prs/composable_kernel/PR-2200.md) — [CK_tile] Add rotating buffer feature for universal gemm  `[source-pr]`
+- [pr-composable_kernel-2202](sources/prs/composable_kernel/PR-2202.md) — Use new mfma instructions for FP8 on gfx950  `[source-pr]`
+- [pr-composable_kernel-2212](sources/prs/composable_kernel/PR-2212.md) — Add the instances for small sized GEMM in preshuffle and improve CMake Flag  `[source-pr]`
+- [pr-composable_kernel-2219](sources/prs/composable_kernel/PR-2219.md) — [CK_TILE] Multiple-D GEMM example  `[source-pr]`
+- [pr-composable_kernel-2221](sources/prs/composable_kernel/PR-2221.md) — [VLLM V1] Add chunked prefill for FA to pass seq with small seqlen_q  `[source-pr]`
+- [pr-composable_kernel-2222](sources/prs/composable_kernel/PR-2222.md) — [CK_TILE] Move GEMM pipeline tail handling logic to pipelines  `[source-pr]`
+- [pr-composable_kernel-2230](sources/prs/composable_kernel/PR-2230.md) — WMMA GEMM universal pipeline v1, mixed precision and paddings, examples  `[source-pr]`
+- [pr-composable_kernel-2239](sources/prs/composable_kernel/PR-2239.md) — [CK_TILE] Refine fp8 support in flatmm  `[source-pr]`
+- [pr-composable_kernel-2240](sources/prs/composable_kernel/PR-2240.md) — [CK_TILE] Support multi-config in tile_example_gemm_universal  `[source-pr]`
+- [pr-composable_kernel-2246](sources/prs/composable_kernel/PR-2246.md) — [CK_TILE] Support for elementwise kernel  `[source-pr]`
+- [pr-composable_kernel-2248](sources/prs/composable_kernel/PR-2248.md) — Lwpck 3170 suggestions  `[source-pr]`
+- [pr-composable_kernel-2256](sources/prs/composable_kernel/PR-2256.md) — Revert '[CK_tile] Add rotating buffer feature for universal gemm'  `[source-pr]`
+- [pr-composable_kernel-2267](sources/prs/composable_kernel/PR-2267.md) — [CK Tile] Int8 Support on CK Tile GEMM  `[source-pr]`
+- [pr-composable_kernel-2276](sources/prs/composable_kernel/PR-2276.md) — Code drop for 2 warp ping pong scheduler along K dimension.  `[source-pr]`
+- [pr-composable_kernel-2280](sources/prs/composable_kernel/PR-2280.md) — Merge 'amd-develop' till 29574f05f into amd-master  `[source-pr]`
+- [pr-composable_kernel-2285](sources/prs/composable_kernel/PR-2285.md) — Fix fmha fwd precision issue on MI3XX series  `[source-pr]`
+- [pr-composable_kernel-2293](sources/prs/composable_kernel/PR-2293.md) — Revert '[CK_TILE] Tile loop persistent gemm kernel'  `[source-pr]`
+- [pr-composable_kernel-2294](sources/prs/composable_kernel/PR-2294.md) — Optimized GEMMs for MX FP4/8  `[source-pr]`
+- [pr-composable_kernel-2297](sources/prs/composable_kernel/PR-2297.md) — Add MoE & FP8 Blockscale WP Kernels for GFX950  `[source-pr]`
+- [pr-composable_kernel-2299](sources/prs/composable_kernel/PR-2299.md) — [CK_TILE] Tileloop persistent gemm - resubmit  `[source-pr]`
+- [pr-composable_kernel-2302](sources/prs/composable_kernel/PR-2302.md) — [CK_Tile] fix flatmm kernel for bigger size for fp16 datatype  `[source-pr]`
+- [pr-composable_kernel-2319](sources/prs/composable_kernel/PR-2319.md) — Implement batched gemm wmma (RDNA batched gemm) based on wmma cshuffle v3  `[source-pr]`
+- [pr-composable_kernel-2320](sources/prs/composable_kernel/PR-2320.md) — Do not use warpSize as compile time constant as it is removed  `[source-pr]`
+- [pr-composable_kernel-2336](sources/prs/composable_kernel/PR-2336.md) — Update warp tile sizes in gemm_utils.hpp so it builds successfully  `[source-pr]`
+- [pr-composable_kernel-2339](sources/prs/composable_kernel/PR-2339.md) — fix moe i4 bug from aiter  `[source-pr]`
+- [pr-composable_kernel-2350](sources/prs/composable_kernel/PR-2350.md) — WMMA GEMM b_scale  `[source-pr]`
+- [pr-composable_kernel-2356](sources/prs/composable_kernel/PR-2356.md) — Fix the CK Tile related operators  `[source-pr]`
+- [pr-composable_kernel-2357](sources/prs/composable_kernel/PR-2357.md) — [CK_TILE] Grouped Convolution Backward Weight Kernel  `[source-pr]`
+- [pr-composable_kernel-2372](sources/prs/composable_kernel/PR-2372.md) — Update for xformers  `[source-pr]`
+- [pr-composable_kernel-2388](sources/prs/composable_kernel/PR-2388.md) — [CK_TILE] Fix compilation errors introduced in #2320, #2219 and #2214  `[source-pr]`
+- [pr-composable_kernel-2389](sources/prs/composable_kernel/PR-2389.md) — [CK_TILE] Eliminate fmha batch_prefill warning caused by failed to meet occupancy requirement  `[source-pr]`
+- [pr-composable_kernel-2402](sources/prs/composable_kernel/PR-2402.md) — [CK_TILE] Low CU utilization optimization for fMHA fwd kernels  `[source-pr]`
+- [pr-composable_kernel-2405](sources/prs/composable_kernel/PR-2405.md) — ck tile pagedkv prefill  `[source-pr]`
+- [pr-composable_kernel-2409](sources/prs/composable_kernel/PR-2409.md) — [CK_TILE] Enhance RMSNorm Accuracy: New Pipeline Pass for Selectable Implementation  `[source-pr]`
+- [pr-composable_kernel-241](sources/prs/composable_kernel/PR-241.md) — GEMM with Multiple Source, GEMM+Bias+Add+FastGeLU example and ckProfiler  `[source-pr]`
+- [pr-composable_kernel-2419](sources/prs/composable_kernel/PR-2419.md) — MX GEMM - FP6 Example  `[source-pr]`
+- [pr-composable_kernel-2425](sources/prs/composable_kernel/PR-2425.md) — Enable Async Copy for MI355  `[source-pr]`
+- [pr-composable_kernel-2427](sources/prs/composable_kernel/PR-2427.md) — [ckProfiler] Add infrastructure and instances to profile gemm_universal with B preshuffle  `[source-pr]`
+- [pr-composable_kernel-2434](sources/prs/composable_kernel/PR-2434.md) — Merge flatmm Operator with universal gemm  `[source-pr]`
+- [pr-composable_kernel-2436](sources/prs/composable_kernel/PR-2436.md) — [CK_TILE] Use read_tr in universal gemm  `[source-pr]`
+- [pr-composable_kernel-2442](sources/prs/composable_kernel/PR-2442.md) — [CK_TILE] Non-K Major from old CK to CK-Tile  `[source-pr]`
+- [pr-composable_kernel-2450](sources/prs/composable_kernel/PR-2450.md) — [CK-Tile] Merge transpose examples  `[source-pr]`
+- [pr-composable_kernel-2453](sources/prs/composable_kernel/PR-2453.md) — Tests for CK Tile Batched Transpose and Smoothquant  `[source-pr]`
+- [pr-composable_kernel-2454](sources/prs/composable_kernel/PR-2454.md) — Support sink-attn in a specific forward fmha branch  `[source-pr]`
+- [pr-composable_kernel-2455](sources/prs/composable_kernel/PR-2455.md) — [CK] Mxfp4 moe blockscale buf2lds version support  `[source-pr]`
+- [pr-composable_kernel-2458](sources/prs/composable_kernel/PR-2458.md) — Tests for CK Tile Flatmm and MOE Smoothquant  `[source-pr]`
+- [pr-composable_kernel-2466](sources/prs/composable_kernel/PR-2466.md) — [CK_TILE] CK_TILE GEMM WMMA Support for GFX11/GFX12  `[source-pr]`
+- [pr-composable_kernel-2473](sources/prs/composable_kernel/PR-2473.md) — ck_tile kernel for gemm with groupwise quantized A  tensor  `[source-pr]`
+- [pr-composable_kernel-2481](sources/prs/composable_kernel/PR-2481.md) — MX GEMM - FP6 Support in GEMM MX v3 Pipeline  `[source-pr]`
+- [pr-composable_kernel-2487](sources/prs/composable_kernel/PR-2487.md) — Add separate mask checking for scope [aligned_physical_seqlen_k_start, physical_seqlen_k_end)  `[source-pr]`
+- [pr-composable_kernel-2488](sources/prs/composable_kernel/PR-2488.md) — MX GEMM - Add FP6 GEMM Test  `[source-pr]`
+- [pr-composable_kernel-2510](sources/prs/composable_kernel/PR-2510.md) — h_dim256 fmha use async_qr pipeline  `[source-pr]`
+- [pr-composable_kernel-2512](sources/prs/composable_kernel/PR-2512.md) — [CK] Fixed MPerBlock=32 build issue for MXFP4 GEMM decode  `[source-pr]`
+- [pr-composable_kernel-2514](sources/prs/composable_kernel/PR-2514.md) — Revert '[CK_TILE] Eliminate fmha batch_prefill warning caused by failed to meet occupancy requirement'  `[source-pr]`
+- [pr-composable_kernel-2516](sources/prs/composable_kernel/PR-2516.md) — Integration of a new pipeline for weight preshuffle into gemm examples  `[source-pr]`
+- [pr-composable_kernel-2520](sources/prs/composable_kernel/PR-2520.md) — [CK_TILE] Introduces a new GEMM API that splits the existing basic GEMM class into multiple specialized classes.  `[source-pr]`
+- [pr-composable_kernel-2524](sources/prs/composable_kernel/PR-2524.md) — Update to gpu_timer for rotating_buffer  `[source-pr]`
+- [pr-composable_kernel-2528](sources/prs/composable_kernel/PR-2528.md) — [CK_TILE] Support WMMA (gfx12) in FMHA  `[source-pr]`
+- [pr-composable_kernel-2535](sources/prs/composable_kernel/PR-2535.md) — General 2D Reduction Kernel  `[source-pr]`
+- [pr-composable_kernel-2540](sources/prs/composable_kernel/PR-2540.md) — [CK_TILE] Correct BlockWarps calculation and fix smoke-test in rmsnorm  `[source-pr]`
+- [pr-composable_kernel-2549](sources/prs/composable_kernel/PR-2549.md) — [CK_TILE][FMHA] Enable dwordx4 loading in async_load_tile_raw()  `[source-pr]`
+- [pr-composable_kernel-2550](sources/prs/composable_kernel/PR-2550.md) — [CK_TILE] FMHA BWD Remove Unnecessary Padding  `[source-pr]`
+- [pr-composable_kernel-2551](sources/prs/composable_kernel/PR-2551.md) — Add json dump support to output details from CK/CKTile Examples.  `[source-pr]`
+- [pr-composable_kernel-2560](sources/prs/composable_kernel/PR-2560.md) — Fix the issue: Missing kernel on gfx950  `[source-pr]`
+- [pr-composable_kernel-2570](sources/prs/composable_kernel/PR-2570.md) — fix mha bwd dbias random mismatch  `[source-pr]`
+- [pr-composable_kernel-2581](sources/prs/composable_kernel/PR-2581.md) — CSV-driven convolution test pipeline  `[source-pr]`
+- [pr-composable_kernel-2588](sources/prs/composable_kernel/PR-2588.md) — Introduce tree reduction for BlockReduce2dCrossWarpSync  `[source-pr]`
+- [pr-composable_kernel-2594](sources/prs/composable_kernel/PR-2594.md) — Support Wave32 in CK_TILE - Part 1  `[source-pr]`
+- [pr-composable_kernel-2597](sources/prs/composable_kernel/PR-2597.md) — Fix the GFX 950 Universal GEMM  `[source-pr]`
+- [pr-composable_kernel-2605](sources/prs/composable_kernel/PR-2605.md) — Persistent grouped gemm CompV4 Enablement & Polish  `[source-pr]`
+- [pr-composable_kernel-2606](sources/prs/composable_kernel/PR-2606.md) — [CK] Extend XDL kernel to support RDNA3/4 (option 2)  `[source-pr]`
+- [pr-composable_kernel-261](sources/prs/composable_kernel/PR-261.md) — gemm + layernorm  `[source-pr]`
+- [pr-composable_kernel-2612](sources/prs/composable_kernel/PR-2612.md) — Implement batched gemm gemm for RDNA (3 and 4)  `[source-pr]`
+- [pr-composable_kernel-2613](sources/prs/composable_kernel/PR-2613.md) — Wmma support for multiple Ds based GEMMs  `[source-pr]`
+- [pr-composable_kernel-2624](sources/prs/composable_kernel/PR-2624.md) — Preshuffle AQ matrix in block scale gemm  `[source-pr]`
+- [pr-composable_kernel-2627](sources/prs/composable_kernel/PR-2627.md) — [CK_TILE] Fix FMHA qr_async Causing Errors in FA  `[source-pr]`
+- [pr-composable_kernel-2628](sources/prs/composable_kernel/PR-2628.md) — [CK_TILE] FMHA BWD Optimization For GFX950  `[source-pr]`
+- [pr-composable_kernel-2631](sources/prs/composable_kernel/PR-2631.md) — Cleanups  `[source-pr]`
+- [pr-composable_kernel-2634](sources/prs/composable_kernel/PR-2634.md) — [CK-tile] add more tests for batched transpose testing the rectangular block tile sizes  `[source-pr]`
+- [pr-composable_kernel-2641](sources/prs/composable_kernel/PR-2641.md) — Optimize fmha fwd decode & prefill for gfx950  `[source-pr]`
+- [pr-composable_kernel-2643](sources/prs/composable_kernel/PR-2643.md) — [CK_TILE] FMHA BWD Decode Pipeline  `[source-pr]`
+- [pr-composable_kernel-2652](sources/prs/composable_kernel/PR-2652.md) — [CK Tile] Grouped convolution backward data  `[source-pr]`
+- [pr-composable_kernel-2660](sources/prs/composable_kernel/PR-2660.md) — GEMM Multi D for CK Tile Engine  `[source-pr]`
+- [pr-composable_kernel-2662](sources/prs/composable_kernel/PR-2662.md) — Add gemm universal f8 f8 bf16 instances on gfx950  `[source-pr]`
+- [pr-composable_kernel-2663](sources/prs/composable_kernel/PR-2663.md) — ck_tile kernel for gemm with groupwise quantized B tensor.  `[source-pr]`
+- [pr-composable_kernel-2665](sources/prs/composable_kernel/PR-2665.md) — Add other layouts for FP8 block scaled gemm  `[source-pr]`
+- [pr-composable_kernel-2670](sources/prs/composable_kernel/PR-2670.md) — Revert 'Optimize fmha fwd decode & prefill for gfx950'  `[source-pr]`
+- [pr-composable_kernel-2671](sources/prs/composable_kernel/PR-2671.md) — Re-enable optimization for gfx950 fmha fwd  `[source-pr]`
+- [pr-composable_kernel-2673](sources/prs/composable_kernel/PR-2673.md) — Remove bad pipeline codegen in FA fwd  `[source-pr]`
+- [pr-composable_kernel-2676](sources/prs/composable_kernel/PR-2676.md) — [CK_TILE]fix elementwise example in gfx11/12  `[source-pr]`
+- [pr-composable_kernel-2679](sources/prs/composable_kernel/PR-2679.md) — Support transposed C tile in Aquant  `[source-pr]`
+- [pr-composable_kernel-2682](sources/prs/composable_kernel/PR-2682.md) — [CK_TILE] FMHA BWD Fix Compilation with Bias  `[source-pr]`
+- [pr-composable_kernel-2687](sources/prs/composable_kernel/PR-2687.md) — [Documentation] update instructions for launching script which launches cmake  `[source-pr]`
+- [pr-composable_kernel-2697](sources/prs/composable_kernel/PR-2697.md) — [CK Tile] gemm splitk two stage  `[source-pr]`
+- [pr-composable_kernel-2700](sources/prs/composable_kernel/PR-2700.md) — [CK TILE] Fix bugs in AQuant preshuffle  `[source-pr]`
+- [pr-composable_kernel-2711](sources/prs/composable_kernel/PR-2711.md) — use iglp to improve dim256 fmha fwd in qr_ks_vs pipeline  `[source-pr]`
+- [pr-composable_kernel-2712](sources/prs/composable_kernel/PR-2712.md) — [CK TILE ENGINE] Adding GEMM Preshuffle to CK Tile Engine  `[source-pr]`
+- [pr-composable_kernel-2713](sources/prs/composable_kernel/PR-2713.md) — [CK_TILE] Fix the Wrong Output Generated by Gemm Examples on GFX11/12  `[source-pr]`
+- [pr-composable_kernel-2715](sources/prs/composable_kernel/PR-2715.md) — [CK_TILE] FMHA avoid unnecessary vmcnt0  `[source-pr]`
+- [pr-composable_kernel-2717](sources/prs/composable_kernel/PR-2717.md) — Lwpck 3548 gemm test cleanups  `[source-pr]`
+- [pr-composable_kernel-2718](sources/prs/composable_kernel/PR-2718.md) — Ck tile gemm low prec data types int4 int8 unit tests  `[source-pr]`
+- [pr-composable_kernel-2719](sources/prs/composable_kernel/PR-2719.md) — Remove unsupported use of c++20 concept.  `[source-pr]`
+- [pr-composable_kernel-272](sources/prs/composable_kernel/PR-272.md) — Gemm + bias + relu + add + layernorm  `[source-pr]`
+- [pr-composable_kernel-2721](sources/prs/composable_kernel/PR-2721.md) — feat(grouped_gemm): add preshuffle v2 support to grouped gemm example  `[source-pr]`
+- [pr-composable_kernel-2722](sources/prs/composable_kernel/PR-2722.md) — Extend XDL kernel to Support RDNA3/4 - Part 2  `[source-pr]`
+- [pr-composable_kernel-2723](sources/prs/composable_kernel/PR-2723.md) — Extend XDL kernel to Support RDNA3/4 - Part 3  `[source-pr]`
+- [pr-composable_kernel-2724](sources/prs/composable_kernel/PR-2724.md) — Extend XDL kernel to Support RDNA3/4 - Part 4  `[source-pr]`
+- [pr-composable_kernel-2726](sources/prs/composable_kernel/PR-2726.md) — Add input fp8 and output bf16 attention  `[source-pr]`
+- [pr-composable_kernel-2729](sources/prs/composable_kernel/PR-2729.md) — [CK_TILE] Row/Col quant gemm  `[source-pr]`
+- [pr-composable_kernel-2731](sources/prs/composable_kernel/PR-2731.md) — [CK_TILE] Add FAv3 fwd pipeline (optimization WIP)  `[source-pr]`
+- [pr-composable_kernel-2739](sources/prs/composable_kernel/PR-2739.md) — [CK_TILE] add atomic IGLP scheduler for wp gemm  `[source-pr]`
+- [pr-composable_kernel-2741](sources/prs/composable_kernel/PR-2741.md) — [CK_TILE] FMHA BWD Enable Tile 16x192  `[source-pr]`
+- [pr-composable_kernel-2744](sources/prs/composable_kernel/PR-2744.md) — [CK_TILE] Add gtests for FMHA  `[source-pr]`
+- [pr-composable_kernel-2747](sources/prs/composable_kernel/PR-2747.md) — Restructure the Tile Engine to have faster build time and clear config report  `[source-pr]`
+- [pr-composable_kernel-2752](sources/prs/composable_kernel/PR-2752.md) — [CK-TILE] Default2DEpilogue, example and adding nullptr_t type for D  `[source-pr]`
+- [pr-composable_kernel-2757](sources/prs/composable_kernel/PR-2757.md) — Revert '[CK_TILE] FMHA BWD Enable Tile 16x192'  `[source-pr]`
+- [pr-composable_kernel-2761](sources/prs/composable_kernel/PR-2761.md) — Reapply '[CK_TILE] FMHA BWD Enable Tile 16x192 (#2741)' (#2757)  `[source-pr]`
+- [pr-composable_kernel-2763](sources/prs/composable_kernel/PR-2763.md) — TF32 POC in Conv3d on MI30x platform  `[source-pr]`
+- [pr-composable_kernel-2766](sources/prs/composable_kernel/PR-2766.md) — refactor: use snake_case naming in ck_tile/core components  `[source-pr]`
+- [pr-composable_kernel-2769](sources/prs/composable_kernel/PR-2769.md) — [CK_TILE] Fixing Type Conversions in PassThroughPack8  `[source-pr]`
+- [pr-composable_kernel-2781](sources/prs/composable_kernel/PR-2781.md) — [CK_TILE] Stream-K GEMM Implementation  `[source-pr]`
+- [pr-composable_kernel-2784](sources/prs/composable_kernel/PR-2784.md) — [FIX] fix on fmha_bwd  `[source-pr]`
+- [pr-composable_kernel-2786](sources/prs/composable_kernel/PR-2786.md) — [CK_TILE] Implement Row/Col quant grouped gemm  `[source-pr]`
+- [pr-composable_kernel-2788](sources/prs/composable_kernel/PR-2788.md) — [CK_TILE] Multiple-ABD GEMM example  `[source-pr]`
+- [pr-composable_kernel-2790](sources/prs/composable_kernel/PR-2790.md) — [CK_TILE] Fix flatmm on gfx11 and gfx12  `[source-pr]`
+- [pr-composable_kernel-2795](sources/prs/composable_kernel/PR-2795.md) — [CK_TILE] Refine Generic2dBlockShape to fix ck_tile example 2,10,11,14 on rdna3 and 4  `[source-pr]`
+- [pr-composable_kernel-2801](sources/prs/composable_kernel/PR-2801.md) — Bf16*fp4 gemm  `[source-pr]`
+- [pr-composable_kernel-2803](sources/prs/composable_kernel/PR-2803.md) — Wmma support for multiple ABD GEMM  `[source-pr]`
+- [pr-composable_kernel-2805](sources/prs/composable_kernel/PR-2805.md) — [CK TILE] Support fp8/fp16 with pk_int4_t as data types for tensors A and B  `[source-pr]`
+- [pr-composable_kernel-2808](sources/prs/composable_kernel/PR-2808.md) — [CK_TILE] Fix example batched_gemm, grouped_gemm, gemm_multi_d, convolution on gfx11 & gfx12  `[source-pr]`
+- [pr-composable_kernel-2810](sources/prs/composable_kernel/PR-2810.md) — [CK_TILE] fix example reduces, permute and elementwise on gfx11 & gfx12  `[source-pr]`
+- [pr-composable_kernel-2813](sources/prs/composable_kernel/PR-2813.md) — [CK-Tile] Fix quant example code  `[source-pr]`
+- [pr-composable_kernel-2821](sources/prs/composable_kernel/PR-2821.md) — [CK_TILE] Enable ck_tile tests on gfx11 and gfx12  `[source-pr]`
+- [pr-composable_kernel-2823](sources/prs/composable_kernel/PR-2823.md) — WMMA support for GEMM reduce  `[source-pr]`
+- [pr-composable_kernel-2825](sources/prs/composable_kernel/PR-2825.md) — implement device batched gemm b scale for wmma  `[source-pr]`
+- [pr-composable_kernel-2831](sources/prs/composable_kernel/PR-2831.md) — Add the vector load & CompV4 Fix  `[source-pr]`
+- [pr-composable_kernel-2833](sources/prs/composable_kernel/PR-2833.md) — [CK_TILE] FMHA FAv3 scheduling fine-tuning for performance  `[source-pr]`
+- [pr-composable_kernel-2836](sources/prs/composable_kernel/PR-2836.md) — [CK_TILE] Support f32 in FMHA (fwd and bwd)  `[source-pr]`
+- [pr-composable_kernel-2837](sources/prs/composable_kernel/PR-2837.md) — [CK_TILE][REGRESSION] Correct blockSize in Generic2dBlockShape (c254f…  `[source-pr]`
+- [pr-composable_kernel-2841](sources/prs/composable_kernel/PR-2841.md) — Wmma support for GEMM quantization  `[source-pr]`
+- [pr-composable_kernel-2846](sources/prs/composable_kernel/PR-2846.md) — [CK_TILE] Tensor-wise scaled quant gemm kernel  `[source-pr]`
+- [pr-composable_kernel-2848](sources/prs/composable_kernel/PR-2848.md) — Revert 'TF32 POC in Conv3d on MI30x platform'  `[source-pr]`
+- [pr-composable_kernel-285](sources/prs/composable_kernel/PR-285.md) — external api for gemm + layernorm  `[source-pr]`
+- [pr-composable_kernel-2851](sources/prs/composable_kernel/PR-2851.md) — [CK_TILE] Add sequence padding and variable length support in fmha (a…  `[source-pr]`
+- [pr-composable_kernel-2852](sources/prs/composable_kernel/PR-2852.md) — TF32 POC in Conv3d on MI30x platform #2763 (second attempt)  `[source-pr]`
+- [pr-composable_kernel-2855](sources/prs/composable_kernel/PR-2855.md) — [CK_TILE] Add conv bwd weight two stage support  `[source-pr]`
+- [pr-composable_kernel-2858](sources/prs/composable_kernel/PR-2858.md) — Add gemm weight preshuffle pk_int_t support  `[source-pr]`
+- [pr-composable_kernel-2863](sources/prs/composable_kernel/PR-2863.md) — fix(grouped_gemm): pipeline selection when tail_num varies per group and leads to numerical error  `[source-pr]`
+- [pr-composable_kernel-2864](sources/prs/composable_kernel/PR-2864.md) — [CK_TILE] Stream-K GEMM Example for bf16 and fp16  `[source-pr]`
+- [pr-composable_kernel-2867](sources/prs/composable_kernel/PR-2867.md) — Conv:TF32: add more instances - 1  `[source-pr]`
+- [pr-composable_kernel-2876](sources/prs/composable_kernel/PR-2876.md) — [CK_TILE] FMHA Fix synchronization issues in BWD pipelines  `[source-pr]`
+- [pr-composable_kernel-2877](sources/prs/composable_kernel/PR-2877.md) — Weight Preshuffle Block Scale gemm support  `[source-pr]`
+- [pr-composable_kernel-2878](sources/prs/composable_kernel/PR-2878.md) — [CK-Tile] Add the API to load SGPR with any byte size  `[source-pr]`
+- [pr-composable_kernel-2881](sources/prs/composable_kernel/PR-2881.md) — [CK_TILE] FMHA BWD Fix Decode Accuracy  `[source-pr]`
+- [pr-composable_kernel-2883](sources/prs/composable_kernel/PR-2883.md) — Revert '[CK_TILE] Add sequence padding and variable length support in fmha (a…'  `[source-pr]`
+- [pr-composable_kernel-2884](sources/prs/composable_kernel/PR-2884.md) — [CK][Examples] Extending support for rdna3/4 in following examples:  `[source-pr]`
+- [pr-composable_kernel-2888](sources/prs/composable_kernel/PR-2888.md) — [CK_TILE] FMHA FWD bug fix  `[source-pr]`
+- [pr-composable_kernel-2892](sources/prs/composable_kernel/PR-2892.md) — Add attn sink  `[source-pr]`
+- [pr-composable_kernel-2893](sources/prs/composable_kernel/PR-2893.md) — Use __builtin_amdgcn_readfirstlane for buffer resource in fused_moe  `[source-pr]`
+- [pr-composable_kernel-2897](sources/prs/composable_kernel/PR-2897.md) — [CK TILE GEMM] Support Aquant GEMM with transposeC and preshuffle  `[source-pr]`
+- [pr-composable_kernel-2900](sources/prs/composable_kernel/PR-2900.md) — [FMHA FWD] gfx950 Accuracy enhancement & bug fix  `[source-pr]`
+- [pr-composable_kernel-2901](sources/prs/composable_kernel/PR-2901.md) — [CK Tile] contraction multi d - kernel & example  `[source-pr]`
+- [pr-composable_kernel-2904](sources/prs/composable_kernel/PR-2904.md) — Revert '[CK-Tile] Add the API to load SGPR '  `[source-pr]`
+- [pr-composable_kernel-2911](sources/prs/composable_kernel/PR-2911.md) — Fix the gfx950 numerical errors  `[source-pr]`
+- [pr-composable_kernel-2913](sources/prs/composable_kernel/PR-2913.md) — Fix the compilation error of #2878  `[source-pr]`
+- [pr-composable_kernel-2916](sources/prs/composable_kernel/PR-2916.md) — [CK_TILE] FMHA BWD Add D96 Instances  `[source-pr]`
+- [pr-composable_kernel-2918](sources/prs/composable_kernel/PR-2918.md) — [CK_TILE] FMHA BWD Pad HDim to a Multiple of 8  `[source-pr]`
+- [pr-composable_kernel-2919](sources/prs/composable_kernel/PR-2919.md) — Ck tile engine preshuffle  `[source-pr]`
+- [pr-composable_kernel-2922](sources/prs/composable_kernel/PR-2922.md) — use inline function in hpp  `[source-pr]`
+- [pr-composable_kernel-2923](sources/prs/composable_kernel/PR-2923.md) — Integrate Multi D GEMMs into Grouped GEMMs along with unit tests  `[source-pr]`
+- [pr-composable_kernel-2932](sources/prs/composable_kernel/PR-2932.md) — Add sequence padding and variable length support in fmha  `[source-pr]`
+- [pr-composable_kernel-2934](sources/prs/composable_kernel/PR-2934.md) — [CK_TILE] FMHA Fix synchronization issue in FWD splitkv combine pipeline  `[source-pr]`
+- [pr-composable_kernel-2949](sources/prs/composable_kernel/PR-2949.md) — Add a new gemm pipeline based on ComputeV4 which utilizes async copy API  `[source-pr]`
+- [pr-composable_kernel-2950](sources/prs/composable_kernel/PR-2950.md) — fix: nil performance results for gemm examples  `[source-pr]`
+- [pr-composable_kernel-2955](sources/prs/composable_kernel/PR-2955.md) — [CK_TILE] Blockwise GEMM pipeline v6 - port of v5 from old CK  `[source-pr]`
+- [pr-composable_kernel-2956](sources/prs/composable_kernel/PR-2956.md) — [CK_TILE] Pooling FWD (Lwpck 3683)  `[source-pr]`
+- [pr-composable_kernel-2959](sources/prs/composable_kernel/PR-2959.md) — add the check of granularity for atomic add in CK GEMM  `[source-pr]`
+- [pr-composable_kernel-2963](sources/prs/composable_kernel/PR-2963.md) — Lwpck 3550: Implement and test fixed precision fp8 x bf8  `[source-pr]`
+- [pr-composable_kernel-2964](sources/prs/composable_kernel/PR-2964.md) — Grouped convolution forward device implementation and base flavors for RDNA3/4  `[source-pr]`
+- [pr-composable_kernel-2968](sources/prs/composable_kernel/PR-2968.md) — [CK][Examples] Extending support for rdna3/4 part 2:  `[source-pr]`
+- [pr-composable_kernel-2970](sources/prs/composable_kernel/PR-2970.md) — [CK TILE] Grouped conv fwd split image  `[source-pr]`
+- [pr-composable_kernel-2974](sources/prs/composable_kernel/PR-2974.md) — Streamk functional tests  `[source-pr]`
+- [pr-composable_kernel-2975](sources/prs/composable_kernel/PR-2975.md) — supporting prefill shapes for preshuffle block scale gemm  `[source-pr]`
+- [pr-composable_kernel-2978](sources/prs/composable_kernel/PR-2978.md) — Update include path to break the cyclic dep issue  `[source-pr]`
+- [pr-composable_kernel-2981](sources/prs/composable_kernel/PR-2981.md) — [CK_TILE] Switch into universal gemms for conv bwds  `[source-pr]`
+- [pr-composable_kernel-2982](sources/prs/composable_kernel/PR-2982.md) — Ck tile engine gemm  `[source-pr]`
+- [pr-composable_kernel-2984](sources/prs/composable_kernel/PR-2984.md) — [CK-Tile] functional support for transposed inputs in compute-bound double-lds-buffer pipeline with async loads from global memory to LDS  `[source-pr]`
+- [pr-composable_kernel-2986](sources/prs/composable_kernel/PR-2986.md) — [CK_Tile] Merge multiple convolution groups into a single GEMM batch  `[source-pr]`
+- [pr-composable_kernel-2987](sources/prs/composable_kernel/PR-2987.md) — Add Memory pipeline for AQuant Block Scale GEMM  `[source-pr]`
+- [pr-composable_kernel-2989](sources/prs/composable_kernel/PR-2989.md) — WMMA gemm_add_relu_add_layernorm  `[source-pr]`
+- [pr-composable_kernel-3000](sources/prs/composable_kernel/PR-3000.md) — [CK-Tile][Async gemm] add missing sync and f8 inputs test cases  `[source-pr]`
+- [pr-composable_kernel-3007](sources/prs/composable_kernel/PR-3007.md) — [CK_TILE] add tensorwise quant in grouped gemm  `[source-pr]`
+- [pr-composable_kernel-3012](sources/prs/composable_kernel/PR-3012.md) — [CK_TILE] Add conv fwd + bias + clamp example  `[source-pr]`
+- [pr-composable_kernel-3013](sources/prs/composable_kernel/PR-3013.md) — [CK_TILE] Add indexing to pooling operator (Lwpck 3892)  `[source-pr]`
+- [pr-composable_kernel-3017](sources/prs/composable_kernel/PR-3017.md) — Revert '[CK_TILE] Non-K Major from old CK to CK-Tile'  `[source-pr]`
+- [pr-composable_kernel-3019](sources/prs/composable_kernel/PR-3019.md) — [CK_TILE] Adding support for TiledPermuteN on preshuffle Block Scale Gemm  `[source-pr]`
+- [pr-composable_kernel-3022](sources/prs/composable_kernel/PR-3022.md) — [CK_TILE] Update flatmm related kernels  `[source-pr]`
+- [pr-composable_kernel-3023](sources/prs/composable_kernel/PR-3023.md) — [CK_TILE] Enable StoreLSE for fmha_fwd_trload kernel  `[source-pr]`
+- [pr-composable_kernel-3027](sources/prs/composable_kernel/PR-3027.md) — Wave Tile Transfer supporting global load with transpose  `[source-pr]`
+- [pr-composable_kernel-3035](sources/prs/composable_kernel/PR-3035.md) — re-enable batched transpose test on gfx942  `[source-pr]`
+- [pr-composable_kernel-3038](sources/prs/composable_kernel/PR-3038.md) — Add CK Tile Tutorials Folder with GEMM and COPY Kernel  `[source-pr]`
+- [pr-composable_kernel-304](sources/prs/composable_kernel/PR-304.md) — External Interface  `[source-pr]`
+- [pr-composable_kernel-3041](sources/prs/composable_kernel/PR-3041.md) — [CK_TILE] Stream-K Gemm Example for fp8 and bf8  `[source-pr]`
+- [pr-composable_kernel-3046](sources/prs/composable_kernel/PR-3046.md) — [CKTILE] FMHA fwd trload lse fix  `[source-pr]`
+- [pr-composable_kernel-3055](sources/prs/composable_kernel/PR-3055.md) — [CK TILE ENGINE] Code changes to finding GPU id from TARGET  `[source-pr]`
+- [pr-composable_kernel-3062](sources/prs/composable_kernel/PR-3062.md) — [CK_TILE] Top-K with Sigmoid kernel  `[source-pr]`
+- [pr-composable_kernel-3063](sources/prs/composable_kernel/PR-3063.md) — [CK_TILE] Add Bquant to Grouped Gemm  `[source-pr]`
+- [pr-composable_kernel-3064](sources/prs/composable_kernel/PR-3064.md) — [CK_TILE] Stream-K operator() Reboot  `[source-pr]`
+- [pr-composable_kernel-3073](sources/prs/composable_kernel/PR-3073.md) — Extend support for ak1 / bk1 WMMA  `[source-pr]`
+- [pr-composable_kernel-3074](sources/prs/composable_kernel/PR-3074.md) — [CK_TILE] B matrix 2D block scale gemm  `[source-pr]`
+- [pr-composable_kernel-3079](sources/prs/composable_kernel/PR-3079.md) — Fix quant scale matrix layout for block scale gemm  `[source-pr]`
+- [pr-composable_kernel-3080](sources/prs/composable_kernel/PR-3080.md) — [CK_TILE] Add mxfp4 flatmm  `[source-pr]`
+- [pr-composable_kernel-3082](sources/prs/composable_kernel/PR-3082.md) — Grouped conv fwd with direct load  `[source-pr]`
+- [pr-composable_kernel-3094](sources/prs/composable_kernel/PR-3094.md) — Remove 'basic' and universal GEMM tests, and incorporate their test cases into the GEMM pipeline tests  `[source-pr]`
+- [pr-composable_kernel-3097](sources/prs/composable_kernel/PR-3097.md) — [CK_TILE] fmha: Add query padding support to backward pass  `[source-pr]`
+- [pr-composable_kernel-3098](sources/prs/composable_kernel/PR-3098.md) — Ck moe mxfp4 blockm32  `[source-pr]`
+- [pr-composable_kernel-310](sources/prs/composable_kernel/PR-310.md) — Wavelet (inter-wave consumer-producer) GEMM  `[source-pr]`
+- [pr-composable_kernel-3107](sources/prs/composable_kernel/PR-3107.md) — Introduces the new partitioner to implement the reduction StreamK kernel.  `[source-pr]`
+- [pr-composable_kernel-3117](sources/prs/composable_kernel/PR-3117.md) — [CK_TILE] Replace GEMM Pipeline Macros in Examples with a Common Enum.  `[source-pr]`
+- [pr-composable_kernel-3119](sources/prs/composable_kernel/PR-3119.md) — test(grouped_gemm): add unit tests for grouped_gemm bquant with preshuffleB true  `[source-pr]`
+- [pr-composable_kernel-3121](sources/prs/composable_kernel/PR-3121.md) — [CK TILE ENGINE] GEMM Multi D Restructure  `[source-pr]`
+- [pr-composable_kernel-3129](sources/prs/composable_kernel/PR-3129.md) — Kabraham/fix block gemm v1 b scale  `[source-pr]`
+- [pr-composable_kernel-3130](sources/prs/composable_kernel/PR-3130.md) — [CK-tile] unhardcode the number of LDS banks from universal gemm policy  `[source-pr]`
+- [pr-composable_kernel-3132](sources/prs/composable_kernel/PR-3132.md) — refactor: remove gemm preshuffle pipeline v1 by removing all references from codebase  `[source-pr]`
+- [pr-composable_kernel-3135](sources/prs/composable_kernel/PR-3135.md) — [CK_TILE] FMHA Fix synchronization issue in FWD QR pipeline with dropout  `[source-pr]`
+- [pr-composable_kernel-3141](sources/prs/composable_kernel/PR-3141.md) — Fix Tail Handler when it equals to 1  `[source-pr]`
+- [pr-composable_kernel-3145](sources/prs/composable_kernel/PR-3145.md) — Wmma support for gemm_reduce  `[source-pr]`
+- [pr-composable_kernel-3146](sources/prs/composable_kernel/PR-3146.md) — [CK_TILE] Move DataTypeTraits into a Common File  `[source-pr]`
+- [pr-composable_kernel-3147](sources/prs/composable_kernel/PR-3147.md) — [CK tile] Add 2D multiple reductions  `[source-pr]`
+- [pr-composable_kernel-3151](sources/prs/composable_kernel/PR-3151.md) — [CK TILE] Refactor Conv configs and Conv Elementwise  `[source-pr]`
+- [pr-composable_kernel-3152](sources/prs/composable_kernel/PR-3152.md) — [CK_BUILDER] Convolution traits.  `[source-pr]`
+- [pr-composable_kernel-3153](sources/prs/composable_kernel/PR-3153.md) — [CK_TILE][FMHA] Integrate FAv2 & FAv3 (WIP) in the single fmha_fwd() API  `[source-pr]`
+- [pr-composable_kernel-3157](sources/prs/composable_kernel/PR-3157.md) — Tile engine for streamk  `[source-pr]`
+- [pr-composable_kernel-3165](sources/prs/composable_kernel/PR-3165.md) — [CK_Tile] Support for preshuffle weight(B) quant tensor for block scale gemm  `[source-pr]`
+- [pr-composable_kernel-317](sources/prs/composable_kernel/PR-317.md) — GEMM pipeline v2  `[source-pr]`
+- [pr-composable_kernel-3175](sources/prs/composable_kernel/PR-3175.md) — [CK_Tile] fixing ambiguous shuffle definitions for preshuffle kernels  `[source-pr]`
+- [pr-composable_kernel-3183](sources/prs/composable_kernel/PR-3183.md) — [CK_BUILDER] Add grouped conv fwd ck tile traits  `[source-pr]`
+- [pr-composable_kernel-3186](sources/prs/composable_kernel/PR-3186.md) — [CK_TILE] Fix block_scale gemm on gfx12  `[source-pr]`
+- [pr-composable_kernel-319](sources/prs/composable_kernel/PR-319.md) — Grouped Gemm device with multiD grid  `[source-pr]`
+- [pr-composable_kernel-3191](sources/prs/composable_kernel/PR-3191.md) — Fix test_gemm_multiply_multiply_wp_xdl_fp8 on gfx950  `[source-pr]`
+- [pr-composable_kernel-3193](sources/prs/composable_kernel/PR-3193.md) — feat(block_scale_gemm): Support RRR-R, CRR-R and CCR-C layout for aquant quant mode  `[source-pr]`
+- [pr-composable_kernel-3199](sources/prs/composable_kernel/PR-3199.md) — [CK_TILE] Non-K Major from old CK to CK-Tile - fix reverted PR  `[source-pr]`
+- [pr-composable_kernel-3202](sources/prs/composable_kernel/PR-3202.md) — [CK_TILE] Remove Old CK Tile Stream-K Artifacts  `[source-pr]`
+- [pr-composable_kernel-3204](sources/prs/composable_kernel/PR-3204.md) — remove usage of tile partitioner's full gemm shape  `[source-pr]`
+- [pr-composable_kernel-3206](sources/prs/composable_kernel/PR-3206.md) — Support fp8 dynamic quantization for fmha  `[source-pr]`
+- [pr-composable_kernel-3207](sources/prs/composable_kernel/PR-3207.md) — [CK_TILE] MX Flatmm Split kernel instances  `[source-pr]`
+- [pr-composable_kernel-3208](sources/prs/composable_kernel/PR-3208.md) — [CK_TILE] Add Flatmm MX FP8  `[source-pr]`
+- [pr-composable_kernel-3215](sources/prs/composable_kernel/PR-3215.md) — [CK_TILE] Refine FP32 => FP16/BF16 Conversion  `[source-pr]`
+- [pr-composable_kernel-3227](sources/prs/composable_kernel/PR-3227.md) — Ck tile/gemm blockscale opt  `[source-pr]`
+- [pr-composable_kernel-3237](sources/prs/composable_kernel/PR-3237.md) — Add grouped gemm instances for RDNA4  `[source-pr]`
+- [pr-composable_kernel-3245](sources/prs/composable_kernel/PR-3245.md) — Fix and improve the gemm quant pipeline infrastructure  `[source-pr]`
+- [pr-composable_kernel-3247](sources/prs/composable_kernel/PR-3247.md) — Reorganize of KPack in GEMM  `[source-pr]`
+- [pr-composable_kernel-3250](sources/prs/composable_kernel/PR-3250.md) — Revert 'Add attn sink'  `[source-pr]`
+- [pr-composable_kernel-3251](sources/prs/composable_kernel/PR-3251.md) — [CK-Tile] Refactor base pipeline usage  `[source-pr]`
+- [pr-composable_kernel-3257](sources/prs/composable_kernel/PR-3257.md) — [ck_tile] refactor reduce kernel  `[source-pr]`
+- [pr-composable_kernel-3271](sources/prs/composable_kernel/PR-3271.md) — Fix a bug in the non-PrefillCase path of  qr_ks_vs_async_trload pipeline  `[source-pr]`
+- [pr-composable_kernel-3276](sources/prs/composable_kernel/PR-3276.md) — [CK_BUILDER] Refactor builder factory code.  `[source-pr]`
+- [pr-composable_kernel-3277](sources/prs/composable_kernel/PR-3277.md) — Extend pk_int4_t support for block_scale_gemm aquant CR and RR layout  `[source-pr]`
+- [pr-composable_kernel-3278](sources/prs/composable_kernel/PR-3278.md) — Wmma support for gemm_multiply_multiply_wp  `[source-pr]`
+- [pr-composable_kernel-3282](sources/prs/composable_kernel/PR-3282.md) — fix: add dynamic selection of pipelines for aquant mode  `[source-pr]`
+- [pr-composable_kernel-3285](sources/prs/composable_kernel/PR-3285.md) — [CK_TILE] Fix Compilation of Flatmm Examples  `[source-pr]`
+- [pr-composable_kernel-3286](sources/prs/composable_kernel/PR-3286.md) — [CK_TILE] Flatmm MX Cleanup & Explicit Offset Calculation  `[source-pr]`
+- [pr-composable_kernel-3287](sources/prs/composable_kernel/PR-3287.md) — [CK_TILE] Optimize Flatmm MXFP4 by Eliminating Runtime Division by 2  `[source-pr]`
+- [pr-composable_kernel-3288](sources/prs/composable_kernel/PR-3288.md) — Update instances list for grouped convolution forward  `[source-pr]`
+- [pr-composable_kernel-3289](sources/prs/composable_kernel/PR-3289.md) — [CK TILE] Grouped Conv Explicit Gemm  `[source-pr]`
+- [pr-composable_kernel-3298](sources/prs/composable_kernel/PR-3298.md) — [CK_Tile] Enable PreshuffleB for 2d block scale Gemm  `[source-pr]`
+- [pr-composable_kernel-3301](sources/prs/composable_kernel/PR-3301.md) — [CK_TILE] Port hw independent changes from internal repo to develop branch  `[source-pr]`
+- [pr-composable_kernel-3303](sources/prs/composable_kernel/PR-3303.md) — Implement grouped gemm fastgelu for RDNA4  `[source-pr]`
+- [pr-composable_kernel-3304](sources/prs/composable_kernel/PR-3304.md) — Implement grouped gemm tile loop for RDNA4  `[source-pr]`
+- [pr-composable_kernel-3307](sources/prs/composable_kernel/PR-3307.md) — [CK_TILE] Fix for comp pipeline v4  `[source-pr]`
+- [pr-composable_kernel-331](sources/prs/composable_kernel/PR-331.md) — Add full QA with verification option, few other changes.  `[source-pr]`
+- [pr-composable_kernel-3311](sources/prs/composable_kernel/PR-3311.md) — [ck_tile] remove duplicate functions in ck_tile  `[source-pr]`
+- [pr-composable_kernel-3314](sources/prs/composable_kernel/PR-3314.md) — Wmma support for gemm_ab_scale  `[source-pr]`
+- [pr-composable_kernel-3315](sources/prs/composable_kernel/PR-3315.md) — Wmma support for gemm_blockscale_wp  `[source-pr]`
+- [pr-composable_kernel-3316](sources/prs/composable_kernel/PR-3316.md) — Wmma support for gemm_bias_add_reduce  `[source-pr]`
+- [pr-composable_kernel-3318](sources/prs/composable_kernel/PR-3318.md) — feat(block_scale_gemm): Add layout Col-Col-Row-Col (ABC-Aquant) for tensors in aquant  `[source-pr]`
+- [pr-composable_kernel-3320](sources/prs/composable_kernel/PR-3320.md) — [CK_TILE] Fix Quant GEMM build  `[source-pr]`
+- [pr-composable_kernel-3325](sources/prs/composable_kernel/PR-3325.md) — Make CK TILE GEMM Aquant support block tile 128x128x128  `[source-pr]`
+- [pr-composable_kernel-3326](sources/prs/composable_kernel/PR-3326.md) — [CK Tile] Fix FMHA LSE calculation and potential division by zero  `[source-pr]`
+- [pr-composable_kernel-3330](sources/prs/composable_kernel/PR-3330.md) — Fp8 block scale quantization for fmha  fwd  `[source-pr]`
+- [pr-composable_kernel-3332](sources/prs/composable_kernel/PR-3332.md) — WMMA support for batched_gemm_reduce  `[source-pr]`
+- [pr-composable_kernel-3337](sources/prs/composable_kernel/PR-3337.md) — [CK Tile] Grouped GEMM aquant mode and non-persistent kernel  `[source-pr]`
+- [pr-composable_kernel-3339](sources/prs/composable_kernel/PR-3339.md) — fp8 fmha async pipeline  `[source-pr]`
+- [pr-composable_kernel-3341](sources/prs/composable_kernel/PR-3341.md) — [CK_TILE][FMHA] Add sparse attention VSA  `[source-pr]`
+- [pr-composable_kernel-3342](sources/prs/composable_kernel/PR-3342.md) — Merge some updates for ck_tile headers  `[source-pr]`
+- [pr-composable_kernel-3343](sources/prs/composable_kernel/PR-3343.md) — Support A/B Quantization in Blockscale GEMM  `[source-pr]`
+- [pr-composable_kernel-3344](sources/prs/composable_kernel/PR-3344.md) — [CK_TILE] fix enforcing fixed vectorsizes for ck tile conv  `[source-pr]`
+- [pr-composable_kernel-3346](sources/prs/composable_kernel/PR-3346.md) — [CK Tile] Aquant mem pipeline bugfixes  `[source-pr]`
+- [pr-composable_kernel-3349](sources/prs/composable_kernel/PR-3349.md) — [CK_TILE] Support more layouts for BQuant GEMM  `[source-pr]`
+- [pr-composable_kernel-335](sources/prs/composable_kernel/PR-335.md) — Gemm multiple d multiple r  `[source-pr]`
+- [pr-composable_kernel-3350](sources/prs/composable_kernel/PR-3350.md) — Add the gfx1011 support on CK Tile with the SGPR builtin reading protection  `[source-pr]`
+- [pr-composable_kernel-3351](sources/prs/composable_kernel/PR-3351.md) — [CK_TILE] Split-K autodeduction  `[source-pr]`
+- [pr-composable_kernel-3352](sources/prs/composable_kernel/PR-3352.md) — [CK_BUILDER] Ck Tile Grouped convolution factory  `[source-pr]`
+- [pr-composable_kernel-3355](sources/prs/composable_kernel/PR-3355.md) — [CK_TILE][FMHA] Add logits soft-capping support for FAv3 (WIP)  `[source-pr]`
+- [pr-composable_kernel-3357](sources/prs/composable_kernel/PR-3357.md) — [CK_BUILDER] Simplify includes for CK builder reflection  `[source-pr]`
+- [pr-composable_kernel-3359](sources/prs/composable_kernel/PR-3359.md) — [CK-Tile] move out memory operation from cshuffle epilogue class  `[source-pr]`
+- [pr-composable_kernel-3364](sources/prs/composable_kernel/PR-3364.md) — [CK TILE][AICK-439] Fix cshuffle epilogue wave per shuffle  `[source-pr]`
+- [pr-composable_kernel-3368](sources/prs/composable_kernel/PR-3368.md) — Add attention sink support for FMHA FWD  `[source-pr]`
+- [pr-composable_kernel-3369](sources/prs/composable_kernel/PR-3369.md) — Add a workaround for a compiler issue for bwd on gfx90a and ROCm 7.1.1  `[source-pr]`
+- [pr-composable_kernel-3371](sources/prs/composable_kernel/PR-3371.md) — [CK_TILE] Stream-K Tree Reduction and Cache Skipping Integration  `[source-pr]`
+- [pr-composable_kernel-3372](sources/prs/composable_kernel/PR-3372.md) — 7.2 cherry-pick PR#3221.  `[source-pr]`
+- [pr-composable_kernel-3377](sources/prs/composable_kernel/PR-3377.md) — [CK_TILE MOE] add NT & preshuffle permute to cktile MOE  `[source-pr]`
+- [pr-composable_kernel-3378](sources/prs/composable_kernel/PR-3378.md) — WIP: Grouped convolution bwd weight wmma v3 instance selection  `[source-pr]`
+- [pr-composable_kernel-3389](sources/prs/composable_kernel/PR-3389.md) — [CK_TILE] support split-k a16w4 gemm1  `[source-pr]`
+- [pr-composable_kernel-3392](sources/prs/composable_kernel/PR-3392.md) — refactor: remove duplicate MakeALdsBlockDescriptor using CRTP pattern  `[source-pr]`
+- [pr-composable_kernel-3394](sources/prs/composable_kernel/PR-3394.md) — [CK_TILE] Fix some inconsistencies with OverrideBDatatype in BQuant GEMM  `[source-pr]`
+- [pr-composable_kernel-3401](sources/prs/composable_kernel/PR-3401.md) — [CK_TILE] Add FP8xF4 Flatmm  `[source-pr]`
+- [pr-composable_kernel-3403](sources/prs/composable_kernel/PR-3403.md) — Update AMD buffer coherency  `[source-pr]`
+- [pr-composable_kernel-3414](sources/prs/composable_kernel/PR-3414.md) — [CK_TILE] Grouped gemm quant tensor layouts  `[source-pr]`
+- [pr-composable_kernel-3415](sources/prs/composable_kernel/PR-3415.md) — flashattention fwd add (80, 96) instance  `[source-pr]`
+- [pr-composable_kernel-3417](sources/prs/composable_kernel/PR-3417.md) — CK Tile: Enable padding blockscale example  `[source-pr]`
+- [pr-composable_kernel-3423](sources/prs/composable_kernel/PR-3423.md) — Fix FMHA fp8 hdim=64 incorrect result in MI200  `[source-pr]`
+- [pr-composable_kernel-3425](sources/prs/composable_kernel/PR-3425.md) — [CK_TILE][FMHA] Add FP8 support for batch_prefill kernel  `[source-pr]`
+- [pr-composable_kernel-3429](sources/prs/composable_kernel/PR-3429.md) — Implement device_gemm_universal_preshuffle_instance for RDNA4  `[source-pr]`
+- [pr-composable_kernel-3434](sources/prs/composable_kernel/PR-3434.md) — [TILE ENGINE] Restructure to Base class of GEMM  `[source-pr]`
+- [pr-composable_kernel-3440](sources/prs/composable_kernel/PR-3440.md) — Ck moe bs splitk pr  `[source-pr]`
+- [pr-composable_kernel-3441](sources/prs/composable_kernel/PR-3441.md) — Zan/moe a8w4  `[source-pr]`
+- [pr-composable_kernel-3442](sources/prs/composable_kernel/PR-3442.md) — [FMHA] Batch Prefill Support Improvements:  Change KV Cache Layout & Large Page Size Support  `[source-pr]`
+- [pr-composable_kernel-3445](sources/prs/composable_kernel/PR-3445.md) — [CK_Tile] Support for various group sizes Preshuffle quant for 2d block scale gemm  `[source-pr]`
+- [pr-composable_kernel-3446](sources/prs/composable_kernel/PR-3446.md) — [CK_TILE] MX Flatmm Use Byte Pointer Arithmetic for A Tensor  `[source-pr]`
+- [pr-composable_kernel-3447](sources/prs/composable_kernel/PR-3447.md) — Dev/a8w4 and a8w8splitk  `[source-pr]`
+- [pr-composable_kernel-3449](sources/prs/composable_kernel/PR-3449.md) — Split grouped conv fwd instances  `[source-pr]`
+- [pr-composable_kernel-3450](sources/prs/composable_kernel/PR-3450.md) — Adding support for scale and bilinear ops for WMMA grouped conv fwd  `[source-pr]`
+- [pr-composable_kernel-3452](sources/prs/composable_kernel/PR-3452.md) — [CKTILE] Support A/B Quantization in Blockscale Grouped Gemm  `[source-pr]`
+- [pr-composable_kernel-3453](sources/prs/composable_kernel/PR-3453.md) — Enable padding blockscale for abquant  `[source-pr]`
+- [pr-composable_kernel-3460](sources/prs/composable_kernel/PR-3460.md) — Grouped convolution backward data WMMA v3 implementation  `[source-pr]`
+- [pr-composable_kernel-3465](sources/prs/composable_kernel/PR-3465.md) — Add support for direct store in epilogue and padding support for wave transfer without transpose  `[source-pr]`
+- [pr-composable_kernel-3477](sources/prs/composable_kernel/PR-3477.md) — fix: Compile error with ROCm6  `[source-pr]`
+- [pr-composable_kernel-3483](sources/prs/composable_kernel/PR-3483.md) — Ensure Consistent 64-Bit Unsigned Handling Across OS Platforms  `[source-pr]`
+- [pr-composable_kernel-3486](sources/prs/composable_kernel/PR-3486.md) — [CK_TILE] Align FMHA BWD Reference with Kernel Implementation  `[source-pr]`
+- [pr-composable_kernel-3488](sources/prs/composable_kernel/PR-3488.md) — enable f8 tests  `[source-pr]`
+- [pr-composable_kernel-3489](sources/prs/composable_kernel/PR-3489.md) — [CK_TILE] MX FLATMM Fix M Padding  `[source-pr]`
+- [pr-composable_kernel-349](sources/prs/composable_kernel/PR-349.md) — Add batched/grouped_gemm contraction deviceOps  `[source-pr]`
+- [pr-composable_kernel-3490](sources/prs/composable_kernel/PR-3490.md) — [CK_TILE][FMHA] Enable gpt-oss sink  `[source-pr]`
+- [pr-composable_kernel-3491](sources/prs/composable_kernel/PR-3491.md) — Shuffle fix for gfx950  `[source-pr]`
+- [pr-composable_kernel-3493](sources/prs/composable_kernel/PR-3493.md) — Refactor weight preshuffled pipeline and unify LDS buffer management API  `[source-pr]`
+- [pr-composable_kernel-3495](sources/prs/composable_kernel/PR-3495.md) — [CK_TILE] add preshuffleB mode for ABQuant GEMM  `[source-pr]`
+- [pr-composable_kernel-3498](sources/prs/composable_kernel/PR-3498.md) — [CK_BUILDER] Instance traits for conv bwd weight algorithms  `[source-pr]`
+- [pr-composable_kernel-3509](sources/prs/composable_kernel/PR-3509.md) — [CK_BUILDER] Add bwd weight factories  `[source-pr]`
+- [pr-composable_kernel-3514](sources/prs/composable_kernel/PR-3514.md) — Addition of Stream-K tests using Tile Engine  `[source-pr]`
+- [pr-composable_kernel-3520](sources/prs/composable_kernel/PR-3520.md) — [CK-Tile] add persistent async input scheduler parameters to kernel device-side and host-side args  `[source-pr]`
+- [pr-composable_kernel-3529](sources/prs/composable_kernel/PR-3529.md) — Adding remaining conv, dynamic_op, and scaleadd_scaleadd_relu flavors for grouped conv fwd  `[source-pr]`
+- [pr-composable_kernel-3537](sources/prs/composable_kernel/PR-3537.md) — Padding support for wave transfer  `[source-pr]`
+- [pr-composable_kernel-3540](sources/prs/composable_kernel/PR-3540.md) — feat: Add Interwave scheduler for aquant memory pipeline  `[source-pr]`
+- [pr-composable_kernel-3541](sources/prs/composable_kernel/PR-3541.md) — Fix error when building with -DCMAKE_BUILD_TYPE=Debug  `[source-pr]`
+- [pr-composable_kernel-3542](sources/prs/composable_kernel/PR-3542.md) — refactor: remove Default scheduler implementation as it not used anymore  `[source-pr]`
+- [pr-composable_kernel-3544](sources/prs/composable_kernel/PR-3544.md) — [CK] Add base class GridwiseGemm_xdl_cshuffle_base for all gridwise_gemm_xdl classes  `[source-pr]`
+- [pr-composable_kernel-3545](sources/prs/composable_kernel/PR-3545.md) — [FMHA] Support page_size=1 (linear layout) in batch prefill pipeline  `[source-pr]`
+- [pr-composable_kernel-3568](sources/prs/composable_kernel/PR-3568.md) — [FMHA] Enable page size 16 for batch prefill kernel  `[source-pr]`
+- [pr-composable_kernel-3578](sources/prs/composable_kernel/PR-3578.md) — Multi AB support for wave transfer  `[source-pr]`
+- [pr-composable_kernel-3584](sources/prs/composable_kernel/PR-3584.md) — [CK TILE QUANT GEMM] use OverrideADataType in aquant pipeline  `[source-pr]`
+- [pr-composable_kernel-3586](sources/prs/composable_kernel/PR-3586.md) — [CK_TILE][FMHA] Add new tile size for async  `[source-pr]`
+- [pr-composable_kernel-3592](sources/prs/composable_kernel/PR-3592.md) — [CK_BUILDER] Add reflection for wmma and bwd weight instances to ck builder reflection  `[source-pr]`
+- [pr-composable_kernel-360](sources/prs/composable_kernel/PR-360.md) — Hotfix LDS data hazard in fused attention  `[source-pr]`
+- [pr-composable_kernel-3601](sources/prs/composable_kernel/PR-3601.md) — Mx fp6 flatmm  `[source-pr]`
+- [pr-composable_kernel-3603](sources/prs/composable_kernel/PR-3603.md) — [CK_Tile] Support for a4w4 (fp4) in block scale gemm AB quant  `[source-pr]`
+- [pr-composable_kernel-3605](sources/prs/composable_kernel/PR-3605.md) — Re enable f8 x bf8 tests on compv3 and compv4  `[source-pr]`
+- [pr-composable_kernel-361](sources/prs/composable_kernel/PR-361.md) — Add examples of batched/grouped/SplitK Gemm for int8/bfp16/fp16/fp32  `[source-pr]`
+- [pr-composable_kernel-3611](sources/prs/composable_kernel/PR-3611.md) — [CK TILE] Fix basic gemm pipelines add v1 interwave pipeline  `[source-pr]`
+- [pr-composable_kernel-3613](sources/prs/composable_kernel/PR-3613.md) — [CK_TILE][FMHA] Revert new tile size for async (#3586)'  `[source-pr]`
+- [pr-composable_kernel-3620](sources/prs/composable_kernel/PR-3620.md) — GEMM Blockscale ABQuant Optimization  `[source-pr]`
+- [pr-composable_kernel-3623](sources/prs/composable_kernel/PR-3623.md) — [CK_TILE][FMHA]Add new tile size for async  `[source-pr]`
+- [pr-composable_kernel-3629](sources/prs/composable_kernel/PR-3629.md) — [CK_Tile] Adding support for preshuffleQuant in AB quant Block Scale Gemm  `[source-pr]`
+- [pr-composable_kernel-3633](sources/prs/composable_kernel/PR-3633.md) — Revert ' Fp8 block scale quantization for fmha  fwd'  `[source-pr]`
+- [pr-composable_kernel-3634](sources/prs/composable_kernel/PR-3634.md) — Solve the staging compiler regression and enhance the docker container execution in script/tools  `[source-pr]`
+- [pr-composable_kernel-3635](sources/prs/composable_kernel/PR-3635.md) — Revert 'Revert ' Fp8 block scale quantization for fmha  fwd''  `[source-pr]`
+- [pr-composable_kernel-3640](sources/prs/composable_kernel/PR-3640.md) — [Compiler] Addressing new compiler warnings  `[source-pr]`
+- [pr-composable_kernel-3648](sources/prs/composable_kernel/PR-3648.md) — Grouped Conv Bwd Weight Direct Load  `[source-pr]`
+- [pr-composable_kernel-3653](sources/prs/composable_kernel/PR-3653.md) — feat: add split_k support for block scale gemm bquant mode.  `[source-pr]`
+- [pr-composable_kernel-3657](sources/prs/composable_kernel/PR-3657.md) — Optimize batch prefill kernel performance for VECTORIZED_LAYOUT KV cache  `[source-pr]`
+- [pr-composable_kernel-368](sources/prs/composable_kernel/PR-368.md) — Gemm reduce examples int4/int8/fp32/bf16  `[source-pr]`
+- [pr-composable_kernel-3681](sources/prs/composable_kernel/PR-3681.md) — Fix redundant cast in model sensitive rmsnorm  `[source-pr]`
+- [pr-composable_kernel-381](sources/prs/composable_kernel/PR-381.md) — Add pipeline v1/v2 selector, add more instances  `[source-pr]`
+- [pr-composable_kernel-383](sources/prs/composable_kernel/PR-383.md) — GEMM batched/splitK/cgemm/grouped int4 examples  `[source-pr]`
+- [pr-composable_kernel-413](sources/prs/composable_kernel/PR-413.md) — Gemm layernorm welford  `[source-pr]`
+- [pr-composable_kernel-535](sources/prs/composable_kernel/PR-535.md) — Add padding device_gemm_add_add_fastgelu_xdl_c_shuffle instances to enable arbitrary problem size  `[source-pr]`
+- [pr-composable_kernel-541](sources/prs/composable_kernel/PR-541.md) — [Navi3x-LWPCK-545] Block-wise GEMM + Real GEMM_WMMA_FP16  `[source-pr]`
+- [pr-composable_kernel-580](sources/prs/composable_kernel/PR-580.md) — Improve normalization  `[source-pr]`
+- [pr-composable_kernel-603](sources/prs/composable_kernel/PR-603.md) — Add a denorm test fix  `[source-pr]`
+- [pr-composable_kernel-628](sources/prs/composable_kernel/PR-628.md) — [gfx110x] support Navi3x architectures.  `[source-pr]`
+- [pr-composable_kernel-652](sources/prs/composable_kernel/PR-652.md) — Merge up from develop to staging.  `[source-pr]`
+- [pr-composable_kernel-669](sources/prs/composable_kernel/PR-669.md) — Grouped Gemm + SplitK + simplified Kernel Args  `[source-pr]`
+- [pr-composable_kernel-687](sources/prs/composable_kernel/PR-687.md) — [CK][WorkAround] suppress unsafe buffer warn  `[source-pr]`
+- [pr-composable_kernel-699](sources/prs/composable_kernel/PR-699.md) — initial stream-k implementation with example  `[source-pr]`
+- [pr-composable_kernel-707](sources/prs/composable_kernel/PR-707.md) — Multiple fixes to GroupedGemm+SplitK  `[source-pr]`
+- [pr-composable_kernel-714](sources/prs/composable_kernel/PR-714.md) — Enable gemm_dl and other kernels on Navi3x.  `[source-pr]`
+- [pr-composable_kernel-733](sources/prs/composable_kernel/PR-733.md) — Fix flash attn mask bug  `[source-pr]`
+- [pr-composable_kernel-763](sources/prs/composable_kernel/PR-763.md) — Use pipeline v1 for splitK gemm  `[source-pr]`
+- [pr-composable_kernel-783](sources/prs/composable_kernel/PR-783.md) — Split GEMM instance library & enable pipeline v2 optimization  `[source-pr]`
+- [pr-composable_kernel-788](sources/prs/composable_kernel/PR-788.md) — Grouped Gemm with looping over the tiles.  `[source-pr]`
+- [pr-composable_kernel-813](sources/prs/composable_kernel/PR-813.md) — Speed-up global memory reading for GEMM instances  `[source-pr]`
+- [pr-composable_kernel-818](sources/prs/composable_kernel/PR-818.md) — Grouped Gemm with Fixed K and N with SplitK  `[source-pr]`
+- [pr-composable_kernel-819](sources/prs/composable_kernel/PR-819.md) — Update tuning parameter & compilation options of DeviceGemmXdl<> instance (layout=TT)  `[source-pr]`
+- [pr-composable_kernel-827](sources/prs/composable_kernel/PR-827.md) — fpAintB_gemm implementation  `[source-pr]`
+- [pr-composable_kernel-835](sources/prs/composable_kernel/PR-835.md) — Add bias for flashattention fwd(v2)  `[source-pr]`
+- [pr-composable_kernel-851](sources/prs/composable_kernel/PR-851.md) — New implementation fpAintB  `[source-pr]`
+- [pr-composable_kernel-856](sources/prs/composable_kernel/PR-856.md) — [HotFix] add config and version files to pass on build info  `[source-pr]`
+- [pr-composable_kernel-857](sources/prs/composable_kernel/PR-857.md) — Ck profiler splitk  `[source-pr]`
+- [pr-composable_kernel-863](sources/prs/composable_kernel/PR-863.md) — Redesign the DPP8 GEMM kernel to use warp-wise component  `[source-pr]`
+- [pr-composable_kernel-865](sources/prs/composable_kernel/PR-865.md) — Fp16/fp8 mixed-precision Gemm with multiply+add fusion  `[source-pr]`
+- [pr-composable_kernel-889](sources/prs/composable_kernel/PR-889.md) — Mha train develop bwdopt bias  `[source-pr]`
+- [pr-composable_kernel-89](sources/prs/composable_kernel/PR-89.md) — Add gridwise GEMM pipeline  `[source-pr]`
+- [pr-composable_kernel-920](sources/prs/composable_kernel/PR-920.md) — Add fp8 gemm instances  `[source-pr]`
+- [pr-composable_kernel-933](sources/prs/composable_kernel/PR-933.md) — Add fp8 @ bf8 gemm support and example  `[source-pr]`
+- [pr-composable_kernel-938](sources/prs/composable_kernel/PR-938.md) — Fixed Gemmv2r3 kpad  `[source-pr]`
+- [pr-composable_kernel-950](sources/prs/composable_kernel/PR-950.md) — Add grouped conv bwd data wmma  `[source-pr]`
+- [pr-composable_kernel-961](sources/prs/composable_kernel/PR-961.md) — Avoid force setting ENABLE_PIPELINE_V2_OPT to OFF  `[source-pr]`
+- [pr-composable_kernel-982](sources/prs/composable_kernel/PR-982.md) — Revert 'Grouped Gemm with looping over the tiles.'  `[source-pr]`
+- [pr-composable_kernel-999](sources/prs/composable_kernel/PR-999.md) — Add basic support for direct loads from global to LDS  `[source-pr]`
+- [pr-flash-attention-179](sources/prs/flash-attention/PR-179.md) — [CK_TILE] Fix NaN for FMHA BWD When seq_q=0  `[source-pr]`
+- [pr-sglang-22802](sources/prs/sglang/PR-22802.md) — [diffusion] [AMD] model: allow AITER backends in Flux 2 pipeline  `[source-pr]`
+- [pr-sglang-23019](sources/prs/sglang/PR-23019.md) — refactor(moe): de-duplicate triton MoE runner path into shared helpers  `[source-pr]`
+- [pr-sglang-23760](sources/prs/sglang/PR-23760.md) — [MoE] Unify DeepEPMoE+MoriEPMoE through AITER MoeRunner pre/post-permute  `[source-pr]`
+- [pr-sglang-24491](sources/prs/sglang/PR-24491.md) — [diffusion] Add performance mode defaults  `[source-pr]`
+- [pr-sglang-24816](sources/prs/sglang/PR-24816.md) — Add FlashInfer SM90 cutlass MXFP4 MoE backend (W4A16) for GPT-OSS + DeepSeek-V4  `[source-pr]`
+- [pr-sglang-25284](sources/prs/sglang/PR-25284.md) — Support Gemma4 Pipeline Parallelism  `[source-pr]`
+- [pr-sglang-26247](sources/prs/sglang/PR-26247.md) — [diffusion] Fix diffusion serve warmup defaults  `[source-pr]`
+- [pr-sglang-26318](sources/prs/sglang/PR-26318.md) — [diffusion][jit_kernel] perf: varlen FA fast path for USPAttention masked branch  `[source-pr]`
+- [pr-triton-104](sources/prs/triton/PR-104.md) — Triton mlir ifu 02022023  `[source-pr]`
+- [pr-triton-174](sources/prs/triton/PR-174.md) — [dotOp] [rocMLIR] Complete the translation pipeline  `[source-pr]`
+- [pr-triton-180](sources/prs/triton/PR-180.md) — [MFMA] Implementation of MFMA DotOp pipeline  `[source-pr]`
+- [pr-triton-185](sources/prs/triton/PR-185.md) — [dotOp] [rocMLIR] Make k-loop in test_gemm work  `[source-pr]`
+- [pr-triton-192](sources/prs/triton/PR-192.md) — [Matmul] [Optimization] Disable pipeline pass for amd gpu  `[source-pr]`
+- [pr-triton-197](sources/prs/triton/PR-197.md) — [dotOp] [rocMLIR] Enable full GEMM  `[source-pr]`
+- [pr-triton-201](sources/prs/triton/PR-201.md) — [dotOp] [rocMLIR] Enable tuning  `[source-pr]`
+- [pr-triton-229](sources/prs/triton/PR-229.md) — IFU 230601  `[source-pr]`
+- [pr-triton-23](sources/prs/triton/PR-23.md) — [Triton-MLIR][ROCM] Preparing for ROCm support.  `[source-pr]`
+- [pr-triton-241](sources/prs/triton/PR-241.md) — [Dot] Support slicing in dot operands  `[source-pr]`
+- [pr-triton-269](sources/prs/triton/PR-269.md) — [MFMA] Introduce dot operand loading fast path  `[source-pr]`
+- [pr-triton-276](sources/prs/triton/PR-276.md) — Disable pipelining  `[source-pr]`
+- [pr-triton-288](sources/prs/triton/PR-288.md) — [Tests] Fix some tests in test_core_amd.py  `[source-pr]`
+- [pr-triton-299](sources/prs/triton/PR-299.md) — [NFC] Rename `MMAv2kWidth` to `kWidth`  `[source-pr]`
+- [pr-triton-305](sources/prs/triton/PR-305.md) — [MLIR] Added tritongpu-stream-pipeline pass  `[source-pr]`
+- [pr-triton-308](sources/prs/triton/PR-308.md) — [Autotuner] Print out best config for each key  `[source-pr]`
+- [pr-triton-325](sources/prs/triton/PR-325.md) — Fix dangling gpu_has_mfma use  `[source-pr]`
+- [pr-triton-344](sources/prs/triton/PR-344.md) — [GEMM] [Tuning] Merge split_k and non split_k kernels in GEMM tuning script  `[source-pr]`
+- [pr-triton-345](sources/prs/triton/PR-345.md) — [Stream] Fixed bug in stream-pipeline for FA  `[source-pr]`
+- [pr-triton-356](sources/prs/triton/PR-356.md) — Improve FA fwd kernel with causal=True  `[source-pr]`
+- [pr-triton-400](sources/prs/triton/PR-400.md) — [MFMA] Refactor dot pipeline to reduce code duplication  `[source-pr]`
+- [pr-triton-479](sources/prs/triton/PR-479.md) — [MFMA] Cleanup mfma pipeline  `[source-pr]`
+- [pr-triton-590](sources/prs/triton/PR-590.md) — Add infrastructure to allow for kernel instrumentation passes to be inserted into the pass pipeline  `[source-pr]`
+- [pr-triton-600](sources/prs/triton/PR-600.md) — prune LDS usage for the new pipeliner  `[source-pr]`
+- [pr-triton-614](sources/prs/triton/PR-614.md) — Copy *tune_gemm* from `triton-mlir` branch to `main_perf` branch  `[source-pr]`
+- [pr-triton-629](sources/prs/triton/PR-629.md) — Clean up *tune_gemm* script from `main_perf` branch  `[source-pr]`
+- [pr-triton-647](sources/prs/triton/PR-647.md) — matmul performance regression pipeline  `[source-pr]`
+- [pr-triton-652](sources/prs/triton/PR-652.md) — add stream-k v0.2  `[source-pr]`
+- [pr-triton-653](sources/prs/triton/PR-653.md) — Update num_stages to 2 from 0 in perf regression tests  `[source-pr]`
+- [pr-triton-655](sources/prs/triton/PR-655.md) — Replace num_stages=0 with num_stages=2  `[source-pr]`
+- [pr-triton-658](sources/prs/triton/PR-658.md) — Set num_stage to 2 from 0 in tune_gemm  `[source-pr]`
+- [pr-triton-660](sources/prs/triton/PR-660.md) — Streamk v0.3  `[source-pr]`
+- [pr-triton-661](sources/prs/triton/PR-661.md) — [tune_gemm] Update the filter for LDS usage for stream-pipelineV2  `[source-pr]`
+- [pr-triton-686](sources/prs/triton/PR-686.md) — enable stream pipeline for persistent rmsnorm kernel  `[source-pr]`
+- [pr-triton-695](sources/prs/triton/PR-695.md) — Triton bypassLDS changes  `[source-pr]`
+- [pr-triton-698](sources/prs/triton/PR-698.md) — Fold fp_to_fp op with zero constant input (#5007)  `[source-pr]`
+- [pr-triton-722](sources/prs/triton/PR-722.md) — Fix pid remapping logic when GRID_MN cannot divide NUM_XCDS  `[source-pr]`
+- [pr-triton-760](sources/prs/triton/PR-760.md) — [release/internal/2.3.x] Conditionalize 'libamd_comgr.so' based on rocm version  `[source-pr]`
+- [pr-triton-778](sources/prs/triton/PR-778.md) — Cherry-pick more performance improvmenet commits  `[source-pr]`
+- [pr-triton-796](sources/prs/triton/PR-796.md) — [AMD] Enable async pingpong for F16 GEMMs  `[source-pr]`
+- [pr-triton-801](sources/prs/triton/PR-801.md) — Add skinny pingpong transform  `[source-pr]`
+- [pr-triton-803](sources/prs/triton/PR-803.md) — [AMD] Add an option to force async copy overlapping  `[source-pr]`
+- [pr-triton-812](sources/prs/triton/PR-812.md) — [AMD] Improve Scheduling for Async BF16 GEMM  `[source-pr]`
+- [pr-triton-813](sources/prs/triton/PR-813.md) — Preshuffling support  `[source-pr]`
+- [pr-triton-814](sources/prs/triton/PR-814.md) — Op_sel support for mxfp4  `[source-pr]`
+- [pr-triton-846](sources/prs/triton/PR-846.md) — [Cherry-Pick] gfx950 improvements and bug fixes  `[source-pr]`
+- [pr-triton-96](sources/prs/triton/PR-96.md) — Triton mlir ifu 2023 30 1  `[source-pr]`
+- [pr-vllm-36243](sources/prs/vllm/PR-36243.md) — [Bugfix] Skip out-of-stage layers in get_layers_from_vllm_config for pipeline parallel  `[source-pr]`
+- [pr-vllm-36823](sources/prs/vllm/PR-36823.md) — [vLLM IR] 2/N fused_add_rms_norm and maybe_inplace overload  `[source-pr]`
+- [pr-vllm-37283](sources/prs/vllm/PR-37283.md) — [Releases] [ROCm] Enable Nightly Docker Image and Wheel Releases for ROCm  `[source-pr]`
+- [pr-vllm-37539](sources/prs/vllm/PR-37539.md) — [Performance] Remove unnecessary zero-fill of MLA decode output tensor in Aiter backend  `[source-pr]`
+- [pr-vllm-37566](sources/prs/vllm/PR-37566.md) — refactor hard coded device string in test files under tests/v1 and tests/lora  `[source-pr]`
+- [pr-vllm-38263](sources/prs/vllm/PR-38263.md) — [ROCm] [Bugfix] [Release] Fix nightly rocm release pipeline  `[source-pr]`
+- [pr-vllm-38901](sources/prs/vllm/PR-38901.md) — refactor hard coded device string in test files under tests/compile tests/quantization tests/models and tests/model_executor  `[source-pr]`
+- [pr-vllm-39233](sources/prs/vllm/PR-39233.md) — [NVIDIA] Add sm_110 (Jetson Thor) to CUDA 13.0 build targets  `[source-pr]`
+- [pr-vllm-40749](sources/prs/vllm/PR-40749.md) — [Bugfix] Skip PP sampled-token receive on last rank during async scheduling  `[source-pr]`
+- [pr-vllm-41416](sources/prs/vllm/PR-41416.md) — [Build] Switch CUDA 13.0 wheel builds to PyTorch manylinux_2_28 base  `[source-pr]`
+- [pr-vllm-41751](sources/prs/vllm/PR-41751.md) — [ROCm] mori: add InterNodeV1LL inter-node kernel selection via VLLM_MORI_INTERNODE_KERNEL  `[source-pr]`
+- [pr-vllm-41901](sources/prs/vllm/PR-41901.md) — [Model] Use AutoWeightsLoader for AXK1  `[source-pr]`
+- [pr-vllm-43898](sources/prs/vllm/PR-43898.md) — [ROCm][DSv4] Remove device pipeline stall in sparse attention  `[source-pr]`
+
+## split-k
+
+- [pr-FlyDSL-327](sources/prs/FlyDSL/PR-327.md) — Add hgemm split-k kernels  `[source-pr]`
+- [pr-FlyDSL-346](sources/prs/FlyDSL/PR-346.md) — [FLYDSL]: if dispatch dynamic tests refactor  `[source-pr]`
+- [pr-FlyDSL-370](sources/prs/FlyDSL/PR-370.md) — Pr/a16wi4 group  `[source-pr]`
+- [pr-FlyDSL-388](sources/prs/FlyDSL/PR-388.md) — [Perf] Port mixed_moe kernel optimizations for stage1/stage2  `[source-pr]`
+- [pr-FlyDSL-390](sources/prs/FlyDSL/PR-390.md) — support split-k algo for moe_gemm_2stage  `[source-pr]`
+- [pr-FlyDSL-435](sources/prs/FlyDSL/PR-435.md) — Refine hgemm split-k kernel  `[source-pr]`
+- [pr-FlyDSL-465](sources/prs/FlyDSL/PR-465.md) — some optimization about smoothquant moe  `[source-pr]`
+- [pr-FlyDSL-478](sources/prs/FlyDSL/PR-478.md) — [Refact] Rename JitArgument & DslType interfaces, support SimpleNamespace as DslType  `[source-pr]`
+- [pr-FlyDSL-483](sources/prs/FlyDSL/PR-483.md) — [gfx1250] MoE 2-stage GEMM: MXScale rework + TDM K-loop hoist + build  `[source-pr]`
+- [pr-FlyDSL-530](sources/prs/FlyDSL/PR-530.md) — hgemm_splitk: add mixed sllitk/slicek policies  `[source-pr]`
+- [pr-FlyDSL-554](sources/prs/FlyDSL/PR-554.md) — [Feat] Add TensorAdaptor.mark_static for shape-aware JIT cache keys  `[source-pr]`
+- [pr-FlyDSL-579](sources/prs/FlyDSL/PR-579.md) — [Enh] Port AITER FlyDSL kernels  `[source-pr]`
+- [pr-FlyDSL-588](sources/prs/FlyDSL/PR-588.md) — hgemm_spk: add multi-stage lds pipeline  `[source-pr]`
+- [pr-aiter-1019](sources/prs/aiter/PR-1019.md) — refactor fmoe tuner  `[source-pr]`
+- [pr-aiter-1048](sources/prs/aiter/PR-1048.md) — [MI35x]Gating bf16gemm  `[source-pr]`
+- [pr-aiter-1058](sources/prs/aiter/PR-1058.md) — Pa mtp3 update  `[source-pr]`
+- [pr-aiter-1073](sources/prs/aiter/PR-1073.md) — feat(mha): Add sequence padding support for CK FMHA forward  `[source-pr]`
+- [pr-aiter-1102](sources/prs/aiter/PR-1102.md) — Tuning Utility update  `[source-pr]`
+- [pr-aiter-1148](sources/prs/aiter/PR-1148.md) — Catchall PR for all 355_wip related changes  `[source-pr]`
+- [pr-aiter-1161](sources/prs/aiter/PR-1161.md) — A8w8 asm codegen and tune  `[source-pr]`
+- [pr-aiter-1218](sources/prs/aiter/PR-1218.md) — [Triton] [355_wip_triton] DS 355_wip fused_shared_expert  `[source-pr]`
+- [pr-aiter-1233](sources/prs/aiter/PR-1233.md) — Mla splitkv enhance split alg inte  `[source-pr]`
+- [pr-aiter-1260](sources/prs/aiter/PR-1260.md) — Kernel naming: add reusable constexpr repr helper and testing it with gemm_a16w16  `[source-pr]`
+- [pr-aiter-1283](sources/prs/aiter/PR-1283.md) — [TRITON] GEMM kernels nomenclature changes  `[source-pr]`
+- [pr-aiter-1293](sources/prs/aiter/PR-1293.md) — [TRITON] Batched GEMM kernels nomenclature changes  `[source-pr]`
+- [pr-aiter-1326](sources/prs/aiter/PR-1326.md) — [TRITON] Simplify and optimize triton_kernels moe code and move it into aiter  `[source-pr]`
+- [pr-aiter-1328](sources/prs/aiter/PR-1328.md) — [Triton] DS a16w8 GEMM and fused reduce_rms_fp8_group_quant  `[source-pr]`
+- [pr-aiter-1331](sources/prs/aiter/PR-1331.md) — [Triton] add gemm tune check utility function  `[source-pr]`
+- [pr-aiter-1356](sources/prs/aiter/PR-1356.md) — [TRITON] Add MoE GEMM a8w8 kernel  `[source-pr]`
+- [pr-aiter-1400](sources/prs/aiter/PR-1400.md) — cktile weight preshuffle test and auto tuning for a8w8  `[source-pr]`
+- [pr-aiter-1439](sources/prs/aiter/PR-1439.md) — fix_prebuiild_asm  `[source-pr]`
+- [pr-aiter-1443](sources/prs/aiter/PR-1443.md) — fix merging aiter config  `[source-pr]`
+- [pr-aiter-1456](sources/prs/aiter/PR-1456.md) — add gen_fake for 4 gemm operators  `[source-pr]`
+- [pr-aiter-1483](sources/prs/aiter/PR-1483.md) — [TRITON] Add a8w8 blockscale MoE  `[source-pr]`
+- [pr-aiter-1490](sources/prs/aiter/PR-1490.md) — Enable bf16 asm bpreshuffle tune  `[source-pr]`
+- [pr-aiter-1503](sources/prs/aiter/PR-1503.md) — Merge cktile ck gemm tune  `[source-pr]`
+- [pr-aiter-1514](sources/prs/aiter/PR-1514.md) — bf16gemm_asm_tune  `[source-pr]`
+- [pr-aiter-156](sources/prs/aiter/PR-156.md) — Fp8 blockscale gemm  `[source-pr]`
+- [pr-aiter-1587](sources/prs/aiter/PR-1587.md) — [TRITON] Standardize get_config for GEMM kernels and have a unified format for their configs  `[source-pr]`
+- [pr-aiter-1596](sources/prs/aiter/PR-1596.md) — add ck tile block scale gemm a8w8  `[source-pr]`
+- [pr-aiter-1654](sources/prs/aiter/PR-1654.md) — support moe a8w8 splitk  `[source-pr]`
+- [pr-aiter-1667](sources/prs/aiter/PR-1667.md) — Dev/a8w4 and a8w8splitk  `[source-pr]`
+- [pr-aiter-1680](sources/prs/aiter/PR-1680.md) — add dealing with memory access fault in Mp tuner  `[source-pr]`
+- [pr-aiter-1686](sources/prs/aiter/PR-1686.md) — fixing the fp4 gemm tune script Exception caused by csv title inconsistency with code  `[source-pr]`
+- [pr-aiter-1700](sources/prs/aiter/PR-1700.md) — bf16_gemm_clean_in_kl  `[source-pr]`
+- [pr-aiter-1719](sources/prs/aiter/PR-1719.md) — [refractor] mha fwd api refractor  `[source-pr]`
+- [pr-aiter-172](sources/prs/aiter/PR-172.md) — Add a8w8 CK Batched GEMM  `[source-pr]`
+- [pr-aiter-1729](sources/prs/aiter/PR-1729.md) — Wjx/ck tile moe merge  `[source-pr]`
+- [pr-aiter-1737](sources/prs/aiter/PR-1737.md) — use a16w4 to replace a4w4 as default policy  `[source-pr]`
+- [pr-aiter-1745](sources/prs/aiter/PR-1745.md) — [Triton] skip_reduce for gemm_afp4wfp4_preshuffle  `[source-pr]`
+- [pr-aiter-1764](sources/prs/aiter/PR-1764.md) — [Triton] Triton FP8 bloscale GEMM preshuffle  `[source-pr]`
+- [pr-aiter-1767](sources/prs/aiter/PR-1767.md) — fix tune error when N is large  `[source-pr]`
+- [pr-aiter-1778](sources/prs/aiter/PR-1778.md) — [Triton] Triton a16w8 gemm preshuffle  `[source-pr]`
+- [pr-aiter-1790](sources/prs/aiter/PR-1790.md) — Move moe tune to csrc  `[source-pr]`
+- [pr-aiter-1814](sources/prs/aiter/PR-1814.md) — rebase and init optimization  `[source-pr]`
+- [pr-aiter-1833](sources/prs/aiter/PR-1833.md) — [Triton] GEMM tunning script  `[source-pr]`
+- [pr-aiter-186](sources/prs/aiter/PR-186.md) — Add CK batched Gemm for BF16  `[source-pr]`
+- [pr-aiter-1866](sources/prs/aiter/PR-1866.md) — Fix code style after updating Black to 26.1.0  `[source-pr]`
+- [pr-aiter-1927](sources/prs/aiter/PR-1927.md) — fix aot fp4 moe  `[source-pr]`
+- [pr-aiter-194](sources/prs/aiter/PR-194.md) — Mdf compiler 0312  `[source-pr]`
+- [pr-aiter-1954](sources/prs/aiter/PR-1954.md) — feat(ck_tile): add a8w8 blockscale gemm with preshuffleB support  `[source-pr]`
+- [pr-aiter-196](sources/prs/aiter/PR-196.md) — update ck & some fix  `[source-pr]`
+- [pr-aiter-2024](sources/prs/aiter/PR-2024.md) — [gfx942]Add new GEMM configuration files for DSKR1  `[source-pr]`
+- [pr-aiter-2049](sources/prs/aiter/PR-2049.md) — [TRITON] Add smoothquant int8 MoE kernel  `[source-pr]`
+- [pr-aiter-2113](sources/prs/aiter/PR-2113.md) — [FlyDSL] import flydsl implement of a4w4 moe  `[source-pr]`
+- [pr-aiter-2136](sources/prs/aiter/PR-2136.md) — add mhc_pre hip kernel (mhc_pre_gemm_sqrsum, mhc_pre_big_fuse)  `[source-pr]`
+- [pr-aiter-2142](sources/prs/aiter/PR-2142.md) — [FP8_BS_GEMM] add fp8 blockscale asm kernel  `[source-pr]`
+- [pr-aiter-2180](sources/prs/aiter/PR-2180.md) — [TRITON] Add support for splitk to A8W8 kernel  `[source-pr]`
+- [pr-aiter-2213](sources/prs/aiter/PR-2213.md) — Add GEMM-A16W16-ATOMIC-N=256-K=6144 triton gemm tune config  `[source-pr]`
+- [pr-aiter-2262](sources/prs/aiter/PR-2262.md) — Introduce asm fmoe kernels that do not require bf16->fp8 quantization  `[source-pr]`
+- [pr-aiter-2313](sources/prs/aiter/PR-2313.md) — Add blockPerCu support for CKTile GEMMs and CKTile MOE tuning  `[source-pr]`
+- [pr-aiter-2335](sources/prs/aiter/PR-2335.md) — fix(gemm_a8w8_bpreshuffle): pass splitK/KBatch to CK kernels  `[source-pr]`
+- [pr-aiter-2353](sources/prs/aiter/PR-2353.md) — Fmha fwd remove ck dependency  `[source-pr]`
+- [pr-aiter-2373](sources/prs/aiter/PR-2373.md) — [FIX] fix igemm 4GB oob bug  `[source-pr]`
+- [pr-aiter-2375](sources/prs/aiter/PR-2375.md) — Add run_config and compare in tuner  `[source-pr]`
+- [pr-aiter-2382](sources/prs/aiter/PR-2382.md) — [FEAT] exclude torch.h in a8w8 cu files  `[source-pr]`
+- [pr-aiter-2390](sources/prs/aiter/PR-2390.md) — [FlyDSL] Add FlyDSL MoE a4w4 support and update kernels  `[source-pr]`
+- [pr-aiter-2491](sources/prs/aiter/PR-2491.md) — [TRITON] Fix unit tests on `gfx950` - part 2  `[source-pr]`
+- [pr-aiter-2496](sources/prs/aiter/PR-2496.md) — Rebase to main  `[source-pr]`
+- [pr-aiter-2526](sources/prs/aiter/PR-2526.md) — [FIX] fix a8w8 asm kernel  ks>1 mismatch  `[source-pr]`
+- [pr-aiter-2536](sources/prs/aiter/PR-2536.md) — add flydsl splitk gemm and update kimi-2 bf16 tunned config  `[source-pr]`
+- [pr-aiter-2545](sources/prs/aiter/PR-2545.md) — refactor hip kernel -- remove torch from csrc  `[source-pr]`
+- [pr-aiter-2546](sources/prs/aiter/PR-2546.md) — So/a8w8 bpreshuffle flydsl  `[source-pr]`
+- [pr-aiter-2551](sources/prs/aiter/PR-2551.md) — (alternative to #2508) Fix/splitk tmp_out undersized buffer avoid double-zeroing  `[source-pr]`
+- [pr-aiter-2567](sources/prs/aiter/PR-2567.md) — Fix FlyDSL split-k HGEMM correctness and precision issues  `[source-pr]`
+- [pr-aiter-2581](sources/prs/aiter/PR-2581.md) — [FlyDSL] Optimize a4w4 MOE kernels  `[source-pr]`
+- [pr-aiter-2583](sources/prs/aiter/PR-2583.md) — [TRITON] Swiglu and reduce refactor  `[source-pr]`
+- [pr-aiter-2634](sources/prs/aiter/PR-2634.md) — update flydsl bf16 gemm implementation and tuned config  `[source-pr]`
+- [pr-aiter-2645](sources/prs/aiter/PR-2645.md) — fix(ck_gemm): fix multi-arch build targeting and kernel dispatch across all CK GEMM modules  `[source-pr]`
+- [pr-aiter-2646](sources/prs/aiter/PR-2646.md) — [TRITON] mHC-pre: Manifold-constrained Hyper Connection  `[source-pr]`
+- [pr-aiter-2657](sources/prs/aiter/PR-2657.md) — add triton fallback for mi455 gptoss & dsfp4  `[source-pr]`
+- [pr-aiter-2658](sources/prs/aiter/PR-2658.md) — [Perf]support ck fp8 blockscale splitk in moe tunner  `[source-pr]`
+- [pr-aiter-2666](sources/prs/aiter/PR-2666.md) — update kimi2 bf16 tuned config  `[source-pr]`
+- [pr-aiter-2679](sources/prs/aiter/PR-2679.md) — fix hip_call for launch  and  asm a8w8 splitk  `[source-pr]`
+- [pr-aiter-2695](sources/prs/aiter/PR-2695.md) — [Triton] Declare triton>=3.6.0 dependency  `[source-pr]`
+- [pr-aiter-2696](sources/prs/aiter/PR-2696.md) — Introduce 16x128 fused moe kernel with weigths prefetch  `[source-pr]`
+- [pr-aiter-2719](sources/prs/aiter/PR-2719.md) — [CK] Fix ck moe splitk module jit and retune  `[source-pr]`
+- [pr-aiter-2721](sources/prs/aiter/PR-2721.md) — Ensure GemmTuner doesn't generate invalid input combinations for SplitK kernels  `[source-pr]`
+- [pr-aiter-2732](sources/prs/aiter/PR-2732.md) — Make FlyDSL LDS checks architecture-aware and reduce tuner failure noise  `[source-pr]`
+- [pr-aiter-2738](sources/prs/aiter/PR-2738.md) — fix moe splitk aot and jit  `[source-pr]`
+- [pr-aiter-2741](sources/prs/aiter/PR-2741.md) — Add FlyDSL GEMM AOT precompile support  `[source-pr]`
+- [pr-aiter-2775](sources/prs/aiter/PR-2775.md) — Xiaobing/gptoss small m  `[source-pr]`
+- [pr-aiter-2776](sources/prs/aiter/PR-2776.md) — [FLYDSL]: aiter flydsl if const_expr  `[source-pr]`
+- [pr-aiter-2777](sources/prs/aiter/PR-2777.md) — [FLYDSL] Fix flyc recompile issue for `hgemm` and `gdr`  `[source-pr]`
+- [pr-aiter-28](sources/prs/aiter/PR-28.md) — Gemm a8w8 asm  `[source-pr]`
+- [pr-aiter-280](sources/prs/aiter/PR-280.md) — refine aiter::mha & add benchmark  `[source-pr]`
+- [pr-aiter-2877](sources/prs/aiter/PR-2877.md) — Fix FlyDSL split-k barrier synchronization issue  `[source-pr]`
+- [pr-aiter-2945](sources/prs/aiter/PR-2945.md) — [OPUS]bf16 opus gemm support  `[source-pr]`
+- [pr-aiter-2972](sources/prs/aiter/PR-2972.md) — add swiglu a4w4 moe path for gpt-oss model  `[source-pr]`
+- [pr-aiter-2980](sources/prs/aiter/PR-2980.md) — [Bugfix] Suppress pandas FutureWarning and fix pybind11 type hint mismatch  `[source-pr]`
+- [pr-aiter-30](sources/prs/aiter/PR-30.md) — add ck gemm a8w8 splitK  `[source-pr]`
+- [pr-aiter-3005](sources/prs/aiter/PR-3005.md) — [Silo] Bulk merge: kernel fixes and features (SplitK, MoE fixes, Qwen3-Next, pa_mqa OOB)  `[source-pr]`
+- [pr-aiter-3050](sources/prs/aiter/PR-3050.md) — Fix CK MoE split-k dispatch for blockscale FP8  `[source-pr]`
+- [pr-aiter-3057](sources/prs/aiter/PR-3057.md) — [Triton] [ATOM] DSV4 fusions phase 1  `[source-pr]`
+- [pr-aiter-3075](sources/prs/aiter/PR-3075.md) — blockscale gemm: dispatch by kernelName, strict tuned-CSV validation  `[source-pr]`
+- [pr-aiter-3092](sources/prs/aiter/PR-3092.md) — Remove redundant ir_values unpack  `[source-pr]`
+- [pr-aiter-3103](sources/prs/aiter/PR-3103.md) — [MOE] Special path for moe ptpc fp8, batch 1~32 with hsaco  `[source-pr]`
+- [pr-aiter-3153](sources/prs/aiter/PR-3153.md) — [MoE] Align FlyDSL MXFP4 rounding  `[source-pr]`
+- [pr-aiter-3190](sources/prs/aiter/PR-3190.md) — [Triton] [ATOM] DSV4 fusion phase2  `[source-pr]`
+- [pr-aiter-3208](sources/prs/aiter/PR-3208.md) — [Bugfix][CKTile] Use local expert ids for MoE bias activation  `[source-pr]`
+- [pr-aiter-3230](sources/prs/aiter/PR-3230.md) — [TRITON] Make splitk reduce common  `[source-pr]`
+- [pr-aiter-3278](sources/prs/aiter/PR-3278.md) — [bugfix] fix mhc split-k acc_sq mask  `[source-pr]`
+- [pr-aiter-3279](sources/prs/aiter/PR-3279.md) — [FLYDSL] Add streaming-k with mixed slice-k and split-k for flydsl hgemm  `[source-pr]`
+- [pr-aiter-3288](sources/prs/aiter/PR-3288.md) — [Bugfix] a16w16 splitk: per-stream semaphore workspace to avoid deadlock  `[source-pr]`
+- [pr-aiter-3339](sources/prs/aiter/PR-3339.md) — [DSv4] Tune FP8 a8w8 blockscale bpreshuffle GEMM for all batch sizes  `[source-pr]`
+- [pr-aiter-3341](sources/prs/aiter/PR-3341.md) — [MoE] Optimize qwen3.5 397B ptpc fp8 moe prefill and decoding  `[source-pr]`
+- [pr-aiter-3346](sources/prs/aiter/PR-3346.md) — Unify gemm solution function signatures in tuned_gemm.py  `[source-pr]`
+- [pr-aiter-3373](sources/prs/aiter/PR-3373.md) — Flydsl update fix dynmaic layout; use fx.ptr for kernels not using layout  `[source-pr]`
+- [pr-aiter-3382](sources/prs/aiter/PR-3382.md) — [OPUS]fix opus_gemm mono version m align assert error  `[source-pr]`
+- [pr-aiter-3383](sources/prs/aiter/PR-3383.md) — [Perf] tune a8w8_blockscale_bpreshuffle for DSv4-Pro shapes on MI355X  `[source-pr]`
+- [pr-aiter-3404](sources/prs/aiter/PR-3404.md) — moe enable padding params as runtime  `[source-pr]`
+- [pr-aiter-3435](sources/prs/aiter/PR-3435.md) — Revert 'moe enable padding params as runtime'  `[source-pr]`
+- [pr-aiter-377](sources/prs/aiter/PR-377.md) — update build utility  `[source-pr]`
+- [pr-aiter-38](sources/prs/aiter/PR-38.md) — update asm gemm  `[source-pr]`
+- [pr-aiter-381](sources/prs/aiter/PR-381.md) — [TRITON][GEMM] Add support for inplace output  `[source-pr]`
+- [pr-aiter-414](sources/prs/aiter/PR-414.md) — Skinny GEMM support bfloat16 input  `[source-pr]`
+- [pr-aiter-418](sources/prs/aiter/PR-418.md) — [TRITON] Add splitk kernel for GEMM AFP4WFP4  `[source-pr]`
+- [pr-aiter-422](sources/prs/aiter/PR-422.md) — Update FA api & get AITER_ASM_DIR in csrc  `[source-pr]`
+- [pr-aiter-440](sources/prs/aiter/PR-440.md) — [Triton] Fix gemm mxfp4 for memory access error due to parsing faulty EVEN_K  `[source-pr]`
+- [pr-aiter-466](sources/prs/aiter/PR-466.md) — Add aiter namespace to avoid symbol conflict with vllm  `[source-pr]`
+- [pr-aiter-470](sources/prs/aiter/PR-470.md) — Vllm v1 pa  `[source-pr]`
+- [pr-aiter-486](sources/prs/aiter/PR-486.md) — [TRITON] Triton tuning gemms  `[source-pr]`
+- [pr-aiter-513](sources/prs/aiter/PR-513.md) — Gemm weightpreshuffle  `[source-pr]`
+- [pr-aiter-528](sources/prs/aiter/PR-528.md) — Add gemm_a4w4_blockscale and gemm_a4w4_blockscale_tune  `[source-pr]`
+- [pr-aiter-547](sources/prs/aiter/PR-547.md) — Gemm_f4_bpreshuffle  `[source-pr]`
+- [pr-aiter-558](sources/prs/aiter/PR-558.md) — [TRITON]: Gemm refactor  `[source-pr]`
+- [pr-aiter-573](sources/prs/aiter/PR-573.md) — [TRITON]: GEMM updates for DS  `[source-pr]`
+- [pr-aiter-603](sources/prs/aiter/PR-603.md) — add ck gemm a4w4 blockscale with splitK support  `[source-pr]`
+- [pr-aiter-607](sources/prs/aiter/PR-607.md) — [Triton] DS fused custom ops  `[source-pr]`
+- [pr-aiter-625](sources/prs/aiter/PR-625.md) — enable parallel tuning on CK kernels  `[source-pr]`
+- [pr-aiter-649](sources/prs/aiter/PR-649.md) — A4w4_asm_pro  `[source-pr]`
+- [pr-aiter-653](sources/prs/aiter/PR-653.md) — Fix ck_gemm_a4w4_blockscale tune with splitK  `[source-pr]`
+- [pr-aiter-662](sources/prs/aiter/PR-662.md) — enable gemm_a4w4 asm kernel to tune splitk  `[source-pr]`
+- [pr-aiter-709](sources/prs/aiter/PR-709.md) — [TRITON] shaoclee/triton gemm a8w8 dev  `[source-pr]`
+- [pr-aiter-717](sources/prs/aiter/PR-717.md) — fix bug in splitK select  `[source-pr]`
+- [pr-aiter-719](sources/prs/aiter/PR-719.md) — update ptpc bpreshuffle gemm tune  `[source-pr]`
+- [pr-aiter-722](sources/prs/aiter/PR-722.md) — [TRITON]: Add logging to GEMM ops  `[source-pr]`
+- [pr-aiter-733](sources/prs/aiter/PR-733.md) — fix multiprocess tuning problem  `[source-pr]`
+- [pr-aiter-740](sources/prs/aiter/PR-740.md) — Enable custom op and avoid graph breaks  `[source-pr]`
+- [pr-aiter-741](sources/prs/aiter/PR-741.md) — A4w4_asm_pro_max_v2  `[source-pr]`
+- [pr-aiter-783](sources/prs/aiter/PR-783.md) — Make Gemm and other ops return Tesnor And graph break fix  `[source-pr]`
+- [pr-aiter-810](sources/prs/aiter/PR-810.md) — update CK to fix fa fwd build error  `[source-pr]`
+- [pr-aiter-870](sources/prs/aiter/PR-870.md) — update batch & group mode fwd kernel padding on seqlen dimension  `[source-pr]`
+- [pr-aiter-877](sources/prs/aiter/PR-877.md) — fix splitk kernel precision issues  `[source-pr]`
+- [pr-aiter-901](sources/prs/aiter/PR-901.md) — [Port][355_wip] Port 2 PRs into 355_wip branch(quick gemm, unit8 compatibility)  `[source-pr]`
+- [pr-aiter-907](sources/prs/aiter/PR-907.md) — add kernels from general tilemxtilen 32x{1...8}x128x{1...8}  `[source-pr]`
+- [pr-aiter-923](sources/prs/aiter/PR-923.md) — [TRITON] Add SplitK to the GEMM a16w16 Triton Kernel  `[source-pr]`
+- [pr-aiter-928](sources/prs/aiter/PR-928.md) — enable splitk0 asm of 256x256 and 128x512 tile shape  `[source-pr]`
+- [pr-aiter-935](sources/prs/aiter/PR-935.md) — fix wrong profiling time when tuning with splitk enabled  `[source-pr]`
+- [pr-aiter-953](sources/prs/aiter/PR-953.md) — refactor tuner to support more features  `[source-pr]`
+- [pr-aiter-955](sources/prs/aiter/PR-955.md) — Add aiter.gemm_a8w8_blockscale_bpreshuffle  `[source-pr]`
+- [pr-aiter-957](sources/prs/aiter/PR-957.md) — [TRITON]: Gluon Blockscale a8w8 GEMM Improvements  `[source-pr]`
+- [pr-aiter-965](sources/prs/aiter/PR-965.md) — [MI35X]update f4gemm_bf16_per1x32Fp4.csv with kernels differing in splitk  `[source-pr]`
+- [pr-aiter-97](sources/prs/aiter/PR-97.md) — FP16 Paged Attention & Fused MoE  `[source-pr]`
+- [pr-aiter-972](sources/prs/aiter/PR-972.md) — fix asm splitk tune in gemm_a4w4_blockscale  `[source-pr]`
+- [pr-composable_kernel-100](sources/prs/composable_kernel/PR-100.md) — [Bf16 & int8] [example & ckprofiler]  `[source-pr]`
+- [pr-composable_kernel-1018](sources/prs/composable_kernel/PR-1018.md) — Add Gemm instances for performance improvement  `[source-pr]`
+- [pr-composable_kernel-1022](sources/prs/composable_kernel/PR-1022.md) — Layernorm4d  `[source-pr]`
+- [pr-composable_kernel-1065](sources/prs/composable_kernel/PR-1065.md) — Fixed GroupedGemmFixedNK with hipGraph  `[source-pr]`
+- [pr-composable_kernel-1083](sources/prs/composable_kernel/PR-1083.md) — layernorm and groupnorm backward data  `[source-pr]`
+- [pr-composable_kernel-1124](sources/prs/composable_kernel/PR-1124.md) — Add an option to change the number of warm-up cycles and iterations.  `[source-pr]`
+- [pr-composable_kernel-1135](sources/prs/composable_kernel/PR-1135.md) — [GEMM] Optimization for MI200/300.  `[source-pr]`
+- [pr-composable_kernel-1137](sources/prs/composable_kernel/PR-1137.md) — Implement direct loads split-K GEMM kernel  `[source-pr]`
+- [pr-composable_kernel-1150](sources/prs/composable_kernel/PR-1150.md) — Optimizing fp8_fp16 mixedprec gemm  `[source-pr]`
+- [pr-composable_kernel-1154](sources/prs/composable_kernel/PR-1154.md) — [GEMM] Gemm universal device operation  `[source-pr]`
+- [pr-composable_kernel-1159](sources/prs/composable_kernel/PR-1159.md) — Split-up instances to improve build times.  `[source-pr]`
+- [pr-composable_kernel-1212](sources/prs/composable_kernel/PR-1212.md) — Add Grouped Gemm Multiple D SplitK TwoStage  `[source-pr]`
+- [pr-composable_kernel-1221](sources/prs/composable_kernel/PR-1221.md) — Improve GroupGemmFixedNK  `[source-pr]`
+- [pr-composable_kernel-1223](sources/prs/composable_kernel/PR-1223.md) — Split the instances by architecture.  `[source-pr]`
+- [pr-composable_kernel-1228](sources/prs/composable_kernel/PR-1228.md) — Add bf16 and bf16@int8 mk_nk_mn instances for grouped gemm two stage  `[source-pr]`
+- [pr-composable_kernel-1256](sources/prs/composable_kernel/PR-1256.md) — Add unit tests for grouped gemm two stage  `[source-pr]`
+- [pr-composable_kernel-1262](sources/prs/composable_kernel/PR-1262.md) — [GEMM] UniversalGemm update  `[source-pr]`
+- [pr-composable_kernel-1278](sources/prs/composable_kernel/PR-1278.md) — Enable logging in CK with environment variable.  `[source-pr]`
+- [pr-composable_kernel-1296](sources/prs/composable_kernel/PR-1296.md) — Replace the ENV macro with CK_ENV to avoid conflicts  `[source-pr]`
+- [pr-composable_kernel-1297](sources/prs/composable_kernel/PR-1297.md) — aggregate device macros in ck_tile config header.  `[source-pr]`
+- [pr-composable_kernel-131](sources/prs/composable_kernel/PR-131.md) — Gemm_c_shuffle (4 layouts) X (fp32 bf16 int8)  `[source-pr]`
+- [pr-composable_kernel-1315](sources/prs/composable_kernel/PR-1315.md) — Integrate universal gemm with conv bwd data and add SplitK  `[source-pr]`
+- [pr-composable_kernel-1338](sources/prs/composable_kernel/PR-1338.md) — [CK_TILE] fmha forward split-kv + combine kernels  `[source-pr]`
+- [pr-composable_kernel-1341](sources/prs/composable_kernel/PR-1341.md) — Universal gemm splitk using reduce (with multi-d)  `[source-pr]`
+- [pr-composable_kernel-1356](sources/prs/composable_kernel/PR-1356.md) — [CK_TILE] wa prec, remove sgpr offset for inline asm  `[source-pr]`
+- [pr-composable_kernel-1360](sources/prs/composable_kernel/PR-1360.md) — Universal streamk with atomics  `[source-pr]`
+- [pr-composable_kernel-1387](sources/prs/composable_kernel/PR-1387.md) — [CK_TILE] Add PagedAttention kernels  `[source-pr]`
+- [pr-composable_kernel-1396](sources/prs/composable_kernel/PR-1396.md) — Fixed some issue in GEMM_Reduce_MultiD  `[source-pr]`
+- [pr-composable_kernel-1397](sources/prs/composable_kernel/PR-1397.md) — [CK_TILE] FA bwd kernels optimization  `[source-pr]`
+- [pr-composable_kernel-143](sources/prs/composable_kernel/PR-143.md) — Re-enable op disabled in ckProfiler by mistake previously  `[source-pr]`
+- [pr-composable_kernel-1453](sources/prs/composable_kernel/PR-1453.md) — [GEMM] gemm_universal related optimization  `[source-pr]`
+- [pr-composable_kernel-1484](sources/prs/composable_kernel/PR-1484.md) — Add gemm universal bf16 instances  `[source-pr]`
+- [pr-composable_kernel-1527](sources/prs/composable_kernel/PR-1527.md) — [CK_TILE] Change output accum tensor layout of fmha fwd split-kv & combine kernels  `[source-pr]`
+- [pr-composable_kernel-1528](sources/prs/composable_kernel/PR-1528.md) — Add a gpu gemm reference kernel  `[source-pr]`
+- [pr-composable_kernel-1545](sources/prs/composable_kernel/PR-1545.md) — Fix grouped gemm check to avoid overflow  `[source-pr]`
+- [pr-composable_kernel-1549](sources/prs/composable_kernel/PR-1549.md) — [CK_TILE] Simplify the codes in splitkv_combine pipeline  `[source-pr]`
+- [pr-composable_kernel-1577](sources/prs/composable_kernel/PR-1577.md) — [CK_TILE] Optimize fmha splitkv & splitkv combine kernels  `[source-pr]`
+- [pr-composable_kernel-1588](sources/prs/composable_kernel/PR-1588.md) — [CK_TILE] More fmha splitkv optimizations  `[source-pr]`
+- [pr-composable_kernel-1600](sources/prs/composable_kernel/PR-1600.md) — Polished Grouped GEMM APIs and new BF16 instances  `[source-pr]`
+- [pr-composable_kernel-1608](sources/prs/composable_kernel/PR-1608.md) — [CK_TILE] Add fmha fwd headdim96 support  `[source-pr]`
+- [pr-composable_kernel-1649](sources/prs/composable_kernel/PR-1649.md) — [CK_TILE] Fix fmha fwd splitkv block table read out-of-bound  `[source-pr]`
+- [pr-composable_kernel-1673](sources/prs/composable_kernel/PR-1673.md) — Add check for bf16 splitk support for grouped gemm splitk  `[source-pr]`
+- [pr-composable_kernel-1678](sources/prs/composable_kernel/PR-1678.md) — [CK_TILE] Add paged-kvcache support in group mode fmha fwd splitkv kernels  `[source-pr]`
+- [pr-composable_kernel-1688](sources/prs/composable_kernel/PR-1688.md) — [CK_TILE] Fix incorrect computation of group mode PagedAttention  `[source-pr]`
+- [pr-composable_kernel-1690](sources/prs/composable_kernel/PR-1690.md) — Change in fwd-splitkv kernel to support num_splits=1 case  `[source-pr]`
+- [pr-composable_kernel-1695](sources/prs/composable_kernel/PR-1695.md) — LWPCK-2429: Device grouped GEMM uses Async Memcpy  `[source-pr]`
+- [pr-composable_kernel-1705](sources/prs/composable_kernel/PR-1705.md) — [CK_TILE] Add fmha fwd N-Warp S-Shuffle pipeline (fmha fwd splitkv pipeline variant)  `[source-pr]`
+- [pr-composable_kernel-1710](sources/prs/composable_kernel/PR-1710.md) — OCP FP8 support for gfx12.  `[source-pr]`
+- [pr-composable_kernel-1716](sources/prs/composable_kernel/PR-1716.md) — [CK_TILE] Use 'false' for highest dimension padding flags  `[source-pr]`
+- [pr-composable_kernel-1724](sources/prs/composable_kernel/PR-1724.md) — [CK TILE] GEMM and Batched GEMM SplitK support  `[source-pr]`
+- [pr-composable_kernel-1729](sources/prs/composable_kernel/PR-1729.md) — Add SplitK support into Batched GEMM V3  `[source-pr]`
+- [pr-composable_kernel-1731](sources/prs/composable_kernel/PR-1731.md) — [CK TILE] Use config name instead of data type in FmhaFwdTypeConfig<config>  `[source-pr]`
+- [pr-composable_kernel-1755](sources/prs/composable_kernel/PR-1755.md) — Use s_shuffling to replace p_shuffling which removes the needs of cross-warp reduction  `[source-pr]`
+- [pr-composable_kernel-1756](sources/prs/composable_kernel/PR-1756.md) — CK-Tile Grouped GEMM refactor and post PR fixes  `[source-pr]`
+- [pr-composable_kernel-1762](sources/prs/composable_kernel/PR-1762.md) — Jing's contribution: prototype of mixed precision gemm FP16/BF16xint4 GEMM  `[source-pr]`
+- [pr-composable_kernel-1770](sources/prs/composable_kernel/PR-1770.md) — Promote develop into amd-develop  `[source-pr]`
+- [pr-composable_kernel-1774](sources/prs/composable_kernel/PR-1774.md) — Dev/merge u8w8  `[source-pr]`
+- [pr-composable_kernel-1775](sources/prs/composable_kernel/PR-1775.md) — [CK_TILE] Fix fmha fwd splitkv codegen error  `[source-pr]`
+- [pr-composable_kernel-1778](sources/prs/composable_kernel/PR-1778.md) — Remove using partitioner for all fmha kernels  `[source-pr]`
+- [pr-composable_kernel-1786](sources/prs/composable_kernel/PR-1786.md) — Implement the fp16xint4 scale weight only kernel for Ali  `[source-pr]`
+- [pr-composable_kernel-1789](sources/prs/composable_kernel/PR-1789.md) — [CK_TILE] fmha fwd splitkv optimization for decode (seqlen_q=1)  `[source-pr]`
+- [pr-composable_kernel-1799](sources/prs/composable_kernel/PR-1799.md) — Update in GridSize() and using GridSize() for splitkv kernel  `[source-pr]`
+- [pr-composable_kernel-1807](sources/prs/composable_kernel/PR-1807.md) — enable int4 scale (weight only) kernel  `[source-pr]`
+- [pr-composable_kernel-1843](sources/prs/composable_kernel/PR-1843.md) — [CK Tile] Spatially local GEMM tile partitioner.  `[source-pr]`
+- [pr-composable_kernel-1853](sources/prs/composable_kernel/PR-1853.md) — CK Tile GEMM Compute V2 (2 LDS Ping Pong mechanism)  `[source-pr]`
+- [pr-composable_kernel-1871](sources/prs/composable_kernel/PR-1871.md) — Fix KPack and enable existing instances on gfx950  `[source-pr]`
+- [pr-composable_kernel-1877](sources/prs/composable_kernel/PR-1877.md) — Add receipt 10~12 for codegen of aiter integration  `[source-pr]`
+- [pr-composable_kernel-1888](sources/prs/composable_kernel/PR-1888.md) — Tiny Fix  `[source-pr]`
+- [pr-composable_kernel-1894](sources/prs/composable_kernel/PR-1894.md) — Ck tile/paged attention workaround  `[source-pr]`
+- [pr-composable_kernel-1903](sources/prs/composable_kernel/PR-1903.md) — only output the deterministic bwd kernel for aiter  `[source-pr]`
+- [pr-composable_kernel-1907](sources/prs/composable_kernel/PR-1907.md) — [CK TILE] Gemm pk_int4_t permute B  `[source-pr]`
+- [pr-composable_kernel-1911](sources/prs/composable_kernel/PR-1911.md) — Apply filter to every kernel in the codgen of FMHA  `[source-pr]`
+- [pr-composable_kernel-1920](sources/prs/composable_kernel/PR-1920.md) — explicit show no feature in kernel name  `[source-pr]`
+- [pr-composable_kernel-1923](sources/prs/composable_kernel/PR-1923.md) — MIGraphX hipRTC fix  `[source-pr]`
+- [pr-composable_kernel-1925](sources/prs/composable_kernel/PR-1925.md) — Fix launch error handling  `[source-pr]`
+- [pr-composable_kernel-1935](sources/prs/composable_kernel/PR-1935.md) — Remove CK_USE_AMD_MFMA_GFX950  `[source-pr]`
+- [pr-composable_kernel-1940](sources/prs/composable_kernel/PR-1940.md) — Async grouped gemm v3  `[source-pr]`
+- [pr-composable_kernel-1941](sources/prs/composable_kernel/PR-1941.md) — Ck tile/complete k prefetch  `[source-pr]`
+- [pr-composable_kernel-1949](sources/prs/composable_kernel/PR-1949.md) — Ck int4 moe develop  `[source-pr]`
+- [pr-composable_kernel-197](sources/prs/composable_kernel/PR-197.md) — Navi21 gemm  `[source-pr]`
+- [pr-composable_kernel-1971](sources/prs/composable_kernel/PR-1971.md) — Reapply '[CK_TILE] support hdim=192/128 pair for deepseekv3 (#1961)' …  `[source-pr]`
+- [pr-composable_kernel-1982](sources/prs/composable_kernel/PR-1982.md) — [CK_TILE] return value with macro in ck_tile::kernel_launch API  `[source-pr]`
+- [pr-composable_kernel-1989](sources/prs/composable_kernel/PR-1989.md) — [cktile] Sync the kname with instance name  `[source-pr]`
+- [pr-composable_kernel-1991](sources/prs/composable_kernel/PR-1991.md) — Post-merge changes for fully async args copy in ck grouped gemm  `[source-pr]`
+- [pr-composable_kernel-2000](sources/prs/composable_kernel/PR-2000.md) — WIP: Introduce MX GEMM for FP8 data type  `[source-pr]`
+- [pr-composable_kernel-2001](sources/prs/composable_kernel/PR-2001.md) — [CK_TILE] Remove scratch usage from universal gemm  `[source-pr]`
+- [pr-composable_kernel-2016](sources/prs/composable_kernel/PR-2016.md) — MX GEMM examples with FP8, FP16, and E8M0 scales  `[source-pr]`
+- [pr-composable_kernel-2049](sources/prs/composable_kernel/PR-2049.md) — Split env.hpp header from the ck.hpp header.  `[source-pr]`
+- [pr-composable_kernel-2059](sources/prs/composable_kernel/PR-2059.md) — MX GEMM - New GEMM pipeline for MX data types  `[source-pr]`
+- [pr-composable_kernel-2068](sources/prs/composable_kernel/PR-2068.md) — add fmha fwd splitkv receipt for aiter c++ api  `[source-pr]`
+- [pr-composable_kernel-2072](sources/prs/composable_kernel/PR-2072.md) — [CK_TILE] Avoid using store_tile_raw() for fp32 tensors (fmha splitkv)  `[source-pr]`
+- [pr-composable_kernel-2089](sources/prs/composable_kernel/PR-2089.md) — [flatmm] implement basic fp16 flatmm  `[source-pr]`
+- [pr-composable_kernel-2108](sources/prs/composable_kernel/PR-2108.md) — [CK_TILE] Allow specifying logits soft-caping through fMHA forwawrd APIs  `[source-pr]`
+- [pr-composable_kernel-2114](sources/prs/composable_kernel/PR-2114.md) — [CK_TILE] FMHA Support hdim_v to as a Multiple of 32  `[source-pr]`
+- [pr-composable_kernel-2120](sources/prs/composable_kernel/PR-2120.md) — Only generate specific hdim for fmha fwd kernel  `[source-pr]`
+- [pr-composable_kernel-2126](sources/prs/composable_kernel/PR-2126.md) — Improve hdim=256 performance  `[source-pr]`
+- [pr-composable_kernel-2146](sources/prs/composable_kernel/PR-2146.md) — [CK_TILE] Grouped GEMM tile loop  `[source-pr]`
+- [pr-composable_kernel-2152](sources/prs/composable_kernel/PR-2152.md) — MX GEMM - Add FP8 GEMM Tests for Different Layouts  `[source-pr]`
+- [pr-composable_kernel-2163](sources/prs/composable_kernel/PR-2163.md) — [CK_TILE] Add logits soft-capping & customization support to the FMHA forward kernel/pipelines  `[source-pr]`
+- [pr-composable_kernel-2188](sources/prs/composable_kernel/PR-2188.md) — [CK TILE] Grouped Convolution Forward Kernel  `[source-pr]`
+- [pr-composable_kernel-2191](sources/prs/composable_kernel/PR-2191.md) — [CK_TILE] Tile loop persistent gemm kernel  `[source-pr]`
+- [pr-composable_kernel-2193](sources/prs/composable_kernel/PR-2193.md) — [Tile Engine] Add benchmark for tile engine gemm.  `[source-pr]`
+- [pr-composable_kernel-2200](sources/prs/composable_kernel/PR-2200.md) — [CK_tile] Add rotating buffer feature for universal gemm  `[source-pr]`
+- [pr-composable_kernel-2202](sources/prs/composable_kernel/PR-2202.md) — Use new mfma instructions for FP8 on gfx950  `[source-pr]`
+- [pr-composable_kernel-2209](sources/prs/composable_kernel/PR-2209.md) — [CK_TILE] For FMHA forward kernels, assign block indices reversely if using mask  `[source-pr]`
+- [pr-composable_kernel-2222](sources/prs/composable_kernel/PR-2222.md) — [CK_TILE] Move GEMM pipeline tail handling logic to pipelines  `[source-pr]`
+- [pr-composable_kernel-2230](sources/prs/composable_kernel/PR-2230.md) — WMMA GEMM universal pipeline v1, mixed precision and paddings, examples  `[source-pr]`
+- [pr-composable_kernel-2239](sources/prs/composable_kernel/PR-2239.md) — [CK_TILE] Refine fp8 support in flatmm  `[source-pr]`
+- [pr-composable_kernel-2256](sources/prs/composable_kernel/PR-2256.md) — Revert '[CK_tile] Add rotating buffer feature for universal gemm'  `[source-pr]`
+- [pr-composable_kernel-2276](sources/prs/composable_kernel/PR-2276.md) — Code drop for 2 warp ping pong scheduler along K dimension.  `[source-pr]`
+- [pr-composable_kernel-2293](sources/prs/composable_kernel/PR-2293.md) — Revert '[CK_TILE] Tile loop persistent gemm kernel'  `[source-pr]`
+- [pr-composable_kernel-2294](sources/prs/composable_kernel/PR-2294.md) — Optimized GEMMs for MX FP4/8  `[source-pr]`
+- [pr-composable_kernel-2299](sources/prs/composable_kernel/PR-2299.md) — [CK_TILE] Tileloop persistent gemm - resubmit  `[source-pr]`
+- [pr-composable_kernel-231](sources/prs/composable_kernel/PR-231.md) — Fix split-k gemm test  `[source-pr]`
+- [pr-composable_kernel-2319](sources/prs/composable_kernel/PR-2319.md) — Implement batched gemm wmma (RDNA batched gemm) based on wmma cshuffle v3  `[source-pr]`
+- [pr-composable_kernel-235](sources/prs/composable_kernel/PR-235.md) — Refactor block to C tile map  `[source-pr]`
+- [pr-composable_kernel-2350](sources/prs/composable_kernel/PR-2350.md) — WMMA GEMM b_scale  `[source-pr]`
+- [pr-composable_kernel-239](sources/prs/composable_kernel/PR-239.md) — Tensile-style block to C tile map  `[source-pr]`
+- [pr-composable_kernel-2405](sources/prs/composable_kernel/PR-2405.md) — ck tile pagedkv prefill  `[source-pr]`
+- [pr-composable_kernel-2434](sources/prs/composable_kernel/PR-2434.md) — Merge flatmm Operator with universal gemm  `[source-pr]`
+- [pr-composable_kernel-2454](sources/prs/composable_kernel/PR-2454.md) — Support sink-attn in a specific forward fmha branch  `[source-pr]`
+- [pr-composable_kernel-2473](sources/prs/composable_kernel/PR-2473.md) — ck_tile kernel for gemm with groupwise quantized A  tensor  `[source-pr]`
+- [pr-composable_kernel-2480](sources/prs/composable_kernel/PR-2480.md) — Update FMHA recipe for Pytorch SDPA integration  `[source-pr]`
+- [pr-composable_kernel-2491](sources/prs/composable_kernel/PR-2491.md) — Automatic deduction of split-K value for grouped convolution  `[source-pr]`
+- [pr-composable_kernel-2520](sources/prs/composable_kernel/PR-2520.md) — [CK_TILE] Introduces a new GEMM API that splits the existing basic GEMM class into multiple specialized classes.  `[source-pr]`
+- [pr-composable_kernel-2524](sources/prs/composable_kernel/PR-2524.md) — Update to gpu_timer for rotating_buffer  `[source-pr]`
+- [pr-composable_kernel-2528](sources/prs/composable_kernel/PR-2528.md) — [CK_TILE] Support WMMA (gfx12) in FMHA  `[source-pr]`
+- [pr-composable_kernel-2593](sources/prs/composable_kernel/PR-2593.md) — [CK_Tile] Updating gpu timer when doing flush cache  `[source-pr]`
+- [pr-composable_kernel-2594](sources/prs/composable_kernel/PR-2594.md) — Support Wave32 in CK_TILE - Part 1  `[source-pr]`
+- [pr-composable_kernel-2624](sources/prs/composable_kernel/PR-2624.md) — Preshuffle AQ matrix in block scale gemm  `[source-pr]`
+- [pr-composable_kernel-2627](sources/prs/composable_kernel/PR-2627.md) — [CK_TILE] Fix FMHA qr_async Causing Errors in FA  `[source-pr]`
+- [pr-composable_kernel-2631](sources/prs/composable_kernel/PR-2631.md) — Cleanups  `[source-pr]`
+- [pr-composable_kernel-2632](sources/prs/composable_kernel/PR-2632.md) — CK_TILE: Implement two-stage split-K GEMM with workspace reduction (LWPCK-2966)  `[source-pr]`
+- [pr-composable_kernel-2638](sources/prs/composable_kernel/PR-2638.md) — Mirchen/gemm blockscale wp segfault fix  `[source-pr]`
+- [pr-composable_kernel-265](sources/prs/composable_kernel/PR-265.md) — example for convnd bwd weight bf16 splitk  `[source-pr]`
+- [pr-composable_kernel-2653](sources/prs/composable_kernel/PR-2653.md) — Fix num_byte calculations to use nhead_k for K & V size  `[source-pr]`
+- [pr-composable_kernel-2660](sources/prs/composable_kernel/PR-2660.md) — GEMM Multi D for CK Tile Engine  `[source-pr]`
+- [pr-composable_kernel-2662](sources/prs/composable_kernel/PR-2662.md) — Add gemm universal f8 f8 bf16 instances on gfx950  `[source-pr]`
+- [pr-composable_kernel-2663](sources/prs/composable_kernel/PR-2663.md) — ck_tile kernel for gemm with groupwise quantized B tensor.  `[source-pr]`
+- [pr-composable_kernel-2673](sources/prs/composable_kernel/PR-2673.md) — Remove bad pipeline codegen in FA fwd  `[source-pr]`
+- [pr-composable_kernel-2697](sources/prs/composable_kernel/PR-2697.md) — [CK Tile] gemm splitk two stage  `[source-pr]`
+- [pr-composable_kernel-2721](sources/prs/composable_kernel/PR-2721.md) — feat(grouped_gemm): add preshuffle v2 support to grouped gemm example  `[source-pr]`
+- [pr-composable_kernel-2726](sources/prs/composable_kernel/PR-2726.md) — Add input fp8 and output bf16 attention  `[source-pr]`
+- [pr-composable_kernel-2729](sources/prs/composable_kernel/PR-2729.md) — [CK_TILE] Row/Col quant gemm  `[source-pr]`
+- [pr-composable_kernel-2744](sources/prs/composable_kernel/PR-2744.md) — [CK_TILE] Add gtests for FMHA  `[source-pr]`
+- [pr-composable_kernel-2752](sources/prs/composable_kernel/PR-2752.md) — [CK-TILE] Default2DEpilogue, example and adding nullptr_t type for D  `[source-pr]`
+- [pr-composable_kernel-2763](sources/prs/composable_kernel/PR-2763.md) — TF32 POC in Conv3d on MI30x platform  `[source-pr]`
+- [pr-composable_kernel-2766](sources/prs/composable_kernel/PR-2766.md) — refactor: use snake_case naming in ck_tile/core components  `[source-pr]`
+- [pr-composable_kernel-2781](sources/prs/composable_kernel/PR-2781.md) — [CK_TILE] Stream-K GEMM Implementation  `[source-pr]`
+- [pr-composable_kernel-2786](sources/prs/composable_kernel/PR-2786.md) — [CK_TILE] Implement Row/Col quant grouped gemm  `[source-pr]`
+- [pr-composable_kernel-2788](sources/prs/composable_kernel/PR-2788.md) — [CK_TILE] Multiple-ABD GEMM example  `[source-pr]`
+- [pr-composable_kernel-2790](sources/prs/composable_kernel/PR-2790.md) — [CK_TILE] Fix flatmm on gfx11 and gfx12  `[source-pr]`
+- [pr-composable_kernel-2808](sources/prs/composable_kernel/PR-2808.md) — [CK_TILE] Fix example batched_gemm, grouped_gemm, gemm_multi_d, convolution on gfx11 & gfx12  `[source-pr]`
+- [pr-composable_kernel-2810](sources/prs/composable_kernel/PR-2810.md) — [CK_TILE] fix example reduces, permute and elementwise on gfx11 & gfx12  `[source-pr]`
+- [pr-composable_kernel-2813](sources/prs/composable_kernel/PR-2813.md) — [CK-Tile] Fix quant example code  `[source-pr]`
+- [pr-composable_kernel-2823](sources/prs/composable_kernel/PR-2823.md) — WMMA support for GEMM reduce  `[source-pr]`
+- [pr-composable_kernel-2825](sources/prs/composable_kernel/PR-2825.md) — implement device batched gemm b scale for wmma  `[source-pr]`
+- [pr-composable_kernel-2836](sources/prs/composable_kernel/PR-2836.md) — [CK_TILE] Support f32 in FMHA (fwd and bwd)  `[source-pr]`
+- [pr-composable_kernel-2840](sources/prs/composable_kernel/PR-2840.md) — [CK][Examples] - fixing grouped_conv_bwd_weight command parser.  `[source-pr]`
+- [pr-composable_kernel-2841](sources/prs/composable_kernel/PR-2841.md) — Wmma support for GEMM quantization  `[source-pr]`
+- [pr-composable_kernel-2848](sources/prs/composable_kernel/PR-2848.md) — Revert 'TF32 POC in Conv3d on MI30x platform'  `[source-pr]`
+- [pr-composable_kernel-2852](sources/prs/composable_kernel/PR-2852.md) — TF32 POC in Conv3d on MI30x platform #2763 (second attempt)  `[source-pr]`
+- [pr-composable_kernel-2856](sources/prs/composable_kernel/PR-2856.md) — Disable bwd weight split-k autodeduce for single stage kernels  `[source-pr]`
+- [pr-composable_kernel-2864](sources/prs/composable_kernel/PR-2864.md) — [CK_TILE] Stream-K GEMM Example for bf16 and fp16  `[source-pr]`
+- [pr-composable_kernel-2877](sources/prs/composable_kernel/PR-2877.md) — Weight Preshuffle Block Scale gemm support  `[source-pr]`
+- [pr-composable_kernel-2878](sources/prs/composable_kernel/PR-2878.md) — [CK-Tile] Add the API to load SGPR with any byte size  `[source-pr]`
+- [pr-composable_kernel-2884](sources/prs/composable_kernel/PR-2884.md) — [CK][Examples] Extending support for rdna3/4 in following examples:  `[source-pr]`
+- [pr-composable_kernel-2892](sources/prs/composable_kernel/PR-2892.md) — Add attn sink  `[source-pr]`
+- [pr-composable_kernel-2901](sources/prs/composable_kernel/PR-2901.md) — [CK Tile] contraction multi d - kernel & example  `[source-pr]`
+- [pr-composable_kernel-2904](sources/prs/composable_kernel/PR-2904.md) — Revert '[CK-Tile] Add the API to load SGPR '  `[source-pr]`
+- [pr-composable_kernel-2913](sources/prs/composable_kernel/PR-2913.md) — Fix the compilation error of #2878  `[source-pr]`
+- [pr-composable_kernel-2934](sources/prs/composable_kernel/PR-2934.md) — [CK_TILE] FMHA Fix synchronization issue in FWD splitkv combine pipeline  `[source-pr]`
+- [pr-composable_kernel-2940](sources/prs/composable_kernel/PR-2940.md) — Fix timing issue in CK_TILE GEMM example  `[source-pr]`
+- [pr-composable_kernel-2947](sources/prs/composable_kernel/PR-2947.md) — Wmma support for grouped convolution bwd weight  `[source-pr]`
+- [pr-composable_kernel-2950](sources/prs/composable_kernel/PR-2950.md) — fix: nil performance results for gemm examples  `[source-pr]`
+- [pr-composable_kernel-2968](sources/prs/composable_kernel/PR-2968.md) — [CK][Examples] Extending support for rdna3/4 part 2:  `[source-pr]`
+- [pr-composable_kernel-2970](sources/prs/composable_kernel/PR-2970.md) — [CK TILE] Grouped conv fwd split image  `[source-pr]`
+- [pr-composable_kernel-2975](sources/prs/composable_kernel/PR-2975.md) — supporting prefill shapes for preshuffle block scale gemm  `[source-pr]`
+- [pr-composable_kernel-2989](sources/prs/composable_kernel/PR-2989.md) — WMMA gemm_add_relu_add_layernorm  `[source-pr]`
+- [pr-composable_kernel-2991](sources/prs/composable_kernel/PR-2991.md) — Fix splitK for grouped conv bwd data  `[source-pr]`
+- [pr-composable_kernel-3007](sources/prs/composable_kernel/PR-3007.md) — [CK_TILE] add tensorwise quant in grouped gemm  `[source-pr]`
+- [pr-composable_kernel-3022](sources/prs/composable_kernel/PR-3022.md) — [CK_TILE] Update flatmm related kernels  `[source-pr]`
+- [pr-composable_kernel-3024](sources/prs/composable_kernel/PR-3024.md) — Fixed handling of split-K autodeduce argument for grouped convolution  `[source-pr]`
+- [pr-composable_kernel-304](sources/prs/composable_kernel/PR-304.md) — External Interface  `[source-pr]`
+- [pr-composable_kernel-3057](sources/prs/composable_kernel/PR-3057.md) — [CK_TILE] Add fmt: skip to FMHA codegen scripts for readability  `[source-pr]`
+- [pr-composable_kernel-3063](sources/prs/composable_kernel/PR-3063.md) — [CK_TILE] Add Bquant to Grouped Gemm  `[source-pr]`
+- [pr-composable_kernel-3080](sources/prs/composable_kernel/PR-3080.md) — [CK_TILE] Add mxfp4 flatmm  `[source-pr]`
+- [pr-composable_kernel-311](sources/prs/composable_kernel/PR-311.md) — Improve external interface for GEMM and GEMM+add+add+fastgelu  `[source-pr]`
+- [pr-composable_kernel-3117](sources/prs/composable_kernel/PR-3117.md) — [CK_TILE] Replace GEMM Pipeline Macros in Examples with a Common Enum.  `[source-pr]`
+- [pr-composable_kernel-3119](sources/prs/composable_kernel/PR-3119.md) — test(grouped_gemm): add unit tests for grouped_gemm bquant with preshuffleB true  `[source-pr]`
+- [pr-composable_kernel-3137](sources/prs/composable_kernel/PR-3137.md) — Fix splitk preshuffle  `[source-pr]`
+- [pr-composable_kernel-3145](sources/prs/composable_kernel/PR-3145.md) — Wmma support for gemm_reduce  `[source-pr]`
+- [pr-composable_kernel-3146](sources/prs/composable_kernel/PR-3146.md) — [CK_TILE] Move DataTypeTraits into a Common File  `[source-pr]`
+- [pr-composable_kernel-3165](sources/prs/composable_kernel/PR-3165.md) — [CK_Tile] Support for preshuffle weight(B) quant tensor for block scale gemm  `[source-pr]`
+- [pr-composable_kernel-3169](sources/prs/composable_kernel/PR-3169.md) — [CK] Allow tensors larger than 2GB in grouped conv bwd weight  `[source-pr]`
+- [pr-composable_kernel-3181](sources/prs/composable_kernel/PR-3181.md) — [CK TILE GEMM] Refactor block_scale_gemm examples  `[source-pr]`
+- [pr-composable_kernel-3204](sources/prs/composable_kernel/PR-3204.md) — remove usage of tile partitioner's full gemm shape  `[source-pr]`
+- [pr-composable_kernel-3207](sources/prs/composable_kernel/PR-3207.md) — [CK_TILE] MX Flatmm Split kernel instances  `[source-pr]`
+- [pr-composable_kernel-3208](sources/prs/composable_kernel/PR-3208.md) — [CK_TILE] Add Flatmm MX FP8  `[source-pr]`
+- [pr-composable_kernel-3232](sources/prs/composable_kernel/PR-3232.md) — [CK_BUILDER] Put global CK functions in a CK namespace  `[source-pr]`
+- [pr-composable_kernel-3237](sources/prs/composable_kernel/PR-3237.md) — Add grouped gemm instances for RDNA4  `[source-pr]`
+- [pr-composable_kernel-3250](sources/prs/composable_kernel/PR-3250.md) — Revert 'Add attn sink'  `[source-pr]`
+- [pr-composable_kernel-3251](sources/prs/composable_kernel/PR-3251.md) — [CK-Tile] Refactor base pipeline usage  `[source-pr]`
+- [pr-composable_kernel-3257](sources/prs/composable_kernel/PR-3257.md) — [ck_tile] refactor reduce kernel  `[source-pr]`
+- [pr-composable_kernel-3259](sources/prs/composable_kernel/PR-3259.md) — [CK Tile] enable building examples by default  `[source-pr]`
+- [pr-composable_kernel-3278](sources/prs/composable_kernel/PR-3278.md) — Wmma support for gemm_multiply_multiply_wp  `[source-pr]`
+- [pr-composable_kernel-3303](sources/prs/composable_kernel/PR-3303.md) — Implement grouped gemm fastgelu for RDNA4  `[source-pr]`
+- [pr-composable_kernel-3304](sources/prs/composable_kernel/PR-3304.md) — Implement grouped gemm tile loop for RDNA4  `[source-pr]`
+- [pr-composable_kernel-3307](sources/prs/composable_kernel/PR-3307.md) — [CK_TILE] Fix for comp pipeline v4  `[source-pr]`
+- [pr-composable_kernel-3316](sources/prs/composable_kernel/PR-3316.md) — Wmma support for gemm_bias_add_reduce  `[source-pr]`
+- [pr-composable_kernel-3320](sources/prs/composable_kernel/PR-3320.md) — [CK_TILE] Fix Quant GEMM build  `[source-pr]`
+- [pr-composable_kernel-3330](sources/prs/composable_kernel/PR-3330.md) — Fp8 block scale quantization for fmha  fwd  `[source-pr]`
+- [pr-composable_kernel-3332](sources/prs/composable_kernel/PR-3332.md) — WMMA support for batched_gemm_reduce  `[source-pr]`
+- [pr-composable_kernel-3351](sources/prs/composable_kernel/PR-3351.md) — [CK_TILE] Split-K autodeduction  `[source-pr]`
+- [pr-composable_kernel-3353](sources/prs/composable_kernel/PR-3353.md) — [CK_TILE] Add splitk support to ck tile conv bwd data  `[source-pr]`
+- [pr-composable_kernel-3359](sources/prs/composable_kernel/PR-3359.md) — [CK-Tile] move out memory operation from cshuffle epilogue class  `[source-pr]`
+- [pr-composable_kernel-3368](sources/prs/composable_kernel/PR-3368.md) — Add attention sink support for FMHA FWD  `[source-pr]`
+- [pr-composable_kernel-3377](sources/prs/composable_kernel/PR-3377.md) — [CK_TILE MOE] add NT & preshuffle permute to cktile MOE  `[source-pr]`
+- [pr-composable_kernel-3387](sources/prs/composable_kernel/PR-3387.md) — [CK_TILE] Minor splitk bugfix for gemms and conv  `[source-pr]`
+- [pr-composable_kernel-3389](sources/prs/composable_kernel/PR-3389.md) — [CK_TILE] support split-k a16w4 gemm1  `[source-pr]`
+- [pr-composable_kernel-3401](sources/prs/composable_kernel/PR-3401.md) — [CK_TILE] Add FP8xF4 Flatmm  `[source-pr]`
+- [pr-composable_kernel-3405](sources/prs/composable_kernel/PR-3405.md) — [CK Grouped Gemm] Disable split-k kernel for split-k > 1 with non-contiguous strides  `[source-pr]`
+- [pr-composable_kernel-3412](sources/prs/composable_kernel/PR-3412.md) — [CK Grouped Gemm] Fix workspace stride in two stage kernel  `[source-pr]`
+- [pr-composable_kernel-3414](sources/prs/composable_kernel/PR-3414.md) — [CK_TILE] Grouped gemm quant tensor layouts  `[source-pr]`
+- [pr-composable_kernel-3429](sources/prs/composable_kernel/PR-3429.md) — Implement device_gemm_universal_preshuffle_instance for RDNA4  `[source-pr]`
+- [pr-composable_kernel-3440](sources/prs/composable_kernel/PR-3440.md) — Ck moe bs splitk pr  `[source-pr]`
+- [pr-composable_kernel-3447](sources/prs/composable_kernel/PR-3447.md) — Dev/a8w4 and a8w8splitk  `[source-pr]`
+- [pr-composable_kernel-3465](sources/prs/composable_kernel/PR-3465.md) — Add support for direct store in epilogue and padding support for wave transfer without transpose  `[source-pr]`
+- [pr-composable_kernel-3466](sources/prs/composable_kernel/PR-3466.md) — [CK grouped gemm] Fix grouped gemm two stage HasMainK0BlockLoop  `[source-pr]`
+- [pr-composable_kernel-3490](sources/prs/composable_kernel/PR-3490.md) — [CK_TILE][FMHA] Enable gpt-oss sink  `[source-pr]`
+- [pr-composable_kernel-3493](sources/prs/composable_kernel/PR-3493.md) — Refactor weight preshuffled pipeline and unify LDS buffer management API  `[source-pr]`
+- [pr-composable_kernel-3495](sources/prs/composable_kernel/PR-3495.md) — [CK_TILE] add preshuffleB mode for ABQuant GEMM  `[source-pr]`
+- [pr-composable_kernel-3520](sources/prs/composable_kernel/PR-3520.md) — [CK-Tile] add persistent async input scheduler parameters to kernel device-side and host-side args  `[source-pr]`
+- [pr-composable_kernel-3524](sources/prs/composable_kernel/PR-3524.md) — moe fp8 blockscale use nt  `[source-pr]`
+- [pr-composable_kernel-3527](sources/prs/composable_kernel/PR-3527.md) — [CK TILE] Fix grouped conv kernels splitk and double lds  `[source-pr]`
+- [pr-composable_kernel-3537](sources/prs/composable_kernel/PR-3537.md) — Padding support for wave transfer  `[source-pr]`
+- [pr-composable_kernel-361](sources/prs/composable_kernel/PR-361.md) — Add examples of batched/grouped/SplitK Gemm for int8/bfp16/fp16/fp32  `[source-pr]`
+- [pr-composable_kernel-3633](sources/prs/composable_kernel/PR-3633.md) — Revert ' Fp8 block scale quantization for fmha  fwd'  `[source-pr]`
+- [pr-composable_kernel-3635](sources/prs/composable_kernel/PR-3635.md) — Revert 'Revert ' Fp8 block scale quantization for fmha  fwd''  `[source-pr]`
+- [pr-composable_kernel-3653](sources/prs/composable_kernel/PR-3653.md) — feat: add split_k support for block scale gemm bquant mode.  `[source-pr]`
+- [pr-composable_kernel-3656](sources/prs/composable_kernel/PR-3656.md) — [Conv] Enable bwd weight splitk autodeduction with cap  `[source-pr]`
+- [pr-composable_kernel-382](sources/prs/composable_kernel/PR-382.md) — add splitK_gemm performance tests  `[source-pr]`
+- [pr-composable_kernel-383](sources/prs/composable_kernel/PR-383.md) — GEMM batched/splitK/cgemm/grouped int4 examples  `[source-pr]`
+- [pr-composable_kernel-384](sources/prs/composable_kernel/PR-384.md) — Fixed splitk gemm fp32  `[source-pr]`
+- [pr-composable_kernel-401](sources/prs/composable_kernel/PR-401.md) — [Hotfix] SplitK Gemm fp32  `[source-pr]`
+- [pr-composable_kernel-402](sources/prs/composable_kernel/PR-402.md) — Add stderr to QA logfiles, process splitK and ONNX gemm kernels  `[source-pr]`
+- [pr-composable_kernel-430](sources/prs/composable_kernel/PR-430.md) — Example contraction splitk  `[source-pr]`
+- [pr-composable_kernel-514](sources/prs/composable_kernel/PR-514.md) — Modularize ckProfiler operations  `[source-pr]`
+- [pr-composable_kernel-59](sources/prs/composable_kernel/PR-59.md) — add split-k GEMM  `[source-pr]`
+- [pr-composable_kernel-615](sources/prs/composable_kernel/PR-615.md) — Normalization/split k  `[source-pr]`
+- [pr-composable_kernel-644](sources/prs/composable_kernel/PR-644.md) — simplify karg in device/grid of split-k op  `[source-pr]`
+- [pr-composable_kernel-652](sources/prs/composable_kernel/PR-652.md) — Merge up from develop to staging.  `[source-pr]`
+- [pr-composable_kernel-665](sources/prs/composable_kernel/PR-665.md) — Revert 'simplify karg in device/grid of split-k op (#644)'  `[source-pr]`
+- [pr-composable_kernel-669](sources/prs/composable_kernel/PR-669.md) — Grouped Gemm + SplitK + simplified Kernel Args  `[source-pr]`
+- [pr-composable_kernel-684](sources/prs/composable_kernel/PR-684.md) — Put back the split-k gemm code.  `[source-pr]`
+- [pr-composable_kernel-685](sources/prs/composable_kernel/PR-685.md) — Reduce initial range for half_t splitk  `[source-pr]`
+- [pr-composable_kernel-690](sources/prs/composable_kernel/PR-690.md) — Syncing up from internal repo to enable MI300.  `[source-pr]`
+- [pr-composable_kernel-691](sources/prs/composable_kernel/PR-691.md) — fixed init of grouped_gemm_splitK  `[source-pr]`
+- [pr-composable_kernel-694](sources/prs/composable_kernel/PR-694.md) — Fix grouped_gemm_splitk kernels on MI300.  `[source-pr]`
+- [pr-composable_kernel-695](sources/prs/composable_kernel/PR-695.md) — Fix the group of quantization_int8 kernels on MI300.  `[source-pr]`
+- [pr-composable_kernel-699](sources/prs/composable_kernel/PR-699.md) — initial stream-k implementation with example  `[source-pr]`
+- [pr-composable_kernel-706](sources/prs/composable_kernel/PR-706.md) — Update staging branch.  `[source-pr]`
+- [pr-composable_kernel-707](sources/prs/composable_kernel/PR-707.md) — Multiple fixes to GroupedGemm+SplitK  `[source-pr]`
+- [pr-composable_kernel-714](sources/prs/composable_kernel/PR-714.md) — Enable gemm_dl and other kernels on Navi3x.  `[source-pr]`
+- [pr-composable_kernel-734](sources/prs/composable_kernel/PR-734.md) — replace hipMemcpy with hipMemcpyWithStream  `[source-pr]`
+- [pr-composable_kernel-740](sources/prs/composable_kernel/PR-740.md) — fix clang format  `[source-pr]`
+- [pr-composable_kernel-752](sources/prs/composable_kernel/PR-752.md) — Enable gfx941 and gfx942 architectures.  `[source-pr]`
+- [pr-composable_kernel-76](sources/prs/composable_kernel/PR-76.md) — GEMM+Bias+ReLU+Add  `[source-pr]`
+- [pr-composable_kernel-763](sources/prs/composable_kernel/PR-763.md) — Use pipeline v1 for splitK gemm  `[source-pr]`
+- [pr-composable_kernel-765](sources/prs/composable_kernel/PR-765.md) — Disable XDL kernels on unsupported HW; Add `ck::is_xdl_supported` function  `[source-pr]`
+- [pr-composable_kernel-771](sources/prs/composable_kernel/PR-771.md) — Batchnorm splitk single kernel  `[source-pr]`
+- [pr-composable_kernel-777](sources/prs/composable_kernel/PR-777.md) — Move Device Ops implementations into impl directory.  `[source-pr]`
+- [pr-composable_kernel-788](sources/prs/composable_kernel/PR-788.md) — Grouped Gemm with looping over the tiles.  `[source-pr]`
+- [pr-composable_kernel-792](sources/prs/composable_kernel/PR-792.md) — Refactor f8_t, add bf8_t  `[source-pr]`
+- [pr-composable_kernel-80](sources/prs/composable_kernel/PR-80.md) — Add small tile size for fp16/fp32 and NN layout  `[source-pr]`
+- [pr-composable_kernel-81](sources/prs/composable_kernel/PR-81.md) — Hot fix for build breaks  `[source-pr]`
+- [pr-composable_kernel-818](sources/prs/composable_kernel/PR-818.md) — Grouped Gemm with Fixed K and N with SplitK  `[source-pr]`
+- [pr-composable_kernel-829](sources/prs/composable_kernel/PR-829.md) — Add Normalization splitk instances  `[source-pr]`
+- [pr-composable_kernel-850](sources/prs/composable_kernel/PR-850.md) — Use asynchronous version of hipMemset  `[source-pr]`
+- [pr-composable_kernel-853](sources/prs/composable_kernel/PR-853.md) — Add instances/ckProfiler/client example for fp8/fp16 mixed precision Gemm  `[source-pr]`
+- [pr-composable_kernel-857](sources/prs/composable_kernel/PR-857.md) — Ck profiler splitk  `[source-pr]`
+- [pr-composable_kernel-858](sources/prs/composable_kernel/PR-858.md) — add generic instances for splitK/streamK gemm  `[source-pr]`
+- [pr-composable_kernel-862](sources/prs/composable_kernel/PR-862.md) — use correct data types in cmake conditions for splitk gemm example  `[source-pr]`
+- [pr-composable_kernel-874](sources/prs/composable_kernel/PR-874.md) — Add  fp16/fp8 support into Grouped gemm FixedNK  `[source-pr]`
+- [pr-composable_kernel-882](sources/prs/composable_kernel/PR-882.md) — Fixed fp8 gemm  `[source-pr]`
+- [pr-composable_kernel-91](sources/prs/composable_kernel/PR-91.md) — Gemm alpha beta profiler (fp32 & fp16)  `[source-pr]`
+- [pr-composable_kernel-929](sources/prs/composable_kernel/PR-929.md) — Layernorm and groupnorm support to save mean and inverse std in forward  `[source-pr]`
+- [pr-composable_kernel-932](sources/prs/composable_kernel/PR-932.md) — Refactoring cmake files to build data types separately.  `[source-pr]`
+- [pr-composable_kernel-933](sources/prs/composable_kernel/PR-933.md) — Add fp8 @ bf8 gemm support and example  `[source-pr]`
+- [pr-composable_kernel-937](sources/prs/composable_kernel/PR-937.md) — Update instances naming f8->fp8  `[source-pr]`
+- [pr-composable_kernel-947](sources/prs/composable_kernel/PR-947.md) — add generic instances into splitK gemm  `[source-pr]`
+- [pr-composable_kernel-951](sources/prs/composable_kernel/PR-951.md) — Fix gemm_splitk test, add hip_check_error after kernel calls in kernel_launch.  `[source-pr]`
+- [pr-composable_kernel-956](sources/prs/composable_kernel/PR-956.md) — added ab_elementwise_op support into splitK Gemm  `[source-pr]`
+- [pr-composable_kernel-959](sources/prs/composable_kernel/PR-959.md) — changed test for grouped_gemm to be random  `[source-pr]`
+- [pr-composable_kernel-97](sources/prs/composable_kernel/PR-97.md) — Split k f16  `[source-pr]`
+- [pr-composable_kernel-974](sources/prs/composable_kernel/PR-974.md) — Clean DTYPES conditions in CMake  `[source-pr]`
+- [pr-composable_kernel-982](sources/prs/composable_kernel/PR-982.md) — Revert 'Grouped Gemm with looping over the tiles.'  `[source-pr]`
+- [pr-composable_kernel-983](sources/prs/composable_kernel/PR-983.md) — Add splitk gemm fp16 @ fp16 with fp8 compute instances  `[source-pr]`
+- [pr-flash-attention-147](sources/prs/flash-attention/PR-147.md) — [CK_TILE] Use more reasonable splitkv heuristic  `[source-pr]`
+- [pr-flash-attention-98](sources/prs/flash-attention/PR-98.md) — [CK_TILE] Fix fmha fwd splitkv block table read out-of-bound  `[source-pr]`
+- [pr-sglang-22850](sources/prs/sglang/PR-22850.md) — [AMD] Reduce NSA indexer kernels (weights_proj,  k-cache store kernel fusion)  `[source-pr]`
+- [pr-sglang-24930](sources/prs/sglang/PR-24930.md) — amd/deepseek_v4 integration 16/N Triton sparse MLA kernel 0508  `[source-pr]`
+- [pr-sglang-25554](sources/prs/sglang/PR-25554.md) — amd/deepseek_v4 27/N [fix] Reduce Triton autotune configs for faster first-time server launch  `[source-pr]`
+- [pr-sglang-25878](sources/prs/sglang/PR-25878.md) — amd/deepseek_v4 29/N Optimize Triton sparse MLA kernel dispatch for prefill, from separate gather+attention path to 1 fused kernel  `[source-pr]`
+- [pr-sglang-25977](sources/prs/sglang/PR-25977.md) — amd/deepseek_v4 30/N Enable fused nosplitk attention dispatch for extend, from separate gather+attention to 1 fused kernel  `[source-pr]`
+- [pr-sglang-26208](sources/prs/sglang/PR-26208.md) — [AMD] Dsv4/pr2 compressor opt  `[source-pr]`
+- [pr-sglang-26722](sources/prs/sglang/PR-26722.md) — amd/deepseek_v4 35/N refactor Triton sparse MLA decode dispatch kernel to always run in a fused kernel  `[source-pr]`
+- [pr-triton-614](sources/prs/triton/PR-614.md) — Copy *tune_gemm* from `triton-mlir` branch to `main_perf` branch  `[source-pr]`
+- [pr-triton-629](sources/prs/triton/PR-629.md) — Clean up *tune_gemm* script from `main_perf` branch  `[source-pr]`
+- [pr-vllm-37712](sources/prs/vllm/PR-37712.md) — Properly enable wvSplitK fp8 path for RDNA  `[source-pr]`
+- [pr-vllm-38043](sources/prs/vllm/PR-38043.md) — {ROCm]: gpt-oss fusion/padding fixes  `[source-pr]`
+- [pr-vllm-40037](sources/prs/vllm/PR-40037.md) — [ROCm] Add gfx1102/gfx1103 support  `[source-pr]`
+- [pr-vllm-40687](sources/prs/vllm/PR-40687.md) — [ROCm][Perf] Support N=5 in wvSplitK skinny GEMM kernels for speculative decoding  `[source-pr]`
+
+## stream-k
+
+- [pr-Tensile-1794](sources/prs/Tensile/PR-1794.md) — Stream-K kernel generation  `[source-pr]`
+- [pr-Tensile-1803](sources/prs/Tensile/PR-1803.md) — LdsPad optimization + new parameters for local read related optimizations  `[source-pr]`
+- [pr-Tensile-1805](sources/prs/Tensile/PR-1805.md) — Add code to allow testing stream-k grid multipliers.  `[source-pr]`
+- [pr-Tensile-1815](sources/prs/Tensile/PR-1815.md) — Two-Tile Stream-K  `[source-pr]`
+- [pr-Tensile-1818](sources/prs/Tensile/PR-1818.md) — ROCm 6.1 merge staging into master  `[source-pr]`
+- [pr-Tensile-1835](sources/prs/Tensile/PR-1835.md) — Mode to dynamically adjust number of CUs used  `[source-pr]`
+- [pr-Tensile-1861](sources/prs/Tensile/PR-1861.md) — Stream-K Batch  `[source-pr]`
+- [pr-Tensile-1877](sources/prs/Tensile/PR-1877.md) — Fix BufferLoad=False with stream-k  `[source-pr]`
+- [pr-Tensile-1880](sources/prs/Tensile/PR-1880.md) — Disable InitAccVgprOpt for Stream-K  `[source-pr]`
+- [pr-Tensile-1884](sources/prs/Tensile/PR-1884.md) — Temporarily disable stream-k tests on gfx94X  `[source-pr]`
+- [pr-Tensile-1885](sources/prs/Tensile/PR-1885.md) — Fix StreamK Partials Cache Behavior  `[source-pr]`
+- [pr-Tensile-1895](sources/prs/Tensile/PR-1895.md) — Skip stream-k init kernel when possible  `[source-pr]`
+- [pr-Tensile-1900](sources/prs/Tensile/PR-1900.md) — New dynamic mode  `[source-pr]`
+- [pr-Tensile-1903](sources/prs/Tensile/PR-1903.md) — Env variable to test fixed grid size with SK kernels  `[source-pr]`
+- [pr-Tensile-1906](sources/prs/Tensile/PR-1906.md) — Atomic 2-tile strean-k and tuning parameter clean-up  `[source-pr]`
+- [pr-Tensile-1915](sources/prs/Tensile/PR-1915.md) — Stream-k debug settings  `[source-pr]`
+- [pr-Tensile-1928](sources/prs/Tensile/PR-1928.md) — XCC-based workgroup remapping for stream-k kernels  `[source-pr]`
+- [pr-Tensile-1929](sources/prs/Tensile/PR-1929.md) — Analytical grid size prediction model for Stream-K  `[source-pr]`
+- [pr-Tensile-1934](sources/prs/Tensile/PR-1934.md) — Prediction model for optimal number of stream-k tiles to run  `[source-pr]`
+- [pr-Tensile-1990](sources/prs/Tensile/PR-1990.md) — Remove StreamK XCC config that causes tests to hang  `[source-pr]`
+- [pr-Tensile-2042](sources/prs/Tensile/PR-2042.md) — Fix stream-k dynamic grid model  `[source-pr]`
+- [pr-aiter-3373](sources/prs/aiter/PR-3373.md) — Flydsl update fix dynmaic layout; use fx.ptr for kernels not using layout  `[source-pr]`
+- [pr-composable_kernel-1065](sources/prs/composable_kernel/PR-1065.md) — Fixed GroupedGemmFixedNK with hipGraph  `[source-pr]`
+- [pr-composable_kernel-1142](sources/prs/composable_kernel/PR-1142.md) — Fixing most of the cppcheck errors.  `[source-pr]`
+- [pr-composable_kernel-1154](sources/prs/composable_kernel/PR-1154.md) — [GEMM] Gemm universal device operation  `[source-pr]`
+- [pr-composable_kernel-1159](sources/prs/composable_kernel/PR-1159.md) — Split-up instances to improve build times.  `[source-pr]`
+- [pr-composable_kernel-1360](sources/prs/composable_kernel/PR-1360.md) — Universal streamk with atomics  `[source-pr]`
+- [pr-composable_kernel-1528](sources/prs/composable_kernel/PR-1528.md) — Add a gpu gemm reference kernel  `[source-pr]`
+- [pr-composable_kernel-1541](sources/prs/composable_kernel/PR-1541.md) — BF16 GEMM Stream-K  `[source-pr]`
+- [pr-composable_kernel-1559](sources/prs/composable_kernel/PR-1559.md) — Fix gemm streamk v3 example  `[source-pr]`
+- [pr-composable_kernel-1576](sources/prs/composable_kernel/PR-1576.md) — Update default stride  `[source-pr]`
+- [pr-composable_kernel-1596](sources/prs/composable_kernel/PR-1596.md) — Update GPU verification  `[source-pr]`
+- [pr-composable_kernel-1665](sources/prs/composable_kernel/PR-1665.md) — universal streamk fp8 changes  `[source-pr]`
+- [pr-composable_kernel-1754](sources/prs/composable_kernel/PR-1754.md) — updated fp16 instances to be on parity with universal gemm instances  `[source-pr]`
+- [pr-composable_kernel-1762](sources/prs/composable_kernel/PR-1762.md) — Jing's contribution: prototype of mixed precision gemm FP16/BF16xint4 GEMM  `[source-pr]`
+- [pr-composable_kernel-1767](sources/prs/composable_kernel/PR-1767.md) — Promote latest CK develop  `[source-pr]`
+- [pr-composable_kernel-1866](sources/prs/composable_kernel/PR-1866.md) — Fix for Unsupported Input Shapes/Sizes in Stream-K GEMM -  BF16/FP16  `[source-pr]`
+- [pr-composable_kernel-1871](sources/prs/composable_kernel/PR-1871.md) — Fix KPack and enable existing instances on gfx950  `[source-pr]`
+- [pr-composable_kernel-1879](sources/prs/composable_kernel/PR-1879.md) — f8/bf16 GEMM Stream-K  `[source-pr]`
+- [pr-composable_kernel-1891](sources/prs/composable_kernel/PR-1891.md) — Fix test_gemm_universal test_grouped_convnd_fwd and example_gemm_xdl_streamk on gfx950  `[source-pr]`
+- [pr-composable_kernel-1935](sources/prs/composable_kernel/PR-1935.md) — Remove CK_USE_AMD_MFMA_GFX950  `[source-pr]`
+- [pr-composable_kernel-1949](sources/prs/composable_kernel/PR-1949.md) — Ck int4 moe develop  `[source-pr]`
+- [pr-composable_kernel-1957](sources/prs/composable_kernel/PR-1957.md) — [CK_TILE] Add 2:4 structured sparsity support for fp16 gemm  `[source-pr]`
+- [pr-composable_kernel-2044](sources/prs/composable_kernel/PR-2044.md) — CkProfiler StreamK GemmUniversal Fix and Split Gemm_universal Test  `[source-pr]`
+- [pr-composable_kernel-2054](sources/prs/composable_kernel/PR-2054.md) — Revert 'CkProfiler StreamK GemmUniversal Fix and Split Gemm_universal Test '  `[source-pr]`
+- [pr-composable_kernel-2059](sources/prs/composable_kernel/PR-2059.md) — MX GEMM - New GEMM pipeline for MX data types  `[source-pr]`
+- [pr-composable_kernel-2070](sources/prs/composable_kernel/PR-2070.md) — CkProfiler StreamK GemmUniversal Fix and Split Gemm_universal Test Redo PR #2044  `[source-pr]`
+- [pr-composable_kernel-2101](sources/prs/composable_kernel/PR-2101.md) — Floating Point Exception Error fix for Streamk GEMM Kernel  `[source-pr]`
+- [pr-composable_kernel-2145](sources/prs/composable_kernel/PR-2145.md) — Stream-K Reduction option as Runtime parameter and Compilation Error Fix (SK- Reduction)  `[source-pr]`
+- [pr-composable_kernel-2199](sources/prs/composable_kernel/PR-2199.md) — MX GEMM - Expand MX MFMA Testing to BF8, FP6, and BF6 Data Types  `[source-pr]`
+- [pr-composable_kernel-2202](sources/prs/composable_kernel/PR-2202.md) — Use new mfma instructions for FP8 on gfx950  `[source-pr]`
+- [pr-composable_kernel-2219](sources/prs/composable_kernel/PR-2219.md) — [CK_TILE] Multiple-D GEMM example  `[source-pr]`
+- [pr-composable_kernel-2268](sources/prs/composable_kernel/PR-2268.md) — Add 0 as an acceptable arguement for strides in CK GEMM example (Issue 2037)  `[source-pr]`
+- [pr-composable_kernel-2294](sources/prs/composable_kernel/PR-2294.md) — Optimized GEMMs for MX FP4/8  `[source-pr]`
+- [pr-composable_kernel-2333](sources/prs/composable_kernel/PR-2333.md) — Stream-K CkProfiler Update ( Replace CPU Validation with GPU Validation and Add Dynamic Grid Size Calculation for Stream-K GEMM Profiler)  `[source-pr]`
+- [pr-composable_kernel-2351](sources/prs/composable_kernel/PR-2351.md) — Fix Add in dynamic buffer for fp32/i8  `[source-pr]`
+- [pr-composable_kernel-2638](sources/prs/composable_kernel/PR-2638.md) — Mirchen/gemm blockscale wp segfault fix  `[source-pr]`
+- [pr-composable_kernel-2681](sources/prs/composable_kernel/PR-2681.md) — [CK Tile] Stream K GEMM Kernel HostArgs and Kernel Classes  `[source-pr]`
+- [pr-composable_kernel-2708](sources/prs/composable_kernel/PR-2708.md) — [CK TILE] Stream-K tile partitioner  `[source-pr]`
+- [pr-composable_kernel-2781](sources/prs/composable_kernel/PR-2781.md) — [CK_TILE] Stream-K GEMM Implementation  `[source-pr]`
+- [pr-composable_kernel-2788](sources/prs/composable_kernel/PR-2788.md) — [CK_TILE] Multiple-ABD GEMM example  `[source-pr]`
+- [pr-composable_kernel-2864](sources/prs/composable_kernel/PR-2864.md) — [CK_TILE] Stream-K GEMM Example for bf16 and fp16  `[source-pr]`
+- [pr-composable_kernel-2956](sources/prs/composable_kernel/PR-2956.md) — [CK_TILE] Pooling FWD (Lwpck 3683)  `[source-pr]`
+- [pr-composable_kernel-2974](sources/prs/composable_kernel/PR-2974.md) — Streamk functional tests  `[source-pr]`
+- [pr-composable_kernel-2978](sources/prs/composable_kernel/PR-2978.md) — Update include path to break the cyclic dep issue  `[source-pr]`
+- [pr-composable_kernel-3016](sources/prs/composable_kernel/PR-3016.md) — Streamk unit tests  `[source-pr]`
+- [pr-composable_kernel-3018](sources/prs/composable_kernel/PR-3018.md) — [CK_TILE] Stream-K Tile Partitioner Reboot  `[source-pr]`
+- [pr-composable_kernel-3038](sources/prs/composable_kernel/PR-3038.md) — Add CK Tile Tutorials Folder with GEMM and COPY Kernel  `[source-pr]`
+- [pr-composable_kernel-3039](sources/prs/composable_kernel/PR-3039.md) — [CK_TILE] Fix Stream-K Validation Errors on gfx950 for BF16  `[source-pr]`
+- [pr-composable_kernel-3041](sources/prs/composable_kernel/PR-3041.md) — [CK_TILE] Stream-K Gemm Example for fp8 and bf8  `[source-pr]`
+- [pr-composable_kernel-3064](sources/prs/composable_kernel/PR-3064.md) — [CK_TILE] Stream-K operator() Reboot  `[source-pr]`
+- [pr-composable_kernel-3107](sources/prs/composable_kernel/PR-3107.md) — Introduces the new partitioner to implement the reduction StreamK kernel.  `[source-pr]`
+- [pr-composable_kernel-3146](sources/prs/composable_kernel/PR-3146.md) — [CK_TILE] Move DataTypeTraits into a Common File  `[source-pr]`
+- [pr-composable_kernel-3157](sources/prs/composable_kernel/PR-3157.md) — Tile engine for streamk  `[source-pr]`
+- [pr-composable_kernel-3196](sources/prs/composable_kernel/PR-3196.md) — [ck_tile] enable test grouped_gemm_quant and gemm_streamk on gfx12  `[source-pr]`
+- [pr-composable_kernel-3202](sources/prs/composable_kernel/PR-3202.md) — [CK_TILE] Remove Old CK Tile Stream-K Artifacts  `[source-pr]`
+- [pr-composable_kernel-3204](sources/prs/composable_kernel/PR-3204.md) — remove usage of tile partitioner's full gemm shape  `[source-pr]`
+- [pr-composable_kernel-3264](sources/prs/composable_kernel/PR-3264.md) — [CK][Examples] Extending support for rdna3/4 part 4:  `[source-pr]`
+- [pr-composable_kernel-3269](sources/prs/composable_kernel/PR-3269.md) — [CK_TILE] Fix DP + 2 Tile Stream-K Validation Errors  `[source-pr]`
+- [pr-composable_kernel-3301](sources/prs/composable_kernel/PR-3301.md) — [CK_TILE] Port hw independent changes from internal repo to develop branch  `[source-pr]`
+- [pr-composable_kernel-3320](sources/prs/composable_kernel/PR-3320.md) — [CK_TILE] Fix Quant GEMM build  `[source-pr]`
+- [pr-composable_kernel-3335](sources/prs/composable_kernel/PR-3335.md) — [CK_TILE] Fix for Moving DataTypeTraits into a Common File  `[source-pr]`
+- [pr-composable_kernel-3348](sources/prs/composable_kernel/PR-3348.md) — [CK TILE GEMM STREAMK] update identifier names according to the new code style  `[source-pr]`
+- [pr-composable_kernel-3371](sources/prs/composable_kernel/PR-3371.md) — [CK_TILE] Stream-K Tree Reduction and Cache Skipping Integration  `[source-pr]`
+- [pr-composable_kernel-3434](sources/prs/composable_kernel/PR-3434.md) — [TILE ENGINE] Restructure to Base class of GEMM  `[source-pr]`
+- [pr-composable_kernel-3514](sources/prs/composable_kernel/PR-3514.md) — Addition of Stream-K tests using Tile Engine  `[source-pr]`
+- [pr-composable_kernel-3543](sources/prs/composable_kernel/PR-3543.md) — [CK TILE GEMM] Add bf8 support to tile engine streamk generator  `[source-pr]`
+- [pr-composable_kernel-3544](sources/prs/composable_kernel/PR-3544.md) — [CK] Add base class GridwiseGemm_xdl_cshuffle_base for all gridwise_gemm_xdl classes  `[source-pr]`
+- [pr-composable_kernel-3559](sources/prs/composable_kernel/PR-3559.md) — [CK_TILE] Temporarily disable CK Tile Stream-K reduction tests  `[source-pr]`
+- [pr-composable_kernel-3625](sources/prs/composable_kernel/PR-3625.md) — [CK_TILE] Fix alignment in Stream-K workspace buffer  `[source-pr]`
+- [pr-composable_kernel-3662](sources/prs/composable_kernel/PR-3662.md) — [CK_TILE] Stream-K Tile Engine Test Config File Generation  `[source-pr]`
+- [pr-composable_kernel-699](sources/prs/composable_kernel/PR-699.md) — initial stream-k implementation with example  `[source-pr]`
+- [pr-composable_kernel-850](sources/prs/composable_kernel/PR-850.md) — Use asynchronous version of hipMemset  `[source-pr]`
+- [pr-composable_kernel-858](sources/prs/composable_kernel/PR-858.md) — add generic instances for splitK/streamK gemm  `[source-pr]`
+- [pr-composable_kernel-875](sources/prs/composable_kernel/PR-875.md) — fix gemm_streamk example on mi300  `[source-pr]`
+- [pr-composable_kernel-932](sources/prs/composable_kernel/PR-932.md) — Refactoring cmake files to build data types separately.  `[source-pr]`
+- [pr-composable_kernel-933](sources/prs/composable_kernel/PR-933.md) — Add fp8 @ bf8 gemm support and example  `[source-pr]`
+- [pr-triton-415](sources/prs/triton/PR-415.md) — Optimized stream-k kernel for AMD GPUs  `[source-pr]`
+- [pr-triton-536](sources/prs/triton/PR-536.md) — enable register usage and spill for AMD backend  `[source-pr]`
+- [pr-triton-562](sources/prs/triton/PR-562.md) — add kpack and  matrix_instr_nonkdim for stream-k implementation  `[source-pr]`
+- [pr-triton-579](sources/prs/triton/PR-579.md) — new stream-k kernel implementations  `[source-pr]`
+- [pr-triton-598](sources/prs/triton/PR-598.md) — fix correctness test issue of tune_streamk  `[source-pr]`
+- [pr-triton-607](sources/prs/triton/PR-607.md) — non atomic implementation of stream-k  `[source-pr]`
+- [pr-triton-619](sources/prs/triton/PR-619.md) — streamk v0.1  `[source-pr]`
+- [pr-triton-632](sources/prs/triton/PR-632.md) — streamk atomics fix  `[source-pr]`
+- [pr-triton-649](sources/prs/triton/PR-649.md) — Added instr.sched options to `tune_gemm.py`  `[source-pr]`
+- [pr-triton-652](sources/prs/triton/PR-652.md) — add stream-k v0.2  `[source-pr]`
+- [pr-triton-655](sources/prs/triton/PR-655.md) — Replace num_stages=0 with num_stages=2  `[source-pr]`
+- [pr-triton-660](sources/prs/triton/PR-660.md) — Streamk v0.3  `[source-pr]`
+- [pr-triton-664](sources/prs/triton/PR-664.md) — StreamK Grid Prediction Model  `[source-pr]`
+- [pr-triton-680](sources/prs/triton/PR-680.md) — Query lds size for tune_gemm and tune_streamk  `[source-pr]`
+- [pr-triton-689](sources/prs/triton/PR-689.md) — stream-k v0.4  `[source-pr]`
+- [pr-triton-711](sources/prs/triton/PR-711.md) — Add workaround for pytorch device selection issue  `[source-pr]`
+- [pr-triton-745](sources/prs/triton/PR-745.md) — Fix correctness of streamk by adding a required barrier  `[source-pr]`
+- [pr-triton-755](sources/prs/triton/PR-755.md) — remove production name  `[source-pr]`
+- [pr-triton-835](sources/prs/triton/PR-835.md) — Use rocprofv3 and improve streamk benchmark  `[source-pr]`
+- [pr-triton-843](sources/prs/triton/PR-843.md) — Fix perfCI for streamk/persistent gemm on gfx950  `[source-pr]`
 
 ## swizzled-layout
 
@@ -57,11 +5390,1085 @@ Every page (wiki + PR sources) that uses each optimization technique.
 
 ## vectorized-loads
 
+- [pr-FlyDSL-131](sources/prs/FlyDSL/PR-131.md) — Fix test coverage  `[source-pr]`
+- [pr-FlyDSL-153](sources/prs/FlyDSL/PR-153.md) — Pre v0.1 gemm fix  `[source-pr]`
+- [pr-FlyDSL-158](sources/prs/FlyDSL/PR-158.md) — use abs import for correct importing kernels from wheel  `[source-pr]`
+- [pr-FlyDSL-197](sources/prs/FlyDSL/PR-197.md) — clean codes and wrap numerics in bufferops  `[source-pr]`
+- [pr-FlyDSL-27](sources/prs/FlyDSL/PR-27.md) — Dev/gemm flir  `[source-pr]`
+- [pr-FlyDSL-270](sources/prs/FlyDSL/PR-270.md) — Refine kernel code  `[source-pr]`
+- [pr-FlyDSL-300](sources/prs/FlyDSL/PR-300.md) — [FlyDSL] fused RoPE kernel with layout APIs  `[source-pr]`
+- [pr-FlyDSL-32](sources/prs/FlyDSL/PR-32.md) — Dev/gemm refactor  `[source-pr]`
+- [pr-FlyDSL-346](sources/prs/FlyDSL/PR-346.md) — [FLYDSL]: if dispatch dynamic tests refactor  `[source-pr]`
+- [pr-FlyDSL-360](sources/prs/FlyDSL/PR-360.md) — [Perf] Vectorize MoE reduce kernel via layout API for f16/bf16  `[source-pr]`
+- [pr-FlyDSL-465](sources/prs/FlyDSL/PR-465.md) — some optimization about smoothquant moe  `[source-pr]`
+- [pr-FlyDSL-579](sources/prs/FlyDSL/PR-579.md) — [Enh] Port AITER FlyDSL kernels  `[source-pr]`
+- [pr-FlyDSL-59](sources/prs/FlyDSL/PR-59.md) — fix dynamic m  `[source-pr]`
+- [pr-FlyDSL-60](sources/prs/FlyDSL/PR-60.md) — Dev/fp16 gemm  `[source-pr]`
+- [pr-FlyDSL-74](sources/prs/FlyDSL/PR-74.md) — [MoE] Support non-atomic reduce path for Stage2 large prefill workloads  `[source-pr]`
+- [pr-FlyDSL-79](sources/prs/FlyDSL/PR-79.md) — [FP4] preshuffle gemm a8w4&a4w4 moe gemm a8w4  `[source-pr]`
+- [pr-Tensile-114](sources/prs/Tensile/PR-114.md) — V_pk_fma  `[source-pr]`
+- [pr-Tensile-1185](sources/prs/Tensile/PR-1185.md) — MatrixInstruction for general int8  `[source-pr]`
+- [pr-Tensile-1288](sources/prs/Tensile/PR-1288.md) — rename replacement kernels for MFMA Int8 GEMM  `[source-pr]`
+- [pr-Tensile-1346](sources/prs/Tensile/PR-1346.md) — VectorWidth with MFMA SourceSwap  `[source-pr]`
+- [pr-Tensile-1521](sources/prs/Tensile/PR-1521.md) — Support Tensile for gfx11 series platform  `[source-pr]`
+- [pr-Tensile-2113](sources/prs/Tensile/PR-2113.md) — Adding initial support for gfx950  `[source-pr]`
+- [pr-Tensile-2114](sources/prs/Tensile/PR-2114.md) — Adding initial support for gfx950  `[source-pr]`
+- [pr-Tensile-293](sources/prs/Tensile/PR-293.md) — Fix half gsu  `[source-pr]`
+- [pr-Tensile-311](sources/prs/Tensile/PR-311.md) — merge with develop branch as of 2018-08-06  `[source-pr]`
+- [pr-aiter-1239](sources/prs/aiter/PR-1239.md) — Opt concat cache mla  `[source-pr]`
+- [pr-aiter-1404](sources/prs/aiter/PR-1404.md) — [M308] tune silu&act  `[source-pr]`
+- [pr-aiter-1439](sources/prs/aiter/PR-1439.md) — fix_prebuiild_asm  `[source-pr]`
+- [pr-aiter-1742](sources/prs/aiter/PR-1742.md) — add groupnorm cuda kernel  `[source-pr]`
+- [pr-aiter-1754](sources/prs/aiter/PR-1754.md) — [FMHA] Support Vectorized KV Cache Layout and vLLM/SGLang block table in Batch Prefill kernel  `[source-pr]`
+- [pr-aiter-1792](sources/prs/aiter/PR-1792.md) — fix flag  `[source-pr]`
+- [pr-aiter-2017](sources/prs/aiter/PR-2017.md) — [OPUS] add opus UT  `[source-pr]`
+- [pr-aiter-2040](sources/prs/aiter/PR-2040.md) — [OPUS] enhance opus UT by adding more tests  `[source-pr]`
+- [pr-aiter-2113](sources/prs/aiter/PR-2113.md) — [FlyDSL] import flydsl implement of a4w4 moe  `[source-pr]`
+- [pr-aiter-2220](sources/prs/aiter/PR-2220.md) — feat: add fast gelu  `[source-pr]`
+- [pr-aiter-2302](sources/prs/aiter/PR-2302.md) — Improve batch prefill test coverage  `[source-pr]`
+- [pr-aiter-2328](sources/prs/aiter/PR-2328.md) — Fix OOB GU scales access in 64x128 kernels  `[source-pr]`
+- [pr-aiter-2332](sources/prs/aiter/PR-2332.md) — [Gluon][gfx1250] Gemm MXFP4 preshuffled  `[source-pr]`
+- [pr-aiter-2390](sources/prs/aiter/PR-2390.md) — [FlyDSL] Add FlyDSL MoE a4w4 support and update kernels  `[source-pr]`
+- [pr-aiter-2438](sources/prs/aiter/PR-2438.md) — fix moe stage2 tune config  `[source-pr]`
+- [pr-aiter-2482](sources/prs/aiter/PR-2482.md) — fix(gemm): add EVEN_MN heuristic to restore vectorized store in gemm_…  `[source-pr]`
+- [pr-aiter-2497](sources/prs/aiter/PR-2497.md) — Wjx/upgrade flydsl fused  `[source-pr]`
+- [pr-aiter-2579](sources/prs/aiter/PR-2579.md) — Blockwise Sparse Sage Attention  `[source-pr]`
+- [pr-aiter-2581](sources/prs/aiter/PR-2581.md) — [FlyDSL] Optimize a4w4 MOE kernels  `[source-pr]`
+- [pr-aiter-262](sources/prs/aiter/PR-262.md) — [feat]: support elementwise (m,n,1) and (n,1) broadcast case  `[source-pr]`
+- [pr-aiter-2657](sources/prs/aiter/PR-2657.md) — add triton fallback for mi455 gptoss & dsfp4  `[source-pr]`
+- [pr-aiter-2726](sources/prs/aiter/PR-2726.md) — [FlyDSL MOE] update a8w4 moe  `[source-pr]`
+- [pr-aiter-278](sources/prs/aiter/PR-278.md) — remove torch deps  `[source-pr]`
+- [pr-aiter-2863](sources/prs/aiter/PR-2863.md) — kimi a16wi4 moe support  `[source-pr]`
+- [pr-aiter-2951](sources/prs/aiter/PR-2951.md) — [MOE DSV4] flydsl a8w4 moe for dsv4  `[source-pr]`
+- [pr-aiter-2954](sources/prs/aiter/PR-2954.md) — Fix indexing in cp_gather_indexer_k_quant_cache  `[source-pr]`
+- [pr-aiter-2972](sources/prs/aiter/PR-2972.md) — add swiglu a4w4 moe path for gpt-oss model  `[source-pr]`
+- [pr-aiter-3072](sources/prs/aiter/PR-3072.md) — HK MLA: MI35x m16x8 retune, new m16x4 kernel, page_size + mask support  `[source-pr]`
+- [pr-aiter-3145](sources/prs/aiter/PR-3145.md) — add silu_and_mul_quant and Opt silu_and_mul  `[source-pr]`
+- [pr-aiter-3214](sources/prs/aiter/PR-3214.md) — configs: add DSv4-Flash shape to dsv4_fp8fp4_tuned_fmoe.csv  `[source-pr]`
+- [pr-aiter-3312](sources/prs/aiter/PR-3312.md) — [MOE] Add fused dynamic MXFP8 quant + moe_sort HIP path  `[source-pr]`
+- [pr-aiter-3313](sources/prs/aiter/PR-3313.md) — Zhimding/fix aot moe pad 0522  `[source-pr]`
+- [pr-aiter-3318](sources/prs/aiter/PR-3318.md) — Revert '[Gluon][gfx1250] Gemm MXFP4 preshuffled'  `[source-pr]`
+- [pr-aiter-3342](sources/prs/aiter/PR-3342.md) — Revert 'Zhimding/fix aot moe pad 0522'  `[source-pr]`
+- [pr-aiter-3404](sources/prs/aiter/PR-3404.md) — moe enable padding params as runtime  `[source-pr]`
+- [pr-aiter-3435](sources/prs/aiter/PR-3435.md) — Revert 'moe enable padding params as runtime'  `[source-pr]`
+- [pr-aiter-439](sources/prs/aiter/PR-439.md) — add asm fp4 gemm  `[source-pr]`
+- [pr-aiter-497](sources/prs/aiter/PR-497.md) — cherry pick from asm_moe_1stage  `[source-pr]`
+- [pr-aiter-62](sources/prs/aiter/PR-62.md) — Fmoe g1u1 a8w8  `[source-pr]`
+- [pr-aiter-649](sources/prs/aiter/PR-649.md) — A4w4_asm_pro  `[source-pr]`
+- [pr-aiter-866](sources/prs/aiter/PR-866.md) — refine moe codegen  `[source-pr]`
+- [pr-aiter-944](sources/prs/aiter/PR-944.md) — Add hip kernels for symmetric matrix tridiagonalization  `[source-pr]`
+- [pr-composable_kernel-100](sources/prs/composable_kernel/PR-100.md) — [Bf16 & int8] [example & ckprofiler]  `[source-pr]`
+- [pr-composable_kernel-1008](sources/prs/composable_kernel/PR-1008.md) — Disable the SLP vectorizer to prevent unnecessary wait  `[source-pr]`
+- [pr-composable_kernel-1356](sources/prs/composable_kernel/PR-1356.md) — [CK_TILE] wa prec, remove sgpr offset for inline asm  `[source-pr]`
+- [pr-composable_kernel-1430](sources/prs/composable_kernel/PR-1430.md) — [CK_TILE] Pick bugfixes for ROCm 6.2 compiler issues  `[source-pr]`
+- [pr-composable_kernel-1607](sources/prs/composable_kernel/PR-1607.md) — [CK_TILE] add generic_permute  `[source-pr]`
+- [pr-composable_kernel-1660](sources/prs/composable_kernel/PR-1660.md) — add batched_transpose implement  `[source-pr]`
+- [pr-composable_kernel-1835](sources/prs/composable_kernel/PR-1835.md) — [CK-Tile] Enable vectorized reads on all layouts & improve perf.  `[source-pr]`
+- [pr-composable_kernel-1856](sources/prs/composable_kernel/PR-1856.md) — [CK-Tile] Enable vectorized reads on all layouts for universal gemm memory pipeline  `[source-pr]`
+- [pr-composable_kernel-1861](sources/prs/composable_kernel/PR-1861.md) — [CK_TILE] Improve RMS/Layer Normalization 2 Pass Pipeline Performance  `[source-pr]`
+- [pr-composable_kernel-2086](sources/prs/composable_kernel/PR-2086.md) — fmha hdim256 vectorize improve  `[source-pr]`
+- [pr-composable_kernel-2126](sources/prs/composable_kernel/PR-2126.md) — Improve hdim=256 performance  `[source-pr]`
+- [pr-composable_kernel-2131](sources/prs/composable_kernel/PR-2131.md) — Vectorized Transpose for Batched Transpose CK Tile Operator  `[source-pr]`
+- [pr-composable_kernel-2152](sources/prs/composable_kernel/PR-2152.md) — MX GEMM - Add FP8 GEMM Tests for Different Layouts  `[source-pr]`
+- [pr-composable_kernel-2166](sources/prs/composable_kernel/PR-2166.md) — Improve the general performance of the Preshuffled GEMM V3 & delete the unnecessary instances  `[source-pr]`
+- [pr-composable_kernel-2246](sources/prs/composable_kernel/PR-2246.md) — [CK_TILE] Support for elementwise kernel  `[source-pr]`
+- [pr-composable_kernel-2280](sources/prs/composable_kernel/PR-2280.md) — Merge 'amd-develop' till 29574f05f into amd-master  `[source-pr]`
+- [pr-composable_kernel-2319](sources/prs/composable_kernel/PR-2319.md) — Implement batched gemm wmma (RDNA batched gemm) based on wmma cshuffle v3  `[source-pr]`
+- [pr-composable_kernel-2425](sources/prs/composable_kernel/PR-2425.md) — Enable Async Copy for MI355  `[source-pr]`
+- [pr-composable_kernel-2549](sources/prs/composable_kernel/PR-2549.md) — [CK_TILE][FMHA] Enable dwordx4 loading in async_load_tile_raw()  `[source-pr]`
+- [pr-composable_kernel-2617](sources/prs/composable_kernel/PR-2617.md) — Add e8m0 scaled convert into CK_TILE  `[source-pr]`
+- [pr-composable_kernel-2625](sources/prs/composable_kernel/PR-2625.md) — Delete all slp compilation flag in CK  `[source-pr]`
+- [pr-composable_kernel-2641](sources/prs/composable_kernel/PR-2641.md) — Optimize fmha fwd decode & prefill for gfx950  `[source-pr]`
+- [pr-composable_kernel-2670](sources/prs/composable_kernel/PR-2670.md) — Revert 'Optimize fmha fwd decode & prefill for gfx950'  `[source-pr]`
+- [pr-composable_kernel-2671](sources/prs/composable_kernel/PR-2671.md) — Re-enable optimization for gfx950 fmha fwd  `[source-pr]`
+- [pr-composable_kernel-2825](sources/prs/composable_kernel/PR-2825.md) — implement device batched gemm b scale for wmma  `[source-pr]`
+- [pr-composable_kernel-2892](sources/prs/composable_kernel/PR-2892.md) — Add attn sink  `[source-pr]`
+- [pr-composable_kernel-3038](sources/prs/composable_kernel/PR-3038.md) — Add CK Tile Tutorials Folder with GEMM and COPY Kernel  `[source-pr]`
+- [pr-composable_kernel-3206](sources/prs/composable_kernel/PR-3206.md) — Support fp8 dynamic quantization for fmha  `[source-pr]`
+- [pr-composable_kernel-3250](sources/prs/composable_kernel/PR-3250.md) — Revert 'Add attn sink'  `[source-pr]`
+- [pr-composable_kernel-3368](sources/prs/composable_kernel/PR-3368.md) — Add attention sink support for FMHA FWD  `[source-pr]`
+- [pr-composable_kernel-3401](sources/prs/composable_kernel/PR-3401.md) — [CK_TILE] Add FP8xF4 Flatmm  `[source-pr]`
+- [pr-composable_kernel-3442](sources/prs/composable_kernel/PR-3442.md) — [FMHA] Batch Prefill Support Improvements:  Change KV Cache Layout & Large Page Size Support  `[source-pr]`
+- [pr-composable_kernel-3509](sources/prs/composable_kernel/PR-3509.md) — [CK_BUILDER] Add bwd weight factories  `[source-pr]`
+- [pr-composable_kernel-3512](sources/prs/composable_kernel/PR-3512.md) — [CK TILE] Refactor function amd_buffer_load_invalid_element_return_zero  `[source-pr]`
+- [pr-composable_kernel-3592](sources/prs/composable_kernel/PR-3592.md) — [CK_BUILDER] Add reflection for wmma and bwd weight instances to ck builder reflection  `[source-pr]`
+- [pr-composable_kernel-3603](sources/prs/composable_kernel/PR-3603.md) — [CK_Tile] Support for a4w4 (fp4) in block scale gemm AB quant  `[source-pr]`
+- [pr-composable_kernel-3607](sources/prs/composable_kernel/PR-3607.md) — [CK Tile] multi reduce improvements  `[source-pr]`
+- [pr-composable_kernel-3657](sources/prs/composable_kernel/PR-3657.md) — Optimize batch prefill kernel performance for VECTORIZED_LAYOUT KV cache  `[source-pr]`
+- [pr-composable_kernel-41](sources/prs/composable_kernel/PR-41.md) — FP16 data in-register transpose  `[source-pr]`
+- [pr-composable_kernel-53](sources/prs/composable_kernel/PR-53.md) — Use __builtin_memcpy to implement bit_cast and for accessing vector from pointer of scalars  `[source-pr]`
+- [pr-composable_kernel-94](sources/prs/composable_kernel/PR-94.md) — Conv3d new  `[source-pr]`
+- [pr-sglang-21040](sources/prs/sglang/PR-21040.md) — [AMD][MoRI] Auto-select dispatch quantization type from MoE weight dtype.  `[source-pr]`
+- [pr-sglang-23832](sources/prs/sglang/PR-23832.md) — amd/deepseek_v4 integration 2/N - cuda graph 0426  `[source-pr]`
+- [pr-sglang-24019](sources/prs/sglang/PR-24019.md) — Revert 'amd/deepseek_v4 integration 2/N - cuda graph 0426 (#23832)'  `[source-pr]`
+- [pr-sglang-24143](sources/prs/sglang/PR-24143.md) — amd/deepseek_v4 integration 7/N - topk512transform kernel 0430  `[source-pr]`
+- [pr-sglang-24755](sources/prs/sglang/PR-24755.md) — Optimize large add_constant tensors  `[source-pr]`
+- [pr-triton-146](sources/prs/triton/PR-146.md) — Fix for LLVM compiler's inability to auto-vectorize float16 loads and stores on AMDGPU.  `[source-pr]`
+- [pr-triton-156](sources/prs/triton/PR-156.md) — Some warp64 related fixes.  `[source-pr]`
+- [pr-triton-164](sources/prs/triton/PR-164.md) — Triton mlir ifu 03122023  `[source-pr]`
+- [pr-triton-167](sources/prs/triton/PR-167.md) — Triton mlir ifu 03162023  `[source-pr]`
+- [pr-triton-344](sources/prs/triton/PR-344.md) — [GEMM] [Tuning] Merge split_k and non split_k kernels in GEMM tuning script  `[source-pr]`
+- [pr-triton-38](sources/prs/triton/PR-38.md) — Fix StoreOpConversion bug and add test_where to test_core_amd.py.  `[source-pr]`
+- [pr-triton-439](sources/prs/triton/PR-439.md) — [Backend] Refactor sharedToDotOperandMFMA lowering  `[source-pr]`
+- [pr-vllm-37539](sources/prs/vllm/PR-37539.md) — [Performance] Remove unnecessary zero-fill of MLA decode output tensor in Aiter backend  `[source-pr]`
+- [pr-vllm-42409](sources/prs/vllm/PR-42409.md) — [ROCm] Widen AITER fused AR RMSNorm 1-stage gate  `[source-pr]`
 - [kernel-bandwidth-microbench](wiki/kernels/bandwidth-microbench.md) — HBM Bandwidth Microbenchmark (float4 non-temporal persistent read)  `[wiki-kernel]`
 - [kernel-rmsnorm](wiki/kernels/rmsnorm.md) — Fused RMSNorm (+ residual / quant) on CDNA  `[wiki-kernel]`
 
+## vgpr-budgeting
+
+- [pr-FlyDSL-33](sources/prs/FlyDSL/PR-33.md) — modify cpu golden data to pytorch golden data, fix v_cvt_pk_bf16_f32 issue and test more case compare to aiter ops  `[source-pr]`
+- [pr-FlyDSL-331](sources/prs/FlyDSL/PR-331.md) — [gfx1250] Unified MXFP8/MXFP4/A8W4 GEMM kernel  `[source-pr]`
+- [pr-FlyDSL-340](sources/prs/FlyDSL/PR-340.md) — [gfx1250] optimize FP4 GEMM for large tile 256x256  `[source-pr]`
+- [pr-FlyDSL-359](sources/prs/FlyDSL/PR-359.md) — [Refactor] Convert norm/softmax kernels from raw buffer_ops to layout…  `[source-pr]`
+- [pr-FlyDSL-370](sources/prs/FlyDSL/PR-370.md) — Pr/a16wi4 group  `[source-pr]`
+- [pr-FlyDSL-445](sources/prs/FlyDSL/PR-445.md) — Use internal types in RDNA GEMM kernels  `[source-pr]`
+- [pr-FlyDSL-447](sources/prs/FlyDSL/PR-447.md) — Port kernels internal types except moe  `[source-pr]`
+- [pr-FlyDSL-450](sources/prs/FlyDSL/PR-450.md) — Refactor MLA decode kernel: unify types and simplify MLIR calls  `[source-pr]`
+- [pr-FlyDSL-533](sources/prs/FlyDSL/PR-533.md) — [gfx1250] Optimize FP8/FP4 GEMM kernel and tests  `[source-pr]`
+- [pr-FlyDSL-544](sources/prs/FlyDSL/PR-544.md) — [Feat] Add GFX11 WMMA atom (RDNA3 / RDNA3.5, wave32)  `[source-pr]`
+- [pr-FlyDSL-591](sources/prs/FlyDSL/PR-591.md) — Update kernel-trace-analysis, lds-optimization, prefetch-data-load sk…  `[source-pr]`
+- [pr-Tensile-1059](sources/prs/Tensile/PR-1059.md) — Move fp16 code entirely to components  `[source-pr]`
+- [pr-Tensile-1060](sources/prs/Tensile/PR-1060.md) — Pipelined store for MI kernels  `[source-pr]`
+- [pr-Tensile-1084](sources/prs/Tensile/PR-1084.md) — fix vgpr index out of array bound  `[source-pr]`
+- [pr-Tensile-1100](sources/prs/Tensile/PR-1100.md) — Fix: reusable vgpr up to next occupancy threshold  `[source-pr]`
+- [pr-Tensile-1125](sources/prs/Tensile/PR-1125.md) — PersistentKernel with Prefetch  `[source-pr]`
+- [pr-Tensile-1132](sources/prs/Tensile/PR-1132.md) — BF16/FP16 HPA GSU with per GSU temp buffer  `[source-pr]`
+- [pr-Tensile-1167](sources/prs/Tensile/PR-1167.md) — Prefetch Global Read 2  `[source-pr]`
+- [pr-Tensile-1185](sources/prs/Tensile/PR-1185.md) — MatrixInstruction for general int8  `[source-pr]`
+- [pr-Tensile-1286](sources/prs/Tensile/PR-1286.md) — Refactoring VALU/MFMA code into components  `[source-pr]`
+- [pr-Tensile-1288](sources/prs/Tensile/PR-1288.md) — rename replacement kernels for MFMA Int8 GEMM  `[source-pr]`
+- [pr-Tensile-1292](sources/prs/Tensile/PR-1292.md) — ROCm 4.2 merge staging into master  `[source-pr]`
+- [pr-Tensile-1297](sources/prs/Tensile/PR-1297.md) — NHWC PR  `[source-pr]`
+- [pr-Tensile-1300](sources/prs/Tensile/PR-1300.md) — Initial implementation support for aldebaran  `[source-pr]`
+- [pr-Tensile-1313](sources/prs/Tensile/PR-1313.md) — Swap MFMA source A and B to optimize store code  `[source-pr]`
+- [pr-Tensile-1315](sources/prs/Tensile/PR-1315.md) — merge staging 18875ad6 into master with GO from CQE  `[source-pr]`
+- [pr-Tensile-1319](sources/prs/Tensile/PR-1319.md) — Fix an error: invalid register class: vgpr tuples must be 64 bit aligned  `[source-pr]`
+- [pr-Tensile-1346](sources/prs/Tensile/PR-1346.md) — VectorWidth with MFMA SourceSwap  `[source-pr]`
+- [pr-Tensile-1348](sources/prs/Tensile/PR-1348.md) — fix atomicAddC addrVgpr  `[source-pr]`
+- [pr-Tensile-1350](sources/prs/Tensile/PR-1350.md) — ZGEMM mfma instruction support  `[source-pr]`
+- [pr-Tensile-1351](sources/prs/Tensile/PR-1351.md) — Instruction Scheduling  `[source-pr]`
+- [pr-Tensile-1359](sources/prs/Tensile/PR-1359.md) — don't allocate vgpr in globalWriteBatch  `[source-pr]`
+- [pr-Tensile-1361](sources/prs/Tensile/PR-1361.md) — Aldebaran dgemm misc optimization  `[source-pr]`
+- [pr-Tensile-1371](sources/prs/Tensile/PR-1371.md) — Refactor vgpr occupancy calculation for Aldebaran's new hardware capability Unified Register Files  `[source-pr]`
+- [pr-Tensile-1372](sources/prs/Tensile/PR-1372.md) — Bug fix: codeMulAlpha object is not None when MIArchVgpr is disabled  `[source-pr]`
+- [pr-Tensile-1383](sources/prs/Tensile/PR-1383.md) — ROCm 4.5 merge staging into master  `[source-pr]`
+- [pr-Tensile-1389](sources/prs/Tensile/PR-1389.md) — fix addrVgpr naming for atomic GSU  `[source-pr]`
+- [pr-Tensile-1390](sources/prs/Tensile/PR-1390.md) — Initial version of DirectToVgpr support for DGEMM  `[source-pr]`
+- [pr-Tensile-1399](sources/prs/Tensile/PR-1399.md) — Waitcnt optimization for DirectToVgpr support  `[source-pr]`
+- [pr-Tensile-1406](sources/prs/Tensile/PR-1406.md) — merge staging 998f23ee into master with GO from CQE  `[source-pr]`
+- [pr-Tensile-1430](sources/prs/Tensile/PR-1430.md) — Fix vgpr alignment problem when enabling flat buffer load  `[source-pr]`
+- [pr-Tensile-1443](sources/prs/Tensile/PR-1443.md) — Fixed memory access fault issue with PK + PAP + PAPM, DirectToVgpr + LocalReadVectorWidth=2 issue, and DirectToLds + NN or VectorWidth=1 issue  `[source-pr]`
+- [pr-Tensile-1489](sources/prs/Tensile/PR-1489.md) — DGEMM optimizations + some bug fixes  `[source-pr]`
+- [pr-Tensile-1495](sources/prs/Tensile/PR-1495.md) — Fix for NN ZGEMM optimizations  `[source-pr]`
+- [pr-Tensile-1503](sources/prs/Tensile/PR-1503.md) — DGEMM/ZGEMM DirectToVgpr for TN support + fix for Tensile ticket #1500 and some more  `[source-pr]`
+- [pr-Tensile-1506](sources/prs/Tensile/PR-1506.md) — merge staging f6364759 into master on Conditional GO from CQE  `[source-pr]`
+- [pr-Tensile-1507](sources/prs/Tensile/PR-1507.md) — fix: don't share 2 elements by one c data vgpr for UseInitialStridesC…  `[source-pr]`
+- [pr-Tensile-1521](sources/prs/Tensile/PR-1521.md) — Support Tensile for gfx11 series platform  `[source-pr]`
+- [pr-Tensile-1529](sources/prs/Tensile/PR-1529.md) — merge staging 3c17e5a into master on GO from CQE  `[source-pr]`
+- [pr-Tensile-1533](sources/prs/Tensile/PR-1533.md) — DirectToVgpr support for SGEMM + bug fixes  `[source-pr]`
+- [pr-Tensile-1548](sources/prs/Tensile/PR-1548.md) — DirectToVgpr support for CGEMM + bug fixes  `[source-pr]`
+- [pr-Tensile-1557](sources/prs/Tensile/PR-1557.md) — add skip test for gfx11xx series  `[source-pr]`
+- [pr-Tensile-1562](sources/prs/Tensile/PR-1562.md) — MIArchVgpr support for CGEMM + small changes for StoreCInUnroll  `[source-pr]`
+- [pr-Tensile-1564](sources/prs/Tensile/PR-1564.md) — fix for dgemm opt, MIArchVgpr + cgemm support  `[source-pr]`
+- [pr-Tensile-1574](sources/prs/Tensile/PR-1574.md) — Async DMA support for Transpose Data Layout (ThreadSeparateGlobalRead support) + small bug fix  `[source-pr]`
+- [pr-Tensile-1577](sources/prs/Tensile/PR-1577.md) — merge staging a779253d into master on Conditional GO from CQE  `[source-pr]`
+- [pr-Tensile-1598](sources/prs/Tensile/PR-1598.md) — Assembly syntax and coverage for DirectToLds has changed  `[source-pr]`
+- [pr-Tensile-1602](sources/prs/Tensile/PR-1602.md) — Unify SplitGlobalRead into ThreadSeparateGlobalRead and small fixes  `[source-pr]`
+- [pr-Tensile-1604](sources/prs/Tensile/PR-1604.md) — Fixed issues with large array sizes  `[source-pr]`
+- [pr-Tensile-1609](sources/prs/Tensile/PR-1609.md) — GFX11: use WMMA instruction to optimize GEMM  `[source-pr]`
+- [pr-Tensile-1620](sources/prs/Tensile/PR-1620.md) — Fixed invalid parameters in dtv_dgemm.yaml  `[source-pr]`
+- [pr-Tensile-1627](sources/prs/Tensile/PR-1627.md) — Use global_load/store for BufferLoad/Store=0 and enable scheduling  `[source-pr]`
+- [pr-Tensile-1628](sources/prs/Tensile/PR-1628.md) — InitAccVgprOpt improvement  `[source-pr]`
+- [pr-Tensile-1630](sources/prs/Tensile/PR-1630.md) — WMMA: fix h beta vectorwidth4 correctness issue  `[source-pr]`
+- [pr-Tensile-1646](sources/prs/Tensile/PR-1646.md) — Fix AssertSummationElementMultiple + GlobalSplitU issues, the issue with InitAccVgprOpt improvement  `[source-pr]`
+- [pr-Tensile-1649](sources/prs/Tensile/PR-1649.md) — vectorStaticRemainder/Divide/DivideAndReminder optimization  `[source-pr]`
+- [pr-Tensile-1656](sources/prs/Tensile/PR-1656.md) — MFMA + LocalSplitU(LSU) support  `[source-pr]`
+- [pr-Tensile-1661](sources/prs/Tensile/PR-1661.md) — Optimizations for TailLoop, complex MFMA, removing extra moves for MIArchVgpr, etc.  `[source-pr]`
+- [pr-Tensile-1662](sources/prs/Tensile/PR-1662.md) — Added asmcap check for MIArchVgpr  `[source-pr]`
+- [pr-Tensile-1664](sources/prs/Tensile/PR-1664.md) — Fix for DGEMM 4x4 MatrixInst mismatch issue  `[source-pr]`
+- [pr-Tensile-1666](sources/prs/Tensile/PR-1666.md) — Support for MFMA + LocalSplitU + DirectToVgprA+B  `[source-pr]`
+- [pr-Tensile-1670](sources/prs/Tensile/PR-1670.md) — Fix for DirectToVgpr + LocalSplitU + FractionalLoad mismatch issue  `[source-pr]`
+- [pr-Tensile-1675](sources/prs/Tensile/PR-1675.md) — Update master  `[source-pr]`
+- [pr-Tensile-1679](sources/prs/Tensile/PR-1679.md) — GlobalSplitU + SingleBuffer improvement + BufferLoad, BufferStore=0 issue fixes  `[source-pr]`
+- [pr-Tensile-1682](sources/prs/Tensile/PR-1682.md) — Fix mismatch issue with StoreCInUnroll + DirectToVgpr + no useInitAccVgprOpt  `[source-pr]`
+- [pr-Tensile-1685](sources/prs/Tensile/PR-1685.md) — DirectToVgpr support for small data types + TN  `[source-pr]`
+- [pr-Tensile-1698](sources/prs/Tensile/PR-1698.md) — Rocm 5.6 merge staging into master  `[source-pr]`
+- [pr-Tensile-1701](sources/prs/Tensile/PR-1701.md) — Move MinKForGSU from globalparameter to BenchmarkCommonParameter to support larger GSU  `[source-pr]`
+- [pr-Tensile-1702](sources/prs/Tensile/PR-1702.md) — DirectToVgpr + TailLoop support, plus small fixes  `[source-pr]`
+- [pr-Tensile-1703](sources/prs/Tensile/PR-1703.md) — Generate TailLoop code in NoLoadLoop to support prefetch for TailLoop, plus more TailLoop optimization for mfma  `[source-pr]`
+- [pr-Tensile-1709](sources/prs/Tensile/PR-1709.md) — Fix for rocblas precheckin test fail due to the previous tail loop optimization  `[source-pr]`
+- [pr-Tensile-173](sources/prs/Tensile/PR-173.md) — Feature refactor vgpr  `[source-pr]`
+- [pr-Tensile-1732](sources/prs/Tensile/PR-1732.md) — Fix boundary check for mirror dims  `[source-pr]`
+- [pr-Tensile-1750](sources/prs/Tensile/PR-1750.md) — Apply InitAccVgprOpt for more cases + bug fix for InitAccVgprOpt + GSU>1  `[source-pr]`
+- [pr-Tensile-1751](sources/prs/Tensile/PR-1751.md) — DirectToLds issue fixes  `[source-pr]`
+- [pr-Tensile-1766](sources/prs/Tensile/PR-1766.md) — Re-enable miLatency opt for MI16x16 and instruction scheduling fixes  `[source-pr]`
+- [pr-Tensile-1770](sources/prs/Tensile/PR-1770.md) — Refactor allowLRVWBforTLUandMI and enable DGEMM TLUB + LRVW=2 for odd N  `[source-pr]`
+- [pr-Tensile-1773](sources/prs/Tensile/PR-1773.md) — Enable dedicated vgpr allocation for local read + pack  `[source-pr]`
+- [pr-Tensile-1782](sources/prs/Tensile/PR-1782.md) — Enable wider local read + pack with v_perm for 8or16bit + UnrollMajorLDS=false  `[source-pr]`
+- [pr-Tensile-1788](sources/prs/Tensile/PR-1788.md) — ROCm 6.0 merge staging into master  `[source-pr]`
+- [pr-Tensile-1795](sources/prs/Tensile/PR-1795.md) — Enable DirectToVgpr + MI4x4, plus skinny MacroTile support  `[source-pr]`
+- [pr-Tensile-1803](sources/prs/Tensile/PR-1803.md) — LdsPad optimization + new parameters for local read related optimizations  `[source-pr]`
+- [pr-Tensile-183](sources/prs/Tensile/PR-183.md) — Use indexed addressing for BufferLoad  `[source-pr]`
+- [pr-Tensile-1859](sources/prs/Tensile/PR-1859.md) — VectorWidthB support, VectorWidth + non SourceSwap support, small bug fix for ClusterLocalRead  `[source-pr]`
+- [pr-Tensile-1864](sources/prs/Tensile/PR-1864.md) — enable VgprForLocalReadPacking + PrefetchLocalRead=1  `[source-pr]`
+- [pr-Tensile-1868](sources/prs/Tensile/PR-1868.md) — Optimize temp vgpr allocation for ClusterLocalRead  `[source-pr]`
+- [pr-Tensile-1872](sources/prs/Tensile/PR-1872.md) — DirectToVgpr + packing support, increase extended test timeout  `[source-pr]`
+- [pr-Tensile-1873](sources/prs/Tensile/PR-1873.md) — Skip DTV, DTL, LSU+MFMA tests for gfx908  `[source-pr]`
+- [pr-Tensile-1875](sources/prs/Tensile/PR-1875.md) — fix mismatch issue with GlobalReadCoalesceGroup  `[source-pr]`
+- [pr-Tensile-188](sources/prs/Tensile/PR-188.md) — Add DirectToLDS option [Initial Checkin]  `[source-pr]`
+- [pr-Tensile-1880](sources/prs/Tensile/PR-1880.md) — Disable InitAccVgprOpt for Stream-K  `[source-pr]`
+- [pr-Tensile-1882](sources/prs/Tensile/PR-1882.md) — Reduce extended test time  `[source-pr]`
+- [pr-Tensile-1890](sources/prs/Tensile/PR-1890.md) — more init code optimizations  `[source-pr]`
+- [pr-Tensile-192](sources/prs/Tensile/PR-192.md) — Fix directtolds sync and numElementsPerBatch div-by-zero bugs  `[source-pr]`
+- [pr-Tensile-1927](sources/prs/Tensile/PR-1927.md) — adds tPrint and reconciles printing options  `[source-pr]`
+- [pr-Tensile-2005](sources/prs/Tensile/PR-2005.md) — Catch accvgpr overflow  `[source-pr]`
+- [pr-Tensile-2013](sources/prs/Tensile/PR-2013.md) — Add gfx1151 support  `[source-pr]`
+- [pr-Tensile-2020](sources/prs/Tensile/PR-2020.md) — Add gfx1151 support  `[source-pr]`
+- [pr-Tensile-2026](sources/prs/Tensile/PR-2026.md) — Adding gfx1151 to 6.2  `[source-pr]`
+- [pr-Tensile-2064](sources/prs/Tensile/PR-2064.md) — Updating release branch for ROCm 6.3  `[source-pr]`
+- [pr-Tensile-2113](sources/prs/Tensile/PR-2113.md) — Adding initial support for gfx950  `[source-pr]`
+- [pr-Tensile-2114](sources/prs/Tensile/PR-2114.md) — Adding initial support for gfx950  `[source-pr]`
+- [pr-Tensile-2154](sources/prs/Tensile/PR-2154.md) — Add gfx1150 and complete gfx1151 support  `[source-pr]`
+- [pr-Tensile-239](sources/prs/Tensile/PR-239.md) — Round up for half vgprs  `[source-pr]`
+- [pr-Tensile-243](sources/prs/Tensile/PR-243.md) — Add fractional global load capability  `[source-pr]`
+- [pr-Tensile-291](sources/prs/Tensile/PR-291.md) — Fix hpa beta  `[source-pr]`
+- [pr-Tensile-293](sources/prs/Tensile/PR-293.md) — Fix half gsu  `[source-pr]`
+- [pr-Tensile-299](sources/prs/Tensile/PR-299.md) — merge with develop branch as of 2018-07-29  `[source-pr]`
+- [pr-Tensile-311](sources/prs/Tensile/PR-311.md) — merge with develop branch as of 2018-08-06  `[source-pr]`
+- [pr-Tensile-330](sources/prs/Tensile/PR-330.md) — Opt store addr5  `[source-pr]`
+- [pr-Tensile-381](sources/prs/Tensile/PR-381.md) — Suppress special loop iter  `[source-pr]`
+- [pr-Tensile-453](sources/prs/Tensile/PR-453.md) — Support matrix D for flat store  `[source-pr]`
+- [pr-Tensile-461](sources/prs/Tensile/PR-461.md) — Opt store addr vgpr  `[source-pr]`
+- [pr-Tensile-759](sources/prs/Tensile/PR-759.md) — Modify tmp vgpr usage to fix fp16 test  `[source-pr]`
+- [pr-Tensile-797](sources/prs/Tensile/PR-797.md) — Fix vgpr aliasing in kernel generator  `[source-pr]`
+- [pr-Tensile-798](sources/prs/Tensile/PR-798.md) — implement bfloat16 rounding into kernel generator  `[source-pr]`
+- [pr-Tensile-940](sources/prs/Tensile/PR-940.md) — Reuse C-tile VGPR in unrolled loop  `[source-pr]`
+- [pr-Tensile-972](sources/prs/Tensile/PR-972.md) — re-factory Tensile to support all Matrix Instruction  `[source-pr]`
+- [pr-Tensile-981](sources/prs/Tensile/PR-981.md) — Reduce VGPR count for MI kernels  `[source-pr]`
+- [pr-aiter-1297](sources/prs/aiter/PR-1297.md) — Fix how to update accumulator for dot_scaled  `[source-pr]`
+- [pr-aiter-1602](sources/prs/aiter/PR-1602.md) — [TRITON] Move triton_tests into respective folders  `[source-pr]`
+- [pr-aiter-1816](sources/prs/aiter/PR-1816.md) — Optimize the performance of quick_allreduce  `[source-pr]`
+- [pr-aiter-2050](sources/prs/aiter/PR-2050.md) — [TRITON] Add Model Benchmarking Tool  `[source-pr]`
+- [pr-aiter-2136](sources/prs/aiter/PR-2136.md) — add mhc_pre hip kernel (mhc_pre_gemm_sqrsum, mhc_pre_big_fuse)  `[source-pr]`
+- [pr-aiter-2557](sources/prs/aiter/PR-2557.md) — Avoid an AttributeError in bench_moe_align_block_size.py  `[source-pr]`
+- [pr-aiter-2701](sources/prs/aiter/PR-2701.md) — [OPUS] Optimize opus.hpp compile time: 70% reduction  `[source-pr]`
+- [pr-aiter-2945](sources/prs/aiter/PR-2945.md) — [OPUS]bf16 opus gemm support  `[source-pr]`
+- [pr-aiter-3336](sources/prs/aiter/PR-3336.md) — [csrc/opus] add synchronous fallback to _async_load for non-buffer-to-LDS archs  `[source-pr]`
+- [pr-aiter-616](sources/prs/aiter/PR-616.md) — xiangxli merge seqlen and qk ratio by tensor view transform  `[source-pr]`
+- [pr-aiter-659](sources/prs/aiter/PR-659.md) — slice acc into two parts to reduce vgpr usage  `[source-pr]`
+- [pr-aiter-680](sources/prs/aiter/PR-680.md) — [TRITON]: Add missing GEMM benchmarks  `[source-pr]`
+- [pr-aiter-720](sources/prs/aiter/PR-720.md) — [TRITON]: MLA and Lean Attention updates  `[source-pr]`
+- [pr-aiter-744](sources/prs/aiter/PR-744.md) — [TRITON]: LeanAttention implement loop unrolling to reduce VGPR usage  `[source-pr]`
+- [pr-aiter-957](sources/prs/aiter/PR-957.md) — [TRITON]: Gluon Blockscale a8w8 GEMM Improvements  `[source-pr]`
+- [pr-composable_kernel-108](sources/prs/composable_kernel/PR-108.md) — Int8 qunatization gemm xdl  `[source-pr]`
+- [pr-composable_kernel-1135](sources/prs/composable_kernel/PR-1135.md) — [GEMM] Optimization for MI200/300.  `[source-pr]`
+- [pr-composable_kernel-128](sources/prs/composable_kernel/PR-128.md) — Gemm+Reduce Fusion  `[source-pr]`
+- [pr-composable_kernel-1344](sources/prs/composable_kernel/PR-1344.md) — Hacking  ck_tile fmha Dropout facility  `[source-pr]`
+- [pr-composable_kernel-1362](sources/prs/composable_kernel/PR-1362.md) — Merging the gfx12 code into public repo.  `[source-pr]`
+- [pr-composable_kernel-1482](sources/prs/composable_kernel/PR-1482.md) — [CK_TILE] float -> bf16 inline asm rtn  `[source-pr]`
+- [pr-composable_kernel-152](sources/prs/composable_kernel/PR-152.md) — Improve Reduction kernel api  `[source-pr]`
+- [pr-composable_kernel-156](sources/prs/composable_kernel/PR-156.md) — Batched gemm and reduction  `[source-pr]`
+- [pr-composable_kernel-1756](sources/prs/composable_kernel/PR-1756.md) — CK-Tile Grouped GEMM refactor and post PR fixes  `[source-pr]`
+- [pr-composable_kernel-1810](sources/prs/composable_kernel/PR-1810.md) — Update for fmha_fwd qs_ks_vs pipeline  `[source-pr]`
+- [pr-composable_kernel-1906](sources/prs/composable_kernel/PR-1906.md) — [CK TILE] Block universal gemm lds<->vgpr optimizations  `[source-pr]`
+- [pr-composable_kernel-1913](sources/prs/composable_kernel/PR-1913.md) — [BlockScale GEMM] FP8 Blockscale GEMM optimization and ckProfiler  `[source-pr]`
+- [pr-composable_kernel-1933](sources/prs/composable_kernel/PR-1933.md) — Revert '[BlockScale GEMM] FP8 Blockscale GEMM optimization and ckProf…  `[source-pr]`
+- [pr-composable_kernel-1941](sources/prs/composable_kernel/PR-1941.md) — Ck tile/complete k prefetch  `[source-pr]`
+- [pr-composable_kernel-209](sources/prs/composable_kernel/PR-209.md) — Gemm reduce max  `[source-pr]`
+- [pr-composable_kernel-2096](sources/prs/composable_kernel/PR-2096.md) — DeviceGemm_Wmma_CShuffleV3 with BlockGemmPipelineVersion::v3  `[source-pr]`
+- [pr-composable_kernel-213](sources/prs/composable_kernel/PR-213.md) — Update to gemm_reduce and batched_gemm_reduce  `[source-pr]`
+- [pr-composable_kernel-235](sources/prs/composable_kernel/PR-235.md) — Refactor block to C tile map  `[source-pr]`
+- [pr-composable_kernel-2436](sources/prs/composable_kernel/PR-2436.md) — [CK_TILE] Use read_tr in universal gemm  `[source-pr]`
+- [pr-composable_kernel-2443](sources/prs/composable_kernel/PR-2443.md) — [CK_TILE] Enable printing more structures in CK-Tile  `[source-pr]`
+- [pr-composable_kernel-2588](sources/prs/composable_kernel/PR-2588.md) — Introduce tree reduction for BlockReduce2dCrossWarpSync  `[source-pr]`
+- [pr-composable_kernel-261](sources/prs/composable_kernel/PR-261.md) — gemm + layernorm  `[source-pr]`
+- [pr-composable_kernel-2669](sources/prs/composable_kernel/PR-2669.md) — [CK_TILE] Allow switching between SGPR/VGPR get_warp_id() return values  `[source-pr]`
+- [pr-composable_kernel-2679](sources/prs/composable_kernel/PR-2679.md) — Support transposed C tile in Aquant  `[source-pr]`
+- [pr-composable_kernel-2715](sources/prs/composable_kernel/PR-2715.md) — [CK_TILE] FMHA avoid unnecessary vmcnt0  `[source-pr]`
+- [pr-composable_kernel-272](sources/prs/composable_kernel/PR-272.md) — Gemm + bias + relu + add + layernorm  `[source-pr]`
+- [pr-composable_kernel-2722](sources/prs/composable_kernel/PR-2722.md) — Extend XDL kernel to Support RDNA3/4 - Part 2  `[source-pr]`
+- [pr-composable_kernel-285](sources/prs/composable_kernel/PR-285.md) — external api for gemm + layernorm  `[source-pr]`
+- [pr-composable_kernel-2867](sources/prs/composable_kernel/PR-2867.md) — Conv:TF32: add more instances - 1  `[source-pr]`
+- [pr-composable_kernel-2878](sources/prs/composable_kernel/PR-2878.md) — [CK-Tile] Add the API to load SGPR with any byte size  `[source-pr]`
+- [pr-composable_kernel-2897](sources/prs/composable_kernel/PR-2897.md) — [CK TILE GEMM] Support Aquant GEMM with transposeC and preshuffle  `[source-pr]`
+- [pr-composable_kernel-2904](sources/prs/composable_kernel/PR-2904.md) — Revert '[CK-Tile] Add the API to load SGPR '  `[source-pr]`
+- [pr-composable_kernel-2913](sources/prs/composable_kernel/PR-2913.md) — Fix the compilation error of #2878  `[source-pr]`
+- [pr-composable_kernel-2989](sources/prs/composable_kernel/PR-2989.md) — WMMA gemm_add_relu_add_layernorm  `[source-pr]`
+- [pr-composable_kernel-3027](sources/prs/composable_kernel/PR-3027.md) — Wave Tile Transfer supporting global load with transpose  `[source-pr]`
+- [pr-composable_kernel-3038](sources/prs/composable_kernel/PR-3038.md) — Add CK Tile Tutorials Folder with GEMM and COPY Kernel  `[source-pr]`
+- [pr-composable_kernel-3073](sources/prs/composable_kernel/PR-3073.md) — Extend support for ak1 / bk1 WMMA  `[source-pr]`
+- [pr-composable_kernel-3098](sources/prs/composable_kernel/PR-3098.md) — Ck moe mxfp4 blockm32  `[source-pr]`
+- [pr-composable_kernel-31](sources/prs/composable_kernel/PR-31.md) — [MIOpen Downstream] Dynamic Reduction PR  `[source-pr]`
+- [pr-composable_kernel-3145](sources/prs/composable_kernel/PR-3145.md) — Wmma support for gemm_reduce  `[source-pr]`
+- [pr-composable_kernel-3301](sources/prs/composable_kernel/PR-3301.md) — [CK_TILE] Port hw independent changes from internal repo to develop branch  `[source-pr]`
+- [pr-composable_kernel-3315](sources/prs/composable_kernel/PR-3315.md) — Wmma support for gemm_blockscale_wp  `[source-pr]`
+- [pr-composable_kernel-3316](sources/prs/composable_kernel/PR-3316.md) — Wmma support for gemm_bias_add_reduce  `[source-pr]`
+- [pr-composable_kernel-3332](sources/prs/composable_kernel/PR-3332.md) — WMMA support for batched_gemm_reduce  `[source-pr]`
+- [pr-composable_kernel-34](sources/prs/composable_kernel/PR-34.md) — [MIOpen Downstream] Fix Reduction Kernel  `[source-pr]`
+- [pr-composable_kernel-3512](sources/prs/composable_kernel/PR-3512.md) — [CK TILE] Refactor function amd_buffer_load_invalid_element_return_zero  `[source-pr]`
+- [pr-composable_kernel-3537](sources/prs/composable_kernel/PR-3537.md) — Padding support for wave transfer  `[source-pr]`
+- [pr-composable_kernel-3578](sources/prs/composable_kernel/PR-3578.md) — Multi AB support for wave transfer  `[source-pr]`
+- [pr-composable_kernel-381](sources/prs/composable_kernel/PR-381.md) — Add pipeline v1/v2 selector, add more instances  `[source-pr]`
+- [pr-composable_kernel-395](sources/prs/composable_kernel/PR-395.md) — Fused attention instances & padding tests  `[source-pr]`
+- [pr-composable_kernel-41](sources/prs/composable_kernel/PR-41.md) — FP16 data in-register transpose  `[source-pr]`
+- [pr-composable_kernel-48](sources/prs/composable_kernel/PR-48.md) — ckProfiler and device-level XDL GEMM operator  `[source-pr]`
+- [pr-composable_kernel-49](sources/prs/composable_kernel/PR-49.md) — v5r1 fusion kernels for inference  `[source-pr]`
+- [pr-composable_kernel-51](sources/prs/composable_kernel/PR-51.md) — fixed multiple definition issue of bfp16/fp32 conversion function when building ckProfiler  `[source-pr]`
+- [pr-composable_kernel-541](sources/prs/composable_kernel/PR-541.md) — [Navi3x-LWPCK-545] Block-wise GEMM + Real GEMM_WMMA_FP16  `[source-pr]`
+- [pr-composable_kernel-746](sources/prs/composable_kernel/PR-746.md) — [Navi3x] Add fp16/int8 wmma conv forward instances  `[source-pr]`
+- [pr-composable_kernel-79](sources/prs/composable_kernel/PR-79.md) — Batched GEMM for fp16  `[source-pr]`
+- [pr-composable_kernel-82](sources/prs/composable_kernel/PR-82.md) — Reduction in Composable Kernel  `[source-pr]`
+- [pr-composable_kernel-826](sources/prs/composable_kernel/PR-826.md) — Implement DPP8-based GEMM for Navi21  `[source-pr]`
+- [pr-composable_kernel-827](sources/prs/composable_kernel/PR-827.md) — fpAintB_gemm implementation  `[source-pr]`
+- [pr-composable_kernel-933](sources/prs/composable_kernel/PR-933.md) — Add fp8 @ bf8 gemm support and example  `[source-pr]`
+- [pr-flash-attention-179](sources/prs/flash-attention/PR-179.md) — [CK_TILE] Fix NaN for FMHA BWD When seq_q=0  `[source-pr]`
+- [pr-rocBLAS-1403](sources/prs/rocBLAS/PR-1403.md) — Hotfix: tune aquavanjaram942X BBS+HHS NN datatype  `[source-pr]`
+- [pr-triton-450](sources/prs/triton/PR-450.md) — [tool] Added a script to print occupancy info  `[source-pr]`
+- [pr-triton-635](sources/prs/triton/PR-635.md) — Move utility tools from triton-mlir to main_perf branch  `[source-pr]`
+- [pr-triton-733](sources/prs/triton/PR-733.md) — rmsnorm backward optimizations  `[source-pr]`
+- [pr-triton-775](sources/prs/triton/PR-775.md) — plot_layout.py Refactoring  `[source-pr]`
+
 ## wave-reduce
 
+- [pr-FlyDSL-113](sources/prs/FlyDSL/PR-113.md) — [MoE] Refactor: extract MoE reduction kernel into standalone module with dedicated test  `[source-pr]`
+- [pr-FlyDSL-126](sources/prs/FlyDSL/PR-126.md) — [Test] Test both atomic and reduce modes of MoE by default  `[source-pr]`
+- [pr-FlyDSL-129](sources/prs/FlyDSL/PR-129.md) — [MoE] simplify moe reduce kernel & add zero buffer flag  `[source-pr]`
+- [pr-FlyDSL-131](sources/prs/FlyDSL/PR-131.md) — Fix test coverage  `[source-pr]`
+- [pr-FlyDSL-143](sources/prs/FlyDSL/PR-143.md) — W4a16 bf16 fp8 bf16 moe  `[source-pr]`
+- [pr-FlyDSL-17](sources/prs/FlyDSL/PR-17.md) — code style  `[source-pr]`
+- [pr-FlyDSL-19](sources/prs/FlyDSL/PR-19.md) — improve softmax/rmsnorm/layernorm performance  `[source-pr]`
+- [pr-FlyDSL-191](sources/prs/FlyDSL/PR-191.md) — Refine code  `[source-pr]`
+- [pr-FlyDSL-197](sources/prs/FlyDSL/PR-197.md) — clean codes and wrap numerics in bufferops  `[source-pr]`
+- [pr-FlyDSL-21](sources/prs/FlyDSL/PR-21.md) — Felix/dev  `[source-pr]`
+- [pr-FlyDSL-22](sources/prs/FlyDSL/PR-22.md) — Felix/dev  `[source-pr]`
+- [pr-FlyDSL-24](sources/prs/FlyDSL/PR-24.md) — Proj rename  `[source-pr]`
+- [pr-FlyDSL-250](sources/prs/FlyDSL/PR-250.md) — 【2/N】add support wmma kernels for RDNA4(GFX1201)  `[source-pr]`
+- [pr-FlyDSL-262](sources/prs/FlyDSL/PR-262.md) — feat: support explicit kernel name in @flyc.kernel for profiler visib…  `[source-pr]`
+- [pr-FlyDSL-270](sources/prs/FlyDSL/PR-270.md) — Refine kernel code  `[source-pr]`
+- [pr-FlyDSL-278](sources/prs/FlyDSL/PR-278.md) — [Compiler][Kernel][MI450]Rebase gfx1250 WMMA/mcast/mxfp4 support onto main  `[source-pr]`
+- [pr-FlyDSL-32](sources/prs/FlyDSL/PR-32.md) — Dev/gemm refactor  `[source-pr]`
+- [pr-FlyDSL-326](sources/prs/FlyDSL/PR-326.md) — support allreduce  `[source-pr]`
+- [pr-FlyDSL-33](sources/prs/FlyDSL/PR-33.md) — modify cpu golden data to pytorch golden data, fix v_cvt_pk_bf16_f32 issue and test more case compare to aiter ops  `[source-pr]`
+- [pr-FlyDSL-340](sources/prs/FlyDSL/PR-340.md) — [gfx1250] optimize FP4 GEMM for large tile 256x256  `[source-pr]`
+- [pr-FlyDSL-346](sources/prs/FlyDSL/PR-346.md) — [FLYDSL]: if dispatch dynamic tests refactor  `[source-pr]`
+- [pr-FlyDSL-360](sources/prs/FlyDSL/PR-360.md) — [Perf] Vectorize MoE reduce kernel via layout API for f16/bf16  `[source-pr]`
+- [pr-FlyDSL-37](sources/prs/FlyDSL/PR-37.md) — Dev/int4 moe  `[source-pr]`
+- [pr-FlyDSL-370](sources/prs/FlyDSL/PR-370.md) — Pr/a16wi4 group  `[source-pr]`
+- [pr-FlyDSL-388](sources/prs/FlyDSL/PR-388.md) — [Perf] Port mixed_moe kernel optimizations for stage1/stage2  `[source-pr]`
+- [pr-FlyDSL-426](sources/prs/FlyDSL/PR-426.md) — Add TopK Gating Softmax Kernel  `[source-pr]`
+- [pr-FlyDSL-447](sources/prs/FlyDSL/PR-447.md) — Port kernels internal types except moe  `[source-pr]`
+- [pr-FlyDSL-448](sources/prs/FlyDSL/PR-448.md) — Reduce redundant FlyDSL numeric wrappers  `[source-pr]`
+- [pr-FlyDSL-450](sources/prs/FlyDSL/PR-450.md) — Refactor MLA decode kernel: unify types and simplify MLIR calls  `[source-pr]`
+- [pr-FlyDSL-454](sources/prs/FlyDSL/PR-454.md) — feat(pa): add persistent FP8 decode path  `[source-pr]`
+- [pr-FlyDSL-462](sources/prs/FlyDSL/PR-462.md) — clean fa and tune mla slightly  `[source-pr]`
+- [pr-FlyDSL-465](sources/prs/FlyDSL/PR-465.md) — some optimization about smoothquant moe  `[source-pr]`
+- [pr-FlyDSL-483](sources/prs/FlyDSL/PR-483.md) — [gfx1250] MoE 2-stage GEMM: MXScale rework + TDM K-loop hoist + build  `[source-pr]`
+- [pr-FlyDSL-484](sources/prs/FlyDSL/PR-484.md) — [gfx1250][tdm] Add K-loop hoist descriptor helpers and modify build script  `[source-pr]`
+- [pr-FlyDSL-518](sources/prs/FlyDSL/PR-518.md) — [Refactor] Refactor the allreduce kernel by high-level FlyDSL APIs  `[source-pr]`
+- [pr-FlyDSL-541](sources/prs/FlyDSL/PR-541.md) — [Refactor] Migrate kernels from SmemAllocator to SharedAllocator  `[source-pr]`
+- [pr-FlyDSL-56](sources/prs/FlyDSL/PR-56.md) — change bench config  `[source-pr]`
+- [pr-FlyDSL-59](sources/prs/FlyDSL/PR-59.md) — fix dynamic m  `[source-pr]`
+- [pr-FlyDSL-74](sources/prs/FlyDSL/PR-74.md) — [MoE] Support non-atomic reduce path for Stage2 large prefill workloads  `[source-pr]`
+- [pr-FlyDSL-77](sources/prs/FlyDSL/PR-77.md) — [MoE] Optimize  GEMM Stage2 with vec8 stores for reduce-based epilogue  `[source-pr]`
+- [pr-FlyDSL-79](sources/prs/FlyDSL/PR-79.md) — [FP4] preshuffle gemm a8w4&a4w4 moe gemm a8w4  `[source-pr]`
+- [pr-FlyDSL-82](sources/prs/FlyDSL/PR-82.md) — add reduce param  `[source-pr]`
+- [pr-FlyDSL-85](sources/prs/FlyDSL/PR-85.md) — [MoE] Optimize reduction by converting model_dim loop to 2D grid dispatch in decode scenarios  `[source-pr]`
+- [pr-FlyDSL-92](sources/prs/FlyDSL/PR-92.md) — [Bug] Fix missing stream_ptr parameter in MoeGemm2ReduceWrapper  `[source-pr]`
+- [pr-Tensile-1071](sources/prs/Tensile/PR-1071.md) — Improve serialization performance.  `[source-pr]`
+- [pr-Tensile-1085](sources/prs/Tensile/PR-1085.md) — Enhance csv exporter and speed up librarylogic analyzing  `[source-pr]`
+- [pr-Tensile-1111](sources/prs/Tensile/PR-1111.md) — Reduce stagger_u extended test sizes  `[source-pr]`
+- [pr-Tensile-1129](sources/prs/Tensile/PR-1129.md) — MatrixInstruction parameter alternative format  `[source-pr]`
+- [pr-Tensile-1132](sources/prs/Tensile/PR-1132.md) — BF16/FP16 HPA GSU with per GSU temp buffer  `[source-pr]`
+- [pr-Tensile-114](sources/prs/Tensile/PR-114.md) — V_pk_fma  `[source-pr]`
+- [pr-Tensile-1144](sources/prs/Tensile/PR-1144.md) — Refactor runtime contraction input type checks  `[source-pr]`
+- [pr-Tensile-1196](sources/prs/Tensile/PR-1196.md) — add default parameter to reduce kernel combination  `[source-pr]`
+- [pr-Tensile-1213](sources/prs/Tensile/PR-1213.md) — PersistentKernel Refine: Support PKn1, EPS, optimize LW-vmcnt, and sMagicDiv2  `[source-pr]`
+- [pr-Tensile-1214](sources/prs/Tensile/PR-1214.md) — Instruction scheduling to reduce LDS by half in TN problems  `[source-pr]`
+- [pr-Tensile-1242](sources/prs/Tensile/PR-1242.md) — Use pytest fixtures to setup integration test logic yamls  `[source-pr]`
+- [pr-Tensile-1258](sources/prs/Tensile/PR-1258.md) — Tuning automation fixes and improvements  `[source-pr]`
+- [pr-Tensile-1351](sources/prs/Tensile/PR-1351.md) — Instruction Scheduling  `[source-pr]`
+- [pr-Tensile-1353](sources/prs/Tensile/PR-1353.md) — Reduce extended test count for RunGEMMKernelTests  `[source-pr]`
+- [pr-Tensile-1361](sources/prs/Tensile/PR-1361.md) — Aldebaran dgemm misc optimization  `[source-pr]`
+- [pr-Tensile-1435](sources/prs/Tensile/PR-1435.md) — Reduced max ram usage and optimized runtime of TensileCreateLibraries  `[source-pr]`
+- [pr-Tensile-1471](sources/prs/Tensile/PR-1471.md) — Optimize MessagePackLoadLibraryFile  `[source-pr]`
+- [pr-Tensile-1477](sources/prs/Tensile/PR-1477.md) — Add option to write different architectures to different TensileLibrary files  `[source-pr]`
+- [pr-Tensile-1519](sources/prs/Tensile/PR-1519.md) — Add DirectToLds tests for dgemm (with mfma)  `[source-pr]`
+- [pr-Tensile-1521](sources/prs/Tensile/PR-1521.md) — Support Tensile for gfx11 series platform  `[source-pr]`
+- [pr-Tensile-1575](sources/prs/Tensile/PR-1575.md) — hotfix: use hipModuleLoadData instead of hipModuleLoad  `[source-pr]`
+- [pr-Tensile-1605](sources/prs/Tensile/PR-1605.md) — Serialization changes to reduce library size  `[source-pr]`
+- [pr-Tensile-1613](sources/prs/Tensile/PR-1613.md) — type cast localMemory to a pointer to COMPUTE_DATA_TYPE in LDS to avoid precision loss and modify the code fragment to compute lldsNumElementsReduction  `[source-pr]`
+- [pr-Tensile-1619](sources/prs/Tensile/PR-1619.md) — The assembly kernel with disabling MFMA supports localsplitU for HGEMM+HPA  `[source-pr]`
+- [pr-Tensile-1691](sources/prs/Tensile/PR-1691.md) — Reduce max sgpr usage by improving temporary register re-use  `[source-pr]`
+- [pr-Tensile-1702](sources/prs/Tensile/PR-1702.md) — DirectToVgpr + TailLoop support, plus small fixes  `[source-pr]`
+- [pr-Tensile-1796](sources/prs/Tensile/PR-1796.md) — postGSU code optimization  `[source-pr]`
+- [pr-Tensile-1826](sources/prs/Tensile/PR-1826.md) — Pre-apply offsets for strided batch kernels  `[source-pr]`
+- [pr-Tensile-183](sources/prs/Tensile/PR-183.md) — Use indexed addressing for BufferLoad  `[source-pr]`
+- [pr-Tensile-1840](sources/prs/Tensile/PR-1840.md) — Fix LLVM crash issue  `[source-pr]`
+- [pr-Tensile-1872](sources/prs/Tensile/PR-1872.md) — DirectToVgpr + packing support, increase extended test timeout  `[source-pr]`
+- [pr-Tensile-1882](sources/prs/Tensile/PR-1882.md) — Reduce extended test time  `[source-pr]`
+- [pr-Tensile-1900](sources/prs/Tensile/PR-1900.md) — New dynamic mode  `[source-pr]`
+- [pr-Tensile-1919](sources/prs/Tensile/PR-1919.md) — Default value for long jump positive and negative  `[source-pr]`
+- [pr-Tensile-1937](sources/prs/Tensile/PR-1937.md) — Replace YAML operations with C libyaml backend  `[source-pr]`
+- [pr-Tensile-1966](sources/prs/Tensile/PR-1966.md) — Filter kernels with build errors  `[source-pr]`
+- [pr-Tensile-1983](sources/prs/Tensile/PR-1983.md) — Add kernel helper write fxns  `[source-pr]`
+- [pr-Tensile-2007](sources/prs/Tensile/PR-2007.md) — Add logic to remove temporary build artifacts  `[source-pr]`
+- [pr-Tensile-2014](sources/prs/Tensile/PR-2014.md) — Linearize asm register search  `[source-pr]`
+- [pr-Tensile-2019](sources/prs/Tensile/PR-2019.md) — Cache asm capabilities for reuse  `[source-pr]`
+- [pr-Tensile-2041](sources/prs/Tensile/PR-2041.md) — Guard against inconsistent state  `[source-pr]`
+- [pr-Tensile-291](sources/prs/Tensile/PR-291.md) — Fix hpa beta  `[source-pr]`
+- [pr-Tensile-293](sources/prs/Tensile/PR-293.md) — Fix half gsu  `[source-pr]`
+- [pr-Tensile-299](sources/prs/Tensile/PR-299.md) — merge with develop branch as of 2018-07-29  `[source-pr]`
+- [pr-Tensile-381](sources/prs/Tensile/PR-381.md) — Suppress special loop iter  `[source-pr]`
+- [pr-Tensile-401](sources/prs/Tensile/PR-401.md) — reduce igemm pre-checkin time to 8 min  `[source-pr]`
+- [pr-Tensile-415](sources/prs/Tensile/PR-415.md) — move i8 nightly tests to special  `[source-pr]`
+- [pr-Tensile-448](sources/prs/Tensile/PR-448.md) — PrintLevel 2 for write_assemblyFilename  `[source-pr]`
+- [pr-Tensile-449](sources/prs/Tensile/PR-449.md) — PrintLevel 2 for write_assemblyFilename  `[source-pr]`
+- [pr-Tensile-488](sources/prs/Tensile/PR-488.md) — shorten filename length by removing most leading zeros  `[source-pr]`
+- [pr-Tensile-626](sources/prs/Tensile/PR-626.md) — Merge platform fixes  `[source-pr]`
+- [pr-Tensile-648](sources/prs/Tensile/PR-648.md) — Use cwd to remove replicated path and reduce command line len  `[source-pr]`
+- [pr-Tensile-681](sources/prs/Tensile/PR-681.md) — New client validation stride  `[source-pr]`
+- [pr-Tensile-699](sources/prs/Tensile/PR-699.md) — Reduce the amount of pre_checkin tests (c/zgemm)  `[source-pr]`
+- [pr-Tensile-790](sources/prs/Tensile/PR-790.md) — rename active replacement kernels due to commit 3227984  `[source-pr]`
+- [pr-Tensile-865](sources/prs/Tensile/PR-865.md) — Reduce tuning options  `[source-pr]`
+- [pr-Tensile-900](sources/prs/Tensile/PR-900.md) — remove sgemm_transposeLDS.yaml for now; taking way toooo long  `[source-pr]`
+- [pr-Tensile-908](sources/prs/Tensile/PR-908.md) — Including entire path to YAML file in test name.  `[source-pr]`
+- [pr-Tensile-911](sources/prs/Tensile/PR-911.md) — Shorten convolution_config tests  `[source-pr]`
+- [pr-Tensile-940](sources/prs/Tensile/PR-940.md) — Reuse C-tile VGPR in unrolled loop  `[source-pr]`
+- [pr-Tensile-981](sources/prs/Tensile/PR-981.md) — Reduce VGPR count for MI kernels  `[source-pr]`
+- [pr-Tensile-987](sources/prs/Tensile/PR-987.md) — Tensile create libraries custom command  `[source-pr]`
+- [pr-aiter-1008](sources/prs/aiter/PR-1008.md) — Topksoftmax_asm  `[source-pr]`
+- [pr-aiter-1024](sources/prs/aiter/PR-1024.md) — 085 aiter topk  `[source-pr]`
+- [pr-aiter-1057](sources/prs/aiter/PR-1057.md) — fix mla metadata&reduce perf  `[source-pr]`
+- [pr-aiter-1101](sources/prs/aiter/PR-1101.md) — topk further optimization for group topk case  `[source-pr]`
+- [pr-aiter-1148](sources/prs/aiter/PR-1148.md) — Catchall PR for all 355_wip related changes  `[source-pr]`
+- [pr-aiter-1159](sources/prs/aiter/PR-1159.md) — not do hipify by default  `[source-pr]`
+- [pr-aiter-1191](sources/prs/aiter/PR-1191.md) — [bug] fix qr when variable input  `[source-pr]`
+- [pr-aiter-12](sources/prs/aiter/PR-12.md) — add allreduce unit test  `[source-pr]`
+- [pr-aiter-1207](sources/prs/aiter/PR-1207.md) — [fea]: custom all gather  `[source-pr]`
+- [pr-aiter-1217](sources/prs/aiter/PR-1217.md) — [Triton] [355_wip] DS 355_wip fused_shared_expert  `[source-pr]`
+- [pr-aiter-1218](sources/prs/aiter/PR-1218.md) — [Triton] [355_wip_triton] DS 355_wip fused_shared_expert  `[source-pr]`
+- [pr-aiter-122](sources/prs/aiter/PR-122.md) — mdf_setup  `[source-pr]`
+- [pr-aiter-1233](sources/prs/aiter/PR-1233.md) — Mla splitkv enhance split alg inte  `[source-pr]`
+- [pr-aiter-1263](sources/prs/aiter/PR-1263.md) — Refine ca  `[source-pr]`
+- [pr-aiter-1283](sources/prs/aiter/PR-1283.md) — [TRITON] GEMM kernels nomenclature changes  `[source-pr]`
+- [pr-aiter-1287](sources/prs/aiter/PR-1287.md) — [Update] update dev/perf branch to main branch commit 02b6c7f419  `[source-pr]`
+- [pr-aiter-1290](sources/prs/aiter/PR-1290.md) — Ar rms  `[source-pr]`
+- [pr-aiter-1293](sources/prs/aiter/PR-1293.md) — [TRITON] Batched GEMM kernels nomenclature changes  `[source-pr]`
+- [pr-aiter-1295](sources/prs/aiter/PR-1295.md) — [TRITON]  Apply config-aware naming (kernel_repr) to attention kernels  `[source-pr]`
+- [pr-aiter-1310](sources/prs/aiter/PR-1310.md) — [GEMM][Config] add a8w8 block scale tuned config for deepseek-v3  `[source-pr]`
+- [pr-aiter-1317](sources/prs/aiter/PR-1317.md) — using standalone pybind  `[source-pr]`
+- [pr-aiter-1326](sources/prs/aiter/PR-1326.md) — [TRITON] Simplify and optimize triton_kernels moe code and move it into aiter  `[source-pr]`
+- [pr-aiter-1328](sources/prs/aiter/PR-1328.md) — [Triton] DS a16w8 GEMM and fused reduce_rms_fp8_group_quant  `[source-pr]`
+- [pr-aiter-1331](sources/prs/aiter/PR-1331.md) — [Triton] add gemm tune check utility function  `[source-pr]`
+- [pr-aiter-1335](sources/prs/aiter/PR-1335.md) — [fix]: car 6 rank coredump  `[source-pr]`
+- [pr-aiter-1338](sources/prs/aiter/PR-1338.md) — Improve Memory Usage in MLA  `[source-pr]`
+- [pr-aiter-1341](sources/prs/aiter/PR-1341.md) — [MI35X]cktile moe a16w4 support  `[source-pr]`
+- [pr-aiter-1353](sources/prs/aiter/PR-1353.md) — Support distributed_init_method and DP in init_distributed  `[source-pr]`
+- [pr-aiter-1356](sources/prs/aiter/PR-1356.md) — [TRITON] Add MoE GEMM a8w8 kernel  `[source-pr]`
+- [pr-aiter-1371](sources/prs/aiter/PR-1371.md) — [Triton] DS FP4 triton fusion  `[source-pr]`
+- [pr-aiter-1376](sources/prs/aiter/PR-1376.md) — [fix]: add ar switch  `[source-pr]`
+- [pr-aiter-1383](sources/prs/aiter/PR-1383.md) — Add paged attention decode with Gluon JIT/AOT for AMD CDNA3  `[source-pr]`
+- [pr-aiter-1401](sources/prs/aiter/PR-1401.md) — Ar rms new interface  `[source-pr]`
+- [pr-aiter-1412](sources/prs/aiter/PR-1412.md) — [fix]: prebuild gen so  `[source-pr]`
+- [pr-aiter-1422](sources/prs/aiter/PR-1422.md) — [TRITON] FP8 MQA optimizations  `[source-pr]`
+- [pr-aiter-1447](sources/prs/aiter/PR-1447.md) — Merge trtllm fusion to branch `xyt/dev`  `[source-pr]`
+- [pr-aiter-1456](sources/prs/aiter/PR-1456.md) — add gen_fake for 4 gemm operators  `[source-pr]`
+- [pr-aiter-1457](sources/prs/aiter/PR-1457.md) — [fea]: reduce_scatter  `[source-pr]`
+- [pr-aiter-1464](sources/prs/aiter/PR-1464.md) — Initial development of triton based communication primitives using Iris  `[source-pr]`
+- [pr-aiter-1483](sources/prs/aiter/PR-1483.md) — [TRITON] Add a8w8 blockscale MoE  `[source-pr]`
+- [pr-aiter-1487](sources/prs/aiter/PR-1487.md) — [fix]: fused_ar_rms acc error  `[source-pr]`
+- [pr-aiter-1502](sources/prs/aiter/PR-1502.md) — [fix] correct return type of fused arnorm fake impl  `[source-pr]`
+- [pr-aiter-1507](sources/prs/aiter/PR-1507.md) — [fix]: local_device_load_rmsnorm acc error  `[source-pr]`
+- [pr-aiter-1512](sources/prs/aiter/PR-1512.md) — Optimize topk_per_row for low-range logits (10LSBits) with one-pass kernel  `[source-pr]`
+- [pr-aiter-1513](sources/prs/aiter/PR-1513.md) — Support PA persistent mode in AITER  `[source-pr]`
+- [pr-aiter-1541](sources/prs/aiter/PR-1541.md) — Add fused bias support for GMM and bias‑gradient/accumulate support for persistent TGMM  `[source-pr]`
+- [pr-aiter-1548](sources/prs/aiter/PR-1548.md) — [update]: set ar use_new value true  `[source-pr]`
+- [pr-aiter-1562](sources/prs/aiter/PR-1562.md) — Enhance MLA Reduce for Prefill  `[source-pr]`
+- [pr-aiter-1576](sources/prs/aiter/PR-1576.md) — [TRITON] Add attention sink support to Triton MHA kernels  `[source-pr]`
+- [pr-aiter-1587](sources/prs/aiter/PR-1587.md) — [TRITON] Standardize get_config for GEMM kernels and have a unified format for their configs  `[source-pr]`
+- [pr-aiter-1592](sources/prs/aiter/PR-1592.md) — [fix]: dispatch logic of ar_1stage  `[source-pr]`
+- [pr-aiter-1601](sources/prs/aiter/PR-1601.md) — Revert 'Initial development of triton based communication primitives using Iris'  `[source-pr]`
+- [pr-aiter-1607](sources/prs/aiter/PR-1607.md) — Initial development of triton based communication primitives using Iris - try 2  `[source-pr]`
+- [pr-aiter-1616](sources/prs/aiter/PR-1616.md) — [fix]: Resolve perf regression of fused_ar_rms on MI300 and MI355  `[source-pr]`
+- [pr-aiter-1626](sources/prs/aiter/PR-1626.md) — Reduce #splits and assign workload more evenly for MLA cases nhead=128 and mtp>=1  `[source-pr]`
+- [pr-aiter-1633](sources/prs/aiter/PR-1633.md) — add sinks and sliding window  `[source-pr]`
+- [pr-aiter-1643](sources/prs/aiter/PR-1643.md) — [fix]: reduce_scatter rollback  `[source-pr]`
+- [pr-aiter-1655](sources/prs/aiter/PR-1655.md) — Zan/moe a8w4  `[source-pr]`
+- [pr-aiter-1657](sources/prs/aiter/PR-1657.md) — fix some compile issues with -Werror  `[source-pr]`
+- [pr-aiter-1693](sources/prs/aiter/PR-1693.md) — Add allreduce fusion  `[source-pr]`
+- [pr-aiter-1730](sources/prs/aiter/PR-1730.md) — [MLA] nhead64 and nhead32  `[source-pr]`
+- [pr-aiter-1742](sources/prs/aiter/PR-1742.md) — add groupnorm cuda kernel  `[source-pr]`
+- [pr-aiter-1745](sources/prs/aiter/PR-1745.md) — [Triton] skip_reduce for gemm_afp4wfp4_preshuffle  `[source-pr]`
+- [pr-aiter-1747](sources/prs/aiter/PR-1747.md) — [MOE] special path for moe fp8/bf16, batch 1~16  `[source-pr]`
+- [pr-aiter-1754](sources/prs/aiter/PR-1754.md) — [FMHA] Support Vectorized KV Cache Layout and vLLM/SGLang block table in Batch Prefill kernel  `[source-pr]`
+- [pr-aiter-176](sources/prs/aiter/PR-176.md) — Implement Variants of RoPE  `[source-pr]`
+- [pr-aiter-1764](sources/prs/aiter/PR-1764.md) — [Triton] Triton FP8 bloscale GEMM preshuffle  `[source-pr]`
+- [pr-aiter-1774](sources/prs/aiter/PR-1774.md) — [PA] Optimization: Remove Query/Output Transpose Kernels by Direct 5D Tensor Access in PA Decode Gluon  `[source-pr]`
+- [pr-aiter-1778](sources/prs/aiter/PR-1778.md) — [Triton] Triton a16w8 gemm preshuffle  `[source-pr]`
+- [pr-aiter-1779](sources/prs/aiter/PR-1779.md) — Add nhead4 & nhead32 case to support `mla_reduce_v1` used in `pa_persistent_fwd`  `[source-pr]`
+- [pr-aiter-1784](sources/prs/aiter/PR-1784.md) — [TRITON] Update triton gemm tuning config file for deepseekR1-mxfp4 bs64  `[source-pr]`
+- [pr-aiter-1787](sources/prs/aiter/PR-1787.md) — Support profiler pa and reduce kernel and remove p99 to use test_common  `[source-pr]`
+- [pr-aiter-1794](sources/prs/aiter/PR-1794.md) — [Fix] fix the mha fwd_v3 segment fault in torch.compile(mode='reduce-overhead', fullgraph=True)  `[source-pr]`
+- [pr-aiter-18](sources/prs/aiter/PR-18.md) — fix attention interface and others  `[source-pr]`
+- [pr-aiter-1809](sources/prs/aiter/PR-1809.md) — [TRITON] gluon gemm_afp4wfp4  `[source-pr]`
+- [pr-aiter-1816](sources/prs/aiter/PR-1816.md) — Optimize the performance of quick_allreduce  `[source-pr]`
+- [pr-aiter-1818](sources/prs/aiter/PR-1818.md) — [TRITON] Fav3 sage  `[source-pr]`
+- [pr-aiter-1820](sources/prs/aiter/PR-1820.md) — support atom pa ps reduce shape  `[source-pr]`
+- [pr-aiter-1838](sources/prs/aiter/PR-1838.md) — [dev/perf][Update] update dev/perf branch to main branch commit 1ec04f7  `[source-pr]`
+- [pr-aiter-1866](sources/prs/aiter/PR-1866.md) — Fix code style after updating Black to 26.1.0  `[source-pr]`
+- [pr-aiter-1869](sources/prs/aiter/PR-1869.md) — Optimize moe_align_block_size kernel with O(E) shared memory, average improvement 18% across all configs  `[source-pr]`
+- [pr-aiter-1873](sources/prs/aiter/PR-1873.md) — [CK_TILE] Fix Int32 Overflow in Deterministic FMHA BWD  `[source-pr]`
+- [pr-aiter-1880](sources/prs/aiter/PR-1880.md) — add custom_allreduce write mode  `[source-pr]`
+- [pr-aiter-1896](sources/prs/aiter/PR-1896.md) — Refactor MLA Reduce  `[source-pr]`
+- [pr-aiter-1908](sources/prs/aiter/PR-1908.md) — Fix calculation on number of workgroup per batch and head  `[source-pr]`
+- [pr-aiter-1910](sources/prs/aiter/PR-1910.md) — optimize allreduce write mode by broadcast output ptr  `[source-pr]`
+- [pr-aiter-194](sources/prs/aiter/PR-194.md) — Mdf compiler 0312  `[source-pr]`
+- [pr-aiter-1942](sources/prs/aiter/PR-1942.md) — [Triton] Sync Flash Attention Package  `[source-pr]`
+- [pr-aiter-1949](sources/prs/aiter/PR-1949.md) — Add allreduce rmsnorm 1stage fusion pass  `[source-pr]`
+- [pr-aiter-1960](sources/prs/aiter/PR-1960.md) — Instrumentation ar  `[source-pr]`
+- [pr-aiter-1962](sources/prs/aiter/PR-1962.md) — Minor fix for mla f8 v3 kernel  `[source-pr]`
+- [pr-aiter-1967](sources/prs/aiter/PR-1967.md) — Fix the precision issue of allreduce  `[source-pr]`
+- [pr-aiter-1973](sources/prs/aiter/PR-1973.md) — Defer expensive build operations to build_ext.run()  `[source-pr]`
+- [pr-aiter-1990](sources/prs/aiter/PR-1990.md) — Add `allreduce+rmsnorm+quant` fusion pass  `[source-pr]`
+- [pr-aiter-2031](sources/prs/aiter/PR-2031.md) — Add support to dpsk-fp4 tp2/tp4(head=64/32) cases  `[source-pr]`
+- [pr-aiter-2034](sources/prs/aiter/PR-2034.md) — Top-K Top-P Sampling Kernel Optimization  `[source-pr]`
+- [pr-aiter-2039](sources/prs/aiter/PR-2039.md) — Introduce HipKittens based nhead=128 MLA Kernel  `[source-pr]`
+- [pr-aiter-2049](sources/prs/aiter/PR-2049.md) — [TRITON] Add smoothquant int8 MoE kernel  `[source-pr]`
+- [pr-aiter-2064](sources/prs/aiter/PR-2064.md) — Adding double buffer option to cross_device_reduce_1stage  `[source-pr]`
+- [pr-aiter-2107](sources/prs/aiter/PR-2107.md) — [fix]: replace ck_tile by opus in ar  `[source-pr]`
+- [pr-aiter-2113](sources/prs/aiter/PR-2113.md) — [FlyDSL] import flydsl implement of a4w4 moe  `[source-pr]`
+- [pr-aiter-2127](sources/prs/aiter/PR-2127.md) — [OPUS] opus device test speed up  `[source-pr]`
+- [pr-aiter-2136](sources/prs/aiter/PR-2136.md) — add mhc_pre hip kernel (mhc_pre_gemm_sqrsum, mhc_pre_big_fuse)  `[source-pr]`
+- [pr-aiter-2162](sources/prs/aiter/PR-2162.md) — [fix]: support dim(-1) allgather  `[source-pr]`
+- [pr-aiter-2180](sources/prs/aiter/PR-2180.md) — [TRITON] Add support for splitk to A8W8 kernel  `[source-pr]`
+- [pr-aiter-2233](sources/prs/aiter/PR-2233.md) — opt prefill  `[source-pr]`
+- [pr-aiter-2319](sources/prs/aiter/PR-2319.md) — mla nps fp8 mode get_meta_param avoid  kv_tail_len < max_seqlen_q and fix nhead=128 reduce mgc  `[source-pr]`
+- [pr-aiter-2329](sources/prs/aiter/PR-2329.md) — feat(custom_all_reduce): support GPT-OSS-120B hidden_size=2880 in fus…  `[source-pr]`
+- [pr-aiter-2331](sources/prs/aiter/PR-2331.md) — replace ck_tile type convert by opus cast  `[source-pr]`
+- [pr-aiter-2346](sources/prs/aiter/PR-2346.md) — fix(car): shfl and ag dispatch  `[source-pr]`
+- [pr-aiter-2390](sources/prs/aiter/PR-2390.md) — [FlyDSL] Add FlyDSL MoE a4w4 support and update kernels  `[source-pr]`
+- [pr-aiter-2414](sources/prs/aiter/PR-2414.md) — perf: optimize _moe_mxfp4_sort_kernel — reduce recompilation and improve throughput  `[source-pr]`
+- [pr-aiter-2441](sources/prs/aiter/PR-2441.md) — [Triton MoE]: Add optimized Gluon kernel for AMD CDNA3 with K-dimension unrolling  `[source-pr]`
+- [pr-aiter-2461](sources/prs/aiter/PR-2461.md) — MI350 mla ps mode support nhead=8 mtp=4 feature  `[source-pr]`
+- [pr-aiter-2481](sources/prs/aiter/PR-2481.md) — Add head_num=40 for mla fp8 reduce kernel for wan2.2  `[source-pr]`
+- [pr-aiter-2491](sources/prs/aiter/PR-2491.md) — [TRITON] Fix unit tests on `gfx950` - part 2  `[source-pr]`
+- [pr-aiter-2496](sources/prs/aiter/PR-2496.md) — Rebase to main  `[source-pr]`
+- [pr-aiter-2497](sources/prs/aiter/PR-2497.md) — Wjx/upgrade flydsl fused  `[source-pr]`
+- [pr-aiter-2525](sources/prs/aiter/PR-2525.md) — add WARP_SIZE define in csrc/include/aiter_hip_common.h  for host and device  &&   rm hip_compat.h  `[source-pr]`
+- [pr-aiter-2527](sources/prs/aiter/PR-2527.md) — add fused_qk_norm_group_quant kernel  `[source-pr]`
+- [pr-aiter-2545](sources/prs/aiter/PR-2545.md) — refactor hip kernel -- remove torch from csrc  `[source-pr]`
+- [pr-aiter-2556](sources/prs/aiter/PR-2556.md) — Adding benchmark script to PR #2360  `[source-pr]`
+- [pr-aiter-2581](sources/prs/aiter/PR-2581.md) — [FlyDSL] Optimize a4w4 MOE kernels  `[source-pr]`
+- [pr-aiter-2583](sources/prs/aiter/PR-2583.md) — [TRITON] Swiglu and reduce refactor  `[source-pr]`
+- [pr-aiter-2584](sources/prs/aiter/PR-2584.md) — [TRITON] Reduce GEMM unit tests  `[source-pr]`
+- [pr-aiter-2586](sources/prs/aiter/PR-2586.md) — Fix: Numerical Accuracy in `allreduce_fusion_kernel_1stage`  `[source-pr]`
+- [pr-aiter-2588](sources/prs/aiter/PR-2588.md) — [TRITON] Reduce rope tests  `[source-pr]`
+- [pr-aiter-2599](sources/prs/aiter/PR-2599.md) — Update some HIP kernels support different warp_size(topksoftmax/grouptopk, cache, sample)  `[source-pr]`
+- [pr-aiter-26](sources/prs/aiter/PR-26.md) — Allreduce asm  `[source-pr]`
+- [pr-aiter-2607](sources/prs/aiter/PR-2607.md) — fix(car): write mode dispatch  `[source-pr]`
+- [pr-aiter-2612](sources/prs/aiter/PR-2612.md) — [TRITON] Reduce MHA UTs  `[source-pr]`
+- [pr-aiter-2624](sources/prs/aiter/PR-2624.md) — Refactor hip kl  `[source-pr]`
+- [pr-aiter-2638](sources/prs/aiter/PR-2638.md) — fix(car): craph capture err  `[source-pr]`
+- [pr-aiter-2646](sources/prs/aiter/PR-2646.md) — [TRITON] mHC-pre: Manifold-constrained Hyper Connection  `[source-pr]`
+- [pr-aiter-2669](sources/prs/aiter/PR-2669.md) — [TRITON] Reduce GMM tests  `[source-pr]`
+- [pr-aiter-2695](sources/prs/aiter/PR-2695.md) — [Triton] Declare triton>=3.6.0 dependency  `[source-pr]`
+- [pr-aiter-2701](sources/prs/aiter/PR-2701.md) — [OPUS] Optimize opus.hpp compile time: 70% reduction  `[source-pr]`
+- [pr-aiter-2703](sources/prs/aiter/PR-2703.md) — fea(car): support custom group device  `[source-pr]`
+- [pr-aiter-2717](sources/prs/aiter/PR-2717.md) — Replace CK/CK_TILE in MLA Reduce and Metadata Kernel with OPUS  `[source-pr]`
+- [pr-aiter-2723](sources/prs/aiter/PR-2723.md) — Fix Triton MoE GEMM shared memory exhaustion by reducing stage count  `[source-pr]`
+- [pr-aiter-2726](sources/prs/aiter/PR-2726.md) — [FlyDSL MOE] update a8w4 moe  `[source-pr]`
+- [pr-aiter-2729](sources/prs/aiter/PR-2729.md) — Add bf16 MLA decode kernel for gqa_ratio=64, qseqlen=1 (non-persistent)  `[source-pr]`
+- [pr-aiter-2732](sources/prs/aiter/PR-2732.md) — Make FlyDSL LDS checks architecture-aware and reduce tuner failure noise  `[source-pr]`
+- [pr-aiter-2735](sources/prs/aiter/PR-2735.md) — Revert 'fix(car): craph capture err'  `[source-pr]`
+- [pr-aiter-2745](sources/prs/aiter/PR-2745.md) — fix(car): sglang prefill launch error kernel  `[source-pr]`
+- [pr-aiter-2784](sources/prs/aiter/PR-2784.md) — Fix LDS Exhaustion in `fused_gemm_afp4wfp4_a16w16` for ASYNC_COPY Enabled  `[source-pr]`
+- [pr-aiter-2817](sources/prs/aiter/PR-2817.md) — FlyDSL tuning improvements: prune M-incompatible tile candidates and warn on stale kernel names  `[source-pr]`
+- [pr-aiter-2823](sources/prs/aiter/PR-2823.md) — Add fused AR + RMSNorm + per-group FP8 quant: optional bf16 side-output  `[source-pr]`
+- [pr-aiter-2829](sources/prs/aiter/PR-2829.md) — Fix sliding window mtp  `[source-pr]`
+- [pr-aiter-2863](sources/prs/aiter/PR-2863.md) — kimi a16wi4 moe support  `[source-pr]`
+- [pr-aiter-2890](sources/prs/aiter/PR-2890.md) — Fix 2-stage fused_allreduce_rmsnorm memory ordering  `[source-pr]`
+- [pr-aiter-290](sources/prs/aiter/PR-290.md) — add Kvcache_blockscale  `[source-pr]`
+- [pr-aiter-2921](sources/prs/aiter/PR-2921.md) — [TRITON] Set RNG seed in Triton tests  `[source-pr]`
+- [pr-aiter-2924](sources/prs/aiter/PR-2924.md) — [FLYDSL] Update GDR decode kernel  `[source-pr]`
+- [pr-aiter-2945](sources/prs/aiter/PR-2945.md) — [OPUS]bf16 opus gemm support  `[source-pr]`
+- [pr-aiter-2951](sources/prs/aiter/PR-2951.md) — [MOE DSV4] flydsl a8w4 moe for dsv4  `[source-pr]`
+- [pr-aiter-2967](sources/prs/aiter/PR-2967.md) — [TRITON] mHC-post: Apply post-stream and res-stream mixing  `[source-pr]`
+- [pr-aiter-2968](sources/prs/aiter/PR-2968.md) — [GFX1250] Add Triton TDM to MoE Metadata kernels  `[source-pr]`
+- [pr-aiter-2984](sources/prs/aiter/PR-2984.md) — [TRITON] Split `test_mha.py` into smaller test files  `[source-pr]`
+- [pr-aiter-2995](sources/prs/aiter/PR-2995.md) — add topk_softplus kernel  `[source-pr]`
+- [pr-aiter-3033](sources/prs/aiter/PR-3033.md) — Fix sqrsum store race condition in mhc_pre_gemm_sqrsum_kernel  `[source-pr]`
+- [pr-aiter-3057](sources/prs/aiter/PR-3057.md) — [Triton] [ATOM] DSV4 fusions phase 1  `[source-pr]`
+- [pr-aiter-3063](sources/prs/aiter/PR-3063.md) — MI350 mla ps mode all bf16 cases no longer follow the folding logic and nhead64,1 use m16x4 kernel  `[source-pr]`
+- [pr-aiter-3072](sources/prs/aiter/PR-3072.md) — HK MLA: MI35x m16x8 retune, new m16x4 kernel, page_size + mask support  `[source-pr]`
+- [pr-aiter-31](sources/prs/aiter/PR-31.md) — Ddddd  `[source-pr]`
+- [pr-aiter-3100](sources/prs/aiter/PR-3100.md) — feat(topk): optimized topk_gating kernel with sigmoid/softmax support  `[source-pr]`
+- [pr-aiter-3137](sources/prs/aiter/PR-3137.md) — [qk_rmsnorm_group_quant] refactor hip kl  `[source-pr]`
+- [pr-aiter-3144](sources/prs/aiter/PR-3144.md) — Fusion allreduce old add rmsnorm  `[source-pr]`
+- [pr-aiter-3145](sources/prs/aiter/PR-3145.md) — add silu_and_mul_quant and Opt silu_and_mul  `[source-pr]`
+- [pr-aiter-3153](sources/prs/aiter/PR-3153.md) — [MoE] Align FlyDSL MXFP4 rounding  `[source-pr]`
+- [pr-aiter-3159](sources/prs/aiter/PR-3159.md) — [module_fused_qk_norm_rope_cache_quant_shuffle] hip kl refactor  `[source-pr]`
+- [pr-aiter-3163](sources/prs/aiter/PR-3163.md) — minimax ops: support fused qknorm+allreduce kernel  `[source-pr]`
+- [pr-aiter-3184](sources/prs/aiter/PR-3184.md) — fix deepseek v4 padding issue  `[source-pr]`
+- [pr-aiter-3189](sources/prs/aiter/PR-3189.md) — [custom_all_reduce] qknorm_allreduce_fusion_kernel_2stage: grid-strided loop, drop 80-token cap  `[source-pr]`
+- [pr-aiter-3190](sources/prs/aiter/PR-3190.md) — [Triton] [ATOM] DSV4 fusion phase2  `[source-pr]`
+- [pr-aiter-3217](sources/prs/aiter/PR-3217.md) — perf(sampling): replace ternary-search TopKRenorm with radix-select +…  `[source-pr]`
+- [pr-aiter-322](sources/prs/aiter/PR-322.md) — add mla for head_num=128 (tp1), with mtp support  `[source-pr]`
+- [pr-aiter-3230](sources/prs/aiter/PR-3230.md) — [TRITON] Make splitk reduce common  `[source-pr]`
+- [pr-aiter-3231](sources/prs/aiter/PR-3231.md) — [TRITON] Use tl.dot(..., acc=...) accumulator form  `[source-pr]`
+- [pr-aiter-3283](sources/prs/aiter/PR-3283.md) — Tune gfx950 batched GEMM configs and benchmarks  `[source-pr]`
+- [pr-aiter-3288](sources/prs/aiter/PR-3288.md) — [Bugfix] a16w16 splitk: per-stream semaphore workspace to avoid deadlock  `[source-pr]`
+- [pr-aiter-3293](sources/prs/aiter/PR-3293.md) — Moe gfx1250 optimizations  `[source-pr]`
+- [pr-aiter-3312](sources/prs/aiter/PR-3312.md) — [MOE] Add fused dynamic MXFP8 quant + moe_sort HIP path  `[source-pr]`
+- [pr-aiter-3313](sources/prs/aiter/PR-3313.md) — Zhimding/fix aot moe pad 0522  `[source-pr]`
+- [pr-aiter-3323](sources/prs/aiter/PR-3323.md) — ck_gemm_a8w8_blockscale: deduplicate manifest declarations and split lookup TUs  `[source-pr]`
+- [pr-aiter-334](sources/prs/aiter/PR-334.md) — fix oom and other bugs  `[source-pr]`
+- [pr-aiter-3342](sources/prs/aiter/PR-3342.md) — Revert 'Zhimding/fix aot moe pad 0522'  `[source-pr]`
+- [pr-aiter-3375](sources/prs/aiter/PR-3375.md) — fix(dist): DP-attention CUDAGraph capture compatibility  `[source-pr]`
+- [pr-aiter-3382](sources/prs/aiter/PR-3382.md) — [OPUS]fix opus_gemm mono version m align assert error  `[source-pr]`
+- [pr-aiter-3404](sources/prs/aiter/PR-3404.md) — moe enable padding params as runtime  `[source-pr]`
+- [pr-aiter-3435](sources/prs/aiter/PR-3435.md) — Revert 'moe enable padding params as runtime'  `[source-pr]`
+- [pr-aiter-35](sources/prs/aiter/PR-35.md) — enable hipgraph for allreduce_asm  `[source-pr]`
+- [pr-aiter-387](sources/prs/aiter/PR-387.md) — [TRITON] Causal Attention XCD balancing and MHA Scale  `[source-pr]`
+- [pr-aiter-446](sources/prs/aiter/PR-446.md) — feat: add allreduce fp8 kernel  `[source-pr]`
+- [pr-aiter-466](sources/prs/aiter/PR-466.md) — Add aiter namespace to avoid symbol conflict with vllm  `[source-pr]`
+- [pr-aiter-480](sources/prs/aiter/PR-480.md) — integrate fa bwd asm kernel  `[source-pr]`
+- [pr-aiter-486](sources/prs/aiter/PR-486.md) — [TRITON] Triton tuning gemms  `[source-pr]`
+- [pr-aiter-50](sources/prs/aiter/PR-50.md) — compiler_by_json  `[source-pr]`
+- [pr-aiter-509](sources/prs/aiter/PR-509.md) — quant_opt  `[source-pr]`
+- [pr-aiter-51](sources/prs/aiter/PR-51.md) — add allreduce_fuse_layernorm  `[source-pr]`
+- [pr-aiter-522](sources/prs/aiter/PR-522.md) — [fix]: replace static_cast<float>(half)  `[source-pr]`
+- [pr-aiter-523](sources/prs/aiter/PR-523.md) — Hotfix reduce  `[source-pr]`
+- [pr-aiter-532](sources/prs/aiter/PR-532.md) — Mdf_tests  `[source-pr]`
+- [pr-aiter-552](sources/prs/aiter/PR-552.md) — [update]: update all-reduce  `[source-pr]`
+- [pr-aiter-558](sources/prs/aiter/PR-558.md) — [TRITON]: Gemm refactor  `[source-pr]`
+- [pr-aiter-571](sources/prs/aiter/PR-571.md) — Dispatch combine  `[source-pr]`
+- [pr-aiter-573](sources/prs/aiter/PR-573.md) — [TRITON]: GEMM updates for DS  `[source-pr]`
+- [pr-aiter-596](sources/prs/aiter/PR-596.md) — DIY_args  `[source-pr]`
+- [pr-aiter-611](sources/prs/aiter/PR-611.md) — [fix]: change ar namespace  `[source-pr]`
+- [pr-aiter-62](sources/prs/aiter/PR-62.md) — Fmoe g1u1 a8w8  `[source-pr]`
+- [pr-aiter-626](sources/prs/aiter/PR-626.md) — Topksoftmax_opt  `[source-pr]`
+- [pr-aiter-63](sources/prs/aiter/PR-63.md) — update allreduce_rmsnorm_qnt_N8192.co  `[source-pr]`
+- [pr-aiter-659](sources/prs/aiter/PR-659.md) — slice acc into two parts to reduce vgpr usage  `[source-pr]`
+- [pr-aiter-673](sources/prs/aiter/PR-673.md) — Optimize the topK Softmax kernel to reduce one round of  topK reduce(idea by cui cu)  `[source-pr]`
+- [pr-aiter-699](sources/prs/aiter/PR-699.md) — [fea]: new kernel for allreduce optimize  `[source-pr]`
+- [pr-aiter-709](sources/prs/aiter/PR-709.md) — [TRITON] shaoclee/triton gemm a8w8 dev  `[source-pr]`
+- [pr-aiter-719](sources/prs/aiter/PR-719.md) — update ptpc bpreshuffle gemm tune  `[source-pr]`
+- [pr-aiter-72](sources/prs/aiter/PR-72.md) — rename ater to aiter  `[source-pr]`
+- [pr-aiter-725](sources/prs/aiter/PR-725.md) — [TRITON]: enable buffer ops for lean attention  `[source-pr]`
+- [pr-aiter-736](sources/prs/aiter/PR-736.md) — [TRITON]: Add fused GEMMs to optimize FF block  `[source-pr]`
+- [pr-aiter-740](sources/prs/aiter/PR-740.md) — Enable custom op and avoid graph breaks  `[source-pr]`
+- [pr-aiter-744](sources/prs/aiter/PR-744.md) — [TRITON]: LeanAttention implement loop unrolling to reduce VGPR usage  `[source-pr]`
+- [pr-aiter-750](sources/prs/aiter/PR-750.md) — [fea]: new ar interface  `[source-pr]`
+- [pr-aiter-788](sources/prs/aiter/PR-788.md) — mla persistant merge into 085_aiter  `[source-pr]`
+- [pr-aiter-801](sources/prs/aiter/PR-801.md) — [feature] [rocm] add quick allreduce  `[source-pr]`
+- [pr-aiter-807](sources/prs/aiter/PR-807.md) — [fix]: fix ar 1stage sync error  `[source-pr]`
+- [pr-aiter-823](sources/prs/aiter/PR-823.md) — [fix]: custom_allreduce precision bug  `[source-pr]`
+- [pr-aiter-824](sources/prs/aiter/PR-824.md) — [TRITON] Add non-TN layout tests to Triton GEMMs  `[source-pr]`
+- [pr-aiter-828](sources/prs/aiter/PR-828.md) — [fix]: replace 512 as smem_gpu_loop_stride  `[source-pr]`
+- [pr-aiter-829](sources/prs/aiter/PR-829.md) — [fix]: replace 512 as smem_gpu_loop_stride  `[source-pr]`
+- [pr-aiter-852](sources/prs/aiter/PR-852.md) — [TRITON]: Reduce usage of hardcoded XCD  `[source-pr]`
+- [pr-aiter-881](sources/prs/aiter/PR-881.md) — kvcache_minor_opt  `[source-pr]`
+- [pr-aiter-891](sources/prs/aiter/PR-891.md) — Nano-vllm model enable  `[source-pr]`
+- [pr-aiter-924](sources/prs/aiter/PR-924.md) — grouped topk bug fixed  `[source-pr]`
+- [pr-aiter-944](sources/prs/aiter/PR-944.md) — Add hip kernels for symmetric matrix tridiagonalization  `[source-pr]`
+- [pr-aiter-957](sources/prs/aiter/PR-957.md) — [TRITON]: Gluon Blockscale a8w8 GEMM Improvements  `[source-pr]`
+- [pr-aiter-962](sources/prs/aiter/PR-962.md) — [fix]: access dangling ptr in ar interface  `[source-pr]`
+- [pr-composable_kernel-1011](sources/prs/composable_kernel/PR-1011.md) — Fix the fp8 gemm for large tensors on MI300.  `[source-pr]`
+- [pr-composable_kernel-1039](sources/prs/composable_kernel/PR-1039.md) — Use Flash-Attention-2 method to do output accumulation for infer/forward  `[source-pr]`
+- [pr-composable_kernel-1044](sources/prs/composable_kernel/PR-1044.md) — Split the static library into several files.  `[source-pr]`
+- [pr-composable_kernel-1084](sources/prs/composable_kernel/PR-1084.md) — disabling some fp8 gemm instances to reduce build time  `[source-pr]`
+- [pr-composable_kernel-1142](sources/prs/composable_kernel/PR-1142.md) — Fixing most of the cppcheck errors.  `[source-pr]`
+- [pr-composable_kernel-115](sources/prs/composable_kernel/PR-115.md) — Pr82 followup  `[source-pr]`
+- [pr-composable_kernel-1152](sources/prs/composable_kernel/PR-1152.md) — Add support for more Navi2x and Navi3x models.  `[source-pr]`
+- [pr-composable_kernel-1159](sources/prs/composable_kernel/PR-1159.md) — Split-up instances to improve build times.  `[source-pr]`
+- [pr-composable_kernel-1224](sources/prs/composable_kernel/PR-1224.md) — F8 quantization for FMHA forward  `[source-pr]`
+- [pr-composable_kernel-126](sources/prs/composable_kernel/PR-126.md) — Grouped GEMM for fp16  `[source-pr]`
+- [pr-composable_kernel-1278](sources/prs/composable_kernel/PR-1278.md) — Enable logging in CK with environment variable.  `[source-pr]`
+- [pr-composable_kernel-128](sources/prs/composable_kernel/PR-128.md) — Gemm+Reduce Fusion  `[source-pr]`
+- [pr-composable_kernel-1296](sources/prs/composable_kernel/PR-1296.md) — Replace the ENV macro with CK_ENV to avoid conflicts  `[source-pr]`
+- [pr-composable_kernel-1302](sources/prs/composable_kernel/PR-1302.md) — Update the grid distribution for fmha forward [Performance]  `[source-pr]`
+- [pr-composable_kernel-1304](sources/prs/composable_kernel/PR-1304.md) — Select appropriate GPU targets for instances, tests, and examples.  `[source-pr]`
+- [pr-composable_kernel-133](sources/prs/composable_kernel/PR-133.md) — Unified conv3D API + support for all data types.  `[source-pr]`
+- [pr-composable_kernel-1339](sources/prs/composable_kernel/PR-1339.md) — layernorm2d forward  `[source-pr]`
+- [pr-composable_kernel-1341](sources/prs/composable_kernel/PR-1341.md) — Universal gemm splitk using reduce (with multi-d)  `[source-pr]`
+- [pr-composable_kernel-1344](sources/prs/composable_kernel/PR-1344.md) — Hacking  ck_tile fmha Dropout facility  `[source-pr]`
+- [pr-composable_kernel-1360](sources/prs/composable_kernel/PR-1360.md) — Universal streamk with atomics  `[source-pr]`
+- [pr-composable_kernel-1396](sources/prs/composable_kernel/PR-1396.md) — Fixed some issue in GEMM_Reduce_MultiD  `[source-pr]`
+- [pr-composable_kernel-14](sources/prs/composable_kernel/PR-14.md) — MIOpen Downstream: Initial integration 2nd PR  `[source-pr]`
+- [pr-composable_kernel-143](sources/prs/composable_kernel/PR-143.md) — Re-enable op disabled in ckProfiler by mistake previously  `[source-pr]`
+- [pr-composable_kernel-1432](sources/prs/composable_kernel/PR-1432.md) — Add Grouped Conv Fwd Large Tensor kernel  `[source-pr]`
+- [pr-composable_kernel-1443](sources/prs/composable_kernel/PR-1443.md) — Limit fp8only operator build arch in ckProfiler  `[source-pr]`
+- [pr-composable_kernel-1453](sources/prs/composable_kernel/PR-1453.md) — [GEMM] gemm_universal related optimization  `[source-pr]`
+- [pr-composable_kernel-1469](sources/prs/composable_kernel/PR-1469.md) — Adding Instances and Examples for FP8-based Scaled Convolution with ReLU Activation and AMAX Reduction.  `[source-pr]`
+- [pr-composable_kernel-1473](sources/prs/composable_kernel/PR-1473.md) — Adding Instances and Examples for FP8-based Scaled Convolution and AMAX Reduction.  `[source-pr]`
+- [pr-composable_kernel-1494](sources/prs/composable_kernel/PR-1494.md) — Pool2d max/avg kernel in the BWD version  `[source-pr]`
+- [pr-composable_kernel-152](sources/prs/composable_kernel/PR-152.md) — Improve Reduction kernel api  `[source-pr]`
+- [pr-composable_kernel-1521](sources/prs/composable_kernel/PR-1521.md) — Remove unsupported (fp8) type from Add memory operation.  `[source-pr]`
+- [pr-composable_kernel-1541](sources/prs/composable_kernel/PR-1541.md) — BF16 GEMM Stream-K  `[source-pr]`
+- [pr-composable_kernel-156](sources/prs/composable_kernel/PR-156.md) — Batched gemm and reduction  `[source-pr]`
+- [pr-composable_kernel-159](sources/prs/composable_kernel/PR-159.md) — Tune & add conflict-free LDS gemm kernels  `[source-pr]`
+- [pr-composable_kernel-1592](sources/prs/composable_kernel/PR-1592.md) — topk_softmax  `[source-pr]`
+- [pr-composable_kernel-1595](sources/prs/composable_kernel/PR-1595.md) — fix the logic of enabling XDL and WMMA instances  `[source-pr]`
+- [pr-composable_kernel-1604](sources/prs/composable_kernel/PR-1604.md) — [CK_TILE] layernorm support fused-quant/fused-add  `[source-pr]`
+- [pr-composable_kernel-1605](sources/prs/composable_kernel/PR-1605.md) — [Ck tile] support rmsnorm and related fusion  `[source-pr]`
+- [pr-composable_kernel-161](sources/prs/composable_kernel/PR-161.md) — Test: Use single thread for tensor init  `[source-pr]`
+- [pr-composable_kernel-1610](sources/prs/composable_kernel/PR-1610.md) — Remove virtual destructors from unary ops  `[source-pr]`
+- [pr-composable_kernel-1617](sources/prs/composable_kernel/PR-1617.md) — [Ck_tile] smoothquant  `[source-pr]`
+- [pr-composable_kernel-1621](sources/prs/composable_kernel/PR-1621.md) — Reduce build time.  `[source-pr]`
+- [pr-composable_kernel-1624](sources/prs/composable_kernel/PR-1624.md) — Ck tile/moe sorting  `[source-pr]`
+- [pr-composable_kernel-1634](sources/prs/composable_kernel/PR-1634.md) — [CK_TILE] fused-moe first version  `[source-pr]`
+- [pr-composable_kernel-1639](sources/prs/composable_kernel/PR-1639.md) — Prevent instantiation of undefined FP8 operators.  `[source-pr]`
+- [pr-composable_kernel-1660](sources/prs/composable_kernel/PR-1660.md) — add batched_transpose implement  `[source-pr]`
+- [pr-composable_kernel-1665](sources/prs/composable_kernel/PR-1665.md) — universal streamk fp8 changes  `[source-pr]`
+- [pr-composable_kernel-1666](sources/prs/composable_kernel/PR-1666.md) — Fix example_convnd_fwd_max_xdl_int8 failures on MI300  `[source-pr]`
+- [pr-composable_kernel-1686](sources/prs/composable_kernel/PR-1686.md) — add --squash flag when building dockers  `[source-pr]`
+- [pr-composable_kernel-175](sources/prs/composable_kernel/PR-175.md) — Code refactor  `[source-pr]`
+- [pr-composable_kernel-1755](sources/prs/composable_kernel/PR-1755.md) — Use s_shuffling to replace p_shuffling which removes the needs of cross-warp reduction  `[source-pr]`
+- [pr-composable_kernel-1779](sources/prs/composable_kernel/PR-1779.md) — [CK_TILE] Adjust kBlockSize of reduce example for better perf  `[source-pr]`
+- [pr-composable_kernel-1784](sources/prs/composable_kernel/PR-1784.md) — Ck tile/layernorm:  implement naive reduce, opt performance  `[source-pr]`
+- [pr-composable_kernel-1789](sources/prs/composable_kernel/PR-1789.md) — [CK_TILE] fmha fwd splitkv optimization for decode (seqlen_q=1)  `[source-pr]`
+- [pr-composable_kernel-1808](sources/prs/composable_kernel/PR-1808.md) — [CK_TILE] Fix mock token id, support g1u1/g1u0 through same inline code block  `[source-pr]`
+- [pr-composable_kernel-1810](sources/prs/composable_kernel/PR-1810.md) — Update for fmha_fwd qs_ks_vs pipeline  `[source-pr]`
+- [pr-composable_kernel-184](sources/prs/composable_kernel/PR-184.md) — Manual control of MAC cluster for improved interwave performance  `[source-pr]`
+- [pr-composable_kernel-1871](sources/prs/composable_kernel/PR-1871.md) — Fix KPack and enable existing instances on gfx950  `[source-pr]`
+- [pr-composable_kernel-1879](sources/prs/composable_kernel/PR-1879.md) — f8/bf16 GEMM Stream-K  `[source-pr]`
+- [pr-composable_kernel-188](sources/prs/composable_kernel/PR-188.md) — Compile CK for all targets  `[source-pr]`
+- [pr-composable_kernel-1880](sources/prs/composable_kernel/PR-1880.md) — Add ck tile examples to package  `[source-pr]`
+- [pr-composable_kernel-1891](sources/prs/composable_kernel/PR-1891.md) — Fix test_gemm_universal test_grouped_convnd_fwd and example_gemm_xdl_streamk on gfx950  `[source-pr]`
+- [pr-composable_kernel-1925](sources/prs/composable_kernel/PR-1925.md) — Fix launch error handling  `[source-pr]`
+- [pr-composable_kernel-1935](sources/prs/composable_kernel/PR-1935.md) — Remove CK_USE_AMD_MFMA_GFX950  `[source-pr]`
+- [pr-composable_kernel-1944](sources/prs/composable_kernel/PR-1944.md) — remove support for gfx940 and gfx941 targets  `[source-pr]`
+- [pr-composable_kernel-195](sources/prs/composable_kernel/PR-195.md) — Use ck::half_t for Host Reduction  `[source-pr]`
+- [pr-composable_kernel-1966](sources/prs/composable_kernel/PR-1966.md) — reduce test size to avoid timeout on specific silicon  `[source-pr]`
+- [pr-composable_kernel-199](sources/prs/composable_kernel/PR-199.md) — Add FP64 XDL GEMM built-in function  `[source-pr]`
+- [pr-composable_kernel-2005](sources/prs/composable_kernel/PR-2005.md) — add a fast compilation path for static for (0..N)  `[source-pr]`
+- [pr-composable_kernel-202](sources/prs/composable_kernel/PR-202.md) — [conv bwd-weight]Binding gemm k1 to conv n  `[source-pr]`
+- [pr-composable_kernel-2024](sources/prs/composable_kernel/PR-2024.md) — Reduce redundant space in bias tensor  `[source-pr]`
+- [pr-composable_kernel-2049](sources/prs/composable_kernel/PR-2049.md) — Split env.hpp header from the ck.hpp header.  `[source-pr]`
+- [pr-composable_kernel-2068](sources/prs/composable_kernel/PR-2068.md) — add fmha fwd splitkv receipt for aiter c++ api  `[source-pr]`
+- [pr-composable_kernel-209](sources/prs/composable_kernel/PR-209.md) — Gemm reduce max  `[source-pr]`
+- [pr-composable_kernel-212](sources/prs/composable_kernel/PR-212.md) — Resolution of issue #153: Add compiler warning on comparing int and size_t  `[source-pr]`
+- [pr-composable_kernel-213](sources/prs/composable_kernel/PR-213.md) — Update to gemm_reduce and batched_gemm_reduce  `[source-pr]`
+- [pr-composable_kernel-2145](sources/prs/composable_kernel/PR-2145.md) — Stream-K Reduction option as Runtime parameter and Compilation Error Fix (SK- Reduction)  `[source-pr]`
+- [pr-composable_kernel-2150](sources/prs/composable_kernel/PR-2150.md) — Revert 'Add ck tile examples to package'  `[source-pr]`
+- [pr-composable_kernel-2189](sources/prs/composable_kernel/PR-2189.md) — Adding validation for tile sizes in Tile Engine  `[source-pr]`
+- [pr-composable_kernel-220](sources/prs/composable_kernel/PR-220.md) — Add host API  `[source-pr]`
+- [pr-composable_kernel-2202](sources/prs/composable_kernel/PR-2202.md) — Use new mfma instructions for FP8 on gfx950  `[source-pr]`
+- [pr-composable_kernel-2224](sources/prs/composable_kernel/PR-2224.md) — Add MIOPEN_REQ_LIBS_ONLY option for cmake to build only the libs MIOpen requires  `[source-pr]`
+- [pr-composable_kernel-2225](sources/prs/composable_kernel/PR-2225.md) — Disable building device_mha_operations by default.  `[source-pr]`
+- [pr-composable_kernel-2229](sources/prs/composable_kernel/PR-2229.md) — Convert CK (GeMM MulMul Weight Preshuffle) instances to use 16x16 xdl tile  `[source-pr]`
+- [pr-composable_kernel-2266](sources/prs/composable_kernel/PR-2266.md) — Shard several of the most costly targets.  `[source-pr]`
+- [pr-composable_kernel-2301](sources/prs/composable_kernel/PR-2301.md) — Label CMakeLists message() as DEBUG or STATUS for clean build output  `[source-pr]`
+- [pr-composable_kernel-2319](sources/prs/composable_kernel/PR-2319.md) — Implement batched gemm wmma (RDNA batched gemm) based on wmma cshuffle v3  `[source-pr]`
+- [pr-composable_kernel-2320](sources/prs/composable_kernel/PR-2320.md) — Do not use warpSize as compile time constant as it is removed  `[source-pr]`
+- [pr-composable_kernel-235](sources/prs/composable_kernel/PR-235.md) — Refactor block to C tile map  `[source-pr]`
+- [pr-composable_kernel-237](sources/prs/composable_kernel/PR-237.md) — Overhaul to Reducton and its dependants  `[source-pr]`
+- [pr-composable_kernel-2373](sources/prs/composable_kernel/PR-2373.md) — Shard several of the most costly targets.  `[source-pr]`
+- [pr-composable_kernel-2388](sources/prs/composable_kernel/PR-2388.md) — [CK_TILE] Fix compilation errors introduced in #2320, #2219 and #2214  `[source-pr]`
+- [pr-composable_kernel-239](sources/prs/composable_kernel/PR-239.md) — Tensile-style block to C tile map  `[source-pr]`
+- [pr-composable_kernel-2392](sources/prs/composable_kernel/PR-2392.md) — Enabling diff datatypes for tile_engine and build with more granularity  `[source-pr]`
+- [pr-composable_kernel-2409](sources/prs/composable_kernel/PR-2409.md) — [CK_TILE] Enhance RMSNorm Accuracy: New Pipeline Pass for Selectable Implementation  `[source-pr]`
+- [pr-composable_kernel-241](sources/prs/composable_kernel/PR-241.md) — GEMM with Multiple Source, GEMM+Bias+Add+FastGeLU example and ckProfiler  `[source-pr]`
+- [pr-composable_kernel-2443](sources/prs/composable_kernel/PR-2443.md) — [CK_TILE] Enable printing more structures in CK-Tile  `[source-pr]`
+- [pr-composable_kernel-2453](sources/prs/composable_kernel/PR-2453.md) — Tests for CK Tile Batched Transpose and Smoothquant  `[source-pr]`
+- [pr-composable_kernel-2468](sources/prs/composable_kernel/PR-2468.md) — Cleaned up the documentation in 'client_example'  `[source-pr]`
+- [pr-composable_kernel-2516](sources/prs/composable_kernel/PR-2516.md) — Integration of a new pipeline for weight preshuffle into gemm examples  `[source-pr]`
+- [pr-composable_kernel-2535](sources/prs/composable_kernel/PR-2535.md) — General 2D Reduction Kernel  `[source-pr]`
+- [pr-composable_kernel-2540](sources/prs/composable_kernel/PR-2540.md) — [CK_TILE] Correct BlockWarps calculation and fix smoke-test in rmsnorm  `[source-pr]`
+- [pr-composable_kernel-2551](sources/prs/composable_kernel/PR-2551.md) — Add json dump support to output details from CK/CKTile Examples.  `[source-pr]`
+- [pr-composable_kernel-2564](sources/prs/composable_kernel/PR-2564.md) — Remove !defined(__HIP_DEVICE_COMPILE__) in CK kernel  `[source-pr]`
+- [pr-composable_kernel-2579](sources/prs/composable_kernel/PR-2579.md) — Reduce build time tile engine  `[source-pr]`
+- [pr-composable_kernel-2580](sources/prs/composable_kernel/PR-2580.md) — set default optdim for fmha  `[source-pr]`
+- [pr-composable_kernel-2588](sources/prs/composable_kernel/PR-2588.md) — Introduce tree reduction for BlockReduce2dCrossWarpSync  `[source-pr]`
+- [pr-composable_kernel-2594](sources/prs/composable_kernel/PR-2594.md) — Support Wave32 in CK_TILE - Part 1  `[source-pr]`
+- [pr-composable_kernel-2596](sources/prs/composable_kernel/PR-2596.md) — [CK_Tile] Refactor MOE Sorting and Smoothquant ctests to gtests  `[source-pr]`
+- [pr-composable_kernel-2606](sources/prs/composable_kernel/PR-2606.md) — [CK] Extend XDL kernel to support RDNA3/4 (option 2)  `[source-pr]`
+- [pr-composable_kernel-261](sources/prs/composable_kernel/PR-261.md) — gemm + layernorm  `[source-pr]`
+- [pr-composable_kernel-2611](sources/prs/composable_kernel/PR-2611.md) — Add -gsplit-dwarf flag to reduce debug section size and fix ckProfiler link errors  `[source-pr]`
+- [pr-composable_kernel-262](sources/prs/composable_kernel/PR-262.md) — Unify the naming of the math functions used by the host and kernel  `[source-pr]`
+- [pr-composable_kernel-2622](sources/prs/composable_kernel/PR-2622.md) — [CK_Tile] Refactor Permute and MOE Smoothquant ctests to gtests  `[source-pr]`
+- [pr-composable_kernel-2623](sources/prs/composable_kernel/PR-2623.md) — Revert 'Reduce build time tile engine'  `[source-pr]`
+- [pr-composable_kernel-2628](sources/prs/composable_kernel/PR-2628.md) — [CK_TILE] FMHA BWD Optimization For GFX950  `[source-pr]`
+- [pr-composable_kernel-263](sources/prs/composable_kernel/PR-263.md) — Single-kernel GEMM + layernorm  `[source-pr]`
+- [pr-composable_kernel-2632](sources/prs/composable_kernel/PR-2632.md) — CK_TILE: Implement two-stage split-K GEMM with workspace reduction (LWPCK-2966)  `[source-pr]`
+- [pr-composable_kernel-2638](sources/prs/composable_kernel/PR-2638.md) — Mirchen/gemm blockscale wp segfault fix  `[source-pr]`
+- [pr-composable_kernel-2656](sources/prs/composable_kernel/PR-2656.md) — Fixes to  'General 2D Reduction Kernel' (#2535)  `[source-pr]`
+- [pr-composable_kernel-2660](sources/prs/composable_kernel/PR-2660.md) — GEMM Multi D for CK Tile Engine  `[source-pr]`
+- [pr-composable_kernel-2662](sources/prs/composable_kernel/PR-2662.md) — Add gemm universal f8 f8 bf16 instances on gfx950  `[source-pr]`
+- [pr-composable_kernel-2681](sources/prs/composable_kernel/PR-2681.md) — [CK Tile] Stream K GEMM Kernel HostArgs and Kernel Classes  `[source-pr]`
+- [pr-composable_kernel-2697](sources/prs/composable_kernel/PR-2697.md) — [CK Tile] gemm splitk two stage  `[source-pr]`
+- [pr-composable_kernel-272](sources/prs/composable_kernel/PR-272.md) — Gemm + bias + relu + add + layernorm  `[source-pr]`
+- [pr-composable_kernel-2721](sources/prs/composable_kernel/PR-2721.md) — feat(grouped_gemm): add preshuffle v2 support to grouped gemm example  `[source-pr]`
+- [pr-composable_kernel-2723](sources/prs/composable_kernel/PR-2723.md) — Extend XDL kernel to Support RDNA3/4 - Part 3  `[source-pr]`
+- [pr-composable_kernel-2724](sources/prs/composable_kernel/PR-2724.md) — Extend XDL kernel to Support RDNA3/4 - Part 4  `[source-pr]`
+- [pr-composable_kernel-2725](sources/prs/composable_kernel/PR-2725.md) — Extend XDL kernel to Support RDNA3/4 - Part 5  `[source-pr]`
+- [pr-composable_kernel-2726](sources/prs/composable_kernel/PR-2726.md) — Add input fp8 and output bf16 attention  `[source-pr]`
+- [pr-composable_kernel-274](sources/prs/composable_kernel/PR-274.md) — Regulate reduction accumulator operations and Element-wise operations  `[source-pr]`
+- [pr-composable_kernel-2744](sources/prs/composable_kernel/PR-2744.md) — [CK_TILE] Add gtests for FMHA  `[source-pr]`
+- [pr-composable_kernel-2781](sources/prs/composable_kernel/PR-2781.md) — [CK_TILE] Stream-K GEMM Implementation  `[source-pr]`
+- [pr-composable_kernel-2810](sources/prs/composable_kernel/PR-2810.md) — [CK_TILE] fix example reduces, permute and elementwise on gfx11 & gfx12  `[source-pr]`
+- [pr-composable_kernel-2823](sources/prs/composable_kernel/PR-2823.md) — WMMA support for GEMM reduce  `[source-pr]`
+- [pr-composable_kernel-2825](sources/prs/composable_kernel/PR-2825.md) — implement device batched gemm b scale for wmma  `[source-pr]`
+- [pr-composable_kernel-2829](sources/prs/composable_kernel/PR-2829.md) — Verify `HostTensorDescriptor` when it is created  `[source-pr]`
+- [pr-composable_kernel-2834](sources/prs/composable_kernel/PR-2834.md) — [CK_TILE] FMHA Reduce build time by disabling instances that are not tested  `[source-pr]`
+- [pr-composable_kernel-284](sources/prs/composable_kernel/PR-284.md) — Standalone softmax kernel  `[source-pr]`
+- [pr-composable_kernel-285](sources/prs/composable_kernel/PR-285.md) — external api for gemm + layernorm  `[source-pr]`
+- [pr-composable_kernel-2864](sources/prs/composable_kernel/PR-2864.md) — [CK_TILE] Stream-K GEMM Example for bf16 and fp16  `[source-pr]`
+- [pr-composable_kernel-2878](sources/prs/composable_kernel/PR-2878.md) — [CK-Tile] Add the API to load SGPR with any byte size  `[source-pr]`
+- [pr-composable_kernel-2884](sources/prs/composable_kernel/PR-2884.md) — [CK][Examples] Extending support for rdna3/4 in following examples:  `[source-pr]`
+- [pr-composable_kernel-2889](sources/prs/composable_kernel/PR-2889.md) — [CK] Add command option instance_index and param_mask to run partial ck test  `[source-pr]`
+- [pr-composable_kernel-2890](sources/prs/composable_kernel/PR-2890.md) — [CK] Fix misc issues in CK examples  `[source-pr]`
+- [pr-composable_kernel-2902](sources/prs/composable_kernel/PR-2902.md) — Felix/opt sorting  `[source-pr]`
+- [pr-composable_kernel-2904](sources/prs/composable_kernel/PR-2904.md) — Revert '[CK-Tile] Add the API to load SGPR '  `[source-pr]`
+- [pr-composable_kernel-2905](sources/prs/composable_kernel/PR-2905.md) — [CK_TILE] Share partition index across threads and specify offset in load_tile()/async_load_tile()/load_tile_transpose()  `[source-pr]`
+- [pr-composable_kernel-2913](sources/prs/composable_kernel/PR-2913.md) — Fix the compilation error of #2878  `[source-pr]`
+- [pr-composable_kernel-2918](sources/prs/composable_kernel/PR-2918.md) — [CK_TILE] FMHA BWD Pad HDim to a Multiple of 8  `[source-pr]`
+- [pr-composable_kernel-2923](sources/prs/composable_kernel/PR-2923.md) — Integrate Multi D GEMMs into Grouped GEMMs along with unit tests  `[source-pr]`
+- [pr-composable_kernel-2947](sources/prs/composable_kernel/PR-2947.md) — Wmma support for grouped convolution bwd weight  `[source-pr]`
+- [pr-composable_kernel-295](sources/prs/composable_kernel/PR-295.md) — Standalone sweep once softmax kernel w/ ckProfiler  `[source-pr]`
+- [pr-composable_kernel-2950](sources/prs/composable_kernel/PR-2950.md) — fix: nil performance results for gemm examples  `[source-pr]`
+- [pr-composable_kernel-2956](sources/prs/composable_kernel/PR-2956.md) — [CK_TILE] Pooling FWD (Lwpck 3683)  `[source-pr]`
+- [pr-composable_kernel-2978](sources/prs/composable_kernel/PR-2978.md) — Update include path to break the cyclic dep issue  `[source-pr]`
+- [pr-composable_kernel-2989](sources/prs/composable_kernel/PR-2989.md) — WMMA gemm_add_relu_add_layernorm  `[source-pr]`
+- [pr-composable_kernel-301](sources/prs/composable_kernel/PR-301.md) — Switch to standard ROCm packaging  `[source-pr]`
+- [pr-composable_kernel-3013](sources/prs/composable_kernel/PR-3013.md) — [CK_TILE] Add indexing to pooling operator (Lwpck 3892)  `[source-pr]`
+- [pr-composable_kernel-3016](sources/prs/composable_kernel/PR-3016.md) — Streamk unit tests  `[source-pr]`
+- [pr-composable_kernel-304](sources/prs/composable_kernel/PR-304.md) — External Interface  `[source-pr]`
+- [pr-composable_kernel-3041](sources/prs/composable_kernel/PR-3041.md) — [CK_TILE] Stream-K Gemm Example for fp8 and bf8  `[source-pr]`
+- [pr-composable_kernel-3047](sources/prs/composable_kernel/PR-3047.md) — [CK_TILE] Conv bwd splitN support  `[source-pr]`
+- [pr-composable_kernel-3048](sources/prs/composable_kernel/PR-3048.md) — bug fix: identity value in Max and AbsMax  `[source-pr]`
+- [pr-composable_kernel-3058](sources/prs/composable_kernel/PR-3058.md) — fix identity value of AbsMax  `[source-pr]`
+- [pr-composable_kernel-3064](sources/prs/composable_kernel/PR-3064.md) — [CK_TILE] Stream-K operator() Reboot  `[source-pr]`
+- [pr-composable_kernel-3069](sources/prs/composable_kernel/PR-3069.md) — [CK][Examples] Fixing stride issues in ck examples by workaround - By…  `[source-pr]`
+- [pr-composable_kernel-3075](sources/prs/composable_kernel/PR-3075.md) — [CK_BUILDER] old ck build fixes  `[source-pr]`
+- [pr-composable_kernel-31](sources/prs/composable_kernel/PR-31.md) — [MIOpen Downstream] Dynamic Reduction PR  `[source-pr]`
+- [pr-composable_kernel-3107](sources/prs/composable_kernel/PR-3107.md) — Introduces the new partitioner to implement the reduction StreamK kernel.  `[source-pr]`
+- [pr-composable_kernel-311](sources/prs/composable_kernel/PR-311.md) — Improve external interface for GEMM and GEMM+add+add+fastgelu  `[source-pr]`
+- [pr-composable_kernel-3117](sources/prs/composable_kernel/PR-3117.md) — [CK_TILE] Replace GEMM Pipeline Macros in Examples with a Common Enum.  `[source-pr]`
+- [pr-composable_kernel-3119](sources/prs/composable_kernel/PR-3119.md) — test(grouped_gemm): add unit tests for grouped_gemm bquant with preshuffleB true  `[source-pr]`
+- [pr-composable_kernel-3121](sources/prs/composable_kernel/PR-3121.md) — [CK TILE ENGINE] GEMM Multi D Restructure  `[source-pr]`
+- [pr-composable_kernel-3137](sources/prs/composable_kernel/PR-3137.md) — Fix splitk preshuffle  `[source-pr]`
+- [pr-composable_kernel-3145](sources/prs/composable_kernel/PR-3145.md) — Wmma support for gemm_reduce  `[source-pr]`
+- [pr-composable_kernel-3146](sources/prs/composable_kernel/PR-3146.md) — [CK_TILE] Move DataTypeTraits into a Common File  `[source-pr]`
+- [pr-composable_kernel-3147](sources/prs/composable_kernel/PR-3147.md) — [CK tile] Add 2D multiple reductions  `[source-pr]`
+- [pr-composable_kernel-3157](sources/prs/composable_kernel/PR-3157.md) — Tile engine for streamk  `[source-pr]`
+- [pr-composable_kernel-3181](sources/prs/composable_kernel/PR-3181.md) — [CK TILE GEMM] Refactor block_scale_gemm examples  `[source-pr]`
+- [pr-composable_kernel-3196](sources/prs/composable_kernel/PR-3196.md) — [ck_tile] enable test grouped_gemm_quant and gemm_streamk on gfx12  `[source-pr]`
+- [pr-composable_kernel-32](sources/prs/composable_kernel/PR-32.md) — Merge develop into master  `[source-pr]`
+- [pr-composable_kernel-320](sources/prs/composable_kernel/PR-320.md) — Batchnorm-forward and Batchnorm-infer Implemented using generic kernels  `[source-pr]`
+- [pr-composable_kernel-3202](sources/prs/composable_kernel/PR-3202.md) — [CK_TILE] Remove Old CK Tile Stream-K Artifacts  `[source-pr]`
+- [pr-composable_kernel-3204](sources/prs/composable_kernel/PR-3204.md) — remove usage of tile partitioner's full gemm shape  `[source-pr]`
+- [pr-composable_kernel-322](sources/prs/composable_kernel/PR-322.md) — Add switch between compilers, make 9110 compiler default, add full QA scripts.  `[source-pr]`
+- [pr-composable_kernel-323](sources/prs/composable_kernel/PR-323.md) — Fix sporadic standalone softmax validation failure  `[source-pr]`
+- [pr-composable_kernel-3232](sources/prs/composable_kernel/PR-3232.md) — [CK_BUILDER] Put global CK functions in a CK namespace  `[source-pr]`
+- [pr-composable_kernel-3251](sources/prs/composable_kernel/PR-3251.md) — [CK-Tile] Refactor base pipeline usage  `[source-pr]`
+- [pr-composable_kernel-3257](sources/prs/composable_kernel/PR-3257.md) — [ck_tile] refactor reduce kernel  `[source-pr]`
+- [pr-composable_kernel-3259](sources/prs/composable_kernel/PR-3259.md) — [CK Tile] enable building examples by default  `[source-pr]`
+- [pr-composable_kernel-3301](sources/prs/composable_kernel/PR-3301.md) — [CK_TILE] Port hw independent changes from internal repo to develop branch  `[source-pr]`
+- [pr-composable_kernel-331](sources/prs/composable_kernel/PR-331.md) — Add full QA with verification option, few other changes.  `[source-pr]`
+- [pr-composable_kernel-3316](sources/prs/composable_kernel/PR-3316.md) — Wmma support for gemm_bias_add_reduce  `[source-pr]`
+- [pr-composable_kernel-3319](sources/prs/composable_kernel/PR-3319.md) — refactor: break test instances into multiple cpp files to reduce build time  `[source-pr]`
+- [pr-composable_kernel-3320](sources/prs/composable_kernel/PR-3320.md) — [CK_TILE] Fix Quant GEMM build  `[source-pr]`
+- [pr-composable_kernel-3332](sources/prs/composable_kernel/PR-3332.md) — WMMA support for batched_gemm_reduce  `[source-pr]`
+- [pr-composable_kernel-335](sources/prs/composable_kernel/PR-335.md) — Gemm multiple d multiple r  `[source-pr]`
+- [pr-composable_kernel-3359](sources/prs/composable_kernel/PR-3359.md) — [CK-Tile] move out memory operation from cshuffle epilogue class  `[source-pr]`
+- [pr-composable_kernel-3371](sources/prs/composable_kernel/PR-3371.md) — [CK_TILE] Stream-K Tree Reduction and Cache Skipping Integration  `[source-pr]`
+- [pr-composable_kernel-338](sources/prs/composable_kernel/PR-338.md) — Change all device operations to use add_instance_library  `[source-pr]`
+- [pr-composable_kernel-3382](sources/prs/composable_kernel/PR-3382.md) — [CK_BUILDER] Improve CK Builder and CK Builder tests  `[source-pr]`
+- [pr-composable_kernel-3395](sources/prs/composable_kernel/PR-3395.md) — build: reduce build time for bquant tests by splitting into multiple cpp & support on other gfx10 case  `[source-pr]`
+- [pr-composable_kernel-34](sources/prs/composable_kernel/PR-34.md) — [MIOpen Downstream] Fix Reduction Kernel  `[source-pr]`
+- [pr-composable_kernel-3408](sources/prs/composable_kernel/PR-3408.md) — build: Hot fix to reduce massive build time by just disabling the ins…  `[source-pr]`
+- [pr-composable_kernel-3434](sources/prs/composable_kernel/PR-3434.md) — [TILE ENGINE] Restructure to Base class of GEMM  `[source-pr]`
+- [pr-composable_kernel-345](sources/prs/composable_kernel/PR-345.md) — Fused attention  `[source-pr]`
+- [pr-composable_kernel-3459](sources/prs/composable_kernel/PR-3459.md) — [ck_builder] add utility functions to convolution  `[source-pr]`
+- [pr-composable_kernel-3465](sources/prs/composable_kernel/PR-3465.md) — Add support for direct store in epilogue and padding support for wave transfer without transpose  `[source-pr]`
+- [pr-composable_kernel-3491](sources/prs/composable_kernel/PR-3491.md) — Shuffle fix for gfx950  `[source-pr]`
+- [pr-composable_kernel-3512](sources/prs/composable_kernel/PR-3512.md) — [CK TILE] Refactor function amd_buffer_load_invalid_element_return_zero  `[source-pr]`
+- [pr-composable_kernel-3514](sources/prs/composable_kernel/PR-3514.md) — Addition of Stream-K tests using Tile Engine  `[source-pr]`
+- [pr-composable_kernel-3529](sources/prs/composable_kernel/PR-3529.md) — Adding remaining conv, dynamic_op, and scaleadd_scaleadd_relu flavors for grouped conv fwd  `[source-pr]`
+- [pr-composable_kernel-3537](sources/prs/composable_kernel/PR-3537.md) — Padding support for wave transfer  `[source-pr]`
+- [pr-composable_kernel-3544](sources/prs/composable_kernel/PR-3544.md) — [CK] Add base class GridwiseGemm_xdl_cshuffle_base for all gridwise_gemm_xdl classes  `[source-pr]`
+- [pr-composable_kernel-3559](sources/prs/composable_kernel/PR-3559.md) — [CK_TILE] Temporarily disable CK Tile Stream-K reduction tests  `[source-pr]`
+- [pr-composable_kernel-357](sources/prs/composable_kernel/PR-357.md) — fix build issue  `[source-pr]`
+- [pr-composable_kernel-3592](sources/prs/composable_kernel/PR-3592.md) — [CK_BUILDER] Add reflection for wmma and bwd weight instances to ck builder reflection  `[source-pr]`
+- [pr-composable_kernel-3607](sources/prs/composable_kernel/PR-3607.md) — [CK Tile] multi reduce improvements  `[source-pr]`
+- [pr-composable_kernel-3625](sources/prs/composable_kernel/PR-3625.md) — [CK_TILE] Fix alignment in Stream-K workspace buffer  `[source-pr]`
+- [pr-composable_kernel-3627](sources/prs/composable_kernel/PR-3627.md) — Add ck-rocprof: GPU profiling tool for rocprof-compute  `[source-pr]`
+- [pr-composable_kernel-3634](sources/prs/composable_kernel/PR-3634.md) — Solve the staging compiler regression and enhance the docker container execution in script/tools  `[source-pr]`
+- [pr-composable_kernel-3649](sources/prs/composable_kernel/PR-3649.md) — [CK_BUILDER] Integrate CKB validation with CK verification  `[source-pr]`
+- [pr-composable_kernel-3662](sources/prs/composable_kernel/PR-3662.md) — [CK_TILE] Stream-K Tile Engine Test Config File Generation  `[source-pr]`
+- [pr-composable_kernel-368](sources/prs/composable_kernel/PR-368.md) — Gemm reduce examples int4/int8/fp32/bf16  `[source-pr]`
+- [pr-composable_kernel-372](sources/prs/composable_kernel/PR-372.md) — Add int4 reduction examples  `[source-pr]`
+- [pr-composable_kernel-378](sources/prs/composable_kernel/PR-378.md) — Refactor the design of DeviceGemmMultipleDMultipleR_Xdl_CShuffle  `[source-pr]`
+- [pr-composable_kernel-380](sources/prs/composable_kernel/PR-380.md) — Add examples of Conv + reduction (data type: int4, int8, bf16, fp16, fp32)  `[source-pr]`
+- [pr-composable_kernel-381](sources/prs/composable_kernel/PR-381.md) — Add pipeline v1/v2 selector, add more instances  `[source-pr]`
+- [pr-composable_kernel-395](sources/prs/composable_kernel/PR-395.md) — Fused attention instances & padding tests  `[source-pr]`
+- [pr-composable_kernel-403](sources/prs/composable_kernel/PR-403.md) — Batchnorm-forward implemented using welford method to calculate variance  `[source-pr]`
+- [pr-composable_kernel-420](sources/prs/composable_kernel/PR-420.md) — Refactor device op implementations into `impl` subdirectory.  `[source-pr]`
+- [pr-composable_kernel-43](sources/prs/composable_kernel/PR-43.md) — Merge develop into master  `[source-pr]`
+- [pr-composable_kernel-438](sources/prs/composable_kernel/PR-438.md) — Rangify STL algorithms  `[source-pr]`
+- [pr-composable_kernel-443](sources/prs/composable_kernel/PR-443.md) — Rangify call operator of FillUniformDistribution<> & FillUniformDistributionIntegerValue<>  `[source-pr]`
+- [pr-composable_kernel-444](sources/prs/composable_kernel/PR-444.md) — Rangify check_err()  `[source-pr]`
+- [pr-composable_kernel-445](sources/prs/composable_kernel/PR-445.md) — Rangify constructor of HostTensorDescriptor & Tensor<>  `[source-pr]`
+- [pr-composable_kernel-461](sources/prs/composable_kernel/PR-461.md) — BatchNorm backward implementation  `[source-pr]`
+- [pr-composable_kernel-468](sources/prs/composable_kernel/PR-468.md) — Fused elementwise layernorm  `[source-pr]`
+- [pr-composable_kernel-51](sources/prs/composable_kernel/PR-51.md) — fixed multiple definition issue of bfp16/fp32 conversion function when building ckProfiler  `[source-pr]`
+- [pr-composable_kernel-514](sources/prs/composable_kernel/PR-514.md) — Modularize ckProfiler operations  `[source-pr]`
+- [pr-composable_kernel-549](sources/prs/composable_kernel/PR-549.md) — Add a flag to enable/disable debug output in many kernels.  `[source-pr]`
+- [pr-composable_kernel-568](sources/prs/composable_kernel/PR-568.md) — Gemm+layernorm instance, ckProfiler, client example  `[source-pr]`
+- [pr-composable_kernel-638](sources/prs/composable_kernel/PR-638.md) — Update GetTypeString function to generate unique kernel IDs.  `[source-pr]`
+- [pr-composable_kernel-66](sources/prs/composable_kernel/PR-66.md) — Fix building issue for examples  `[source-pr]`
+- [pr-composable_kernel-660](sources/prs/composable_kernel/PR-660.md) — FastRTN  `[source-pr]`
+- [pr-composable_kernel-685](sources/prs/composable_kernel/PR-685.md) — Reduce initial range for half_t splitk  `[source-pr]`
+- [pr-composable_kernel-690](sources/prs/composable_kernel/PR-690.md) — Syncing up from internal repo to enable MI300.  `[source-pr]`
+- [pr-composable_kernel-699](sources/prs/composable_kernel/PR-699.md) — initial stream-k implementation with example  `[source-pr]`
+- [pr-composable_kernel-708](sources/prs/composable_kernel/PR-708.md) — FP8 enablement - add a pseudorandom number generator, add conversion methods  `[source-pr]`
+- [pr-composable_kernel-714](sources/prs/composable_kernel/PR-714.md) — Enable gemm_dl and other kernels on Navi3x.  `[source-pr]`
+- [pr-composable_kernel-723](sources/prs/composable_kernel/PR-723.md) — Simplify kernel argument of device operator Device(Batched)GemmXdl<>  `[source-pr]`
+- [pr-composable_kernel-730](sources/prs/composable_kernel/PR-730.md) — Padded Generic Kernel Instance  `[source-pr]`
+- [pr-composable_kernel-752](sources/prs/composable_kernel/PR-752.md) — Enable gfx941 and gfx942 architectures.  `[source-pr]`
+- [pr-composable_kernel-759](sources/prs/composable_kernel/PR-759.md) — Merging from staging to master.  `[source-pr]`
+- [pr-composable_kernel-765](sources/prs/composable_kernel/PR-765.md) — Disable XDL kernels on unsupported HW; Add `ck::is_xdl_supported` function  `[source-pr]`
+- [pr-composable_kernel-768](sources/prs/composable_kernel/PR-768.md) — Disable XDL kernels on unsupported HW Add ck::is_xdl_supported  `[source-pr]`
+- [pr-composable_kernel-771](sources/prs/composable_kernel/PR-771.md) — Batchnorm splitk single kernel  `[source-pr]`
+- [pr-composable_kernel-788](sources/prs/composable_kernel/PR-788.md) — Grouped Gemm with looping over the tiles.  `[source-pr]`
+- [pr-composable_kernel-797](sources/prs/composable_kernel/PR-797.md) — Average pool backward deviceOP and example  `[source-pr]`
+- [pr-composable_kernel-82](sources/prs/composable_kernel/PR-82.md) — Reduction in Composable Kernel  `[source-pr]`
+- [pr-composable_kernel-826](sources/prs/composable_kernel/PR-826.md) — Implement DPP8-based GEMM for Navi21  `[source-pr]`
+- [pr-composable_kernel-830](sources/prs/composable_kernel/PR-830.md) — Allow building CK for specific data types and split off last remaining DL instances.  `[source-pr]`
+- [pr-composable_kernel-845](sources/prs/composable_kernel/PR-845.md) — Mha train develop reduce interface  `[source-pr]`
+- [pr-composable_kernel-856](sources/prs/composable_kernel/PR-856.md) — [HotFix] add config and version files to pass on build info  `[source-pr]`
+- [pr-composable_kernel-861](sources/prs/composable_kernel/PR-861.md) — MaxPool & AvgPool bwd instances, test, ckProfiler, client example  `[source-pr]`
+- [pr-composable_kernel-932](sources/prs/composable_kernel/PR-932.md) — Refactoring cmake files to build data types separately.  `[source-pr]`
+- [pr-composable_kernel-933](sources/prs/composable_kernel/PR-933.md) — Add fp8 @ bf8 gemm support and example  `[source-pr]`
+- [pr-composable_kernel-974](sources/prs/composable_kernel/PR-974.md) — Clean DTYPES conditions in CMake  `[source-pr]`
+- [pr-composable_kernel-982](sources/prs/composable_kernel/PR-982.md) — Revert 'Grouped Gemm with looping over the tiles.'  `[source-pr]`
+- [pr-flash-attention-12](sources/prs/flash-attention/PR-12.md) — Optimized API for packed conditions  `[source-pr]`
+- [pr-rocBLAS-1023](sources/prs/rocBLAS/PR-1023.md) — Updating strided_batched tests to use CHECK_DEVICE_ALLOCATION().  `[source-pr]`
+- [pr-rocBLAS-1115](sources/prs/rocBLAS/PR-1115.md) — Batched memcheck fixes  `[source-pr]`
+- [pr-rocBLAS-1117](sources/prs/rocBLAS/PR-1117.md) — Use smart pointers instead of Variable Length Arrays  `[source-pr]`
+- [pr-rocBLAS-1133](sources/prs/rocBLAS/PR-1133.md) — Batched memcheck fixes (#1115)  `[source-pr]`
+- [pr-rocBLAS-1134](sources/prs/rocBLAS/PR-1134.md) — Batched memcheck fixes (#1115)  `[source-pr]`
+- [pr-rocBLAS-1171](sources/prs/rocBLAS/PR-1171.md) — [Hotfix] SWDEV-254253  `[source-pr]`
+- [pr-rocBLAS-1327](sources/prs/rocBLAS/PR-1327.md) — re-optimize kernels when not large index  `[source-pr]`
+- [pr-rocBLAS-1364](sources/prs/rocBLAS/PR-1364.md) — Hotfix guard kernel launches  `[source-pr]`
+- [pr-rocBLAS-1369](sources/prs/rocBLAS/PR-1369.md) — Fix host-pointer-mode reductions for nonblocking streams  `[source-pr]`
+- [pr-rocBLAS-1474](sources/prs/rocBLAS/PR-1474.md) — reducing reduction workspace for ILP64 (#2678)  `[source-pr]`
+- [pr-rocBLAS-1489](sources/prs/rocBLAS/PR-1489.md) — iamin iamax eliminate passes for workspace size reduction (#2711)  `[source-pr]`
+- [pr-rocBLAS-1539](sources/prs/rocBLAS/PR-1539.md) — fix dot large N batched bug (#2836)  `[source-pr]`
+- [pr-rocBLAS-1567](sources/prs/rocBLAS/PR-1567.md) — tests reduced and moved to correct files  `[source-pr]`
+- [pr-rocBLAS-1662](sources/prs/rocBLAS/PR-1662.md) — fix explicit specialization cannot have a storage class warnings (#1658)  `[source-pr]`
+- [pr-rocBLAS-207](sources/prs/rocBLAS/PR-207.md) — add MIOpen sizes for TN with k high multiple of 2  `[source-pr]`
+- [pr-rocBLAS-220](sources/prs/rocBLAS/PR-220.md) — fix the bug in blas1 when size is > 1024*1024  `[source-pr]`
+- [pr-rocBLAS-377](sources/prs/rocBLAS/PR-377.md) — change midnight trigger 3 to 1am  `[source-pr]`
+- [pr-rocBLAS-379](sources/prs/rocBLAS/PR-379.md) — Test hpa arithmetic and update hip hpa files  `[source-pr]`
+- [pr-rocBLAS-429](sources/prs/rocBLAS/PR-429.md) — Complete refactoring of rocBLAS test framework  `[source-pr]`
+- [pr-rocBLAS-444](sources/prs/rocBLAS/PR-444.md) — Add profile logging, refactor rocBLAS, and fix TRSV, IAMIN (net -1164 LoC)  `[source-pr]`
+- [pr-rocBLAS-448](sources/prs/rocBLAS/PR-448.md) — TRSM optimizations - reduce copies and smaller trtri kernel sizes  `[source-pr]`
+- [pr-rocBLAS-631](sources/prs/rocBLAS/PR-631.md) — gfx908 support  `[source-pr]`
+- [pr-rocBLAS-655](sources/prs/rocBLAS/PR-655.md) — fp16 and bfloat16 precision for dot  `[source-pr]`
+- [pr-rocBLAS-673](sources/prs/rocBLAS/PR-673.md) — Reduce complex GEMM pre_checkin tests  `[source-pr]`
+- [pr-rocBLAS-696](sources/prs/rocBLAS/PR-696.md) — Torrezuk batched and strided nrm2 and asum  `[source-pr]`
+- [pr-rocBLAS-751](sources/prs/rocBLAS/PR-751.md) — Fix build for hipclang  `[source-pr]`
+- [pr-rocBLAS-923](sources/prs/rocBLAS/PR-923.md) — Use C++14 std::enable_if_t to make code more compact  `[source-pr]`
+- [pr-sglang-21315](sources/prs/sglang/PR-21315.md) — [AMD] Fused rope kv store  `[source-pr]`
+- [pr-sglang-21511](sources/prs/sglang/PR-21511.md) — [AMD] Enable FP8 KV cache and FP8 attention kernel for NSA on MI300/MI355 with TileLang backend  `[source-pr]`
+- [pr-sglang-21657](sources/prs/sglang/PR-21657.md) — [AMD] Use tgemm.mm for MoEGate router gemm in deepseek_v2.py  `[source-pr]`
+- [pr-sglang-21947](sources/prs/sglang/PR-21947.md) — [AMD] Resolve the performance degression when launch server with '--enable-aiter-allreduce-fusion'  `[source-pr]`
+- [pr-sglang-21986](sources/prs/sglang/PR-21986.md) — [AMD] Simplify fused allreduce + RMSNorm and remove hidden_dim allowlist  `[source-pr]`
+- [pr-sglang-22232](sources/prs/sglang/PR-22232.md) — Reduce unnecessary kernels and copies in the NSA indexer  `[source-pr]`
+- [pr-sglang-22424](sources/prs/sglang/PR-22424.md) — [AMD] Use aiter CK layernorm2d for LayerNorm to reduce NSA indexer kernel launches  `[source-pr]`
+- [pr-sglang-22673](sources/prs/sglang/PR-22673.md) — [Perf] Precompute gemma_weight to avoid redundant add on every forward  `[source-pr]`
+- [pr-sglang-22850](sources/prs/sglang/PR-22850.md) — [AMD] Reduce NSA indexer kernels (weights_proj,  k-cache store kernel fusion)  `[source-pr]`
+- [pr-sglang-23019](sources/prs/sglang/PR-23019.md) — refactor(moe): de-duplicate triton MoE runner path into shared helpers  `[source-pr]`
+- [pr-sglang-23319](sources/prs/sglang/PR-23319.md) — [AMD] Use bpreshuffle FP8 blockscale GEMM to replace ABScale GEMM  `[source-pr]`
+- [pr-sglang-23562](sources/prs/sglang/PR-23562.md) — [AMD] Enable preshuffle paged MQA and page_size=64 for NSA indexer  `[source-pr]`
+- [pr-sglang-23575](sources/prs/sglang/PR-23575.md) — [AMD] fused qk gemma norm kernels to reduce four kernels  `[source-pr]`
+- [pr-sglang-23646](sources/prs/sglang/PR-23646.md) — [MUSA][Diffusion] Fix fa3 API on MT MUSA  `[source-pr]`
+- [pr-sglang-23648](sources/prs/sglang/PR-23648.md) — [diffusion] model: Fix FLUX.1/2 graph breaks  `[source-pr]`
+- [pr-sglang-23882](sources/prs/sglang/PR-23882.md) — Deepseek V4  `[source-pr]`
+- [pr-sglang-24033](sources/prs/sglang/PR-24033.md) — amd/deepseek_v4 integration 4/N - TilelangAttn 0428  `[source-pr]`
+- [pr-sglang-24050](sources/prs/sglang/PR-24050.md) — amd/deepseek_v4 integration 5/N - indexer TilelangAttn 0428  `[source-pr]`
+- [pr-sglang-24143](sources/prs/sglang/PR-24143.md) — amd/deepseek_v4 integration 7/N - topk512transform kernel 0430  `[source-pr]`
+- [pr-sglang-24259](sources/prs/sglang/PR-24259.md) — [AMD] enable sdma for moriep unittest  `[source-pr]`
+- [pr-sglang-24360](sources/prs/sglang/PR-24360.md) — [AMD] Replace naive triton RMSNorm with aiter RMSNorm for diffusion model  `[source-pr]`
+- [pr-sglang-24629](sources/prs/sglang/PR-24629.md) — [Fix] Disable FlashInfer allreduce fusion under deterministic inference  `[source-pr]`
+- [pr-sglang-24930](sources/prs/sglang/PR-24930.md) — amd/deepseek_v4 integration 16/N Triton sparse MLA kernel 0508  `[source-pr]`
+- [pr-sglang-25245](sources/prs/sglang/PR-25245.md) — [AMD] amd/deepseek_v4 integration 23/N fused softmax pool Triton kernel for compressor  `[source-pr]`
+- [pr-sglang-25251](sources/prs/sglang/PR-25251.md) — [AMD] amd/deepseek_v4 integration 28/N use aiter greedy_sample for all-greedy sampling on ROCm  `[source-pr]`
+- [pr-sglang-25554](sources/prs/sglang/PR-25554.md) — amd/deepseek_v4 27/N [fix] Reduce Triton autotune configs for faster first-time server launch  `[source-pr]`
+- [pr-sglang-25898](sources/prs/sglang/PR-25898.md) — [AMD] Dsv4/pr1 fix run time issue  `[source-pr]`
+- [pr-sglang-26665](sources/prs/sglang/PR-26665.md) — [refactor] unify cuda-graph capture/replay across attention backends  `[source-pr]`
+- [pr-triton-136](sources/prs/triton/PR-136.md) — [dotOp] [rocMLIR] Replace `tt.dot` with `rock.blockwise_gemm_v2`  `[source-pr]`
+- [pr-triton-153](sources/prs/triton/PR-153.md) — Adding wave64 support to Triton  `[source-pr]`
+- [pr-triton-156](sources/prs/triton/PR-156.md) — Some warp64 related fixes.  `[source-pr]`
+- [pr-triton-200](sources/prs/triton/PR-200.md) — Ifu 4 26 2023  `[source-pr]`
+- [pr-triton-216](sources/prs/triton/PR-216.md) — [dotOp] [rocMLIR] [Upstream] Upstream sync after IFU04262023  `[source-pr]`
+- [pr-triton-226](sources/prs/triton/PR-226.md) — [MFMA] Enabled fused attention forward pass.  `[source-pr]`
+- [pr-triton-244](sources/prs/triton/PR-244.md) — Dynamic Warp Size to enable Navi 2x/3x support  `[source-pr]`
+- [pr-triton-247](sources/prs/triton/PR-247.md) — [FA OPTIMIZATION] Keep results of FA dot operations in registers  `[source-pr]`
+- [pr-triton-251](sources/prs/triton/PR-251.md) — [Triton] Mfma16 support  `[source-pr]`
+- [pr-triton-268](sources/prs/triton/PR-268.md) — [CHERRY-PICKED FROM UPSTREAM][BACKEND] no longer uses shared mem or barriers for single-warp reductions (openai#1915)  `[source-pr]`
+- [pr-triton-273](sources/prs/triton/PR-273.md) — Favor dim 1 (N) when setting warpsPerCTA for non-FA mfma  `[source-pr]`
+- [pr-triton-309](sources/prs/triton/PR-309.md) — refine gemm tuning scripts  `[source-pr]`
+- [pr-triton-340](sources/prs/triton/PR-340.md) — [FA fwd D=128] Reduce LDS usage in epilogue  `[source-pr]`
+- [pr-triton-344](sources/prs/triton/PR-344.md) — [GEMM] [Tuning] Merge split_k and non split_k kernels in GEMM tuning script  `[source-pr]`
+- [pr-triton-352](sources/prs/triton/PR-352.md) — [MFMA] Switch between MFMA types  `[source-pr]`
+- [pr-triton-362](sources/prs/triton/PR-362.md) — [GEMM] [Tuning] Add `waves_per_eu` to gemm tuning  `[source-pr]`
+- [pr-triton-400](sources/prs/triton/PR-400.md) — [MFMA] Refactor dot pipeline to reduce code duplication  `[source-pr]`
+- [pr-triton-413](sources/prs/triton/PR-413.md) — [MFMA] Support tile size 4x4 version 1  `[source-pr]`
+- [pr-triton-478](sources/prs/triton/PR-478.md) — refine tolerance in checking GEMM correctness  `[source-pr]`
+- [pr-triton-526](sources/prs/triton/PR-526.md) — [ReductionOp][MFMA] fix reduction of mfma64x4 layout  `[source-pr]`
+- [pr-triton-60](sources/prs/triton/PR-60.md) — [ROCm] Lowering ReduceOp with inline asm. Logical warpSize 32 is assumed.  `[source-pr]`
+- [pr-triton-606](sources/prs/triton/PR-606.md) — [tuning] gemm tuning script v3.3  `[source-pr]`
+- [pr-triton-613](sources/prs/triton/PR-613.md) — replace rocprof with rocprofv2 for the tune gemm script  `[source-pr]`
+- [pr-triton-614](sources/prs/triton/PR-614.md) — Copy *tune_gemm* from `triton-mlir` branch to `main_perf` branch  `[source-pr]`
+- [pr-triton-621](sources/prs/triton/PR-621.md) — Add explicit multiply-reduce GEMM kernel  `[source-pr]`
+- [pr-triton-637](sources/prs/triton/PR-637.md) — Add test and benchmark for explicit dot GEMM  `[source-pr]`
+- [pr-triton-652](sources/prs/triton/PR-652.md) — add stream-k v0.2  `[source-pr]`
+- [pr-triton-660](sources/prs/triton/PR-660.md) — Streamk v0.3  `[source-pr]`
+- [pr-triton-668](sources/prs/triton/PR-668.md) — rmsnorm optimization for M = 1  `[source-pr]`
+- [pr-triton-676](sources/prs/triton/PR-676.md) — implement persistent loop based rmsnorm kernel  `[source-pr]`
+- [pr-triton-709](sources/prs/triton/PR-709.md) — RMSNorm backward kernel implementaton  `[source-pr]`
+- [pr-triton-733](sources/prs/triton/PR-733.md) — rmsnorm backward optimizations  `[source-pr]`
+- [pr-triton-76](sources/prs/triton/PR-76.md) — [ROCM][scripts] Add script to build debug LLVM installation.  `[source-pr]`
+- [pr-triton-769](sources/prs/triton/PR-769.md) — Optimize RMSNorm backward pass  `[source-pr]`
+- [pr-triton-849](sources/prs/triton/PR-849.md) — Use the MoE kernel in commit 7f341eb95 to avoid regression  `[source-pr]`
+- [pr-triton-875](sources/prs/triton/PR-875.md) — [triton_kernels] TopK kernel fixes  `[source-pr]`
+- [pr-vllm-36022](sources/prs/vllm/PR-36022.md) — [Kernel] Add FlashInfer MoE A2A Kernel  `[source-pr]`
+- [pr-vllm-36276](sources/prs/vllm/PR-36276.md) — [EPLB] Add nixl-based eplb communicator  `[source-pr]`
+- [pr-vllm-36574](sources/prs/vllm/PR-36574.md) — [ROCm] Utilize persistent MLA kernel from AITER  `[source-pr]`
+- [pr-vllm-37128](sources/prs/vllm/PR-37128.md) — [MoE Refactor] Mxfp4 oracle rebased  `[source-pr]`
+- [pr-vllm-37418](sources/prs/vllm/PR-37418.md) — [Bugfix][ROCm] Fix MoRI + AITER FP8 dispatch compatibility for defer_input_quant  `[source-pr]`
+- [pr-vllm-37539](sources/prs/vllm/PR-37539.md) — [Performance] Remove unnecessary zero-fill of MLA decode output tensor in Aiter backend  `[source-pr]`
+- [pr-vllm-37646](sources/prs/vllm/PR-37646.md) — [ROCm][FEAT] AITER Fused Allreduce + RMSNorm  `[source-pr]`
+- [pr-vllm-37841](sources/prs/vllm/PR-37841.md) — replace cuda_device_count_stateless() to current_platform.device_count()  `[source-pr]`
+- [pr-vllm-38503](sources/prs/vllm/PR-38503.md) — [ROCm][Engine] Fix GPU memory leaks in engine shutdown and test workaround for async KV prefix cache reset  `[source-pr]`
+- [pr-vllm-38657](sources/prs/vllm/PR-38657.md) — [compile] Invoke split FX graph by codegen.  `[source-pr]`
+- [pr-vllm-38659](sources/prs/vllm/PR-38659.md) — [1/N][Cleanup] Standardize on use of `is_quantized_kv_cache`  `[source-pr]`
+- [pr-vllm-38901](sources/prs/vllm/PR-38901.md) — refactor hard coded device string in test files under tests/compile tests/quantization tests/models and tests/model_executor  `[source-pr]`
+- [pr-vllm-39014](sources/prs/vllm/PR-39014.md) — [vLLM IR] rework gemma_rms_norm  `[source-pr]`
+- [pr-vllm-39024](sources/prs/vllm/PR-39024.md) — Add structure to `requirements/` directory  `[source-pr]`
+- [pr-vllm-39181](sources/prs/vllm/PR-39181.md) — [Bugfix]Fix EP precision for Qwen3.5, Qwen3-Next  `[source-pr]`
+- [pr-vllm-39242](sources/prs/vllm/PR-39242.md) — [ROCm] Add MLA dual RMS norm fusion (Q, KV) pass for DeepSeek/Kimi-K2  `[source-pr]`
+- [pr-vllm-39987](sources/prs/vllm/PR-39987.md) — [ROCm] Add env flags to disable dynamic MXFP4 quant and enable AITER tuned GEMMs for Attention Projection Layers  `[source-pr]`
+- [pr-vllm-40037](sources/prs/vllm/PR-40037.md) — [ROCm] Add gfx1102/gfx1103 support  `[source-pr]`
+- [pr-vllm-40159](sources/prs/vllm/PR-40159.md) — [MyPy] Enable mypy for `vllm/model_executor/layers/`  `[source-pr]`
+- [pr-vllm-40710](sources/prs/vllm/PR-40710.md) — [Aiter][ROCm] RMSNormGated+GroupedQuantFP8 fusion  `[source-pr]`
+- [pr-vllm-40711](sources/prs/vllm/PR-40711.md) — [Aiter][ROCm] gdn_linear_attn kernel fusion  `[source-pr]`
+- [pr-vllm-40871](sources/prs/vllm/PR-40871.md) — [New Model][ROCm] Add AMD support for DeepSeek V4  `[source-pr]`
+- [pr-vllm-40941](sources/prs/vllm/PR-40941.md) — [Attention][TurboQuant] Share dequant buffers, eliminate float16_copy  `[source-pr]`
+- [pr-vllm-41675](sources/prs/vllm/PR-41675.md) — [ROCm] Add QuickReduce min-size override and codec threshold  `[source-pr]`
+- [pr-vllm-41713](sources/prs/vllm/PR-41713.md) — Eliminate redundant MoE buffer copies in AITER fused experts (without dependency on AITER changes)  `[source-pr]`
+- [pr-vllm-41972](sources/prs/vllm/PR-41972.md) — [ROCm] Fix AITER AR+RMSNorm no-residual fusion  `[source-pr]`
+- [pr-vllm-41979](sources/prs/vllm/PR-41979.md) — [MoE] Move various experts classes to fused_moe/experts/  `[source-pr]`
+- [pr-vllm-42409](sources/prs/vllm/PR-42409.md) — [ROCm] Widen AITER fused AR RMSNorm 1-stage gate  `[source-pr]`
+- [pr-vllm-42411](sources/prs/vllm/PR-42411.md) — [ROCm] Run AITER RMSNorm pad fusion before AR RMS fusion  `[source-pr]`
+- [pr-vllm-42509](sources/prs/vllm/PR-42509.md) — [ROCm][MLA] FP8 ASM prefill for AITER dense MLA backend on gfx950  `[source-pr]`
+- [pr-vllm-43108](sources/prs/vllm/PR-43108.md) — [MoE Refactor] Remove supports_expert_map  `[source-pr]`
+- [pr-vllm-43717](sources/prs/vllm/PR-43717.md) — [9/n] Migrate attention and cache kernels to torch stable ABI (continued)  `[source-pr]`
+- [pr-vllm-43727](sources/prs/vllm/PR-43727.md) — [MoE] Remove inplace fused experts mechanism  `[source-pr]`
 - [kernel-flash-attention-ck](wiki/kernels/flash-attention-ck.md) — FlashAttention-2 via CK-tile on CDNA (MI300X)  `[wiki-kernel]`
 - [kernel-rmsnorm](wiki/kernels/rmsnorm.md) — Fused RMSNorm (+ residual / quant) on CDNA  `[wiki-kernel]`
 

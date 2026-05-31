@@ -11,7 +11,8 @@ architectures:
 - gfx942
 tags:
 - gfx942
-techniques: []
+techniques:
+- lds-swizzling
 hardware_features: []
 kernel_types: []
 languages:
@@ -42,6 +43,7 @@ changed_paths:
 - lib/codegen/pass.cc
 - lib/codegen/selection/generator.cc
 - lib/codegen/transform/peephole.cc
+facet_source: inferred
 ---
 
 # Enable rocm

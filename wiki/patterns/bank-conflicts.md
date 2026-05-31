@@ -1,6 +1,6 @@
 ---
 id: pattern-bank-conflicts
-title: "LDS Bank Conflicts — serialized shared-memory access"
+title: LDS Bank Conflicts — serialized shared-memory access
 type: pattern
 architectures:
 - gfx942
@@ -31,8 +31,9 @@ sources:
 - doc-cdna4-isa
 - blog-gemm-optimization
 - ref-matrix-calculator
+implemented_by:
+- pr-FlyDSL-264
 ---
-
 # LDS Bank Conflicts — serialized shared-memory access
 
 ## What this pattern looks like

@@ -1,6 +1,6 @@
 ---
 id: kernel-paged-attention
-title: "Paged Attention Decode (vLLM / AITER) on MI300"
+title: Paged Attention Decode (vLLM / AITER) on MI300
 type: kernel
 architectures:
 - gfx942
@@ -41,23 +41,32 @@ performance_claims:
 - gpu: MI300X
   dtype: fp16
   metric: hbm-bandwidth-utilization
-  value: "~80% of 5.3 TB/s peak at large batch decode"
+  value: ~80% of 5.3 TB/s peak at large batch decode
   source_id: doc-mi300x-datasheet
   confidence: inferred
 - gpu: MI300X
   dtype: fp8
   metric: kv-cache-read-volume
-  value: "~2x lower than fp16 KV cache (1 byte/elem vs 2)"
+  value: ~2x lower than fp16 KV cache (1 byte/elem vs 2)
   source_id: ref-aiter
   confidence: source-reported
 - gpu: MI300X
   dtype: bf16
   metric: decode-throughput
-  value: "AITER paged-attn outperforms the reference vLLM HIP kernel on long-context decode"
+  value: AITER paged-attn outperforms the reference vLLM HIP kernel on long-context
+    decode
   source_id: blog-flash-attention-amd
   confidence: source-reported
+implemented_by:
+- pr-aiter-1383
+- pr-triton-718
+- pr-aiter-376
+- pr-aiter-159
+- pr-sglang-23620
+- pr-composable_kernel-1789
+- pr-vllm-43817
+- pr-vllm-38502
 ---
-
 # Paged Attention Decode (vLLM / AITER) on MI300
 
 ## Overview

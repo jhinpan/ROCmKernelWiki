@@ -26,8 +26,11 @@ merge_sha: 9b0b210a3676
 inclusion_reason: kernel path 'csrc/attention.cu'; keyword 'attention'
 changed_paths:
 - csrc/attention.cu
+related:
+- kernel-paged-attention
+- kernel-mla-decode
+- kernel-flash-attention-ck
 ---
-
 # Pa opt 1121
 
 **Repository:** [ROCm/aiter](https://github.com/ROCm/aiter) · **PR:** [#2](https://github.com/ROCm/aiter/pull/2) · **Merged:** 2024-11-21 · **Author:** @carlushuang

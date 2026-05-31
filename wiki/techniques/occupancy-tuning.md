@@ -1,6 +1,6 @@
 ---
 id: technique-occupancy-tuning
-title: "Occupancy Tuning — Waves per SIMD vs ILP on CDNA"
+title: Occupancy Tuning — Waves per SIMD vs ILP on CDNA
 type: technique
 architectures:
 - gfx942
@@ -36,8 +36,16 @@ sources:
 - blog-gemm-optimization
 - doc-cdna3-isa
 - blog-4wave-fp8-gemm
+implemented_by:
+- pr-Tensile-1383
+- pr-Tensile-1529
+- pr-FlyDSL-591
+- pr-composable_kernel-2825
+- pr-composable_kernel-2722
+- pr-composable_kernel-2319
+- pr-Tensile-1406
+- pr-FlyDSL-447
 ---
-
 # Occupancy Tuning — Waves per SIMD vs ILP on CDNA
 
 ## What occupancy actually is on CDNA

@@ -1,6 +1,6 @@
 ---
 id: kernel-rmsnorm
-title: "Fused RMSNorm (+ residual / quant) on CDNA"
+title: Fused RMSNorm (+ residual / quant) on CDNA
 type: kernel
 architectures:
 - gfx942
@@ -50,24 +50,32 @@ performance_claims:
 - gpu: MI300X
   dtype: bf16
   metric: HBM bandwidth utilization
-  value: "~80-90% of 5.3 TB/s (memory-bound, large hidden)"
+  value: ~80-90% of 5.3 TB/s (memory-bound, large hidden)
   source_id: doc-mi300x-datasheet
-  shape: "[8192, 8192]"
+  shape: '[8192, 8192]'
   utilization: memory-bound
 - gpu: MI300X
   dtype: bf16
   metric: speedup vs unfused norm + residual + quant
-  value: "~1.5-2x from fusing residual-add and FP8 quant into the norm"
+  value: ~1.5-2x from fusing residual-add and FP8 quant into the norm
   source_id: ref-aiter
-  baseline: "three separate elementwise launches"
+  baseline: three separate elementwise launches
 - gpu: MI355X
   dtype: bf16
   metric: HBM bandwidth utilization
-  value: "~80-90% of up to 8 TB/s"
+  value: ~80-90% of up to 8 TB/s
   source_id: doc-mi300x-datasheet
   utilization: memory-bound
+implemented_by:
+- pr-composable_kernel-1605
+- pr-vllm-40710
+- pr-FlyDSL-524
+- pr-composable_kernel-1604
+- pr-sglang-25898
+- pr-FlyDSL-447
+- pr-composable_kernel-2978
+- pr-composable_kernel-2594
 ---
-
 # Fused RMSNorm (+ residual / quant) on CDNA
 
 ## Overview

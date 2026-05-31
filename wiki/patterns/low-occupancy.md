@@ -1,6 +1,6 @@
 ---
 id: pattern-low-occupancy
-title: "Low Occupancy / Idle CUs"
+title: Low Occupancy / Idle CUs
 type: pattern
 architectures:
 - gfx942
@@ -35,8 +35,9 @@ sources:
 - blog-triton-optimizations
 - doc-cdna3-isa
 - blog-gemm-optimization
+implemented_by:
+- pr-Tensile-1383
 ---
-
 # Low Occupancy / Idle CUs
 
 ## What this pattern looks like

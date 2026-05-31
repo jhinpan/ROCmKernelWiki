@@ -44,8 +44,11 @@ changed_paths:
 - CobaltLib/FindOpenCL.cmake
 - CobaltLib/README.md
 - CobaltLib/include/Cobalt.h
+related:
+- technique-vgpr-budgeting
+- technique-stream-k
+- technique-split-k
 ---
-
 # Tensor Contractions in OpenCL
 
 **Repository:** [ROCm/Tensile](https://github.com/ROCm/Tensile) · **PR:** [#9](https://github.com/ROCm/Tensile/pull/9) · **Merged:** 2016-04-22 · **Author:** @guacamoleo

@@ -1,7 +1,9 @@
 ---
 id: lang-composable-kernel
-title: "Composable Kernel (CK / ck_tile) — A Tile DSL for CDNA"
+title: Composable Kernel (CK / ck_tile) — A Tile DSL for CDNA
 type: language
+version_sensitive:
+- vs-ck-tile-status
 architectures:
 - gfx942
 - gfx950
@@ -34,8 +36,16 @@ sources:
 - blog-cktile-flash
 - blog-amd-matrix-cores
 - doc-rocm-hip-hw
+implemented_by:
+- pr-composable_kernel-2836
+- pr-composable_kernel-1705
+- pr-flash-attention-179
+- pr-composable_kernel-3603
+- pr-composable_kernel-3359
+- pr-composable_kernel-3038
+- pr-composable_kernel-2955
+- pr-composable_kernel-2878
 ---
-
 # Composable Kernel (CK / ck_tile) — A Tile DSL for CDNA
 
 ## Overview

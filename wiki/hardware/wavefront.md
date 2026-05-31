@@ -1,6 +1,6 @@
 ---
 id: hw-wavefront
-title: "Wavefronts, EXEC Mask & Register Files (CDNA)"
+title: Wavefronts, EXEC Mask & Register Files (CDNA)
 type: hardware
 architectures:
 - gfx942
@@ -34,8 +34,9 @@ aliases:
 - warp
 - EXEC mask
 - occupancy
+implemented_by:
+- pr-Tensile-1383
 ---
-
 # Wavefronts, EXEC Mask & Register Files (CDNA)
 
 ## Overview

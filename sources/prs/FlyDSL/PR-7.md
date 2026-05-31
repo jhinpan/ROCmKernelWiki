@@ -16,13 +16,14 @@ tags:
 - mfma
 - rmsnorm
 - softmax
-techniques: []
+techniques:
+- mfma-pipelining
 hardware_features:
-- mfma
 - lds
+- mfma
 kernel_types:
-- rmsnorm
 - layernorm
+- rmsnorm
 - softmax
 languages:
 - flydsl
@@ -36,8 +37,12 @@ changed_paths:
 - tests/python/gpu/test_layernorm.py
 - tests/python/gpu/test_rmsnorm.py
 - tests/python/gpu/test_softmax.py
+facet_source: inferred
+related:
+- technique-wave-reduce
+- kernel-flash-attention-ck
+- kernel-rmsnorm
 ---
-
 # use rocir in softmax/layernorm/rmsnorm ops
 
 **Repository:** [ROCm/FlyDSL](https://github.com/ROCm/FlyDSL) · **PR:** [#7](https://github.com/ROCm/FlyDSL/pull/7) · **Merged:** 2025-12-03 · **Author:** @XingerZhu

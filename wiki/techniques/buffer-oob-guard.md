@@ -1,6 +1,6 @@
 ---
 id: technique-buffer-oob-guard
-title: "Branchless Boundary Handling with Buffer OOB Guards"
+title: Branchless Boundary Handling with Buffer OOB Guards
 type: technique
 architectures:
 - gfx942
@@ -33,8 +33,16 @@ sources:
 - ref-gcnasm
 - doc-llvm-amdgpu
 - blog-triton-amd
+implemented_by:
+- pr-triton-729
+- pr-aiter-2328
+- pr-aiter-2685
+- pr-aiter-2394
+- pr-composable_kernel-3512
+- pr-composable_kernel-2425
+- pr-Tensile-1521
+- pr-Tensile-1288
 ---
-
 # Branchless Boundary Handling with Buffer OOB Guards
 
 ## The problem: tail tiles and ragged bounds

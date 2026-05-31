@@ -1,6 +1,6 @@
 ---
 id: pattern-mfma-underutilized
-title: "Matrix Cores Idle — MFMA Underutilization"
+title: Matrix Cores Idle — MFMA Underutilization
 type: pattern
 architectures:
 - gfx942
@@ -35,8 +35,10 @@ sources:
 - blog-gemm-optimization
 - blog-matrix-cores-cdna
 - doc-mi300x-datasheet
+implemented_by:
+- pr-composable_kernel-2110
+- pr-Tensile-1288
 ---
-
 # Matrix Cores Idle — MFMA Underutilization
 
 ## Symptom

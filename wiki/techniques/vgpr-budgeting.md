@@ -1,6 +1,6 @@
 ---
 id: technique-vgpr-budgeting
-title: "VGPR Budgeting — ArchVGPR + AGPR Pressure vs Occupancy"
+title: VGPR Budgeting — ArchVGPR + AGPR Pressure vs Occupancy
 type: technique
 architectures:
 - gfx942
@@ -38,8 +38,16 @@ sources:
 - doc-mi300x-datasheet
 - blog-gemm-optimization
 - ref-matrix-calculator
+implemented_by:
+- pr-Tensile-1383
+- pr-sglang-25898
+- pr-composable_kernel-2528
+- pr-composable_kernel-2466
+- pr-composable_kernel-2276
+- pr-composable_kernel-2110
+- pr-FlyDSL-447
+- pr-sglang-26208
 ---
-
 # VGPR Budgeting — ArchVGPR + AGPR Pressure vs Occupancy
 
 ## Why a budget exists

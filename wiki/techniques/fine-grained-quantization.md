@@ -1,6 +1,6 @@
 ---
 id: technique-fine-grained-quantization
-title: "Fine-Grained FP8 Quantization & Block Scaling"
+title: Fine-Grained FP8 Quantization & Block Scaling
 type: technique
 architectures:
 - gfx942
@@ -39,8 +39,16 @@ sources:
 - doc-cdna4-isa
 - doc-cdna4-whitepaper
 - blog-amd-matrix-cores
+implemented_by:
+- pr-FlyDSL-554
+- pr-composable_kernel-3603
+- pr-aiter-580
+- pr-aiter-2136
+- pr-FlyDSL-153
+- pr-aiter-3228
+- pr-FlyDSL-278
+- pr-sglang-22338
 ---
-
 # Fine-Grained FP8 Quantization & Block Scaling
 
 ## Overview

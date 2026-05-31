@@ -12,7 +12,8 @@ architectures:
 tags:
 - gfx942
 - quantization
-techniques: []
+techniques:
+- fine-grained-quantization
 hardware_features: []
 kernel_types:
 - quantization
@@ -27,8 +28,11 @@ inclusion_reason: keyword 'quant'
 changed_paths:
 - tests/benchmark/per_token_quant_benchmark.py
 - tests/utils.py
+facet_source: inferred
+related:
+- technique-fine-grained-quantization
+- kernel-rmsnorm
 ---
-
 # update per_token quant bench
 
 **Repository:** [ROCm/FlyDSL](https://github.com/ROCm/FlyDSL) · **PR:** [#8](https://github.com/ROCm/FlyDSL/pull/8) · **Merged:** 2025-12-04 · **Author:** @zhiding512

@@ -12,10 +12,12 @@ architectures:
 tags:
 - gfx942
 - moe
+- transpose
 techniques: []
 hardware_features: []
 kernel_types:
 - moe
+- transpose
 languages:
 - hip
 - cpp
@@ -30,8 +32,12 @@ changed_paths:
 - csrc/transpose_add.cu
 - op_tests/dense_70x2.py
 - op_tests/test_transpose_add.py
+facet_source: inferred
+related:
+- technique-bank-conflict-avoidance
+- kernel-transpose-lds
+- kernel-grouped-gemm
 ---
-
 # add add_transpose implement
 
 **Repository:** [ROCm/aiter](https://github.com/ROCm/aiter) · **PR:** [#4](https://github.com/ROCm/aiter/pull/4) · **Merged:** 2024-11-27 · **Author:** @fangche123

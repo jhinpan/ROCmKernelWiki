@@ -27,8 +27,11 @@ inclusion_reason: keyword 'rmsnorm'
 changed_paths:
 - ater/__init__.py
 - ater/ops/rmsnorm.py
+related:
+- kernel-rmsnorm
+- technique-wave-reduce
+- technique-kernel-fusion
 ---
-
 # Expose rmsnorm functions
 
 **Repository:** [ROCm/aiter](https://github.com/ROCm/aiter) · **PR:** [#9](https://github.com/ROCm/aiter/pull/9) · **Merged:** 2024-12-12 · **Author:** @ruanjm

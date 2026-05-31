@@ -1,6 +1,6 @@
 ---
 id: lang-flydsl
-title: "FlyDSL — Python + MLIR Layout DSL for AMD Kernels"
+title: FlyDSL — Python + MLIR Layout DSL for AMD Kernels
 type: language
 architectures:
 - gfx942
@@ -38,8 +38,16 @@ sources:
 - doc-llvm-amdgpu
 - blog-amd-matrix-cores
 - doc-cdna3-isa
+implemented_by:
+- pr-aiter-2726
+- pr-aiter-2581
+- pr-aiter-2497
+- pr-aiter-2390
+- pr-aiter-2113
+- pr-aiter-1561
+- pr-composable_kernel-2320
+- pr-composable_kernel-2040
 ---
-
 # FlyDSL — Python + MLIR Layout DSL for AMD Kernels
 
 ## Overview

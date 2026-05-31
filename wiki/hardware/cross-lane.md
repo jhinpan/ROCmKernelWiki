@@ -1,7 +1,9 @@
 ---
 id: hw-cross-lane
-title: "Cross-Lane Data Movement (DPP, ds_swizzle, ds_permute/bpermute, permlane)"
+title: Cross-Lane Data Movement (DPP, ds_swizzle, ds_permute/bpermute, permlane)
 type: hardware
+version_sensitive:
+- vs-permlane16-gfx950
 architectures:
 - gfx942
 - gfx950
@@ -28,13 +30,12 @@ sources:
 - blog-amd-matrix-cores
 aliases:
 - cross-lane
-- "lane shuffle"
-- "warp shuffle"
+- lane shuffle
+- warp shuffle
 - bpermute
 - permlane16
 - dpp
 ---
-
 # Cross-Lane Data Movement (DPP, ds_swizzle, ds_permute/bpermute, permlane)
 
 ## Overview

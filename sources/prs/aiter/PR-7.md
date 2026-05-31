@@ -11,9 +11,11 @@ architectures:
 - gfx942
 tags:
 - gfx942
+- transpose
 techniques: []
 hardware_features: []
-kernel_types: []
+kernel_types:
+- transpose
 languages:
 - hip
 - cpp
@@ -24,8 +26,11 @@ merge_sha: ee8934a70ec5
 inclusion_reason: kernel path 'csrc/transpose_operator.cu'
 changed_paths:
 - csrc/transpose_operator.cu
+facet_source: inferred
+related:
+- technique-bank-conflict-avoidance
+- kernel-transpose-lds
 ---
-
 # add inline in device code in tranaspose_operator
 
 **Repository:** [ROCm/aiter](https://github.com/ROCm/aiter) · **PR:** [#7](https://github.com/ROCm/aiter/pull/7) · **Merged:** 2024-12-05 · **Author:** @fangche123

@@ -48,9 +48,23 @@ Do NOT use this skill for:
 
 ## How To Query
 
-All commands run from the skill directory (the clone root — where this
-`SKILL.md` lives). Scripts auto-resolve the wiki root; **no environment variable
-required**.
+**First, cd into the skill directory** (the clone root — where this `SKILL.md`
+lives), then run the tools. The scripts auto-resolve the wiki root from their own
+location, so once you `cd` there no environment variable is needed:
+
+```bash
+cd "$(dirname "$(find ~/.claude/skills -name SKILL.md -path '*ROCmKernelWiki*' | head -1)")"
+# ...or just: cd ~/.claude/skills/ROCmKernelWiki
+```
+
+If you cannot `cd` (e.g. running from another working directory), call the
+scripts by absolute path — they still resolve the wiki root correctly:
+
+```bash
+python3 ~/.claude/skills/ROCmKernelWiki/scripts/query.py --tag mfma --type kernel
+```
+
+All example commands below assume you have `cd`'d into the skill directory.
 
 ### Path 1: Unified search (preferred for natural language)
 
@@ -62,18 +76,29 @@ python3 scripts/query.py --symptom bank-conflicts --compact
 ```
 
 Filters: `--type`, `--tag`, `--repo`, `--language`, `--architecture`,
-`--symptom`, `--confidence`, `--limit`, `--compact`, `--paths-only`. `--tag` and
-`--architecture` accept aliases — `--tag XDLOP` matches `mfma`, `--architecture
-MI300` matches `gfx942`, `--architecture MI355X` matches `gfx950`.
+`--symptom`, `--confidence`, `--synthesis`, `--limit`, `--compact`, `--paths-only`.
+Results are ranked IDF-weighted with priors that surface curated wiki pages and
+runnable examples above raw PR noise, and each hit shows a matched-text snippet.
+Add `--synthesis` to restrict to curated wiki pages (skip the 7,400+ PR sources).
+`--tag` and `--architecture` accept aliases — `--tag XDLOP` matches `mfma`,
+`--tag cp.async` matches `async-copy`, `--architecture MI300` matches `gfx942`,
+`--architecture MI355X` matches `gfx950`.
 
 ### Path 2: Fetch a specific page by id or path
 
 ```bash
-python3 scripts/get_page.py kernel-fp8-gemm
-python3 scripts/get_page.py pr-composable_kernel-1234
+python3 scripts/get_page.py kernel-fp8-gemm           # wiki page lists "Implementing PRs"
+python3 scripts/get_page.py pr-composable_kernel-1234  # PR page lists "Synthesized in" wiki pages
 python3 scripts/get_page.py kernel-fp8-gemm --follow-sources
+python3 scripts/get_page.py pr-composable_kernel-1234 --include-code --summary  # compact diff
 python3 scripts/get_page.py hw-mfma --body-only
 ```
+
+Every wiki page now carries `implemented_by:` (the real PRs that built it) and
+every linked PR carries `related:` back to the synthesis page — so you can hop
+between "what it is" and "how it was actually implemented". Use `--include-code
+--summary` to read a PR's `diff_summary.md` (files + key changed lines) instead of
+the full diff.
 
 ### Path 3: Regex text search across wiki bodies and PR pages
 

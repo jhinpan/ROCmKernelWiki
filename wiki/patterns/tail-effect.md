@@ -1,6 +1,6 @@
 ---
 id: pattern-tail-effect
-title: "Tail Effect — Wave Quantization and Idle CUs at GEMM End"
+title: Tail Effect — Wave Quantization and Idle CUs at GEMM End
 type: pattern
 architectures:
 - gfx942
@@ -35,7 +35,6 @@ sources:
 - doc-mi300x-datasheet
 - ref-composable-kernel
 ---
-
 # Tail Effect — Wave Quantization and Idle CUs at GEMM End
 
 ## Symptoms

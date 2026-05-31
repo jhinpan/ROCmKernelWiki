@@ -17,8 +17,8 @@ tags:
 techniques: []
 hardware_features: []
 kernel_types:
-- rmsnorm
 - layernorm
+- rmsnorm
 - softmax
 languages:
 - flydsl
@@ -35,8 +35,12 @@ changed_paths:
 - tests/python/gpu/test_layernorm.py
 - tests/python/gpu/test_rmsnorm.py
 - tests/python/gpu/test_softmax.py
+facet_source: inferred
+related:
+- technique-wave-reduce
+- kernel-rmsnorm
+- technique-kernel-fusion
 ---
-
 # add build_llvm script and add softmax/rmsnorm/layernorm ops test
 
 **Repository:** [ROCm/FlyDSL](https://github.com/ROCm/FlyDSL) · **PR:** [#5](https://github.com/ROCm/FlyDSL/pull/5) · **Merged:** 2025-12-02 · **Author:** @XingerZhu

@@ -10,15 +10,19 @@ source_category: upstream-code
 architectures:
 - gfx90a
 tags:
+- attention
 - bf16
 - flash-attention
 - fp16
+- fp8
 - gfx90a
 techniques: []
 hardware_features:
 - bf16
 - fp16
+- fp8
 kernel_types:
+- attention
 - flash-attention
 languages:
 - composable-kernel
@@ -42,8 +46,12 @@ changed_paths:
 - hipify_patch.patch
 - setup.py
 - tests/test_flash_attn.py
+facet_source: inferred
+related:
+- kernel-flash-attention-ck
+- kernel-mla-decode
+- technique-vgpr-budgeting
 ---
-
 # Jhzhan/release test
 
 **Repository:** [ROCm/flash-attention](https://github.com/ROCm/flash-attention) · **PR:** [#2](https://github.com/ROCm/flash-attention/pull/2) · **Merged:** 2023-06-02 · **Author:** @sabreshao

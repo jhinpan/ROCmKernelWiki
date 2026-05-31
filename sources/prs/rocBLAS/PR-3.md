@@ -13,11 +13,13 @@ tags:
 - gemm
 - gfx942
 - moe
+- sgemm
 techniques: []
 hardware_features: []
 kernel_types:
-- moe
 - gemm
+- moe
+- sgemm
 languages:
 - hip
 - cpp
@@ -34,8 +36,12 @@ changed_paths:
 - src/include/ablas_runtime.h
 - src/include/ablas_types.h
 - src/include/ablas_utility.h
+facet_source: inferred
+related:
+- kernel-grouped-gemm
+- technique-vgpr-budgeting
+- technique-stream-k
 ---
-
 # first major ablas update: add netlib/batched blas api. elaborate ablas types
 
 **Repository:** [ROCm/rocBLAS](https://github.com/ROCm/rocBLAS) · **PR:** [#3](https://github.com/ROCm/rocBLAS/pull/3) · **Merged:** 2016-02-09 · **Author:** @tingxingdong

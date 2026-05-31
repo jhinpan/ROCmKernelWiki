@@ -1,6 +1,6 @@
 ---
 id: kernel-vector-add-asm
-title: "Persistent Vector Add in GCN Assembly (async direct-to-LDS, double-buffered)"
+title: Persistent Vector Add in GCN Assembly (async direct-to-LDS, double-buffered)
 type: kernel
 architectures:
 - gfx942
@@ -55,17 +55,25 @@ performance_claims:
 - gpu: MI300X
   dtype: fp32
   metric: achieved-bandwidth-pct-of-peak
-  value: "~92% of 5.3 TB/s HBM3 peak"
+  value: ~92% of 5.3 TB/s HBM3 peak
   source_id: doc-mi300x-datasheet
   confidence: inferred
 - gpu: MI300X
   dtype: fp32
   metric: effective-bandwidth
-  value: "~4.9 TB/s (read 2x + write 1x, 12 B/elem)"
+  value: ~4.9 TB/s (read 2x + write 1x, 12 B/elem)
   source_id: ref-gcnasm
   confidence: inferred
+implemented_by:
+- pr-Tensile-1288
+- pr-composable_kernel-2949
+- pr-composable_kernel-3603
+- pr-composable_kernel-3208
+- pr-composable_kernel-2963
+- pr-composable_kernel-3520
+- pr-composable_kernel-2715
+- pr-aiter-3072
 ---
-
 # Persistent Vector Add in GCN Assembly (async direct-to-LDS, double-buffered)
 
 ## Overview

@@ -20,8 +20,8 @@ hardware_features:
 - bf16
 - fp16
 kernel_types:
-- flash-attention
 - attention
+- flash-attention
 languages:
 - composable-kernel
 - triton
@@ -39,8 +39,12 @@ changed_paths:
 - csrc/flash_attn_rocm/src/fmha_fprop_fp16_bf16_kernel.gfx90a.cpp
 - csrc/flash_attn_rocm/src/fmha_utils.h
 - flash_attn/flash_attn_interface.py
+facet_source: inferred
+related:
+- kernel-flash-attention-ck
+- kernel-mla-decode
+- technique-vgpr-budgeting
 ---
-
 # Enable both Qloop and Kloop
 
 **Repository:** [ROCm/flash-attention](https://github.com/ROCm/flash-attention) · **PR:** [#6](https://github.com/ROCm/flash-attention/pull/6) · **Merged:** 2023-07-14 · **Author:** @guangzlu

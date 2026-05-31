@@ -1,6 +1,6 @@
 ---
 id: kernel-fp8-gemm
-title: "FP8 Block-Scaled GEMM on CDNA4 (gfx950)"
+title: FP8 Block-Scaled GEMM on CDNA4 (gfx950)
 type: kernel
 architectures:
 - gfx950
@@ -41,23 +41,31 @@ performance_claims:
 - gpu: MI355X
   dtype: OCP-FP8 (E4M3)
   metric: peak dense TFLOPS
-  value: "5000 (5.0 PF)"
+  value: 5000 (5.0 PF)
   source_id: doc-cdna4-whitepaper
   confidence: source-reported
 - gpu: MI355X
   dtype: MXFP6 / MXFP4
   metric: peak dense TFLOPS
-  value: "10000 (10 PF)"
+  value: 10000 (10 PF)
   source_id: doc-cdna4-whitepaper
   confidence: source-reported
 - gpu: MI355X
   dtype: OCP-FP8 (E4M3)
   metric: achieved GEMM TFLOPS (large square M=N=K)
-  value: "~3500-4200 (≈70-84% of peak)"
+  value: ~3500-4200 (≈70-84% of peak)
   source_id: blog-fp8-gemm-cdna4
   confidence: inferred
+implemented_by:
+- pr-composable_kernel-2152
+- pr-aiter-3228
+- pr-FlyDSL-554
+- pr-composable_kernel-933
+- pr-composable_kernel-785
+- pr-composable_kernel-767
+- pr-composable_kernel-2476
+- pr-composable_kernel-2016
 ---
-
 # FP8 Block-Scaled GEMM on CDNA4 (gfx950)
 
 ## Overview

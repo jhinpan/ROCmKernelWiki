@@ -1,6 +1,6 @@
 ---
 id: technique-mfma-pipelining
-title: "MFMA Software Pipelining (interleaving loads and matrix issue)"
+title: MFMA Software Pipelining (interleaving loads and matrix issue)
 type: technique
 architectures:
 - gfx942
@@ -41,8 +41,16 @@ sources:
 - blog-4wave-fp8-gemm
 - blog-gemm-optimization
 - doc-cdna3-isa
+implemented_by:
+- pr-FlyDSL-346
+- pr-Tensile-1685
+- pr-FlyDSL-579
+- pr-FlyDSL-278
+- pr-Tensile-2114
+- pr-Tensile-2113
+- pr-Tensile-1521
+- pr-Tensile-1327
 ---
-
 # MFMA Software Pipelining
 
 ## The problem

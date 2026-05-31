@@ -1,6 +1,6 @@
 ---
 id: technique-bank-conflict-avoidance
-title: "LDS Bank-Conflict Avoidance (padding, swizzle, ds_read2)"
+title: LDS Bank-Conflict Avoidance (padding, swizzle, ds_read2)
 type: technique
 architectures:
 - gfx942
@@ -36,8 +36,16 @@ sources:
 - doc-cdna4-isa
 - blog-gemm-optimization
 - blog-cktile-gemm
+implemented_by:
+- pr-triton-775
+- pr-triton-635
+- pr-aiter-3128
+- pr-Tensile-1383
+- pr-composable_kernel-3620
+- pr-composable_kernel-3349
+- pr-composable_kernel-3193
+- pr-composable_kernel-3027
 ---
-
 # LDS Bank-Conflict Avoidance (padding, swizzle, ds_read2)
 
 ## Overview

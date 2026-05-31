@@ -1,6 +1,6 @@
 ---
 id: kernel-transpose-lds
-title: "LDS-Staged Bank-Conflict-Free Matrix Transpose"
+title: LDS-Staged Bank-Conflict-Free Matrix Transpose
 type: kernel
 architectures:
 - gfx942
@@ -39,17 +39,25 @@ performance_claims:
 - gpu: MI300X
   dtype: fp32
   metric: effective bandwidth (read+write)
-  value: "~4.2 TB/s (~80% of 5.3 TB/s HBM3 peak)"
-  utilization: "~0.80 of HBM peak"
-  baseline: "naive strided transpose (uncoalesced stores)"
+  value: ~4.2 TB/s (~80% of 5.3 TB/s HBM3 peak)
+  utilization: ~0.80 of HBM peak
+  baseline: naive strided transpose (uncoalesced stores)
   source_id: doc-mi300x-datasheet
 - gpu: MI300X
   dtype: fp32
   metric: LDS bank conflicts per transposed tile read
-  value: "0 (padded/swizzled) vs 32-way (unpadded)"
+  value: 0 (padded/swizzled) vs 32-way (unpadded)
   source_id: doc-cdna3-isa
+implemented_by:
+- pr-composable_kernel-3027
+- pr-composable_kernel-2177
+- pr-composable_kernel-3592
+- pr-composable_kernel-3038
+- pr-composable_kernel-3465
+- pr-composable_kernel-94
+- pr-composable_kernel-3603
+- pr-composable_kernel-2955
 ---
-
 # LDS-Staged Bank-Conflict-Free Matrix Transpose
 
 ## Overview

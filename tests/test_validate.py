@@ -41,6 +41,27 @@ def test_alias_architecture():
     assert "result" in r.stdout
 
 
+def test_rerank_surfaces_synthesis_first():
+    # cp.async (alias) must surface the migration synthesis page, not PR noise
+    r = run("scripts/query.py", "how port cuda cp.async to rocm", "--limit", "3",
+            "--compact")
+    assert r.returncode == 0
+    assert "migration-cuda-to-hip" in r.stdout
+
+
+def test_synthesis_flag_excludes_prs():
+    r = run("scripts/query.py", "fp8 gemm", "--synthesis", "--limit", "8", "--compact")
+    assert r.returncode == 0
+    assert "source-pr" not in r.stdout
+
+
+def test_pr_wiki_bridge():
+    # a kernel page should list implementing PRs
+    r = run("scripts/get_page.py", "kernel-fp8-gemm")
+    assert r.returncode == 0
+    assert "Implementing PRs" in r.stdout
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in list(globals().items()):

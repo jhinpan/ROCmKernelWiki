@@ -16,8 +16,8 @@ tags:
 techniques: []
 hardware_features: []
 kernel_types:
-- moe
 - gemm
+- moe
 languages:
 - hip
 - cpp
@@ -39,8 +39,12 @@ changed_paths:
 - src/CMakeLists.txt
 - src/cmake/build-options.cmake
 - src/library/blas3/gemm.cpp
+facet_source: inferred
+related:
+- kernel-grouped-gemm
+- technique-vgpr-budgeting
+- technique-stream-k
 ---
-
 # Add hip dep
 
 **Repository:** [ROCm/rocBLAS](https://github.com/ROCm/rocBLAS) · **PR:** [#9](https://github.com/ROCm/rocBLAS/pull/9) · **Merged:** 2016-03-07 · **Author:** @kknox

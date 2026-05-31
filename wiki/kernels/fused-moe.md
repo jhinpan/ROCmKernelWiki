@@ -1,6 +1,6 @@
 ---
 id: kernel-fused-moe
-title: "Fused MoE — Gate-Up + SiLU + Down with FP8 (CDNA)"
+title: Fused MoE — Gate-Up + SiLU + Down with FP8 (CDNA)
 type: kernel
 architectures:
 - gfx942
@@ -41,23 +41,31 @@ performance_claims:
 - gpu: MI300X
   dtype: fp8
   metric: speedup-vs-unfused
-  value: "~1.3-1.6x end-to-end MoE layer vs separate gate/up/down GEMMs + activation"
+  value: ~1.3-1.6x end-to-end MoE layer vs separate gate/up/down GEMMs + activation
   source_id: ref-aiter
   confidence: source-reported
 - gpu: MI300X
   dtype: fp8
   metric: peak-fp8-tensor
-  value: "2615 TFLOPS dense FP8 ceiling (expert GEMMs are the dominant term)"
+  value: 2615 TFLOPS dense FP8 ceiling (expert GEMMs are the dominant term)
   source_id: doc-mi300x-datasheet
   confidence: source-reported
 - gpu: MI355X
   dtype: fp8
   metric: peak-fp8-tensor
-  value: "5.0 PFLOPS dense OCP-FP8 ceiling (gfx950)"
+  value: 5.0 PFLOPS dense OCP-FP8 ceiling (gfx950)
   source_id: blog-fp8-gemm-cdna4
   confidence: inferred
+implemented_by:
+- pr-sglang-24816
+- pr-vllm-36286
+- pr-vllm-36022
+- pr-composable_kernel-2978
+- pr-composable_kernel-3259
+- pr-composable_kernel-2913
+- pr-composable_kernel-2878
+- pr-composable_kernel-2466
 ---
-
 # Fused MoE — Gate-Up + SiLU + Down with FP8 (CDNA)
 
 ## Overview

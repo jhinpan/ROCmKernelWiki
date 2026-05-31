@@ -10,11 +10,13 @@ source_category: upstream-code
 architectures:
 - gfx942
 tags:
+- convolution
 - gemm
 - gfx942
 techniques: []
 hardware_features: []
 kernel_types:
+- convolution
 - gemm
 languages:
 - composable-kernel
@@ -45,8 +47,12 @@ changed_paths:
 - composable_kernel/include/problem_transform/transform_forward_convolution_into_gemm_v6r1_nchw_kcyx_nkhw.hpp
 - composable_kernel/include/tensor_description/multi_index_transform.hpp
 - composable_kernel/include/tensor_description/multi_index_transform_helper.hpp
+facet_source: inferred
+related:
+- technique-vgpr-budgeting
+- technique-stream-k
+- technique-split-k
 ---
-
 # MIOpen Downstream: Initial integration
 
 **Repository:** [ROCm/composable_kernel](https://github.com/ROCm/composable_kernel) · **PR:** [#8](https://github.com/ROCm/composable_kernel/pull/8) · **Merged:** 2021-08-16 · **Author:** @asroy

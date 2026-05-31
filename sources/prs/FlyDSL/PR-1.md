@@ -45,8 +45,11 @@ changed_paths:
 - tests/python/test_cute_product.py
 - tests/python/test_local_ops.py
 - tests/python/test_product_divide.py
+related:
+- lang-flydsl
+- technique-vgpr-budgeting
+- technique-stream-k
 ---
-
 # Add pass to python
 
 **Repository:** [ROCm/FlyDSL](https://github.com/ROCm/FlyDSL) · **PR:** [#1](https://github.com/ROCm/FlyDSL/pull/1) · **Merged:** 2025-11-25 · **Author:** @coderfeli

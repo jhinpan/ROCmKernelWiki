@@ -1,6 +1,6 @@
 ---
 id: kernel-flydsl-preshuffle-gemm
-title: "FlyDSL Preshuffle GEMM (layout-DSL example)"
+title: FlyDSL Preshuffle GEMM (layout-DSL example)
 type: kernel
 architectures:
 - gfx942
@@ -47,17 +47,25 @@ performance_claims:
 - gpu: MI300X
   dtype: bf16
   metric: percent-of-peak
-  value: "~75% of 1307 TFLOPS dense FP16/BF16 peak (compute-bound tiles)"
-  shape: "M=N=K=8192"
+  value: ~75% of 1307 TFLOPS dense FP16/BF16 peak (compute-bound tiles)
+  shape: M=N=K=8192
   source_id: ref-flydsl
-  baseline: "hipBLASLt bf16 GEMM"
+  baseline: hipBLASLt bf16 GEMM
 - gpu: MI300X
   dtype: bf16
   metric: ds_read-bank-conflicts
-  value: "near-zero LDS bank conflicts on the A/B read path vs. naive row-major staging"
+  value: near-zero LDS bank conflicts on the A/B read path vs. naive row-major staging
   source_id: blog-gemm-optimization
+implemented_by:
+- pr-FlyDSL-79
+- pr-FlyDSL-60
+- pr-composable_kernel-2963
+- pr-FlyDSL-465
+- pr-composable_kernel-2949
+- pr-FlyDSL-388
+- pr-composable_kernel-2516
+- pr-composable_kernel-3603
 ---
-
 # FlyDSL Preshuffle GEMM (layout-DSL example)
 
 ## Overview

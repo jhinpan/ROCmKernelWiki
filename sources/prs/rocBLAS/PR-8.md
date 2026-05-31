@@ -16,8 +16,8 @@ tags:
 techniques: []
 hardware_features: []
 kernel_types:
-- moe
 - gemm
+- moe
 languages:
 - hip
 - cpp
@@ -39,8 +39,12 @@ changed_paths:
 - clients/samples/gemm-expert/gemm-expert.cpp
 - src/CMakeLists.txt
 - src/library/CMakeLists.txt
+facet_source: inferred
+related:
+- kernel-grouped-gemm
+- technique-vgpr-budgeting
+- technique-stream-k
 ---
-
 # cmake build infrastructure for library clients
 
 **Repository:** [ROCm/rocBLAS](https://github.com/ROCm/rocBLAS) · **PR:** [#8](https://github.com/ROCm/rocBLAS/pull/8) · **Merged:** 2016-03-02 · **Author:** @kknox

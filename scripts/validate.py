@@ -101,7 +101,27 @@ def main():
     warnings = []
     all_ids = {}
     referenced_ids = set()
+    version_refs = []
+    stale = []
     files = []
+
+    # cutoff + version-claims registry for freshness/version checks
+    cutoff_date = "9999-99-99"
+    cutoff_path = DATA_DIR / "refresh-cutoff.yaml"
+    if cutoff_path.exists():
+        try:
+            cutoff_date = str(load_yaml(cutoff_path).get("cutoff_date", cutoff_date))
+        except Exception:
+            pass
+    version_claim_ids = set()
+    vc_path = DATA_DIR / "version-claims.yaml"
+    if vc_path.exists():
+        try:
+            for c in (load_yaml(vc_path).get("claims") or []):
+                if isinstance(c, dict) and c.get("id"):
+                    version_claim_ids.add(c["id"])
+        except Exception:
+            pass
 
     for base in (SOURCES_DIR, WIKI_DIR):
         if not base.exists():
@@ -209,12 +229,38 @@ def main():
             referenced_ids.add((str(rel), ref))
         for ref in (fm.get("candidate_techniques") or []):
             referenced_ids.add((str(rel), ref))
+        for ref in (fm.get("implemented_by") or []):
+            referenced_ids.add((str(rel), ref))
+
+        # version-sensitive claim pointers (validated against version-claims.yaml)
+        vs = fm.get("version_sensitive")
+        if vs:
+            vs_list = vs if isinstance(vs, list) else [vs]
+            for vid in vs_list:
+                version_refs.append((str(rel), vid))
+
+        # freshness: PR merge date must not exceed the declared cutoff
+        if ptype == "source-pr" and fm.get("date"):
+            if str(fm["date"]) > cutoff_date:
+                stale.append((str(rel), str(fm["date"])))
 
     # link integrity
     id_set = set(all_ids)
     for src, ref in sorted(referenced_ids):
         if ref not in id_set:
             errors.append(f"{src}: dangling reference '{ref}' (no page with that id)")
+
+    # version_sensitive pointers must resolve to data/version-claims.yaml
+    for src, vid in sorted(version_refs):
+        if vid not in version_claim_ids:
+            errors.append(f"{src}: version_sensitive '{vid}' not in data/version-claims.yaml")
+
+    # freshness: PRs merged after the declared cutoff are a warning, not an error
+    # (data is still valid; it signals the cutoff file should be advanced)
+    if stale:
+        warnings.append(f"{len(stale)} PR page(s) have merge dates after cutoff "
+                        f"{cutoff_date} — advance data/refresh-cutoff.yaml "
+                        f"(e.g. {stale[0][0]} = {stale[0][1]})")
 
     n_pages = len(page_records)
     print(f"Validated {n_pages} pages, {len(all_ids)} unique ids.")

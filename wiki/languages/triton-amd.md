@@ -1,7 +1,9 @@
 ---
 id: lang-triton-amd
-title: "Triton on AMD — tl.dot → MFMA and the AMD backend knobs"
+title: Triton on AMD — tl.dot → MFMA and the AMD backend knobs
 type: language
+version_sensitive:
+- vs-triton-kpack-gfx950
 architectures:
 - gfx942
 - gfx950
@@ -34,8 +36,16 @@ sources:
 - blog-gluon-gemm
 - doc-llvm-amdgpu
 - blog-gemm-optimization
+implemented_by:
+- pr-triton-614
+- pr-aiter-2441
+- pr-FlyDSL-139
+- pr-composable_kernel-1705
+- pr-composable_kernel-1262
+- pr-aiter-3072
+- pr-FlyDSL-346
+- pr-triton-879
 ---
-
 # Triton on AMD — `tl.dot` → MFMA and the AMD backend knobs
 
 ## Overview

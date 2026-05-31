@@ -1,6 +1,6 @@
 ---
 id: technique-wave-reduce
-title: "Wave-Level Reduction (DPP rows + ds_bpermute cross-row + readlane)"
+title: Wave-Level Reduction (DPP rows + ds_bpermute cross-row + readlane)
 type: technique
 architectures:
 - gfx942
@@ -42,8 +42,16 @@ sources:
 - doc-cdna4-isa
 - doc-llvm-amdgpu
 - ref-gcnasm
+implemented_by:
+- pr-FlyDSL-447
+- pr-FlyDSL-524
+- pr-composable_kernel-2594
+- pr-FlyDSL-450
+- pr-FlyDSL-300
+- pr-sglang-23882
+- pr-composable_kernel-3259
+- pr-composable_kernel-2978
 ---
-
 # Wave-Level Reduction (DPP rows + ds_bpermute cross-row + readlane)
 
 ## Overview
