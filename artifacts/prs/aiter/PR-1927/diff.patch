@@ -1,0 +1,486 @@
+diff --git a/aiter/fused_moe.py b/aiter/fused_moe.py
+index 40e55df362..577ead3058 100644
+--- a/aiter/fused_moe.py
++++ b/aiter/fused_moe.py
+@@ -212,6 +212,7 @@ def fused_moe_(
+         inter_dim * 2,
+     ], f"Invalid MoE weight: {w1.shape=} {w2.shape=}"
+     isG1U1 = inter_dim != w1.shape[1]
++    isShuffled = getattr(w1, "is_shuffled", False)
+ 
+     global_E = E
+     if expert_mask is not None:
+@@ -249,6 +250,7 @@ def fused_moe_(
+         doweight_stage1,
+         hidden_pad,
+         intermediate_pad,
++        isShuffled,
+     )
+ 
+     block_size_M = metadata.block_m if block_size_M is None else block_size_M
+@@ -603,6 +605,7 @@ def get_2stage_cfgs(
+     doweight_stage1,
+     hidden_pad,
+     intermediate_pad,
++    is_shuffled=True,
+ ):
+     def get_cfg_2stages(tune_file):
+         import pandas as pd
+@@ -802,6 +805,7 @@ def get_block_m() -> int:
+         and q_type == QuantType.per_1x32
+         and q_dtype_w in [dtypes.fp4x2]
+         and ksplit > 1
++        and is_shuffled
+     ):
+         return MOEMetadata(
+             functools.partial(
+@@ -918,6 +922,7 @@ def fused_moe_2stages(
+     E, model_dim, inter_dim = get_inter_dim(w1.shape, w2.shape)
+     dtype = moe_out.dtype
+     device = hidden_states.device
++    is_shuffled = getattr(w1, "is_shuffled", False)
+     metadata = get_2stage_cfgs(
+         get_padded_M(token_num),  # consider token_num > 1024 as prefill
+         model_dim,
+@@ -933,6 +938,7 @@ def fused_moe_2stages(
+         doweight_stage1,
+         hidden_pad,
+         intermediate_pad,
++        is_shuffled,
+     )
+     if (
+         quant_type == QuantType.per_1x32
+@@ -941,7 +947,7 @@ def fused_moe_2stages(
+         and (
+             q_dtype_a in [dtypes.bf16, dtypes.fp16]
+             and activation == ActivationType.Swiglu
+-            or (q_dtype_a in [dtypes.fp4x2] and metadata.ksplit > 1)
++            or (q_dtype_a in [dtypes.fp4x2] and metadata.ksplit > 1 and is_shuffled)
+         )
+     ):
+         a1 = hidden_states.to(dtype)
+@@ -1044,7 +1050,7 @@ def fused_moe_2stages(
+         and (
+             q_dtype_a in [dtypes.bf16, dtypes.fp16]
+             and activation == ActivationType.Swiglu
+-            or metadata.ksplit > 1
++            or (metadata.ksplit > 1 and is_shuffled)
+         )
+     ):
+         a2_scale = None
+@@ -1477,11 +1483,12 @@ def ck_moe_stage1(
+     dtype=None,
+ ):
+     token_num = hidden_states.shape[0]
++    is_splitk = quant_type is aiter.QuantType.per_1x128 and splitk > 1
+     tmp_out = (
+         torch.zeros(
+             (token_num, topk, w1.shape[1]), dtype=dtypes.fp32, device=out.device
+         )
+-        if splitk > 1
++        if is_splitk
+         else out
+     )
+     aiter.ck_moe_stage1_fwd(
+@@ -1500,11 +1507,11 @@ def ck_moe_stage1(
+         sorted_weights,
+         quant_type,
+         activation,
+-        splitk,
++        splitk if is_splitk else 0,
+         use_non_temporal_load,
+         out.dtype,
+     )
+-    if splitk > 1:
++    if is_splitk:
+         if activation == ActivationType.Silu:
+             aiter.silu_and_mul(out, tmp_out.view(dtypes.fp32))
+         else:
+diff --git a/aiter/ops/moe_op.py b/aiter/ops/moe_op.py
+index bba15c5b27..9757ff8f57 100755
+--- a/aiter/ops/moe_op.py
++++ b/aiter/ops/moe_op.py
+@@ -226,6 +226,7 @@ def cmdGenFunc_ck_moe_stage(
+     splitk: int = 1,
+     use_non_temporal_load: bool = False,
+     dst_type: Optional[str] = None,
++    is_shuffled: bool = True,
+ ):
+ 
+     mul_routed_weight_stage = 2 if sorted_weights is None else 1
+@@ -238,7 +239,7 @@ def cmdGenFunc_ck_moe_stage(
+         activation,
+         quant_type,
+         mul_routed_weight_stage,
+-        getattr(w1, "is_shuffled", False),
++        is_shuffled,
+         is_splitk,
+     )
+     return {
+@@ -266,6 +267,7 @@ def cmdGenFunc_ck_moe_stage2(
+     splitk: int = 1,
+     use_non_temporal_load: bool = False,
+     dst_type: Optional[str] = None,
++    is_shuffled: bool = True,
+ ):
+ 
+     mul_routed_weight_stage = 1 if sorted_weights is None else 2
+@@ -276,7 +278,7 @@ def cmdGenFunc_ck_moe_stage2(
+         activation,
+         quant_type,
+         mul_routed_weight_stage,
+-        getattr(w1, "is_shuffled", False),
++        is_shuffled,
+     )
+     return {
+         "md_name": md_name,
+@@ -304,6 +306,7 @@ def ck_moe_stage1(
+     splitk: Optional[int] = 1,
+     use_non_temporal_load: bool = False,
+     dst_type: Optional[str] = None,
++    is_shuffled: bool = True,
+ ) -> None: ...
+ 
+ 
+@@ -327,6 +330,7 @@ def ck_moe_stage2(
+     splitk: int = 1,
+     use_non_temporal_load: bool = False,
+     dst_type: Optional[str] = None,
++    is_shuffled: bool = True,
+ ) -> None: ...
+ 
+ 
+@@ -554,6 +558,7 @@ def ck_moe_stage1_fwd(
+         int(splitk) if splitk is not None else splitk,
+         use_non_temporal_load,
+         None if dst_type is None else dtype2str_dict[dst_type],
++        is_shuffled=getattr(w1, "is_shuffled", False),
+     )
+     return out
+ 
+@@ -593,5 +598,6 @@ def ck_moe_stage2_fwd(
+         quant_type.value,
+         activation.value,
+         use_non_temporal_load=use_non_temporal_load,
++        is_shuffled=getattr(w2, "is_shuffled", False),
+     )
+     return out
+diff --git a/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages.cu b/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages.cu
+index 4b3910fdc1..301736c1d3 100644
+--- a/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages.cu
++++ b/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages.cu
+@@ -15,7 +15,7 @@ using MoeKernelMap = std::unordered_map<std::string, MoeKernel>;
+ // API for user aiter.ck_moe_stage1(...)
+ 
+ template <int stage = 1>
+-MoeKernel moe_dispatch(std::string &kernelName, int block_m, int inter_dim, at::ScalarType x_dtype, at::ScalarType w_dtype, at::ScalarType y_dtype, int act_op, int quant_type, bool mul_routed_weight)
++MoeKernel moe_dispatch(std::string &kernelName, int block_m, int inter_dim, at::ScalarType x_dtype, at::ScalarType w_dtype, at::ScalarType y_dtype, int act_op, int quant_type, bool mul_routed_weight, bool is_shuffled)
+ {
+     static const auto lookup = []
+     {
+@@ -34,11 +34,11 @@ MoeKernel moe_dispatch(std::string &kernelName, int block_m, int inter_dim, at::
+     }
+     if constexpr (stage == 1)
+     {
+-        return moe_stage1_heuristic_dispatch(block_m, inter_dim, x_dtype, w_dtype, y_dtype, act_op, quant_type, mul_routed_weight);
++        return moe_stage1_heuristic_dispatch(block_m, inter_dim, x_dtype, w_dtype, y_dtype, act_op, quant_type, mul_routed_weight, is_shuffled);
+     }
+     else
+     {
+-        return moe_stage2_heuristic_dispatch(block_m, inter_dim, x_dtype, w_dtype, y_dtype, 0, quant_type, mul_routed_weight);
++        return moe_stage2_heuristic_dispatch(block_m, inter_dim, x_dtype, w_dtype, y_dtype, 0, quant_type, mul_routed_weight, is_shuffled);
+     }
+ }
+ 
+@@ -59,7 +59,8 @@ void ck_moe_stage1(torch::Tensor &hidden_states,     // [m, k], input token
+                    int activation = 0,
+                    std::optional<int> splitk = 1,
+                    bool nt = false,
+-                   std::optional<std::string> dst_type = std::nullopt)
++                   std::optional<std::string> dst_type = std::nullopt,
++                   bool is_shuffled = true)
+ {
+     // std::cerr << __FILE__ << ":" << __LINE__ << " ck_moe_stage1 called!" << nt << " " << block_m.value() << std::endl;
+     const at::hip::OptionalHIPGuardMasqueradingAsCUDA device_guard(device_of(out));
+@@ -108,7 +109,7 @@ void ck_moe_stage1(torch::Tensor &hidden_states,     // [m, k], input token
+ 
+     activation = !activation;
+ 
+-    auto kernel = moe_dispatch<1>(kernelName, MPerBlock, N, hidden_states.dtype().toScalarType(), w1.dtype().toScalarType(), out.dtype().toScalarType(), activation, quant_type, MulRoutedWeight);
++    auto kernel = moe_dispatch<1>(kernelName, MPerBlock, N, hidden_states.dtype().toScalarType(), w1.dtype().toScalarType(), out.dtype().toScalarType(), activation, quant_type, MulRoutedWeight, is_shuffled);
+ 
+     kernel(at::hip::getCurrentHIPStream(),
+            tokens, sorted_size, N, K, topk,
+@@ -132,7 +133,8 @@ void ck_moe_stage2(torch::Tensor &inter_states,      // [m, k], input token
+                    int activation = 0,
+                    std::optional<int> splitk = 1,
+                    bool nt = false,
+-                   std::optional<std::string> dst_type = std::nullopt)
++                   std::optional<std::string> dst_type = std::nullopt,
++                   bool is_shuffled = true)
+ {
+     // std::cerr << __FILE__ << ":" << __LINE__ << " ck_moe_stage2 called!" << nt << " " << block_m.value() << std::endl;
+     TORCH_CHECK(out.dtype() == at::ScalarType::BFloat16 || out.dtype() == at::ScalarType::Half,
+@@ -170,7 +172,7 @@ void ck_moe_stage2(torch::Tensor &inter_states,      // [m, k], input token
+     }
+ 
+     activation = !activation;
+-    auto kernel = moe_dispatch<2>(kernelName, MPerBlock, K, inter_states.dtype().toScalarType(), w1.dtype().toScalarType(), out.dtype().toScalarType(), activation, quant_type, MulRoutedWeight);
++    auto kernel = moe_dispatch<2>(kernelName, MPerBlock, K, inter_states.dtype().toScalarType(), w1.dtype().toScalarType(), out.dtype().toScalarType(), activation, quant_type, MulRoutedWeight, is_shuffled);
+ 
+     kernel(at::hip::getCurrentHIPStream(),
+            tokens, sorted_size, N, K, topk,
+diff --git a/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages.h b/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages.h
+index 18d9977dc7..108efa9efb 100644
+--- a/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages.h
++++ b/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages.h
+@@ -323,14 +323,12 @@ struct MulABScaleExpertWeightA8W8blkscale
+     __host__ __device__ constexpr void
+     operator()<F16, float, float>(F16& e, const float& c, const float& d2) const
+     {
+-        (void)d2;
+         e = ck::type_convert<F16>(c);
+     }
+     template <>
+     __host__ __device__ constexpr void
+     operator()<B16, float, float>(B16& e, const float& c, const float& d2) const
+     {
+-        (void)d2;
+         e = ck::type_convert<B16>(c);
+     }
+ };
+@@ -348,6 +346,47 @@ struct MulABScaleExpertWeightA8W8blkscaleSplitk
+     }
+ };
+ 
++struct MulABScaleShuffled
++{
++    template <typename E, typename C, typename D0, typename D1, typename D2>
++    __host__ __device__ constexpr void
++    operator()(E& e, const C& c, const D0& d0, const D1& d1, const D2& d2) const;
++
++    template <>
++    __host__ __device__ constexpr void operator()<F16, float, float, float, float>(
++        F16& e, const float& c, const float& d0, const float& d1, const float& d2) const
++    {
++        e = ck::type_convert<F16>(c);
++    }
++
++    template <>
++    __host__ __device__ constexpr void operator()<B16, float, float, float, float>(
++        B16& e, const float& c, const float& d0, const float& d1, const float& d2) const
++    {
++        e = ck::type_convert<B16>(c);
++    }
++};
++
++struct MulABScaleExpertWeightShuffled
++{
++    template <typename E, typename C, typename D0, typename D1, typename D2>
++    __host__ __device__ constexpr void
++    operator()(E& e, const C& c, const D0& d0, const D1& d1, const D2& d2) const;
++    template <>
++    __host__ __device__ constexpr void operator()<F16, float, float, float, float>(
++        F16& e, const float& c, const float& d0, const float& d1, const float& d2) const
++    {
++        e = ck::type_convert<F16>(c);
++    }
++
++    template <>
++    __host__ __device__ constexpr void operator()<B16, float, float, float, float>(
++        B16& e, const float& c, const float& d0, const float& d1, const float& d2) const
++    {
++        e = ck::type_convert<B16>(c);
++    }
++};
++
+ using MoeKernel = std::function<void(const hipStream_t& stream,
+                                      int,
+                                      int,
+diff --git a/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages_common.py b/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages_common.py
+index eabe4b728e..dcebb4b0b3 100644
+--- a/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages_common.py
++++ b/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages_common.py
+@@ -397,6 +397,7 @@ def get_gemm1_kernels_list(
+             tag = "a4w4"
+         else:
+             tag = "a4w4_bns"
++
+     else:
+         raise ValueError(f"Unsupported data type combination: {Adtype}, {Bdtype}")
+     kernels_list = gemm1_kernels_dict[tag]
+@@ -416,8 +417,10 @@ def get_gemm1_kernels_list(
+                 kernel.CDEElementOp = "MulABScaleExpertWeightA8W8blkscaleSplitk"
+             else:
+                 kernel.CDEElementOp = "MulABScaleExpertWeightA8W8blkscale"
+-        elif tag == "a8w8" or tag == "a4w4" or tag == "a4w4_bns":
++        elif tag == "a8w8" or tag == "a4w4_bns":
+             kernel.CDEElementOp = "MulABScale"
++        elif tag == "a4w4":
++            kernel.CDEElementOp = "MulABScaleShuffled"
+         elif tag == "a16w16":
+             if MulRoutedWeight:
+                 kernel.CDEElementOp = "TypeCastExpertWeight"
+@@ -480,8 +483,10 @@ def get_gemm2_kernels_list(
+             kernel.CDEElementOp = "MulABScaleExpertWeightWin4"
+         elif tag == "a8w8blkscale":
+             kernel.CDEElementOp = "MulABScaleExpertWeightA8W8blkscale"
+-        elif tag == "a8w8" or tag == "a4w4" or tag == "a4w4_bns":
++        elif tag == "a8w8" or tag == "a4w4_bns":
+             kernel.CDEElementOp = "MulABScaleExpertWeight"
++        elif tag == "a4w4":
++            kernel.CDEElementOp = "MulABScaleExpertWeightShuffled"
+         elif tag == "a16w16":
+             if MulRoutedWeight:
+                 kernel.CDEElementOp = "TypeCastExpertWeight"
+diff --git a/csrc/ck_gemm_moe_2stages_codegen/gen_instances.py b/csrc/ck_gemm_moe_2stages_codegen/gen_instances.py
+index ba1ce45fa1..b12b2fa3ee 100644
+--- a/csrc/ck_gemm_moe_2stages_codegen/gen_instances.py
++++ b/csrc/ck_gemm_moe_2stages_codegen/gen_instances.py
+@@ -45,7 +45,7 @@
+ // Copyright (c) 2024, Advanced Micro Devices, Inc. All rights reserved.
+ #include "gemm_moe_ck2stages.h"
+ 
+-MoeKernel moe_stage1_heuristic_dispatch(int block_m, int inter_dim, at::ScalarType x_dtype, at::ScalarType w_dtype, at::ScalarType y_dtype, int act_op, int quant, bool mul_routed_weight_stage)
++MoeKernel moe_stage1_heuristic_dispatch(int block_m, int inter_dim, at::ScalarType x_dtype, at::ScalarType w_dtype, at::ScalarType y_dtype, int act_op, int quant, bool mul_routed_weight_stage, bool is_shuffled)
+ {{
+ """
+ 
+@@ -54,7 +54,7 @@
+ // Copyright (c) 2024, Advanced Micro Devices, Inc. All rights reserved.
+ #include "gemm_moe_ck2stages.h"
+ 
+-MoeKernel moe_stage2_heuristic_dispatch(int block_m, int inter_dim, at::ScalarType x_dtype, at::ScalarType w_dtype, at::ScalarType y_dtype, int act_op, int quant, bool mul_routed_weight_stage)
++MoeKernel moe_stage2_heuristic_dispatch(int block_m, int inter_dim, at::ScalarType x_dtype, at::ScalarType w_dtype, at::ScalarType y_dtype, int act_op, int quant, bool mul_routed_weight_stage, bool is_shuffled)
+ {{
+ """
+ 
+@@ -212,7 +212,8 @@
+         && dtype_checker<{EDataType}>{{}}(y_dtype)
+         && {ActOP} == act_op
+         && {MulRoutedWeight} == mul_routed_weight_stage
+-        && {Quant} == quant)
++        && {Quant} == quant
++        && {Preshuffle} == is_shuffled)
+     {{
+         if (block_m == 32)
+         {{
+@@ -245,7 +246,8 @@
+         && dtype_checker<{EDataType}>{{}}(y_dtype)
+         && {ActOP} == act_op
+         && {MulRoutedWeight} == mul_routed_weight_stage
+-        && {Quant} == quant)
++        && {Quant} == quant
++        && {Preshuffle} == is_shuffled)
+     {{
+         if (block_m == 32)
+         {{
+@@ -497,7 +499,8 @@
+         && dtype_checker<{B0DataType}>{{}}(w_dtype)
+         && dtype_checker<{EDataType}>{{}}(y_dtype)
+         && {MulRoutedWeight} == mul_routed_weight_stage
+-        && {Quant} == quant)
++        && {Quant} == quant
++        && {Preshuffle} == is_shuffled)
+     {{
+         if (inter_dim <= 256)
+         {{
+@@ -553,7 +556,8 @@
+         && dtype_checker<{B0DataType}>{{}}(w_dtype)
+         && dtype_checker<{EDataType}>{{}}(y_dtype)
+         && {MulRoutedWeight} == mul_routed_weight_stage
+-        && {Quant} == quant)
++        && {Quant} == quant
++        && {Preshuffle} == is_shuffled)
+     {{
+         if (inter_dim <= 256)
+         {{
+@@ -815,6 +819,10 @@ def generate_instance_and_lookUpTable(self):
+                                 self.mul_routed_weight_stage == kernel.stage
+                             ).lower(),
+                         )
++                        if "FP4" in self.b_dtype:
++                            stage_instance = (
++                                "#ifndef __gfx942__\n" + stage_instance + "\n#endif\n"
++                            )
+                         f_ins.write(stage_instance)
+ 
+                 ## generate lookUpTable
+@@ -860,6 +868,7 @@ def generate_instance_and_lookUpTable(self):
+                 Quant=self.quant_type,
+                 ActOP=str(int(self.activation == "silu")),
+                 MulRoutedWeight=str(self.mul_routed_weight_stage == 1).lower(),
++                Preshuffle=str(self.preshuffle).lower(),
+             )
+             f_h.write(gemm1_heuristic_dispatch_str)
+ 
+@@ -877,6 +886,7 @@ def generate_instance_and_lookUpTable(self):
+                 Quant=self.quant_type,
+                 ActOP=0,
+                 MulRoutedWeight=str(self.mul_routed_weight_stage == 2).lower(),
++                Preshuffle=str(self.preshuffle).lower(),
+             )
+             f_h.write(gemm2_heuristic_dispatch_str)
+ 
+@@ -995,7 +1005,7 @@ def generate_instance_and_lookUpTable(self):
+         acts = ["silu", "gelu"]
+         routed_weight_l = [1, 2]
+         general_quant_l = ["per_tensor", "per_token"]
+-        preshuffle_mode_l = [False]
++        preshuffle_mode_l = [True, False]
+         for (
+             b_dtype,
+             c_dtype,
+@@ -1013,6 +1023,7 @@ def generate_instance_and_lookUpTable(self):
+         ):
+             a_dtype = b_dtype if b_dtype != "i4" else "f8"
+             quant = quant if b_dtype != "fp4x2" else "per_1x32"
++            preshuffle_mode = preshuffle_mode if quant == "per_1x32" else True
+             codegen = ck_moe_2stage_gemm_codegen(
+                 args.working_path,
+                 a_dtype,
+diff --git a/csrc/include/moe_ck.h b/csrc/include/moe_ck.h
+index 16d1101cf1..761490f187 100644
+--- a/csrc/include/moe_ck.h
++++ b/csrc/include/moe_ck.h
+@@ -21,7 +21,8 @@ void ck_moe_stage1(torch::Tensor& hidden_states, // [m, k], input token
+                    int activation,
+                    std::optional<int> splitk,
+                    bool nt,
+-                   std::optional<std::string> dst_type);
++                   std::optional<std::string> dst_type,
++                   bool is_shuffled);
+ 
+ void ck_moe_stage2(torch::Tensor& inter_states, // [m, k], input token
+                    torch::Tensor& w1, // [e, n, k]/[e, 2*n, k], pre-shuffle([e, nr, kr, w])
+@@ -40,4 +41,5 @@ void ck_moe_stage2(torch::Tensor& inter_states, // [m, k], input token
+                    int activation,
+                    std::optional<int> splitk,
+                    bool nt,
+-                   std::optional<std::string> dst_type);
++                   std::optional<std::string> dst_type,
++                   bool is_shuffled);
+diff --git a/csrc/include/rocm_ops.hpp b/csrc/include/rocm_ops.hpp
+index 3b0436bac3..6299ea027c 100644
+--- a/csrc/include/rocm_ops.hpp
++++ b/csrc/include/rocm_ops.hpp
+@@ -978,7 +978,8 @@ namespace py = pybind11;
+           py::arg("activation")        = 0,            \
+           py::arg("splitk")            = 1,            \
+           py::arg("non_temporal_load") = false,        \
+-          py::arg("dst_type")          = std::nullopt);         \
++          py::arg("dst_type")          = std::nullopt, \
++          py::arg("is_shuffled")    = true);           \
+                                                        \
+     m.def("ck_moe_stage2",                             \
+           &ck_moe_stage2,                              \
+@@ -999,7 +1000,8 @@ namespace py = pybind11;
+           py::arg("activation")        = 0,            \
+           py::arg("splitk")            = 1,            \
+           py::arg("non_temporal_load") = false,        \
+-          py::arg("dst_type")          = std::nullopt);
++          py::arg("dst_type")          = std::nullopt, \
++          py::arg("is_shuffled")    = true);
+ 
+ #define MOE_CKTILE_2STAGES_PYBIND                   \
+     m.def("cktile_moe_gemm1",                       \

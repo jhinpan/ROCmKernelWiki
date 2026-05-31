@@ -25,6 +25,7 @@ languages:
 - hip
 - cpp
 captured_at: '2026-05-15'
+artifact_dir: artifacts/prs/composable_kernel/PR-5
 status: merged
 merge_sha: d09ea4f4e5ac
 inclusion_reason: kernel path 'host/driver_online/include/online_device_dynamic_convolution_forward_implicit_gemm_v4r4_dlops_nchw_kcyx_nkhw.hpp';

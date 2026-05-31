@@ -14,7 +14,8 @@ tags:
 - mfma
 - block-scale
 confidence: source-reported
-reproducibility: snippet
+reproducibility: runnable
+artifact_dir: examples/fused-moe
 kernel_types:
 - fused-moe
 - moe
@@ -243,6 +244,32 @@ Mitigations used in practice:
   FP8 MoE layer versus unfused gate/up/down + standalone activation
   ([AITER](../../sources/refs/ref-aiter.md)). Treat as `source-reported`; exact
   gains depend on `E`, `top_k`, hidden size, and batch.
+
+## Runnable example
+
+A portable, self-checking fp32 reference of this dataflow lives in
+[`examples/fused-moe/`](../../examples/fused-moe/). It fuses the per-token path —
+router GEMV → top-k gating + softmax → gate-up GEMV + SiLU·mul (kept in LDS) →
+down GEMV with router-weighted reduction — in a single HIP kernel (one block per
+token) and verifies against a CPU reference. It uses **no MFMA/FP8**, so unlike
+the CDNA production kernel above it **builds and runs natively on gfx1201**.
+Production MoE replaces the per-token GEMVs with grouped GEMM on matrix cores and
+FP8 weights (see [grouped GEMM](grouped-gemm.md)).
+
+```bash
+hipcc --offload-arch=gfx1201 -O3 fused_moe.cpp -o fused_moe && ./fused_moe
+```
+
+Expected output (captured on gfx1201, ROCm 7.2.3):
+
+```
+Fused MoE (fp32, portable HIP)
+  dims: T=64 D=128 N=256 E=8 top_k=2
+  kernel time: 148.223 us/iter (200 iters)
+  max abs err: 5.215e-08
+  max rel err: 1.508e-03
+PASS
+```
 
 ## See also
 

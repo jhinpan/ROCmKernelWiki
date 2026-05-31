@@ -1,0 +1,3119 @@
+diff --git a/.github/workflows/flash_attention_integration.yaml b/.github/workflows/flash_attention_integration.yaml
+index 772c107dda..1a7548dfae 100644
+--- a/.github/workflows/flash_attention_integration.yaml
++++ b/.github/workflows/flash_attention_integration.yaml
+@@ -129,18 +129,19 @@ jobs:
+           RUN pip install --upgrade pip
+           RUN pip install pytest pytest-rerunfailures pytest-timeout einops
+ 
+-          # Clone flash-attention and override aiter submodule with local checkout
+-          COPY . /aiter
++          # Install FA (setup.py handles submodule init and installs its pinned aiter)
+           RUN git clone -b ${{ env.FA_BRANCH }} ${{ env.FA_REPOSITORY_URL }} /flash-attention && \
+-              rm -rf /flash-attention/${{ env.AITER_SUBMODULE_PATH }} && \
+-              cp -a /aiter /flash-attention/${{ env.AITER_SUBMODULE_PATH }} && \
+               cd /flash-attention && \
+               FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE \
+               pip install --no-build-isolation .
+ 
+-          RUN echo "=== Installed versions ===" && \
+-              pip show flash-attn && \
+-              pip show amd-aiter
++          # Override with PR aiter
++          COPY . /aiter
++          RUN pip uninstall -y amd-aiter && pip install --no-build-isolation -e /aiter
++
++          # Verify aiter is installed from PR branch
++          RUN pip show flash-attn && pip show amd-aiter && pip show triton && \
++              python -c "from importlib.metadata import distribution; d = distribution('amd-aiter'); loc = d.read_text('direct_url.json'); assert '/aiter' in loc, f'aiter not from PR branch: {loc}'"
+ 
+           WORKDIR /flash-attention
+           EOF
+@@ -171,44 +172,63 @@ jobs:
+             --name fa_triton_test \
+             fa_triton_test:ci
+ 
+-      - name: Run correctness tests
+-        timeout-minutes: 360
+-        run: |
+-          if [ "${{ github.event_name }}" = "push" ]; then
+-            # Post-merge: full test suite
+-            docker exec fa_triton_test bash -c "
+-              cd /flash-attention
+-              FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE \
+-              pytest -v --reruns 2 --timeout=120 \
+-                tests/test_flash_attn_triton_amd.py
+-            "
+-          else
+-            # PR: core API subset (~1 hour)
+-            docker exec fa_triton_test bash -c "
+-              cd /flash-attention
+-              FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE \
+-              pytest -v --reruns 2 --timeout=120 \
+-                tests/test_flash_attn_triton_amd.py \
+-                -k 'test_flash_attn_output or test_flash_attn_kvcache'
+-            "
+-          fi
+-
+       - name: Run benchmarks
+-        timeout-minutes: 30
++        if: ${{ github.event_name != 'push' }}
++        timeout-minutes: 60
+         run: |
+           set -o pipefail
+           docker exec fa_triton_test bash -c "
+             cd /flash-attention
+             FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE \
+             python benchmarks/benchmark_flash_attention.py
+-          " |& tee benchmark_triton_${{ matrix.label }}.log
++          " |& tee benchmark_fa_triton_${{ matrix.label }}.log
++          docker exec fa_triton_test bash -c "
++            cd /aiter
++            python op_tests/op_benchmarks/triton/bench_mha.py \
++              -impl dao_ai -metric throughput -o /tmp/bench_dao_ai
++          " |& tee benchmark_mha_daoai_${{ matrix.label }}.log
++          docker cp fa_triton_test:/tmp/bench_dao_ai/ bench_dao_ai_${{ matrix.label }}/ 2>/dev/null || true
++
++      - name: PR correctness tests
++        if: ${{ github.event_name != 'push' }}
++        timeout-minutes: 90
++        run: |
++          docker exec fa_triton_test bash -c "
++            cd /flash-attention
++            export FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE
++            export FLASH_ATTENTION_TRITON_AMD_AUTOTUNE=0
++            pytest -v --reruns 2 --timeout=120 \
++              tests/test_flash_attn_triton_amd.py::test_flash_attn_output \
++              -k '2048-2048' && \
++            pytest -v --reruns 2 --timeout=120 \
++              tests/test_flash_attn_triton_amd.py::test_flash_attn_varlen_output \
++              -k '1024-1024' && \
++            pytest -v --reruns 2 --timeout=120 \
++              tests/test_flash_attn_triton_amd.py::test_flash_attn_kvcache \
++              -k '16-20000'
++          "
++
++      - name: Post-merge correctness tests
++        if: ${{ github.event_name == 'push' && matrix.label == 'MI35X' }}
++        timeout-minutes: 360
++        run: |
++          docker exec fa_triton_test bash -c "
++            cd /flash-attention
++            FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE \
++            FLASH_ATTENTION_TRITON_AMD_AUTOTUNE=0 \
++            pytest -v --reruns 2 --timeout=120 \
++              tests/test_flash_attn_triton_amd.py
++          "
+ 
+       - name: Upload benchmark results
+-        if: success()
++        if: ${{ success() && github.event_name != 'push' }}
+         uses: actions/upload-artifact@v4
+         with:
+           name: flash-attention-triton-benchmark-${{ matrix.label }}
+-          path: benchmark_triton_${{ matrix.label }}.log
++          path: |
++            benchmark_fa_triton_${{ matrix.label }}.log
++            benchmark_mha_daoai_${{ matrix.label }}.log
++            bench_dao_ai_${{ matrix.label }}/
+ 
+       - name: Clean Up
+         if: always()
+@@ -360,7 +380,7 @@ jobs:
+           # docker exec fa_ck_test bash -c "
+           #   cd /flash-attention
+           #   python benchmarks/benchmark_flash_attention.py
+-          # " |& tee benchmark_ck.log
++          # " |& tee benchmark_fa_ck.log
+ 
+       - name: Upload benchmark results
+         if: success()
+diff --git a/aiter/ops/triton/_triton_kernels/flash_attn_triton_amd/bwd.py b/aiter/ops/triton/_triton_kernels/flash_attn_triton_amd/bwd.py
+index 92175e297c..1155243633 100755
+--- a/aiter/ops/triton/_triton_kernels/flash_attn_triton_amd/bwd.py
++++ b/aiter/ops/triton/_triton_kernels/flash_attn_triton_amd/bwd.py
+@@ -6,6 +6,7 @@
+ from .utils import (
+     DEBUG,
+     AUTOTUNE,
++    AutotuneMode,
+     is_fp8,
+     get_arch,
+     remap_xcd,
+@@ -38,13 +39,185 @@
+ ]
+ 
+ 
+-def get_bwd_configs(autotune: bool):
++def get_bwd_configs(mode: AutotuneMode):
+ 
+-    # default config
+-    if not autotune:
++    if mode == "off":
+         arch = get_arch()
++        if arch.name == "gfx942":
++            if arch.cu_count < 304:
++                preprocess_configs = [
++                    triton.Config(
++                        {"PRE_BLOCK": 64, "waves_per_eu": 1}, num_stages=1, num_warps=8
++                    ),
++                ]
++                noncausal_configs = [
++                    triton.Config(
++                        {
++                            "BLOCK_M1": 32,
++                            "BLOCK_N1": 128,
++                            "BLOCK_M2": 128,
++                            "BLOCK_N2": 64,
++                            "BLK_SLICE_FACTOR": 2,
++                            "waves_per_eu": 1,
++                            "matrix_instr_nonkdim": 16,
++                        },
++                        num_stages=1,
++                        num_warps=4,
++                    ),
++                ]
++                causal_configs = [
++                    triton.Config(
++                        {
++                            "BLOCK_M1": 32,
++                            "BLOCK_N1": 128,
++                            "BLOCK_M2": 128,
++                            "BLOCK_N2": 64,
++                            "BLK_SLICE_FACTOR": 2,
++                            "waves_per_eu": 1,
++                            "matrix_instr_nonkdim": 16,
++                        },
++                        num_stages=1,
++                        num_warps=4,
++                    ),
++                ]
++            else:
++                preprocess_configs = [
++                    triton.Config(
++                        {"PRE_BLOCK": 64, "waves_per_eu": 2}, num_stages=2, num_warps=8
++                    ),
++                ]
++                noncausal_configs = [
++                    triton.Config(
++                        {
++                            "BLOCK_M1": 32,
++                            "BLOCK_N1": 128,
++                            "BLOCK_M2": 128,
++                            "BLOCK_N2": 64,
++                            "BLK_SLICE_FACTOR": 2,
++                            "waves_per_eu": 1,
++                            "matrix_instr_nonkdim": 16,
++                        },
++                        num_stages=1,
++                        num_warps=4,
++                    ),
++                ]
++                causal_configs = [
++                    triton.Config(
++                        {
++                            "BLOCK_M1": 32,
++                            "BLOCK_N1": 128,
++                            "BLOCK_M2": 128,
++                            "BLOCK_N2": 64,
++                            "BLK_SLICE_FACTOR": 2,
++                            "waves_per_eu": 1,
++                            "matrix_instr_nonkdim": 16,
++                        },
++                        num_stages=1,
++                        num_warps=4,
++                    ),
++                ]
++        elif arch.name == "gfx950":
++            preprocess_configs = [
++                triton.Config(
++                    {"PRE_BLOCK": 64, "waves_per_eu": 2}, num_stages=2, num_warps=8
++                ),
++            ]
++            noncausal_configs = [
++                triton.Config(
++                    {
++                        "BLOCK_M1": 64,
++                        "BLOCK_N1": 128,
++                        "BLOCK_M2": 128,
++                        "BLOCK_N2": 64,
++                        "BLK_SLICE_FACTOR": 2,
++                        "waves_per_eu": 1,
++                    },
++                    num_stages=1,
++                    num_warps=4,
++                ),
++            ]
++            causal_configs = [
++                triton.Config(
++                    {
++                        "BLOCK_M1": 32,
++                        "BLOCK_N1": 128,
++                        "BLOCK_M2": 128,
++                        "BLOCK_N2": 64,
++                        "BLK_SLICE_FACTOR": 2,
++                        "waves_per_eu": 1,
++                    },
++                    num_stages=1,
++                    num_warps=4,
++                ),
++            ]
++        elif arch.is_rdna:
++            preprocess_configs = [
++                triton.Config({"PRE_BLOCK": 32}, num_stages=1, num_warps=4),
++            ]
++            noncausal_configs = [
++                triton.Config(
++                    {
++                        "BLOCK_M1": 32,
++                        "BLOCK_N1": 32,
++                        "BLOCK_M2": 32,
++                        "BLOCK_N2": 32,
++                        "BLK_SLICE_FACTOR": 2,
++                    },
++                    num_stages=1,
++                    num_warps=4,
++                ),
++            ]
++            causal_configs = [
++                triton.Config(
++                    {
++                        "BLOCK_M1": 32,
++                        "BLOCK_N1": 32,
++                        "BLOCK_M2": 32,
++                        "BLOCK_N2": 32,
++                        "BLK_SLICE_FACTOR": 2,
++                    },
++                    num_stages=1,
++                    num_warps=4,
++                ),
++            ]
++        else:
++            preprocess_configs = [
++                triton.Config(
++                    {"PRE_BLOCK": 64, "waves_per_eu": 2}, num_stages=2, num_warps=8
++                ),
++            ]
++            noncausal_configs = [
++                triton.Config(
++                    {
++                        "BLOCK_M1": 32,
++                        "BLOCK_N1": 128,
++                        "BLOCK_M2": 128,
++                        "BLOCK_N2": 64,
++                        "BLK_SLICE_FACTOR": 2,
++                        "waves_per_eu": 1,
++                    },
++                    num_stages=1,
++                    num_warps=4,
++                ),
++            ]
++            causal_configs = [
++                triton.Config(
++                    {
++                        "BLOCK_M1": 32,
++                        "BLOCK_N1": 128,
++                        "BLOCK_M2": 128,
++                        "BLOCK_N2": 64,
++                        "BLK_SLICE_FACTOR": 2,
++                        "waves_per_eu": 1,
++                    },
++                    num_stages=1,
++                    num_warps=4,
++                ),
++            ]
++        return (preprocess_configs, causal_configs, noncausal_configs)
+ 
+-        # configs for the kernels
++    elif mode == "on":
++        arch = get_arch()
+         if arch.name == "gfx942":
+             if arch.cu_count < 304:
+                 preprocess_configs = [
+@@ -445,119 +618,101 @@ def get_bwd_configs(autotune: bool):
+ 
+         return (preprocess_configs, causal_configs, noncausal_configs)
+ 
+-    # ===================== Autotune Sweep =====================
+-    # param options
+-    PRE_BLOCK_OPTIONS = [64, 128]  # og: 128
+-    PRE_WAVES_PER_EU_OPTIONS = [1, 2]
+-    PRE_NUM_STAGES_OPTIONS = [1, 2]
+-    PRE_NUM_WARPS_OPTIONS = [4, 8]
+-    NUM_STAGES_OPTIONS = [1, 2]  # og: 1
+-    NUM_WARPS_OPTIONS = [4, 8]  # og: 4
+-    WAVES_PER_EU_OPTIONS = [1, 2]  # og: 1
+-    NON_CAUSAL_BLOCK_M1_OPTIONS = [16, 32, 64, 128]  # og: 32
+-    NON_CAUSAL_BLOCK_N1_M2_OPTIONS = [32, 64, 128, 256]  # og: 128
+-    NON_CAUSAL_BLOCK_N2_OPTIONS = [16, 32, 64, 128]  # og: 32
+-    CAUSAL_BLOCK_M1_OPTIONS = [32, 64]  # og: 32
+-    CAUSAL_BLOCK_N1_M2_OPTIONS = [32, 64, 128]  # og: 128
+-    CAUSAL_BLOCK_N2_OPTIONS = [32, 64]  # og: 32
+-    BLK_SLICE_FACTOR_OPTIONS = [2]  # og: 2
+-
+-    # ==================== sweep configs ================================
+-    preprocess_autotune_configs = []
+-    for pre_num_warps in PRE_NUM_WARPS_OPTIONS:
+-        for pre_num_stages in PRE_NUM_STAGES_OPTIONS:
+-            for pre_waves in PRE_WAVES_PER_EU_OPTIONS:
+-                for pre_block in PRE_BLOCK_OPTIONS:
+-                    preprocess_autotune_configs.append(
+-                        triton.Config(
+-                            {
+-                                "PRE_BLOCK": pre_block,
+-                                "waves_per_eu": pre_waves,
+-                            },
+-                            num_stages=pre_num_stages,
+-                            num_warps=pre_num_warps,
++    else:  # sweep
++        PRE_BLOCK_OPTIONS = [64, 128]
++        PRE_WAVES_PER_EU_OPTIONS = [1, 2]
++        PRE_NUM_STAGES_OPTIONS = [1, 2]
++        PRE_NUM_WARPS_OPTIONS = [4, 8]
++        NUM_STAGES_OPTIONS = [1, 2]
++        NUM_WARPS_OPTIONS = [4, 8]
++        WAVES_PER_EU_OPTIONS = [1, 2]
++        NON_CAUSAL_BLOCK_M1_OPTIONS = [16, 32, 64, 128]
++        NON_CAUSAL_BLOCK_N1_M2_OPTIONS = [32, 64, 128, 256]
++        NON_CAUSAL_BLOCK_N2_OPTIONS = [16, 32, 64, 128]
++        CAUSAL_BLOCK_M1_OPTIONS = [32, 64]
++        CAUSAL_BLOCK_N1_M2_OPTIONS = [32, 64, 128]
++        CAUSAL_BLOCK_N2_OPTIONS = [32, 64]
++        BLK_SLICE_FACTOR_OPTIONS = [2]
++
++        preprocess_configs = []
++        for pre_num_warps in PRE_NUM_WARPS_OPTIONS:
++            for pre_num_stages in PRE_NUM_STAGES_OPTIONS:
++                for pre_waves in PRE_WAVES_PER_EU_OPTIONS:
++                    for pre_block in PRE_BLOCK_OPTIONS:
++                        preprocess_configs.append(
++                            triton.Config(
++                                {
++                                    "PRE_BLOCK": pre_block,
++                                    "waves_per_eu": pre_waves,
++                                },
++                                num_stages=pre_num_stages,
++                                num_warps=pre_num_warps,
++                            )
+                         )
+-                    )
+ 
+-    causal_autotune_configs = []
+-    for num_warps in NUM_WARPS_OPTIONS:
+-        for num_stages in NUM_STAGES_OPTIONS:
+-            for waves in WAVES_PER_EU_OPTIONS:
+-                for m1 in CAUSAL_BLOCK_M1_OPTIONS:
+-                    for n1 in CAUSAL_BLOCK_N1_M2_OPTIONS:
+-                        m2 = n1
+-                        for n2 in CAUSAL_BLOCK_N2_OPTIONS:
+-                            # Ensure constraint
+-                            assert (
+-                                n1 == m2
+-                            ), f"BLOCK_N1 ({n1}) must equal BLOCK_M2 ({m2})"
+-
+-                            # Skip configs where BLOCK_M2 % BLOCK_N2 != 0
+-                            if m2 % n2 != 0:
+-                                continue
+-
+-                            # Skip configs where BLOCK_N1 % BLOCK_M1 != 0
+-                            if n1 % m1 != 0:
+-                                continue
+-
+-                            for blk_slice in BLK_SLICE_FACTOR_OPTIONS:
+-                                causal_autotune_configs.append(
+-                                    triton.Config(
+-                                        {
+-                                            "BLOCK_M1": m1,
+-                                            "BLOCK_N1": n1,
+-                                            "BLOCK_M2": m2,
+-                                            "BLOCK_N2": n2,
+-                                            "BLK_SLICE_FACTOR": blk_slice,
+-                                            "waves_per_eu": waves,
+-                                        },
+-                                        num_stages=num_stages,
+-                                        num_warps=num_warps,
++        causal_configs = []
++        for num_warps in NUM_WARPS_OPTIONS:
++            for num_stages in NUM_STAGES_OPTIONS:
++                for waves in WAVES_PER_EU_OPTIONS:
++                    for m1 in CAUSAL_BLOCK_M1_OPTIONS:
++                        for n1 in CAUSAL_BLOCK_N1_M2_OPTIONS:
++                            m2 = n1
++                            for n2 in CAUSAL_BLOCK_N2_OPTIONS:
++                                assert (
++                                    n1 == m2
++                                ), f"BLOCK_N1 ({n1}) must equal BLOCK_M2 ({m2})"
++                                if m2 % n2 != 0:
++                                    continue
++                                if n1 % m1 != 0:
++                                    continue
++                                for blk_slice in BLK_SLICE_FACTOR_OPTIONS:
++                                    causal_configs.append(
++                                        triton.Config(
++                                            {
++                                                "BLOCK_M1": m1,
++                                                "BLOCK_N1": n1,
++                                                "BLOCK_M2": m2,
++                                                "BLOCK_N2": n2,
++                                                "BLK_SLICE_FACTOR": blk_slice,
++                                                "waves_per_eu": waves,
++                                            },
++                                            num_stages=num_stages,
++                                            num_warps=num_warps,
++                                        )
+                                     )
+-                                )
+-
+-    noncausal_autotune_configs = []
+-    for num_warps in NUM_WARPS_OPTIONS:
+-        for num_stages in NUM_STAGES_OPTIONS:
+-            for waves in WAVES_PER_EU_OPTIONS:
+-                for m1 in NON_CAUSAL_BLOCK_M1_OPTIONS:
+-                    for n1 in NON_CAUSAL_BLOCK_N1_M2_OPTIONS:
+-                        m2 = n1
+-                        for n2 in NON_CAUSAL_BLOCK_N2_OPTIONS:
+-                            # Ensure constraint
+-                            assert (
+-                                n1 == m2
+-                            ), f"BLOCK_N1 ({n1}) must equal BLOCK_M2 ({m2})"
+-
+-                            # Skip configs where BLOCK_M2 % BLOCK_N2 != 0
+-                            if m2 % n2 != 0:
+-                                continue
+-
+-                            # Skip configs where BLOCK_N1 % BLOCK_M1 != 0
+-                            if n1 % m1 != 0:
+-                                continue
+-
+-                            for blk_slice in BLK_SLICE_FACTOR_OPTIONS:
+-                                noncausal_autotune_configs.append(
+-                                    triton.Config(
+-                                        {
+-                                            "BLOCK_M1": m1,
+-                                            "BLOCK_N1": n1,
+-                                            "BLOCK_M2": m2,
+-                                            "BLOCK_N2": n2,
+-                                            "BLK_SLICE_FACTOR": blk_slice,
+-                                            "waves_per_eu": waves,
+-                                        },
+-                                        num_stages=num_stages,
+-                                        num_warps=num_warps,
++
++        noncausal_configs = []
++        for num_warps in NUM_WARPS_OPTIONS:
++            for num_stages in NUM_STAGES_OPTIONS:
++                for waves in WAVES_PER_EU_OPTIONS:
++                    for m1 in NON_CAUSAL_BLOCK_M1_OPTIONS:
++                        for n1 in NON_CAUSAL_BLOCK_N1_M2_OPTIONS:
++                            m2 = n1
++                            for n2 in NON_CAUSAL_BLOCK_N2_OPTIONS:
++                                assert (
++                                    n1 == m2
++                                ), f"BLOCK_N1 ({n1}) must equal BLOCK_M2 ({m2})"
++                                if m2 % n2 != 0:
++                                    continue
++                                if n1 % m1 != 0:
++                                    continue
++                                for blk_slice in BLK_SLICE_FACTOR_OPTIONS:
++                                    noncausal_configs.append(
++                                        triton.Config(
++                                            {
++                                                "BLOCK_M1": m1,
++                                                "BLOCK_N1": n1,
++                                                "BLOCK_M2": m2,
++                                                "BLOCK_N2": n2,
++                                                "BLK_SLICE_FACTOR": blk_slice,
++                                                "waves_per_eu": waves,
++                                            },
++                                            num_stages=num_stages,
++                                            num_warps=num_warps,
++                                        )
+                                     )
+-                                )
+ 
+-    return (
+-        preprocess_autotune_configs,
+-        causal_autotune_configs,
+-        noncausal_autotune_configs,
+-    )
++        return (preprocess_configs, causal_configs, noncausal_configs)
+ 
+ 
+ # os.environ["TRITON_PRINT_AUTOTUNING"] = "1"
+diff --git a/aiter/ops/triton/_triton_kernels/flash_attn_triton_amd/fwd_decode.py b/aiter/ops/triton/_triton_kernels/flash_attn_triton_amd/fwd_decode.py
+index 5189750017..27dc5fc6db 100755
+--- a/aiter/ops/triton/_triton_kernels/flash_attn_triton_amd/fwd_decode.py
++++ b/aiter/ops/triton/_triton_kernels/flash_attn_triton_amd/fwd_decode.py
+@@ -7,6 +7,7 @@
+ from .utils import (
+     DEBUG,
+     AUTOTUNE,
++    AutotuneMode,
+     get_arch,
+     get_padded_headsize,
+     get_shape_from_layout,
+@@ -28,7 +29,7 @@
+ MAX_BLOCK_M = 64
+ 
+ 
+-def get_fwd_decode_configs(autotune: bool):
++def get_fwd_decode_configs(mode: AutotuneMode):
+     """
+     Returns configs for both the splitK kernel and reduce kernel.
+ 
+@@ -36,9 +37,44 @@ def get_fwd_decode_configs(autotune: bool):
+         (splitk_configs, reduce_config): Tuple of config lists for each kernel
+     """
+ 
+-    if not autotune:
++    if mode == "off":
+         arch = get_arch()
++        if arch.is_rdna:
++            return (
++                [
++                    triton.Config(
++                        {"BLOCK_M": 32, "BLOCK_N": 32},
++                        num_stages=1,
++                        num_warps=4,
++                    ),
++                ],
++                [triton.Config({}, num_stages=1, num_warps=4)],
++            )
++        elif arch.is_cdna:
++            return (
++                [
++                    triton.Config(
++                        {"BLOCK_M": 64, "BLOCK_N": 64, "waves_per_eu": 1},
++                        num_stages=1,
++                        num_warps=4,
++                    ),
++                ],
++                [triton.Config({}, num_stages=1, num_warps=4)],
++            )
++        else:
++            return (
++                [
++                    triton.Config(
++                        {"BLOCK_M": 64, "BLOCK_N": 64, "waves_per_eu": 1},
++                        num_stages=1,
++                        num_warps=4,
++                    ),
++                ],
++                [triton.Config({}, num_stages=1, num_warps=4)],
++            )
+ 
++    elif mode == "on":
++        arch = get_arch()
+         if arch.is_rdna:
+             return (
+                 [
+@@ -62,7 +98,6 @@ def get_fwd_decode_configs(autotune: bool):
+                 [triton.Config({}, num_stages=1, num_warps=4)],
+             )
+         else:
+-            # Default / fallback
+             return (
+                 [
+                     triton.Config(
+@@ -74,45 +109,46 @@ def get_fwd_decode_configs(autotune: bool):
+                 [triton.Config({}, num_stages=1, num_warps=4)],
+             )
+ 
+-    # ===================== Autotune Sweep =====================
+-    arch = get_arch()
+-    splitk_configs = []
+-
+-    BLOCK_M_OPTIONS = [64, 32, 16]
+-    BLOCK_N_OPTIONS = [128, 64, 32, 16]
+-    NUM_WARPS_OPTIONS = [2, 4]
+-    NUM_STAGES_OPTIONS = [1]
+-    WAVES_PER_EU_OPTIONS = [4, 2, 1]
+-
+-    # Ensure BLOCK_M options don't exceed MAX_BLOCK_M
+-    assert all(
+-        bm <= MAX_BLOCK_M for bm in BLOCK_M_OPTIONS
+-    ), f"BLOCK_M_OPTIONS {BLOCK_M_OPTIONS} exceeds MAX_BLOCK_M {MAX_BLOCK_M}"
+-
+-    for bm in BLOCK_M_OPTIONS:
+-        for bn in BLOCK_N_OPTIONS:
+-            for waves in WAVES_PER_EU_OPTIONS:
+-                for nw in NUM_WARPS_OPTIONS:
+-                    for ns in NUM_STAGES_OPTIONS:
+-                        splitk_configs.append(
+-                            triton.Config(
+-                                {
+-                                    "BLOCK_M": bm,
+-                                    "BLOCK_N": bn,
+-                                    "waves_per_eu": waves,
+-                                },
+-                                num_stages=ns,
+-                                num_warps=nw,
++    else:  # sweep
++        arch = get_arch()
++        splitk_configs = []
++
++        BLOCK_M_OPTIONS = [64, 32, 16]
++        BLOCK_N_OPTIONS = [128, 64, 32, 16]
++        NUM_WARPS_OPTIONS = [2, 4]
++        NUM_STAGES_OPTIONS = [1]
++        WAVES_PER_EU_OPTIONS = [4, 2, 1]
++
++        # Ensure BLOCK_M options don't exceed MAX_BLOCK_M
++        assert all(
++            bm <= MAX_BLOCK_M for bm in BLOCK_M_OPTIONS
++        ), f"BLOCK_M_OPTIONS {BLOCK_M_OPTIONS} exceeds MAX_BLOCK_M {MAX_BLOCK_M}"
++
++        for bm in BLOCK_M_OPTIONS:
++            for bn in BLOCK_N_OPTIONS:
++                for waves in WAVES_PER_EU_OPTIONS:
++                    for nw in NUM_WARPS_OPTIONS:
++                        for ns in NUM_STAGES_OPTIONS:
++                            splitk_configs.append(
++                                triton.Config(
++                                    {
++                                        "BLOCK_M": bm,
++                                        "BLOCK_N": bn,
++                                        "waves_per_eu": waves,
++                                    },
++                                    num_stages=ns,
++                                    num_warps=nw,
++                                )
+                             )
+-                        )
+ 
+-    # Reduce kernel configs - sweep num_warps
+-    NUM_WARPS_REDUCE_OPTIONS = [2, 4]
+-    reduce_configs = [
+-        triton.Config({}, num_stages=1, num_warps=nw) for nw in NUM_WARPS_REDUCE_OPTIONS
+-    ]
++        # Reduce kernel configs - sweep num_warps
++        NUM_WARPS_REDUCE_OPTIONS = [2, 4]
++        reduce_configs = [
++            triton.Config({}, num_stages=1, num_warps=nw)
++            for nw in NUM_WARPS_REDUCE_OPTIONS
++        ]
+ 
+-    return splitk_configs, reduce_configs
++        return splitk_configs, reduce_configs
+ 
+ 
+ fwd_decode_splitk_configs, fwd_decode_reduce_configs = get_fwd_decode_configs(AUTOTUNE)
+@@ -331,6 +367,32 @@ def _fwd_kernel_splitK(
+     USE_BLOCK_TABLE: tl.constexpr,
+     IS_FP8: tl.constexpr,  # FP8 flag
+ ):
++    # Cast strides to int64 to prevent overflow in pointer arithmetic.
++    # stride * index can exceed int32 range for large tensors (e.g. batch=64, sk=8192, d=56).
++    # See mha.py USE_INT64_STRIDES for the same pattern used in the prefill kernel.
++    stride_qz_i64 = tl.cast(stride_qz, tl.int64)
++    stride_qm_i64 = tl.cast(stride_qm, tl.int64)
++    stride_qg_i64 = tl.cast(stride_qg, tl.int64)
++    stride_qh_i64 = tl.cast(stride_qh, tl.int64)
++    stride_qd_i64 = tl.cast(stride_qd, tl.int64)
++    stride_kz_i64 = tl.cast(stride_kz, tl.int64)
++    stride_kn_i64 = tl.cast(stride_kn, tl.int64)
++    stride_kg_i64 = tl.cast(stride_kg, tl.int64)
++    stride_kh_i64 = tl.cast(stride_kh, tl.int64)
++    stride_kd_i64 = tl.cast(stride_kd, tl.int64)
++    stride_vz_i64 = tl.cast(stride_vz, tl.int64)
++    stride_vn_i64 = tl.cast(stride_vn, tl.int64)
++    stride_vg_i64 = tl.cast(stride_vg, tl.int64)
++    stride_vh_i64 = tl.cast(stride_vh, tl.int64)
++    stride_vd_i64 = tl.cast(stride_vd, tl.int64)
++    stride_osk_zhg_i64 = tl.cast(stride_osk_zhg, tl.int64)
++    stride_osk_s_i64 = tl.cast(stride_osk_s, tl.int64)
++    stride_osk_m_i64 = tl.cast(stride_osk_m, tl.int64)
++    stride_osk_d_i64 = tl.cast(stride_osk_d, tl.int64)
++    stride_mzhg_i64 = tl.cast(stride_mzhg, tl.int64)
++    stride_ms_i64 = tl.cast(stride_ms, tl.int64)
++    stride_m2_i64 = tl.cast(stride_m2, tl.int64)
++
+     # get program ids
+     pid_m = tl.program_id(0)
+     pid_zhg = tl.program_id(1)
+@@ -391,8 +453,10 @@ def _fwd_kernel_splitK(
+     offs_d = tl.arange(0, BLOCK_DMODEL)
+ 
+     # compute ptrs
+-    q_offset = Q + hq_id * stride_qh + z_id * stride_qz + g_id * stride_qg
+-    q_ptrs = q_offset + offs_m[:, None] * stride_qm + offs_d[None, :] * stride_qd
++    q_offset = Q + hq_id * stride_qh_i64 + z_id * stride_qz_i64 + g_id * stride_qg_i64
++    q_ptrs = (
++        q_offset + offs_m[:, None] * stride_qm_i64 + offs_d[None, :] * stride_qd_i64
++    )
+ 
+     # Handle block table for paged attention
+     if USE_BLOCK_TABLE:
+@@ -401,10 +465,16 @@ def _fwd_kernel_splitK(
+         block_table_ptr = Block_table + z_id * stride_bt_b
+     else:
+         k_offset = (
+-            K + hk_id * stride_kh + cache_batch_idx * stride_kz + g_id * stride_kg
++            K
++            + hk_id * stride_kh_i64
++            + cache_batch_idx * stride_kz_i64
++            + g_id * stride_kg_i64
+         )
+         v_offset = (
+-            V + hv_id * stride_vh + cache_batch_idx * stride_vz + g_id * stride_vg
++            V
++            + hv_id * stride_vh_i64
++            + cache_batch_idx * stride_vz_i64
++            + g_id * stride_vg_i64
+         )
+ 
+     # compute masks
+@@ -486,15 +556,15 @@ def _fwd_kernel_splitK(
+                     # Calculate base addresses for K and V in this physical block
+                     k_base = (
+                         K
+-                        + physical_block * BLOCK_SIZE_K * stride_kn
+-                        + hk_id * stride_kh
+-                        + g_id * stride_kg
++                        + physical_block * BLOCK_SIZE_K * stride_kn_i64
++                        + hk_id * stride_kh_i64
++                        + g_id * stride_kg_i64
+                     )
+                     v_base = (
+                         V
+-                        + physical_block * BLOCK_SIZE_K * stride_vn
+-                        + hv_id * stride_vh
+-                        + g_id * stride_vg
++                        + physical_block * BLOCK_SIZE_K * stride_vn_i64
++                        + hv_id * stride_vh_i64
++                        + g_id * stride_vg_i64
+                     )
+ 
+                     # Offsets within the current block
+@@ -517,13 +587,13 @@ def _fwd_kernel_splitK(
+                     # Load K and V
+                     kT_ptrs = (
+                         k_base
+-                        + offs_d[:, None] * stride_kd
+-                        + block_offs[None, :] * stride_kn
++                        + offs_d[:, None] * stride_kd_i64
++                        + block_offs[None, :] * stride_kn_i64
+                     )
+                     v_ptrs = (
+                         v_base
+-                        + block_offs[:, None] * stride_vn
+-                        + offs_d[None, :] * stride_vd
++                        + block_offs[:, None] * stride_vn_i64
++                        + offs_d[None, :] * stride_vd_i64
+                     )
+ 
+                     kT = tl.load(kT_ptrs, mask=kT_mask_final, other=0.0)
+@@ -565,13 +635,13 @@ def _fwd_kernel_splitK(
+         for start_n in range(lo, hi, BLOCK_N):
+             kT_ptrs = (
+                 k_offset
+-                + offs_d[:, None] * stride_kd
+-                + (start_n + offs_n)[None, :] * stride_kn
++                + offs_d[:, None] * stride_kd_i64
++                + (start_n + offs_n)[None, :] * stride_kn_i64
+             )
+             V_ptrs = (
+                 v_offset
+-                + (start_n + offs_n)[:, None] * stride_vn
+-                + offs_d[None, :] * stride_vd
++                + (start_n + offs_n)[:, None] * stride_vn_i64
++                + offs_d[None, :] * stride_vd_i64
+             )
+ 
+             # load k
+@@ -611,9 +681,13 @@ def _fwd_kernel_splitK(
+             )
+ 
+     # write back O
+-    osk_offset = Out_splitK + pid_zhg * stride_osk_zhg + pid_splitk * stride_osk_s
++    osk_offset = (
++        Out_splitK + pid_zhg * stride_osk_zhg_i64 + pid_splitk * stride_osk_s_i64
++    )
+     osk_ptrs = (
+-        osk_offset + offs_m[:, None] * stride_osk_m + offs_d[None, :] * stride_osk_d
++        osk_offset
++        + offs_m[:, None] * stride_osk_m_i64
++        + offs_d[None, :] * stride_osk_d_i64
+     )
+     tl.store(
+         osk_ptrs,
+@@ -622,10 +696,10 @@ def _fwd_kernel_splitK(
+     )
+ 
+     # write metadata for split-K reduction
+-    metadata_offset = Metadata + pid_zhg * stride_mzhg + pid_splitk * stride_ms
++    metadata_offset = Metadata + pid_zhg * stride_mzhg_i64 + pid_splitk * stride_ms_i64
+     metadata_ptr = metadata_offset + offs_m
+     tl.store(metadata_ptr, m_i)
+-    tl.store(metadata_ptr + stride_m2, l_i)
++    tl.store(metadata_ptr + stride_m2_i64, l_i)
+ 
+ 
+ FWD_DECODE_REDUCE_AUTOTUNE_KEYS = [
+@@ -670,6 +744,21 @@ def _splitK_reduce(
+     MASK_SPLITK: tl.constexpr,
+     PADDED_HEAD: tl.constexpr,
+ ):
++    # Cast strides to int64 to prevent overflow in pointer arithmetic.
++    stride_osk_zhg_i64 = tl.cast(stride_osk_zhg, tl.int64)
++    stride_osk_s_i64 = tl.cast(stride_osk_s, tl.int64)
++    stride_osk_m_i64 = tl.cast(stride_osk_m, tl.int64)
++    stride_osk_k_i64 = tl.cast(stride_osk_k, tl.int64)
++    stride_mzhg_i64 = tl.cast(stride_mzhg, tl.int64)
++    stride_m2_i64 = tl.cast(stride_m2, tl.int64)
++    stride_ms_i64 = tl.cast(stride_ms, tl.int64)
++    stride_mm_i64 = tl.cast(stride_mm, tl.int64)
++    stride_oz_i64 = tl.cast(stride_oz, tl.int64)
++    stride_oh_i64 = tl.cast(stride_oh, tl.int64)
++    stride_og_i64 = tl.cast(stride_og, tl.int64)
++    stride_om_i64 = tl.cast(stride_om, tl.int64)
++    stride_lse_zhg_i64 = tl.cast(stride_lse_zhg, tl.int64)
++
+     # get pids
+     pid_zhg = tl.program_id(0)
+     pid_m = tl.program_id(1)
+@@ -686,25 +775,25 @@ def _splitK_reduce(
+         o_mask = None
+ 
+     # compute ptrs
+-    metadata_offset = Metadata + pid_zhg * stride_mzhg
+-    metadata_ptr = metadata_offset + offs_splitK * stride_ms + pid_m * stride_mm
++    metadata_offset = Metadata + pid_zhg * stride_mzhg_i64
++    metadata_ptr = metadata_offset + offs_splitK * stride_ms_i64 + pid_m * stride_mm_i64
+ 
+-    osk_offset = Out_splitK + pid_zhg * stride_osk_zhg + pid_m * stride_osk_m
++    osk_offset = Out_splitK + pid_zhg * stride_osk_zhg_i64 + pid_m * stride_osk_m_i64
+     osk_ptr = (
+         osk_offset
+-        + offs_splitK[:, None] * stride_osk_s
+-        + offs_k[None, :] * stride_osk_k
++        + offs_splitK[:, None] * stride_osk_s_i64
++        + offs_k[None, :] * stride_osk_k_i64
+     )
+ 
+     # read max values of each splitK
+     if MASK_SPLITK:
+         splitK_mask = offs_splitK < split_k
+         l_m = tl.load(metadata_ptr, mask=splitK_mask, other=float("-inf"))
+-        l_sum = tl.load(metadata_ptr + stride_m2, mask=splitK_mask, other=0.0)
++        l_sum = tl.load(metadata_ptr + stride_m2_i64, mask=splitK_mask, other=0.0)
+         acc = tl.load(osk_ptr, mask=splitK_mask[:, None], other=0.0)
+     else:
+         l_m = tl.load(metadata_ptr)
+-        l_sum = tl.load(metadata_ptr + stride_m2)
++        l_sum = tl.load(metadata_ptr + stride_m2_i64)
+         acc = tl.load(osk_ptr)
+ 
+     g_m = tl.max(l_m, axis=0)
+@@ -723,12 +812,14 @@ def _splitK_reduce(
+     z_id = pid_zhg // (H * G)
+     h_id = (pid_zhg // G) % H
+     g_id = pid_zhg % G
+-    out_offset = Out + z_id * stride_oz + h_id * stride_oh + g_id * stride_og
+-    out_ptr = out_offset + pid_m * stride_om + offs_k
++    out_offset = (
++        Out + z_id * stride_oz_i64 + h_id * stride_oh_i64 + g_id * stride_og_i64
++    )
++    out_ptr = out_offset + pid_m * stride_om_i64 + offs_k
+     tl.store(out_ptr, acc_out, mask=o_mask)
+ 
+     # Store lse
+-    l_ptrs = LSE + pid_zhg * stride_lse_zhg + pid_m
++    l_ptrs = LSE + pid_zhg * stride_lse_zhg_i64 + pid_m
+     lse_val = tl.where(g_sum > 0, (g_m + tl.math.log2(g_sum)) / 1.44269504, g_m)
+     tl.store(l_ptrs, lse_val)
+ 
+@@ -1074,7 +1165,12 @@ def grid(META):
+ 
+     # create intermediate tensors
+     out_splitk = torch.empty(
+-        [batch_size * n_group_q * heads_per_group_q, split_k, seqlen_q_ceil, dim_kc],
++        [
++            batch_size * n_group_q * heads_per_group_q,
++            split_k,
++            seqlen_q_ceil,
++            dim_padded,
++        ],
+         dtype=torch.float32,
+         device=q.device,
+     )
+diff --git a/aiter/ops/triton/_triton_kernels/flash_attn_triton_amd/fwd_prefill.py b/aiter/ops/triton/_triton_kernels/flash_attn_triton_amd/fwd_prefill.py
+index d7bbe27500..02b8de6510 100755
+--- a/aiter/ops/triton/_triton_kernels/flash_attn_triton_amd/fwd_prefill.py
++++ b/aiter/ops/triton/_triton_kernels/flash_attn_triton_amd/fwd_prefill.py
+@@ -6,6 +6,7 @@
+ from .common import compute_alibi_block, compute_fp8_scaling_factors, apply_rotary
+ from .utils import (
+     AUTOTUNE,
++    AutotuneMode,
+     DEBUG,
+     FWD_CONF_OVERRIDE,
+     get_arch,
+@@ -26,16 +27,73 @@
+ ]
+ 
+ 
+-def get_fwd_prefill_configs(autotune: bool):
+-    # Get best config for the architecture.
++def get_fwd_prefill_configs(mode: AutotuneMode):
+     # NOTE: Tests expect specific BLOCK_N sizes for attention score renormalization:
+     #   - CDNA: BLOCK_N=64
+     #   - RDNA: BLOCK_N=32
+     # See _get_block_size_n_triton() in test_flash_attn_triton_amd.py
+-    if not autotune:
++
++    if mode == "off":
+         if FWD_CONF_OVERRIDE:
+             return [FWD_CONF_OVERRIDE]
++        arch = get_arch()
++        if arch.name == "gfx950":
++            return [
++                triton.Config(
++                    {
++                        "BLOCK_M": 128,
++                        "BLOCK_N": 64,
++                        "waves_per_eu": 2,
++                        "PRE_LOAD_V": False,
++                    },
++                    num_stages=1,
++                    num_warps=4,
++                ),
++            ]
++        elif arch.name == "gfx942":
++            return [
++                triton.Config(
++                    {
++                        "BLOCK_M": 128,
++                        "BLOCK_N": 64,
++                        "waves_per_eu": 2,
++                        "PRE_LOAD_V": False,
++                    },
++                    num_stages=1,
++                    num_warps=4,
++                ),
++            ]
++        elif arch.is_rdna:
++            BLOCK_N = 64 if arch.name == "gfx1100" else 32
++            return [
++                triton.Config(
++                    {
++                        "BLOCK_M": 128,
++                        "BLOCK_N": BLOCK_N,
++                        "PRE_LOAD_V": False,
++                        "waves_per_eu": 6,
++                    },
++                    num_stages=1,
++                    num_warps=8,
++                ),
++            ]
++        else:
++            return [
++                triton.Config(
++                    {
++                        "BLOCK_M": 64,
++                        "BLOCK_N": 64,
++                        "waves_per_eu": 2,
++                        "PRE_LOAD_V": False,
++                    },
++                    num_stages=1,
++                    num_warps=4,
++                )
++            ]
+ 
++    elif mode == "on":
++        if FWD_CONF_OVERRIDE:
++            return [FWD_CONF_OVERRIDE]
+         arch = get_arch()
+         if arch.name == "gfx950":
+             return [
+@@ -135,34 +193,33 @@ def get_fwd_prefill_configs(autotune: bool):
+                 )
+             ]
+ 
+-    # ===================== Autotune Sweep =====================
+-    configs = []
+-    BLOCK_M_OPTIONS = [128, 64, 32, 16]
+-    BLOCK_N_OPTIONS = [128, 64, 32, 16]
+-    NUM_WARPS_OPTIONS = [2, 4, 8]
+-    NUM_STAGES_OPTIONS = [1, 2]
+-    WAVES_PER_EU_OPTIONS = [4, 2, 1]
+-    PRE_LOAD_V_OPTIONS = [False]
+-    for bm in BLOCK_M_OPTIONS:
+-        for bn in BLOCK_N_OPTIONS:
+-            for waves in WAVES_PER_EU_OPTIONS:
+-                for nw in NUM_WARPS_OPTIONS:
+-                    for ns in NUM_STAGES_OPTIONS:
+-                        for preload_v in PRE_LOAD_V_OPTIONS:
+-                            configs.append(
+-                                triton.Config(
+-                                    {
+-                                        "BLOCK_M": bm,
+-                                        "BLOCK_N": bn,
+-                                        "waves_per_eu": waves,
+-                                        "PRE_LOAD_V": preload_v,
+-                                    },
+-                                    num_stages=ns,
+-                                    num_warps=nw,
++    else:  # sweep
++        configs = []
++        BLOCK_M_OPTIONS = [128, 64, 32, 16]
++        BLOCK_N_OPTIONS = [128, 64, 32, 16]
++        NUM_WARPS_OPTIONS = [2, 4, 8]
++        NUM_STAGES_OPTIONS = [1, 2]
++        WAVES_PER_EU_OPTIONS = [4, 2, 1]
++        PRE_LOAD_V_OPTIONS = [False]
++        for bm in BLOCK_M_OPTIONS:
++            for bn in BLOCK_N_OPTIONS:
++                for waves in WAVES_PER_EU_OPTIONS:
++                    for nw in NUM_WARPS_OPTIONS:
++                        for ns in NUM_STAGES_OPTIONS:
++                            for preload_v in PRE_LOAD_V_OPTIONS:
++                                configs.append(
++                                    triton.Config(
++                                        {
++                                            "BLOCK_M": bm,
++                                            "BLOCK_N": bn,
++                                            "waves_per_eu": waves,
++                                            "PRE_LOAD_V": preload_v,
++                                        },
++                                        num_stages=ns,
++                                        num_warps=nw,
++                                    )
+                                 )
+-                            )
+-
+-    return configs
++        return configs
+ 
+ 
+ fwd_prefill_autotune_configs = get_fwd_prefill_configs(AUTOTUNE)
+diff --git a/aiter/ops/triton/_triton_kernels/flash_attn_triton_amd/utils.py b/aiter/ops/triton/_triton_kernels/flash_attn_triton_amd/utils.py
+index cb2b5524b0..998814bcf2 100644
+--- a/aiter/ops/triton/_triton_kernels/flash_attn_triton_amd/utils.py
++++ b/aiter/ops/triton/_triton_kernels/flash_attn_triton_amd/utils.py
+@@ -21,11 +21,14 @@
+ 
+ logger = logging.getLogger(__name__)
+ 
++AutotuneMode = Literal["off", "on", "sweep"]
++
+ __all__ = [
+     # Runtime info
+     "get_arch",
+     "is_hip",
+     # Global config
++    "AutotuneMode",
+     "AUTOTUNE",
+     "DEBUG",
+     "USE_TRITON_ROCM",
+@@ -115,10 +118,11 @@ def cu_count(self) -> int:
+ # Global Variables
+ # -------------------------------
+ USE_TRITON_ROCM = os.getenv("FLASH_ATTENTION_TRITON_AMD_ENABLE", "FALSE") == "TRUE"
+-AUTOTUNE = os.environ.get("FLASH_ATTENTION_TRITON_AMD_AUTOTUNE", "0").lower() in (
+-    "1",
+-    "true",
+-    "yes",
++AUTOTUNE: AutotuneMode = (
++    "on"
++    if os.environ.get("FLASH_ATTENTION_TRITON_AMD_AUTOTUNE", "1").lower()
++    in ("1", "true", "yes", "on")
++    else "off"
+ )
+ 
+ # User override config json for attn_fwd.
+@@ -145,7 +149,7 @@ def cu_count(self) -> int:
+ #
+ # Set via: FLASH_ATTENTION_TRITON_AMD_DEBUG=0|1|2
+ DEBUG: int = int(os.environ.get("FLASH_ATTENTION_TRITON_AMD_DEBUG", "0"))
+-if AUTOTUNE or DEBUG > 0:
++if AUTOTUNE != "off" or DEBUG > 0:
+     os.environ["TRITON_PRINT_AUTOTUNING"] = "1"
+ if DEBUG >= 2:
+     os.environ["TRITON_INTERPRET"] = "1"
+diff --git a/aiter/ops/triton/attention/mha.py b/aiter/ops/triton/attention/mha.py
+index 58bf981444..80d55d3d6a 100644
+--- a/aiter/ops/triton/attention/mha.py
++++ b/aiter/ops/triton/attention/mha.py
+@@ -1,7 +1,7 @@
+ # SPDX-License-Identifier: MIT
+ # Copyright (C) 2024-2026, Advanced Micro Devices, Inc. All rights reserved.
+ 
+-from typing import Optional, Tuple, Union
++from typing import Literal, Optional, Tuple, Union
+ import torch
+ import triton
+ import triton.language as tl
+@@ -29,6 +29,15 @@ def mha_set_use_fused_bwd_kernel(value: bool):
+     _USE_FUSED_BWD_KERNEL = value
+ 
+ 
++_MHA_IMPL: Literal["default", "dao_ai"] = "default"
++
++
++def mha_set_impl(impl: Literal["default", "dao_ai"]):
++    """Set MHA forward implementation: 'default' (_attn_fwd) or 'dao_ai' (flash_attn_triton_amd)."""
++    global _MHA_IMPL
++    _MHA_IMPL = impl
++
++
+ _USE_INT64_STRIDES = True
+ 
+ 
+@@ -170,90 +179,130 @@ def _flash_attn_forward(
+         s_dmask = None
+         dropout_mask = None
+ 
+-    if config is None:
+-        config = _get_config(enable_dropout, q.dtype, has_pe=pe_head_dim > 0)
+-
+-    """
+-    # Tuned for gfx942
+-    config = {
+-        "BLOCK_M": 128,
+-        "BLOCK_N": 64,
+-        "waves_per_eu": 2,
+-        "num_warps": 4,
+-        "num_ctas": 1,
+-        "num_stages": 1,
+-    }
+-    # Dropout significantly increases VGPR usage so use small tiles
+-    if enable_dropout or q.dtype == torch.float32:
+-        config = {
+-            "BLOCK_M": 32,
+-            "BLOCK_N": 32,
+-            "waves_per_eu": 1,
+-            "num_warps": 2,
+-            "num_ctas": 1,
+-            "num_stages": 1,
+-        }
+-    """
++    if _MHA_IMPL == "dao_ai":
++        assert sink is None, "dao_ai impl does not support attention sink."
++        assert (
++            pe_head_dim == 0
++        ), "dao_ai impl does not support positional encoding (pe_head_dim > 0)."
++        assert (
++            not IS_FP8
++        ), "dao_ai impl does not support FP8. Use the default impl or FA3 path."
++        assert (
++            window_size_left == -1 and window_size_right == -1
++        ), "dao_ai impl does not support sliding window attention."
++        if is_varlen:
++            o, softmax_lse, s_dmask, _ = flash_attn_2.varlen_fwd(
++                q,
++                k,
++                v,
++                o,
++                cu_seqlens_q,
++                cu_seqlens_k,
++                seqused_k=None,
++                leftpad_k=None,
++                block_table_=None,
++                alibi_slopes=alibi_slopes,
++                max_seqlen_q=max_seqlen_q,
++                max_seqlen_k=max_seqlen_k,
++                dropout_p=dropout_p,
++                softmax_scale=softmax_scale,
++                zero_tensors=False,
++                causal=causal,
++                window_size_left=-1,
++                window_size_right=-1,
++                softcap=0.0,
++                return_softmax=return_softmax,
++            )
++        else:
++            o, softmax_lse, s_dmask, _ = flash_attn_2.fwd(
++                q,
++                k,
++                v,
++                o,
++                alibi_slopes,
++                dropout_p,
++                softmax_scale,
++                causal,
++                window_size_left=-1,
++                window_size_right=-1,
++                softcap=0.0,
++                return_softmax=return_softmax,
++            )
++        # Verify softmax_lse shape contract:
++        #   non-varlen: (batch, nheads_q, seqlen_q)
++        #   varlen:     (nheads_q, total_q)  — transposed vs default impl
++        if is_varlen:
++            assert softmax_lse.shape == (
++                num_q_heads,
++                q.shape[0],
++            ), f"dao_ai varlen softmax_lse shape {softmax_lse.shape} != expected ({num_q_heads}, {q.shape[0]})"
++        else:
++            assert (
++                softmax_lse.shape[0] == batch and softmax_lse.shape[1] == num_q_heads
++            ), f"dao_ai softmax_lse shape {softmax_lse.shape} != expected (batch={batch}, nheads={num_q_heads}, ...)"
++    else:
++        if config is None:
++            config = _get_config(enable_dropout, q.dtype, has_pe=pe_head_dim > 0)
+ 
+-    grid = lambda META: (  # noqa: E731
+-        batch * num_q_heads * triton.cdiv(seqlen_q, META["BLOCK_M"]),
+-    )
++        grid = lambda META: (  # noqa: E731
++            batch * num_q_heads * triton.cdiv(seqlen_q, META["BLOCK_M"]),
++        )
+ 
+-    _attn_fwd[grid](
+-        q,
+-        k,
+-        v,
+-        descale_q,
+-        descale_k,
+-        descale_v,
+-        o,
+-        alibi_slopes,
+-        s_dmask,
+-        dropout_mask,
+-        softmax_lse,
+-        sink,
+-        *q_strides,
+-        *k_strides,
+-        *v_strides,
+-        descale_q.stride(0) if descale_q is not None else 0,
+-        descale_k.stride(0) if descale_k is not None else 0,
+-        descale_v.stride(0) if descale_v is not None else 0,
+-        *o_strides,
+-        alibi_slopes.stride(0) if alibi_slopes is not None else 0,
+-        alibi_slopes.stride(1) if alibi_slopes is not None else 0,
+-        s_dmask.stride(0) if s_dmask is not None else 0,
+-        s_dmask.stride(1) if s_dmask is not None else 0,
+-        s_dmask.stride(2) if s_dmask is not None else 0,
+-        s_dmask.stride(3) if s_dmask is not None else 0,
+-        stride_lse_z if softmax_lse is not None else 0,
+-        stride_lse_h if softmax_lse is not None else 0,
+-        stride_lse_m if softmax_lse is not None else 0,
+-        softmax_scale,
+-        cu_seqlens_q,
+-        cu_seqlens_k,
+-        dropout_p,
+-        philox_seed,
+-        philox_offset,
+-        SEQLEN_Q=max_seqlen_q,
+-        SEQLEN_K=max_seqlen_k,
+-        IS_CAUSAL=causal,
+-        NUM_Q_HEADS=num_q_heads,
+-        NUM_K_HEADS=num_k_heads,
+-        BLOCK_DMODEL=v_head_dim,
+-        BLOCK_DMODEL_POW2=BLOCK_DMODEL_POW2,
+-        BLOCK_DMODEL_PE=pe_head_dim,
+-        RETURN_SCORES=return_softmax,
+-        ENABLE_DROPOUT=enable_dropout,
+-        IS_FP8=IS_FP8,
+-        FP8_MAX=FP8_MAX,
+-        VARLEN=is_varlen,
+-        BATCH=batch,
+-        NUM_XCD=get_num_xcds(),
+-        USE_INT64_STRIDES=_USE_INT64_STRIDES,
+-        ENABLE_SINK=sink is not None,
+-        SLIDING_WINDOW=sliding_window,
+-        **config,
+-    )
++        _attn_fwd[grid](
++            q,
++            k,
++            v,
++            descale_q,
++            descale_k,
++            descale_v,
++            o,
++            alibi_slopes,
++            s_dmask,
++            dropout_mask,
++            softmax_lse,
++            sink,
++            *q_strides,
++            *k_strides,
++            *v_strides,
++            descale_q.stride(0) if descale_q is not None else 0,
++            descale_k.stride(0) if descale_k is not None else 0,
++            descale_v.stride(0) if descale_v is not None else 0,
++            *o_strides,
++            alibi_slopes.stride(0) if alibi_slopes is not None else 0,
++            alibi_slopes.stride(1) if alibi_slopes is not None else 0,
++            s_dmask.stride(0) if s_dmask is not None else 0,
++            s_dmask.stride(1) if s_dmask is not None else 0,
++            s_dmask.stride(2) if s_dmask is not None else 0,
++            s_dmask.stride(3) if s_dmask is not None else 0,
++            stride_lse_z if softmax_lse is not None else 0,
++            stride_lse_h if softmax_lse is not None else 0,
++            stride_lse_m if softmax_lse is not None else 0,
++            softmax_scale,
++            cu_seqlens_q,
++            cu_seqlens_k,
++            dropout_p,
++            philox_seed,
++            philox_offset,
++            SEQLEN_Q=max_seqlen_q,
++            SEQLEN_K=max_seqlen_k,
++            IS_CAUSAL=causal,
++            NUM_Q_HEADS=num_q_heads,
++            NUM_K_HEADS=num_k_heads,
++            BLOCK_DMODEL=v_head_dim,
++            BLOCK_DMODEL_POW2=BLOCK_DMODEL_POW2,
++            BLOCK_DMODEL_PE=pe_head_dim,
++            RETURN_SCORES=return_softmax,
++            ENABLE_DROPOUT=enable_dropout,
++            IS_FP8=IS_FP8,
++            FP8_MAX=FP8_MAX,
++            VARLEN=is_varlen,
++            BATCH=batch,
++            NUM_XCD=get_num_xcds(),
++            USE_INT64_STRIDES=_USE_INT64_STRIDES,
++            ENABLE_SINK=sink is not None,
++            SLIDING_WINDOW=sliding_window,
++            **config,
++        )
+ 
+     return o, softmax_lse, s_dmask, philox_seed, philox_offset
+ 
+@@ -345,16 +394,9 @@ def backward(ctx, do, *args):
+             do_padded = torch.nn.functional.pad(do, [0, 8 - head_size_v_og % 8])
+         sliding_window = _get_sliding_window_size(ctx.window_size)
+ 
+-        if _USE_FUSED_BWD_KERNEL:
+-            if sliding_window > 0:
+-                raise ValueError(
+-                    "Fused backward doesn't support sliding window attention. "
+-                    "Disable fused backward or use the one-kernel backward."
+-                )
+-            assert (
+-                sink is None and dsink is None
+-            ), "Fused backward doesn't support sinks."
+-            flash_attn_fused_backward(
++        if _MHA_IMPL == "dao_ai":
++            assert sink is None, "dao_ai impl does not support attention sink."
++            flash_attn_2.bwd(
+                 do_padded,
+                 q,
+                 k,
+@@ -364,46 +406,75 @@ def backward(ctx, do, *args):
+                 dq,
+                 dk,
+                 dv,
+-                dbias,
+-                ctx.softmax_scale,
+                 ctx.alibi_slopes,
+-                ctx.causal,
+-                None,
+-                None,
+-                max_seqlen_q=q.shape[1],
+-                max_seqlen_k=k.shape[1],
+-                dropout_p=ctx.dropout_p,
+-                philox_seed=ctx.philox_seed,
+-                philox_offset=ctx.philox_offset,
+-                USE_INT64_STRIDES=_USE_INT64_STRIDES,
+-            )
+-        else:
+-            flash_attn_onekernel_backward(
+-                do_padded,
+-                q,
+-                k,
+-                v,
+-                out,
+-                softmax_lse,
+-                dq,
+-                dk,
+-                dv,
+-                dbias,
++                ctx.dropout_p,
+                 ctx.softmax_scale,
+-                ctx.alibi_slopes,
+                 ctx.causal,
+-                None,
+-                None,
+-                max_seqlen_q=q.shape[1],
+-                max_seqlen_k=k.shape[1],
+-                dropout_p=ctx.dropout_p,
+-                philox_seed=ctx.philox_seed,
+-                philox_offset=ctx.philox_offset,
+-                USE_INT64_STRIDES=_USE_INT64_STRIDES,
+-                sink=sink,
+-                dsink=dsink,
+-                sliding_window=sliding_window,
++                window_size_left=-1,
++                window_size_right=-1,
++                softcap=0.0,
++                deterministic=ctx.deterministic,
+             )
++        else:
++            if _USE_FUSED_BWD_KERNEL:
++                if sliding_window > 0:
++                    raise ValueError(
++                        "Fused backward doesn't support sliding window attention. "
++                        "Disable fused backward or use the one-kernel backward."
++                    )
++                assert (
++                    sink is None and dsink is None
++                ), "Fused backward doesn't support sinks."
++                flash_attn_fused_backward(
++                    do_padded,
++                    q,
++                    k,
++                    v,
++                    out,
++                    softmax_lse,
++                    dq,
++                    dk,
++                    dv,
++                    dbias,
++                    ctx.softmax_scale,
++                    ctx.alibi_slopes,
++                    ctx.causal,
++                    None,
++                    None,
++                    max_seqlen_q=q.shape[1],
++                    max_seqlen_k=k.shape[1],
++                    dropout_p=ctx.dropout_p,
++                    philox_seed=ctx.philox_seed,
++                    philox_offset=ctx.philox_offset,
++                    USE_INT64_STRIDES=_USE_INT64_STRIDES,
++                )
++            else:
++                flash_attn_onekernel_backward(
++                    do_padded,
++                    q,
++                    k,
++                    v,
++                    out,
++                    softmax_lse,
++                    dq,
++                    dk,
++                    dv,
++                    dbias,
++                    ctx.softmax_scale,
++                    ctx.alibi_slopes,
++                    ctx.causal,
++                    None,
++                    None,
++                    max_seqlen_q=q.shape[1],
++                    max_seqlen_k=k.shape[1],
++                    dropout_p=ctx.dropout_p,
++                    philox_seed=ctx.philox_seed,
++                    philox_offset=ctx.philox_offset,
++                    USE_INT64_STRIDES=_USE_INT64_STRIDES,
++                    sink=sink,
++                    dsink=dsink,
++                    sliding_window=sliding_window,
++                )
+ 
+         dq = dq[..., : q.shape[-1]]  # We could have padded the head dimension
+         dk = dk[..., : k.shape[-1]]
+@@ -612,16 +683,9 @@ def backward(ctx, do, *args):
+             do_padded = torch.nn.functional.pad(do, [0, 8 - head_size_og % 8])
+         sliding_window = _get_sliding_window_size(ctx.window_size)
+ 
+-        if _USE_FUSED_BWD_KERNEL:
+-            if sliding_window > 0:
+-                raise ValueError(
+-                    "Fused backward doesn't support sliding window attention. "
+-                    "Disable fused backward or use the one-kernel backward."
+-                )
+-            assert (
+-                sink is None and dsink is None
+-            ), "Fused backward doesn't support sinks."
+-            flash_attn_fused_backward(
++        if _MHA_IMPL == "dao_ai":
++            assert sink is None, "dao_ai impl does not support attention sink."
++            flash_attn_2.varlen_bwd(
+                 do_padded,
+                 q,
+                 k,
+@@ -631,46 +695,80 @@ def backward(ctx, do, *args):
+                 dq,
+                 dk,
+                 dv,
+-                dbias,
+-                ctx.softmax_scale,
+-                ctx.alibi_slopes,
+-                ctx.causal,
+                 cu_seqlens_q,
+                 cu_seqlens_k,
+-                max_seqlen_q=ctx.max_seqlen_q,
+-                max_seqlen_k=ctx.max_seqlen_k,
+-                dropout_p=ctx.dropout_p,
+-                philox_seed=ctx.philox_seed,
+-                philox_offset=ctx.philox_offset,
+-                USE_INT64_STRIDES=_USE_INT64_STRIDES,
+-            )
+-        else:
+-            flash_attn_onekernel_backward(
+-                do_padded,
+-                q,
+-                k,
+-                v,
+-                out,
+-                softmax_lse,
+-                dq,
+-                dk,
+-                dv,
+-                dbias,
+-                ctx.softmax_scale,
+                 ctx.alibi_slopes,
+-                ctx.causal,
+-                cu_seqlens_q,
+-                cu_seqlens_k,
+                 max_seqlen_q=ctx.max_seqlen_q,
+                 max_seqlen_k=ctx.max_seqlen_k,
+                 dropout_p=ctx.dropout_p,
+-                philox_seed=ctx.philox_seed,
+-                philox_offset=ctx.philox_offset,
+-                USE_INT64_STRIDES=_USE_INT64_STRIDES,
+-                sink=sink,
+-                dsink=dsink,
+-                sliding_window=sliding_window,
++                softmax_scale=ctx.softmax_scale,
++                zero_tensors=False,
++                causal=ctx.causal,
++                window_size_left=-1,
++                window_size_right=-1,
++                softcap=0.0,
++                deterministic=False,
+             )
++        else:
++            if _USE_FUSED_BWD_KERNEL:
++                if sliding_window > 0:
++                    raise ValueError(
++                        "Fused backward doesn't support sliding window attention. "
++                        "Disable fused backward or use the one-kernel backward."
++                    )
++                assert (
++                    sink is None and dsink is None
++                ), "Fused backward doesn't support sinks."
++                flash_attn_fused_backward(
++                    do_padded,
++                    q,
++                    k,
++                    v,
++                    out,
++                    softmax_lse,
++                    dq,
++                    dk,
++                    dv,
++                    dbias,
++                    ctx.softmax_scale,
++                    ctx.alibi_slopes,
++                    ctx.causal,
++                    cu_seqlens_q,
++                    cu_seqlens_k,
++                    max_seqlen_q=ctx.max_seqlen_q,
++                    max_seqlen_k=ctx.max_seqlen_k,
++                    dropout_p=ctx.dropout_p,
++                    philox_seed=ctx.philox_seed,
++                    philox_offset=ctx.philox_offset,
++                    USE_INT64_STRIDES=_USE_INT64_STRIDES,
++                )
++            else:
++                flash_attn_onekernel_backward(
++                    do_padded,
++                    q,
++                    k,
++                    v,
++                    out,
++                    softmax_lse,
++                    dq,
++                    dk,
++                    dv,
++                    dbias,
++                    ctx.softmax_scale,
++                    ctx.alibi_slopes,
++                    ctx.causal,
++                    cu_seqlens_q,
++                    cu_seqlens_k,
++                    max_seqlen_q=ctx.max_seqlen_q,
++                    max_seqlen_k=ctx.max_seqlen_k,
++                    dropout_p=ctx.dropout_p,
++                    philox_seed=ctx.philox_seed,
++                    philox_offset=ctx.philox_offset,
++                    USE_INT64_STRIDES=_USE_INT64_STRIDES,
++                    sink=sink,
++                    dsink=dsink,
++                    sliding_window=sliding_window,
++                )
+ 
+         dq = dq[..., : q.shape[-1]]  # We could have padded the head dimension
+         dk = dk[..., : k.shape[-1]]
+diff --git a/op_tests/op_benchmarks/triton/bench_mha.py b/op_tests/op_benchmarks/triton/bench_mha.py
+index 5ae6334c7d..de4bbf28a5 100644
+--- a/op_tests/op_benchmarks/triton/bench_mha.py
++++ b/op_tests/op_benchmarks/triton/bench_mha.py
+@@ -2,13 +2,17 @@
+ import warnings
+ import argparse
+ import itertools
++import dataclasses
+ from dataclasses import dataclass
+ from typing import Callable
+ import triton
++from aiter.ops.triton._triton_kernels.flash_attn_triton_amd.utils import get_arch
+ from aiter.ops.triton.attention.mha import (
+     flash_attn_func,
+     flash_attn_varlen_func,
++    flash_attn_with_kvcache,
+     mha_set_use_fused_bwd_kernel,
++    mha_set_impl,
+ )
+ from aiter.ops.triton.attention.mha_v3 import (
+     flash_attn_fp8_func,
+@@ -26,18 +30,89 @@
+ )
+ 
+ 
+-@dataclass(frozen=True)
+-class Provider:
+-    label: str
+-    make_fn: Callable[..., Callable]
++@dataclass
++class BenchRun:
++    configs: list["BenchConfig"]
++    torch_dtype: torch.dtype
++    unit: str  # "ms", "TFLOPS", "GB/s"
++    plot_name: str
++    sink: bool
++    equal_seqlens: bool
++    save_path: str | None
++    profile_dir: str | None
++    print_vgpr: bool
++    bench_torch: bool
++    window_size_left: int = -1
++
+ 
++VALID_FUNCTIONS = {"fwd", "bwd", "fwd_varlen", "bwd_varlen", "fwd_kvcache"}
+ 
+-# Registry populated by create_benchmark_configs, looked up by bench_mha
+-_PROVIDERS: dict[str, Provider] = {}
+ 
++@dataclass(frozen=True)
++class BenchConfig:
++    batch: int
++    hq: int
++    hk: int
++    sq: int
++    sk: int
++    d_head: int
++    d_head_v: int
++    causal: bool
++    function: str  # "fwd", "bwd", "fwd_varlen", "bwd_varlen", "fwd_kvcache"
++    dtype_str: str  # "bf16", "fp16", "fp32", "fp8"
++    impl: str = "default"  # "default" or "dao_ai"
++    fused: bool = False
++    model: str | None = None
++
++    def __str__(self) -> str:
++        label = self.model or "custom"
++        return (
++            f"{label} B={self.batch} HQ={self.hq} HK={self.hk} "
++            f"sq={self.sq} sk={self.sk} d={self.d_head} "
++            f"{self.function} {self.dtype_str} causal={self.causal}"
++        )
+ 
+-def _has_sliding_window(window_size: tuple[int, int]) -> bool:
+-    return window_size[0] >= 0
++    @property
++    def is_varlen(self) -> bool:
++        return "varlen" in self.function
++
++    @property
++    def is_bwd(self) -> bool:
++        return self.function.startswith("bwd")
++
++    @property
++    def is_decode(self) -> bool:
++        return self.function == "fwd_kvcache"
++
++    @property
++    def estimated_memory(self) -> int:
++        """Estimate GPU memory in bytes for q, k, v, o (and grads for bwd)."""
++        elem = {"fp8": 1, "fp16": 2, "bf16": 2, "fp32": 4}.get(self.dtype_str, 2)
++        q = self.batch * self.sq * self.hq * self.d_head * elem
++        k = self.batch * self.sk * self.hk * self.d_head * elem
++        v = self.batch * self.sk * self.hk * self.d_head_v * elem
++        o = self.batch * self.sq * self.hq * self.d_head_v * elem
++        total = q + k + v + o
++        if self.is_bwd:
++            total *= 2  # grads are same size as inputs
++        return total
++
++    def to_tuple(self) -> tuple:
++        return (
++            self.model,
++            self.batch,
++            self.hq,
++            self.hk,
++            self.sq,
++            self.sk,
++            self.d_head,
++            self.d_head_v,
++            self.causal,
++            self.function,
++            self.dtype_str,
++            self.impl,
++            self.fused,
++        )
+ 
+ 
+ def _count_valid_attention_elements(
+@@ -63,8 +138,7 @@ def _count_valid_attention_elements(
+     return total
+ 
+ 
+-def _make_bf16_fn(q, k, v, **kw):
+-    mha_set_use_fused_bwd_kernel(False)
++def _make_attn_fn(q, k, v, **kw):
+     return lambda: flash_attn_func(
+         q,
+         k,
+@@ -72,15 +146,14 @@ def _make_bf16_fn(q, k, v, **kw):
+         dropout_p=kw["dropout"],
+         softmax_scale=kw["sm_scale"],
+         causal=kw["causal"],
+-        window_size=kw["window_size"],
++        window_size=kw.get("window_size", (-1, -1)),
+         return_lse=kw["return_lse"],
+         return_attn_probs=kw["return_attn_probs"],
+         sink=kw["sink"],
+     )
+ 
+ 
+-def _make_bf16_varlen_fn(q, k, v, **kw):
+-    mha_set_use_fused_bwd_kernel(False)
++def _make_varlen_fn(q, k, v, **kw):
+     return lambda: flash_attn_varlen_func(
+         q,
+         k,
+@@ -92,42 +165,26 @@ def _make_bf16_varlen_fn(q, k, v, **kw):
+         dropout_p=kw["dropout"],
+         softmax_scale=kw["sm_scale"],
+         causal=kw["causal"],
+-        window_size=kw["window_size"],
++        window_size=kw.get("window_size", (-1, -1)),
+         return_lse=kw["return_lse"],
+         return_attn_probs=kw["return_attn_probs"],
+         sink=kw["sink"],
+     )
+ 
+ 
+-def _make_bf16_fused_fn(q, k, v, **kw):
+-    if kw.get("has_pe") or kw.get("has_sink") or _has_sliding_window(kw["window_size"]):
+-        warnings.warn(
+-            "Skipping: PE, sink, or sliding window not supported for this provider."
+-        )
+-        return None
+-    mha_set_use_fused_bwd_kernel(True)
+-    return lambda: flash_attn_func(
++def _make_fp8_fn(q, k, v, **kw):
++    return lambda: flash_attn_fp8_func(
+         q,
+         k,
+         v,
+-        dropout_p=kw["dropout"],
+         softmax_scale=kw["sm_scale"],
+         causal=kw["causal"],
+-        window_size=kw["window_size"],
+-        return_lse=kw["return_lse"],
+-        return_attn_probs=kw["return_attn_probs"],
+-        sink=kw["sink"],
++        window_size=kw.get("window_size", (-1, -1)),
+     )
+ 
+ 
+-def _make_bf16_fused_varlen_fn(q, k, v, **kw):
+-    if kw.get("has_pe") or kw.get("has_sink") or _has_sliding_window(kw["window_size"]):
+-        warnings.warn(
+-            "Skipping: PE, sink, or sliding window not supported for this provider."
+-        )
+-        return None
+-    mha_set_use_fused_bwd_kernel(True)
+-    return lambda: flash_attn_varlen_func(
++def _make_fp8_varlen_fn(q, k, v, **kw):
++    return lambda: flash_attn_varlen_fp8_func(
+         q,
+         k,
+         v,
+@@ -135,81 +192,83 @@ def _make_bf16_fused_varlen_fn(q, k, v, **kw):
+         kw["cu_seqlens_k"],
+         kw["max_seqlen_q"],
+         kw["max_seqlen_k"],
+-        dropout_p=kw["dropout"],
+         softmax_scale=kw["sm_scale"],
+         causal=kw["causal"],
+-        window_size=kw["window_size"],
+-        return_lse=kw["return_lse"],
+-        return_attn_probs=kw["return_attn_probs"],
+-        sink=kw["sink"],
++        window_size=kw.get("window_size", (-1, -1)),
+     )
+ 
+ 
+-def _make_fp8_fn(q, k, v, **kw):
+-    if kw.get("has_pe") or kw.get("has_sink"):
+-        warnings.warn("Skipping: PE or sink not supported for this provider.")
+-        return None
+-    mha_set_use_fused_bwd_kernel(False)
+-    return lambda: flash_attn_fp8_func(
++def _make_kvcache_fn(q, k_cache, v_cache, **kw):
++    return lambda: flash_attn_with_kvcache(
+         q,
+-        k,
+-        v,
++        k_cache,
++        v_cache,
++        cache_seqlens=kw["cache_seqlens"],
+         softmax_scale=kw["sm_scale"],
+         causal=kw["causal"],
+-        window_size=kw["window_size"],
+     )
+ 
+ 
+-def _make_fp8_varlen_fn(q, k, v, **kw):
+-    if kw.get("has_pe") or kw.get("has_sink"):
+-        warnings.warn("Skipping: PE or sink not supported for this provider.")
+-        return None
+-    mha_set_use_fused_bwd_kernel(False)
+-    return lambda: flash_attn_varlen_fp8_func(
+-        q,
+-        k,
+-        v,
+-        kw["cu_seqlens_q"],
+-        kw["cu_seqlens_k"],
+-        kw["max_seqlen_q"],
+-        kw["max_seqlen_k"],
+-        softmax_scale=kw["sm_scale"],
+-        causal=kw["causal"],
+-        window_size=kw["window_size"],
+-    )
++# Dispatch: function -> make_fn
++# fwd/bwd share the same make_fn (bwd is layered on top via autograd.grad)
++_MAKE_FN = {
++    "fwd": _make_attn_fn,
++    "bwd": _make_attn_fn,
++    "fwd_varlen": _make_varlen_fn,
++    "bwd_varlen": _make_varlen_fn,
++    "fwd_kvcache": _make_kvcache_fn,
++}
+ 
++_MAKE_FN_FP8 = {
++    "fwd": _make_fp8_fn,
++    "fwd_varlen": _make_fp8_varlen_fn,
++}
+ 
+-def nonvarlen_benchmark_configs():
+-    batch_sizes = [1, 4, 16]
+-    N_HEADS = [16, 48]
+-    seq_len_q = [1, 1024, 4096]
+-    seq_len_k = [163, 8192]
+-    configs = list(itertools.product(batch_sizes, N_HEADS, seq_len_q, seq_len_k))
+-    configs = [
+-        (batch_size, N_HEAD, N_HEAD, seq_len_q, seq_len_k)
+-        for batch_size, N_HEAD, seq_len_q, seq_len_k in configs
+-    ]
+-    return configs
+-
+-
+-def varlen_benchmark_configs():
+-    batch_sizes = [1, 4, 8]
+-    N_HEADS = [16, 48]
+-    seq_len_q = [1, 1024, 4096]
+-    seq_len_k = [163, 8192]
+-    configs = list(itertools.product(batch_sizes, N_HEADS, seq_len_q, seq_len_k))
+-    configs = [
+-        (batch_size, N_HEAD, N_HEAD, seq_len_q, seq_len_k)
+-        for batch_size, N_HEAD, seq_len_q, seq_len_k in configs
+-    ]
+-    return configs
+ 
++def get_make_fn(function: str, dtype: str) -> Callable:
++    if dtype == "fp8":
++        return _MAKE_FN_FP8[function]
++    return _MAKE_FN[function]
+ 
+-def model_benchmark_configs(args):
++
++PREFILL_FNS = ["fwd", "bwd", "fwd_varlen", "bwd_varlen"]
++DECODE_FNS = ["fwd_kvcache"]
++
++
++def make_workloads(
++    num_tokens: int,
++    max_num_seqs: int,
++) -> tuple[list[tuple], list[tuple]]:
++    """Generate realistic workloads from vLLM scheduler parameters.
++
++    Prefill: batch × sq = num_tokens (token budget per step).
++    Decode: batch = min(num_tokens, max_num_seqs), sq=1.
++    Returns (prefill_workloads, decode_workloads).
++    Each entry is (batch, sq, sk, causal, functions).
++    """
++    prefill_seqlens = [256, 1024, num_tokens]
++    prefill = [(num_tokens // sq, sq, sq, True, PREFILL_FNS) for sq in prefill_seqlens]
++    # Cross-attention (non-causal, sq != sk)
++    prefill.append((num_tokens // 1024, 1024, 4096, False, PREFILL_FNS))
++
++    decode_batch = min(num_tokens, max_num_seqs)
++    decode = [(decode_batch, 1, sk, True, DECODE_FNS) for sk in [1024, 4096, 8192]]
++
++    return prefill, decode
++
++
++def model_benchmark_configs(
++    args,
++    *,
++    dtypes: list[str],
++    functions: list[str],
++    impl: str,
++    fused: bool,
++    model: str | None = None,
++) -> list[BenchConfig]:
+     config_file = args.model_configs
+-    configs = get_model_configs(config_path=config_file, models=args.model)
+-    fa_configs = []
+-    batch_size = args.b if args.b else 1
++    configs = get_model_configs(config_path=config_file, models=model or "all")
++    fa_configs: list[BenchConfig] = []
+ 
+     for model_name, config in configs.items():
+         HQ = config["num_attention_heads"]
+@@ -218,27 +277,51 @@ def model_benchmark_configs(args):
+             if config["num_key_value_heads"] is None
+             else config["num_key_value_heads"]
+         )
+-        N_CTX_Q = args.sq if args.sq else [2**i for i in range(1, 14)]
+-        N_CTX_K = args.sk if args.sk else N_CTX_Q
+         HEAD_DIM = config["hidden_size"] // HQ
+-        if isinstance(N_CTX_Q, list):
+-            for seq_len in N_CTX_Q:
++        if args.sq:
++            b = args.b if args.b else 1
++            causal = args.causal if args.causal is not None else True
++            workloads = [
++                (b, args.sq, args.sk if args.sk else args.sq, causal, functions)
++            ]
++        else:
++            # Realistic serving on MI350 node: 8192 token budget per step, 64 concurrent decodes
++            prefill, decode = make_workloads(num_tokens=8192, max_num_seqs=64)
++            workloads = prefill + decode
++            if args.b:
++                workloads = [
++                    (args.b, sq, sk, c, fns) for (_, sq, sk, c, fns) in workloads
++                ]
++            if args.causal is not None:
++                workloads = [
++                    (b, sq, sk, c, fns)
++                    for (b, sq, sk, c, fns) in workloads
++                    if c == args.causal
++                ]
++
++        for (b, sq, sk, causal, workload_fns), d in itertools.product(
++            workloads, dtypes
++        ):
++            for fn in workload_fns:
++                if fn not in functions:
++                    continue
+                 fa_configs.append(
+-                    (
+-                        model_name,
+-                        batch_size,
+-                        HQ,
+-                        HK,
+-                        seq_len,
+-                        seq_len,
+-                        HEAD_DIM,
+-                        HEAD_DIM,
++                    BenchConfig(
++                        model=model_name,
++                        batch=b,
++                        hq=HQ,
++                        hk=HK,
++                        sq=sq,
++                        sk=sk,
++                        d_head=HEAD_DIM,
++                        d_head_v=HEAD_DIM,
++                        causal=causal,
++                        function=fn,
++                        dtype_str=d,
++                        impl=impl,
++                        fused=fused and d != "fp8",
+                     )
+                 )
+-        else:
+-            fa_configs.append(
+-                (model_name, batch_size, HQ, HK, N_CTX_Q, N_CTX_K, HEAD_DIM, HEAD_DIM)
+-            )
+ 
+     return fa_configs
+ 
+@@ -274,120 +357,123 @@ def pad_rearrange_dropout_mask(
+     return padded_dropout_mask
+ 
+ 
+-def create_benchmark_configs(custom, args):
+-    dtype = arg_to_torch_dtype[args.tensor_dtype]
+-    hk = args.hq if not args.hk else args.hk
+-    sk = args.sq if not args.sk else args.sk
+-    head_size = 128 if not args.d else args.d
+-    head_size_v = head_size if not args.dv else args.dv
+-    mode = args.mode
+-    x_names = ["BATCH", "HQ", "HK", "N_CTX_Q", "N_CTX_K"]
+-    causal = args.causal
+-    varlen = args.layout == "thd"
+-
+-    configs = []
+-    plot_name_parts = [get_caller_name_no_ext()]
+-    if args.sink:
+-        plot_name_parts.append("sink")
+-    if args.window_size_left >= 0:
+-        plot_name_parts.append(f"window_left_{args.window_size_left}")
+-    plot_name = "-".join(plot_name_parts)
+-    extra_args = {
+-        "D_HEAD": head_size,
+-        "D_HEAD_V": head_size_v,
+-        "dtype": dtype,
+-        "causal": causal,
+-        "mode": mode,
+-    }
+-
+-    if custom:
+-        x_vals_list = [(args.b, args.hq, hk, args.sq, sk)]
+-    else:
+-        if varlen:
+-            x_vals_list = varlen_benchmark_configs()  # Assume this exists
+-        else:
+-            x_vals_list = nonvarlen_benchmark_configs()  # Assume this exists
+-
+-        if args.model:
+-            x_vals_list = model_benchmark_configs(args)
+-            x_names = [
+-                "model",
+-                "BATCH",
+-                "HQ",
+-                "HK",
+-                "N_CTX_Q",
+-                "N_CTX_K",
+-                "D_HEAD",
+-                "D_HEAD_V",
+-            ]
+-            plot_name = (
+-                f"fused-attention-{mode}-layout-{args.layout}-dtype-{args.dtype}"
+-                f"-causal-{causal}-sink-{args.sink}"
+-                f"-window-left-{args.window_size_left}"
+-            )
+-            extra_args = {"dtype": dtype, "causal": causal, "mode": mode}
+-
+-    if args.metric == "time":
+-        unit = "ms"
+-    elif args.metric == "throughput":
+-        unit = "TFLOPS"
+-    elif args.metric == "bandwidth":
+-        unit = "GB/s"
+-    else:
+-        raise ValueError("Unknown metric: " + args.metric)
+-
+-    dtype_to_fn = {
+-        "bf16": _make_bf16_varlen_fn if varlen else _make_bf16_fn,
+-        "fp16": _make_bf16_varlen_fn if varlen else _make_bf16_fn,
+-        "fp32": _make_bf16_varlen_fn if varlen else _make_bf16_fn,
+-        "fp8": _make_fp8_varlen_fn if varlen else _make_fp8_fn,
+-    }
+-    bf16_fused_fn = _make_bf16_fused_varlen_fn if varlen else _make_bf16_fused_fn
+-
+-    providers = []
+-    for d in args.dtypes:
+-        label = d.upper()
+-        if mode == "bwd":
+-            if args.fused_bwd and d != "fp8":
+-                providers.append(Provider(f"{label}-fused-bwd({unit})", bf16_fused_fn))
+-            else:
+-                providers.append(Provider(f"{label}-bwd({unit})", dtype_to_fn[d]))
+-        else:
+-            providers.append(Provider(f"{label}-fwd({unit})", dtype_to_fn[d]))
+-
+-    if args.bench_torch:
+-        bf16_fn = dtype_to_fn["bf16"]
+-        providers = [
+-            Provider(f"Triton({unit})", bf16_fn),
+-            Provider(f"Torch({unit})", bf16_fn),
+-        ]
+-
+-    _PROVIDERS.clear()
+-    for p in providers:
+-        _PROVIDERS[p.label] = p
+-    line_vals = [p.label for p in providers]
+-
+-    configs.append(
++def _make_triton_benchmark(run: BenchRun) -> list:
++    x_names = [
++        "model",
++        "BATCH",
++        "HQ",
++        "HK",
++        "N_CTX_Q",
++        "N_CTX_K",
++        "D_HEAD",
++        "D_HEAD_V",
++        "causal",
++        "function",
++        "dtype",
++        "impl",
++        "fused",
++    ]
++    return [
+         triton.testing.Benchmark(
+             x_names=x_names,
+-            x_vals=x_vals_list,
++            x_vals=[c.to_tuple() for c in run.configs],
+             line_arg="provider",
+-            line_vals=line_vals,
+-            line_names=line_vals,
+-            styles=[("red", "-"), ("green", "-"), ("yellow", "-")],
+-            ylabel=unit,
+-            plot_name=plot_name,
+-            args=extra_args,
++            line_vals=[run.unit],
++            line_names=[run.unit],
++            styles=[("red", "-")],
++            ylabel=run.unit,
++            plot_name=run.plot_name,
++            args={
++                "torch_dtype": run.torch_dtype,
++                "unit": run.unit,
++            },
+         )
+-    )
+-    return configs
++    ]
+ 
+ 
+-def run_benchmark(custom, args):
+-    torch.manual_seed(20)
++class _CsvWriter:
++    """Incrementally writes benchmark results to CSV."""
++
++    def __init__(self, run: BenchRun):
++        self._path: str | None = None
++        self._written = 0
++        self._skipped = 0
++        if not run.save_path:
++            return
++        import os
++
++        os.makedirs(run.save_path, exist_ok=True)
++        self._path = os.path.join(run.save_path, f"{run.plot_name}.csv")
++        header = [
++            "model",
++            "BATCH",
++            "HQ",
++            "HK",
++            "N_CTX_Q",
++            "N_CTX_K",
++            "D_HEAD",
++            "D_HEAD_V",
++            "causal",
++            "function",
++            "dtype",
++            "impl",
++            "fused",
++            run.unit,
++        ]
++        with open(self._path, "w") as f:
++            f.write(",".join(header) + "\n")
++
++    def write(self, config: BenchConfig, value: float | None) -> None:
++        if self._path is None:
++            return
++        if value is None:
++            self._skipped += 1
++            return
++        with open(self._path, "a") as f:
++            row = ",".join(str(x) for x in config.to_tuple()) + f",{value}\n"
++            f.write(row)
++        self._written += 1
++
++    def summary(self) -> None:
++        if self._path is None:
++            return
++        msg = f"\nResults written to {self._path} ({self._written} rows"
++        if self._skipped:
++            msg += f", {self._skipped} skipped"
++        msg += ")"
++        print(msg, flush=True)
++
++
++def _filter_by_memory(configs: list[BenchConfig]) -> list[BenchConfig]:
++    """Skip large configs to avoid OOM on RDNA (16GB VRAM)."""
++    if not get_arch().is_rdna:
++        return configs
++    vram = 16 * 1024**3
++    limit = vram * 0.8
++    kept = []
++    for c in configs:
++        if c.estimated_memory > limit:
++            print(
++                f"[SKIP] {c} — {c.estimated_memory / 1e9:.1f}GB exceeds {vram // 1024**3}GB VRAM",
++                flush=True,
++            )
++        else:
++            kept.append(c)
++    return kept
++
+ 
+-    @triton.testing.perf_report(create_benchmark_configs(custom, args))
++def run_benchmark(run: BenchRun):
++    torch.manual_seed(20)
++    filtered = _filter_by_memory(run.configs)
++    if len(filtered) < len(run.configs):
++        run = dataclasses.replace(run, configs=filtered)
++    total = len(run.configs)
++    counter = 0
++    csv = _CsvWriter(run)
++
++    @triton.testing.perf_report(_make_triton_benchmark(run))
+     def bench_mha(
++        model,
+         BATCH,
+         HQ,
+         HK,
+@@ -395,23 +481,98 @@ def bench_mha(
+         N_CTX_K,
+         D_HEAD,
+         D_HEAD_V,
+-        dtype,
+         causal,
+-        mode,
++        function,
++        dtype,
++        impl,
++        fused,
++        torch_dtype,
++        unit,
+         provider,
+         dropout=0.0,
+-        model=None,
+         sm_scale=None,
+         device="cuda",
++    ):
++        nonlocal counter
++        counter += 1
++        config = run.configs[counter - 1]
++        label = model or "custom"
++        mem_gb = config.estimated_memory / 1e9
++        print(
++            f"[{counter}/{total}] {label} B={BATCH} HQ={HQ} HK={HK} "
++            f"sq={N_CTX_Q} sk={N_CTX_K} d={D_HEAD} {function} {dtype} causal={causal} ({mem_gb:.1f}GB)",
++            flush=True,
++        )
++        try:
++            value = _run_single_benchmark(
++                model,
++                BATCH,
++                HQ,
++                HK,
++                N_CTX_Q,
++                N_CTX_K,
++                D_HEAD,
++                D_HEAD_V,
++                causal,
++                function,
++                dtype,
++                impl,
++                fused,
++                torch_dtype,
++                unit,
++                dropout,
++                sm_scale,
++                device,
++                run,
++            )
++        except Exception as e:
++            print(f"  [SKIP] {e}", flush=True)
++            value = None
++        finally:
++            torch.cuda.empty_cache()
++        csv.write(config, value)
++        return value if value is not None else 0
++
++    def _run_single_benchmark(
++        model,
++        BATCH,
++        HQ,
++        HK,
++        N_CTX_Q,
++        N_CTX_K,
++        D_HEAD,
++        D_HEAD_V,
++        causal,
++        function,
++        dtype,
++        impl,
++        fused,
++        torch_dtype,
++        unit,
++        dropout,
++        sm_scale,
++        device,
++        run,
+     ):
+         assert dropout <= 0.0, "Dropout not supported in this benchmark."
+-        requires_grad = mode == "bwd"
++        is_bwd = function.startswith("bwd")
++        is_varlen = "varlen" in function
++        is_decode = function == "fwd_kvcache"
++        requires_grad = is_bwd
+         return_lse = True
+         return_attn_probs = False
+-        varlen = args.layout == "thd"
+         has_pe = D_HEAD > D_HEAD_V
+-        window_size = (args.window_size_left, -1)
+-        provider_obj = _PROVIDERS[provider]
++        window_size = (run.window_size_left, -1)
++        has_sliding_window = run.window_size_left >= 0
++        if impl != "default":
++            mha_set_impl(impl)
++        if (fused or dtype == "fp8") and (has_pe or run.sink or has_sliding_window):
++            warnings.warn(
++                "Skipping: PE, sink, or sliding window not supported with fused bwd / fp8."
++            )
++            return 0
++        mha_set_use_fused_bwd_kernel(fused)
++        make_fn = get_make_fn(function, dtype)
+ 
+         # Default softmax scale to match standard attention
+         if sm_scale is None:
+@@ -421,29 +582,24 @@ def bench_mha(
+         q = torch.randn(
+             (BATCH, N_CTX_Q, HQ, D_HEAD),
+             device=device,
+-            dtype=dtype,
++            dtype=torch_dtype,
+             requires_grad=requires_grad,
+         )
+         k = torch.randn(
+             (BATCH, N_CTX_K, HK, D_HEAD),
+             device=device,
+-            dtype=dtype,
++            dtype=torch_dtype,
+             requires_grad=requires_grad,
+         )
+         v = torch.randn(
+             (BATCH, N_CTX_K, HK, D_HEAD_V),
+             device=device,
+-            dtype=dtype,
++            dtype=torch_dtype,
+             requires_grad=requires_grad,
+         )
+         sink = (
+-            torch.randn(
+-                (HQ,),
+-                device=device,
+-                dtype=torch.float32,
+-                requires_grad=requires_grad,
+-            )
+-            if args.sink
++            torch.randn((HQ,), device=device, dtype=dtype, requires_grad=requires_grad)
++            if run.sink
+             else None
+         )
+ 
+@@ -451,12 +607,30 @@ def bench_mha(
+         total_flops = 0.0
+ 
+         # Input preparation
+-        if varlen:
++        if is_decode:
++            # KV cache: q is (B, 1, Hq, D), k/v caches are (B, sk, Hk, D)
++            q_input = q[:, :N_CTX_Q, :, :]  # (B, sq, Hq, D)
++            k_cache = k[:, :N_CTX_K, :, :]  # (B, sk, Hk, D)
++            v_cache = v[:, :N_CTX_K, :, :D_HEAD_V]
++            cache_seqlens = torch.full(
++                (BATCH,), N_CTX_K, dtype=torch.int32, device=device
++            )
++            total_flops += 2.0 * BATCH * HQ * N_CTX_Q * N_CTX_K * (D_HEAD + D_HEAD_V)
++
++            fn_kwargs = dict(
++                sm_scale=sm_scale,
++                causal=causal,
++                cache_seqlens=cache_seqlens,
++            )
++            fn = make_fn(q_input, k_cache, v_cache, **fn_kwargs)
++            if fn is None:
++                return 0
++        elif is_varlen:
+             query_padding_mask = generate_random_padding_mask(
+-                N_CTX_Q, BATCH, device, mode="full" if args.equal_seqlens else "random"
++                N_CTX_Q, BATCH, device, mode="full" if run.equal_seqlens else "random"
+             )
+             key_padding_mask = generate_random_padding_mask(
+-                N_CTX_K, BATCH, device, mode="full" if args.equal_seqlens else "random"
++                N_CTX_K, BATCH, device, mode="full" if run.equal_seqlens else "random"
+             )
+             (
+                 q_unpad,
+@@ -487,15 +661,31 @@ def bench_mha(
+                 seqlen_k = (cu_seqlens_k[i + 1] - cu_seqlens_k[i]).item()
+                 total_flops += (
+                     _count_valid_attention_elements(
+-                        seqlen_q,
+-                        seqlen_k,
+-                        causal,
+-                        window_size,
++                        seqlen_q, seqlen_k, causal, window_size
+                     )
+                     * HQ
+                     * (D_HEAD + D_HEAD_V)
+                     * 2.0
+                 )
++
++            fn_kwargs = dict(
++                sm_scale=sm_scale,
++                causal=causal,
++                dropout=dropout,
++                return_lse=return_lse,
++                return_attn_probs=return_attn_probs,
++                sink=sink,
++                window_size=window_size,
++                has_pe=has_pe,
++                has_sink=run.sink,
++                cu_seqlens_q=cu_seqlens_q,
++                cu_seqlens_k=cu_seqlens_k,
++                max_seqlen_q=max_seqlen_q,
++                max_seqlen_k=max_seqlen_k,
++            )
++            fn = make_fn(q_input, k_input, v_input, **fn_kwargs)
++            if fn is None:
++                return 0
+         else:
+             q_input, k_input, v_input = q, k, v
+ 
+@@ -503,39 +693,26 @@ def bench_mha(
+                 2.0
+                 * BATCH
+                 * HQ
+-                * _count_valid_attention_elements(
+-                    N_CTX_Q,
+-                    N_CTX_K,
+-                    causal,
+-                    window_size,
+-                )
++                * _count_valid_attention_elements(N_CTX_Q, N_CTX_K, causal, window_size)
+                 * (D_HEAD + D_HEAD_V)
+             )
+ 
+-        # Build fn from provider
+-        fn_kwargs = dict(
+-            sm_scale=sm_scale,
+-            causal=causal,
+-            dropout=dropout,
+-            return_lse=return_lse,
+-            return_attn_probs=return_attn_probs,
+-            sink=sink,
+-            window_size=window_size,
+-            has_pe=has_pe,
+-            has_sink=args.sink,
+-        )
+-        if varlen:
+-            fn_kwargs.update(
+-                cu_seqlens_q=cu_seqlens_q,
+-                cu_seqlens_k=cu_seqlens_k,
+-                max_seqlen_q=max_seqlen_q,
+-                max_seqlen_k=max_seqlen_k,
++            fn_kwargs = dict(
++                sm_scale=sm_scale,
++                causal=causal,
++                dropout=dropout,
++                return_lse=return_lse,
++                return_attn_probs=return_attn_probs,
++                sink=sink,
++                window_size=window_size,
++                has_pe=has_pe,
++                has_sink=run.sink,
+             )
+-        fn = provider_obj.make_fn(q_input, k_input, v_input, **fn_kwargs)
+-        if fn is None:
+-            return 0
++            fn = make_fn(q_input, k_input, v_input, **fn_kwargs)
++            if fn is None:
++                return 0
+ 
+-        if mode == "bwd":
++        if is_bwd:
+             with torch.enable_grad():
+                 triton_out = fn()[0]
+                 d_out = torch.randn_like(triton_out)
+@@ -553,7 +730,7 @@ def fn():
+                     )
+                     return grads
+ 
+-        if args.profile is not None:
++        if run.profile_dir is not None:
+             import os
+ 
+             # Warmup
+@@ -575,25 +752,27 @@ def fn():
+                 torch.cuda.synchronize()
+             prof.stop()
+ 
+-            shape_str = f"B{BATCH}_HQ{HQ}_HK{HK}_SQ{N_CTX_Q}_SK{N_CTX_K}_D{D_HEAD}"
+-            print(f"\n--- Profile: {mode} {shape_str} ---")
++            shape_str = (
++                f"{model}_B{BATCH}_HQ{HQ}_HK{HK}_SQ{N_CTX_Q}_SK{N_CTX_K}_D{D_HEAD}"
++            )
++            print(f"\n--- Profile: {function} {shape_str} ---")
+             print(
+                 prof.key_averages().table(
+                     sort_by="self_cuda_time_total",
+                     row_limit=30,
+                 )
+             )
+-            trace_dir = os.path.join(args.profile, f"{mode}_{shape_str}")
++            trace_dir = os.path.join(run.profile_dir, f"{function}_{shape_str}")
+             os.makedirs(trace_dir, exist_ok=True)
+             prof.export_chrome_trace(os.path.join(trace_dir, "trace.json"))
+             return 0
+ 
+         ms = triton.testing.do_bench(fn)
+ 
+-        if mode == "bwd":
++        if is_bwd:
+             total_flops *= 2.5  # 2.0(bwd) + 0.5(recompute)
+ 
+-        if varlen:
++        if is_varlen:
+             total_num_tokens_q = cu_seqlens_q[-1].item()
+             total_num_tokens_k = cu_seqlens_k[-1].item()
+         else:
+@@ -603,38 +782,31 @@ def fn():
+         k_size = total_num_tokens_k * HK * D_HEAD * k.element_size()
+         v_size = total_num_tokens_k * HK * D_HEAD_V * v.element_size()
+         o_size = total_num_tokens_q * HQ * D_HEAD_V * q.element_size()
+-        if mode == "fwd":
+-            # read q, k, v
+-            mem_read = q_size + k_size + v_size
+-            # write o
+-            mem_write = o_size
+-        else:
++        if is_bwd:
+             # read q, k, v, do
+             mem_read = q_size + k_size + v_size + o_size
+             # write dq, dk, dv
+             mem_write = q_size + k_size + v_size
++        else:
++            # read q, k, v
++            mem_read = q_size + k_size + v_size
++            # write o
++            mem_write = o_size
+         mem = mem_read + mem_write
+ 
+-        # return ms
+-        if "ms" in provider:
++        if unit == "ms":
+             return ms
+-        elif "TFLOPS" in provider:
++        elif unit == "TFLOPS":
+             return total_flops / ms * 1e-9
+         else:  # GB/s
+             return mem / ms * 1e-6
+ 
+     try:
+-        bench_mha.run(save_path=args.o, print_data=True)
++        bench_mha.run(print_data=True)
+     except Exception as e:
+-        print(f"\n[WARN] {args.mode} benchmark failed: {e}", flush=True)
+-
+-
+-def supported_layouts():
+-    layouts = (
+-        "bshd: Q, K, V are individual tensors of [batch, seqlen_q/k, num_heads, head_size]. "
+-        "thd: Q, K, V are individual tensors of [total_q/k, num_heads, head_size]. "
+-    )
+-    return layouts
++        print(f"\n[WARN] benchmark failed: {e}", flush=True)
++    finally:
++        csv.summary()
+ 
+ 
+ # argparse lacks support for boolean argument type (sigh...)
+@@ -649,10 +821,22 @@ def str2bool(v):
+         raise argparse.ArgumentTypeError("Boolean value expected.")
+ 
+ 
+-def parse_args(args: list[str] | None = None) -> argparse.Namespace:
++VALID_DTYPES = {"fp16", "bf16", "fp32", "fp8"}
++
++arg_to_torch_dtype = {
++    "fp16": torch.float16,
++    "bf16": torch.bfloat16,
++    "fp32": torch.float32,
++}
++
++
++def parse_args(args: list[str] | None = None) -> BenchRun:
+     parser = get_parser(kernel_name="FlashAttention")
+     parser.add_argument(
+-        "-mode", type=str, default="fwd", help="fwd:forward kernel, bwd:backward kernel"
++        "-fn",
++        type=str,
++        default=None,
++        help=f"Function to benchmark: {sorted(VALID_FUNCTIONS)}. Omit for all.",
+     )
+     parser.add_argument("-b", type=int, default=0)
+     parser.add_argument("-hq", type=int, default=0)
+@@ -663,7 +847,7 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
+         "-equal_seqlens",
+         action="store_true",
+         default=False,
+-        help="If specified, uses equal sequence lengths with thd layout, i.e t = b * sq",
++        help="If specified, uses equal sequence lengths with varlen functions, i.e t = b * sq",
+     )
+     parser.add_argument(
+         "-d",
+@@ -682,7 +866,6 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
+     parser.add_argument("-bench_torch", action="store_true", default=False)
+     parser.add_argument("-fused_bwd", action="store_true", default=False)
+     parser.add_argument("-print_vgpr", action="store_true", default=False)
+-    parser.add_argument("--layout", type=str, default=None, help=supported_layouts())
+     parser.add_argument(
+         "-metric",
+         nargs="?",
+@@ -716,101 +899,129 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
+     parser.add_argument(
+         "-sink", action="store_true", default=False, help="use attention sink"
+     )
++    parser.add_argument(
++        "-impl",
++        type=str,
++        default="default",
++        choices=["default", "dao_ai"],
++        help="MHA forward implementation: default (_attn_fwd) or dao_ai (flash_attn_triton_amd)",
++    )
+     parser.add_argument(
+         "--window-size-left",
+         type=int,
+         default=-1,
+         help="left sliding window size (-1 disables sliding window attention)",
+     )
+-    return parser.parse_args(args=args)
++    parsed = parser.parse_args(args=args)
+ 
++    # Validate dtypes
++    dtypes = [d.strip() for d in parsed.dtype.split(",")]
++    for d in dtypes:
++        assert (
++            d in VALID_DTYPES
++        ), f"Unknown dtype '{d}'. Supported: {sorted(VALID_DTYPES)}"
++    tensor_dtype_str = next((d for d in dtypes if d != "fp8"), "bf16")
++    torch_dtype = arg_to_torch_dtype[tensor_dtype_str]
+ 
+-VALID_DTYPES = {"fp16", "bf16", "fp32", "fp8"}
++    # Validate function
++    if parsed.fn:
++        assert (
++            parsed.fn in VALID_FUNCTIONS
++        ), f"Unknown function '{parsed.fn}'. Supported: {sorted(VALID_FUNCTIONS)}"
+ 
+-arg_to_torch_dtype = {
+-    "fp16": torch.float16,
+-    "bf16": torch.bfloat16,
+-    "fp32": torch.float32,
+-}
++    custom = bool(parsed.hq or parsed.hk or parsed.d or parsed.dv)
++    if custom:
++        if not parsed.dv:
++            parsed.dv = parsed.d
++        assert (
++            parsed.b and parsed.hq and parsed.sq and parsed.d and parsed.dv
++        ), "Custom config requires: -b, -hq, -sq, -d (and optionally -dv)."
++    if parsed.model:
++        assert (
++            not custom
++        ), "--model sets hq, hk, d from the config. Do not provide them."
+ 
++    # Resolve metric/unit
++    metric = parsed.metric or "throughput"
++    unit_map = {"throughput": "TFLOPS", "time": "ms", "bandwidth": "GB/s"}
++    unit = unit_map[metric]
+ 
+-def post_process_args(args: argparse.Namespace) -> tuple[argparse.Namespace, bool]:
+-    if args.model:
+-        if args.causal is None:  # User didn't specify -causal
+-            args.causal = True
+-        if args.layout is None:  # User didn't specify -layout
+-            args.layout = "thd"
+-        print(
+-            f"Note: using -model config defaults: causal={True}, layout={'thd'}. This is the most common real life scenario, but can be overridden with -causal and -layout flags."
++    # Build configs
++    impl = parsed.impl
++    fused = parsed.fused_bwd
++    functions = [parsed.fn] if parsed.fn else sorted(VALID_FUNCTIONS)
++    d_head = parsed.d if parsed.d else 128
++    d_head_v = parsed.dv if parsed.dv else d_head
++
++    if custom:
++        hk = parsed.hk if parsed.hk else parsed.hq
++        sk = parsed.sk if parsed.sk else parsed.sq
++        causals = [parsed.causal] if parsed.causal is not None else [False, True]
++        configs = [
++            BenchConfig(
++                model=f"custom_B{parsed.b}_HQ{parsed.hq}_HK{hk}",
++                batch=parsed.b,
++                hq=parsed.hq,
++                hk=hk,
++                sq=parsed.sq,
++                sk=sk,
++                d_head=d_head,
++                d_head_v=d_head_v,
++                causal=c,
++                function=fn,
++                dtype_str=d,
++                impl=impl,
++                fused=fused and d != "fp8",
++            )
++            for c, fn, d in itertools.product(causals, functions, dtypes)
++        ]
++    elif parsed.model:
++        configs = model_benchmark_configs(
++            parsed,
++            dtypes=dtypes,
++            functions=functions,
++            impl=impl,
++            fused=fused,
++            model=parsed.model,
+         )
+     else:
+-        # the defaults for causal and varlen when not using the -model
+-        if args.causal is None:  # User didn't specify -causal
+-            args.causal = False
+-        if args.layout is None:  # User didn't specify -layout
+-            args.layout = "bshd"
+-
+-    custom_config = False
+-
+-    assert (
+-        args.layout == "thd" or not args.equal_seqlens or args.model
+-    ), "Equal sequence lengths arg must be used with the thd layout or a model config."
+-    if args.hq or args.hk or args.d or args.dv:
+-        custom_config = True
+-        if not args.dv:
+-            args.dv = args.d
+-        assert (
+-            args.b and args.hq and args.sq and args.d and args.dv
+-        ), "If custom config is specified, please provide \
+-                all of batch, number of Q heads, Q sequence length \
+-                and head size."
+-
+-    if args.model:
+-        assert not (
+-            args.hq or args.hk or args.d or args.dv
+-        ), "Specifying model fixes hq, hk and d already. Do not provide them!"
+-
+-    args.dtypes = [d.strip() for d in args.dtype.split(",")]
+-    for d in args.dtypes:
+-        assert (
+-            d in VALID_DTYPES
+-        ), f"Unknown dtype '{d}'. Supported: {sorted(VALID_DTYPES)}"
+-    # Tensor dtype is the first non-fp8 dtype, or bf16 if only fp8
+-    args.tensor_dtype = next((d for d in args.dtypes if d != "fp8"), "bf16")
+-
+-    assert (
+-        args.layout in supported_layouts()
+-    ), f"{args.layout} is not in supported layouts: {supported_layouts()}."
+-
+-    if args.layout == "thd" and args.equal_seqlens:
+-        warnings.warn(
+-            "Using 'thd' layout with equal_seqlen=True incurs an extra sequence length lookup cost "
+-            "compared to 'bshd' layout. Consider using 'bshd' for better performance.",
+-            category=RuntimeWarning,
++        configs = model_benchmark_configs(
++            parsed,
++            dtypes=dtypes,
++            functions=functions,
++            impl=impl,
++            fused=fused,
+         )
+ 
+-    assert (
+-        args.window_size_left >= -1
+-    ), f"Invalid --window-size-left={args.window_size_left}. Expected -1 or a non-negative integer."
+-
+-    return args, custom_config
++    return BenchRun(
++        configs=configs,
++        torch_dtype=torch_dtype,
++        unit=unit,
++        plot_name=get_caller_name_no_ext(),
++        sink=parsed.sink,
++        equal_seqlens=parsed.equal_seqlens,
++        save_path=parsed.o,
++        profile_dir=parsed.profile,
++        print_vgpr=parsed.print_vgpr,
++        bench_torch=parsed.bench_torch,
++        window_size_left=parsed.window_size_left,
++    )
+ 
+ 
+ def main(args: list[str] | None = None) -> None:
+-    parsed_args = parse_args(args=args)
+-    parsed_args, custom_config = post_process_args(parsed_args)
++    run = parse_args(args=args)
+ 
+-    if parsed_args.print_vgpr:
+-        assert not parsed_args.bench_torch, "Do not use -bench_torch with -print_vgpr."
++    if run.print_vgpr:
++        assert not run.bench_torch, "Do not use -bench_torch with -print_vgpr."
+         print("Retrieving VGPR usage for Triton kernels...")
+ 
+         def fun():
+-            return run_benchmark(custom_config, parsed_args)
++            return run_benchmark(run)
+ 
+         print_vgpr(fun, get_caller_name_no_ext())
+         return
+ 
+-    run_benchmark(custom_config, parsed_args)
++    run_benchmark(run)
+ 
+ 
+ if __name__ == "__main__":
+diff --git a/op_tests/triton_tests/attention/test_mha.py b/op_tests/triton_tests/attention/test_mha.py
+index ca493dc581..e73f069031 100644
+--- a/op_tests/triton_tests/attention/test_mha.py
++++ b/op_tests/triton_tests/attention/test_mha.py
+@@ -22,8 +22,10 @@
+ from op_tests.triton_tests.attention.mha_test_utils import pad_rearrange_dropout_mask
+ 
+ from aiter.ops.triton.utils._triton.arch_info import get_arch
++from aiter.ops.triton._triton_kernels.flash_attn_triton_amd.utils import FP8_ARCHS
+ 
+ arch = get_arch()
++_supports_fp8 = arch in FP8_ARCHS
+ 
+ logging.basicConfig(level=logging.DEBUG)
+ logger = logging.getLogger(__name__)
+@@ -142,6 +144,8 @@ def test_mha(
+ 
+     dropout_mask = None
+     if FP8:
++        if not _supports_fp8:
++            pytest.skip(f"FP8 not supported on {arch}")
+         if DROPOUT > 0.0 or RETURN_LSE or RETURN_SOFTMAX:
+             pytest.skip(
+                 "FP8 mode does not support dropout_p, return_lse, or return_attn_probs"
+@@ -380,6 +384,8 @@ def test_mha_varlen(
+         print(f"cu_seqlens_q={cu_seqlens_q }")
+         print(f"cu_seqlens_k={cu_seqlens_k }")
+     if FP8:
++        if not _supports_fp8:
++            pytest.skip(f"FP8 not supported on {arch}")
+         if DROPOUT > 0.0 or RETURN_LSE or RETURN_SOFTMAX:
+             pytest.skip(
+                 "FP8 varlen mode does not support dropout_p, return_lse, or return_attn_probs"
+@@ -505,6 +511,8 @@ def test_mha_backward(
+     torch.cuda.empty_cache()
+     torch.manual_seed(20)
+ 
++    if FP8 and not _supports_fp8:
++        pytest.skip(f"FP8 not supported on {arch}")
+     if FUSED and CAUSAL:
+         pytest.skip("FUSED+CAUSAL results in NaNs")
+     if FP8 and HAS_DROPOUT:
+@@ -595,6 +603,8 @@ def test_mha_backward_varlen(
+     torch.cuda.empty_cache()
+     torch.manual_seed(20)
+ 
++    if FP8 and not _supports_fp8:
++        pytest.skip(f"FP8 not supported on {arch}")
+     if FUSED and CAUSAL:
+         pytest.skip("FUSED+CAUSAL results in NaNs")
+     if FP8 and HAS_DROPOUT:
+diff --git a/op_tests/triton_tests/attention/test_mha_dao_ai.py b/op_tests/triton_tests/attention/test_mha_dao_ai.py
+new file mode 100644
+index 0000000000..da3eb3e04b
+--- /dev/null
++++ b/op_tests/triton_tests/attention/test_mha_dao_ai.py
+@@ -0,0 +1,182 @@
++# SPDX-License-Identifier: MIT
++# Copyright (C) 2024-2026, Advanced Micro Devices, Inc. All rights reserved.
++
++import torch
++import pytest
++from aiter.ops.triton.attention.mha import (
++    flash_attn_func,
++    flash_attn_varlen_func,
++    mha_set_impl,
++)
++from aiter.test_mha_common import (
++    attention_ref,
++    generate_random_padding_mask,
++    generate_qkv,
++)
++
++
++@pytest.fixture
++def dao_ai_impl():
++    """Set mha impl to dao_ai for the test, restore to default on cleanup."""
++    mha_set_impl("dao_ai")
++    yield
++    mha_set_impl("default")
++
++
++@pytest.mark.parametrize(
++    "BATCH, SEQLEN_Q, SEQLEN_K, NUM_Q_HEADS, NUM_K_HEADS, HEAD_SZ, CAUSAL, VARLEN, BWD",
++    [
++        (1, 128, 128, 8, 8, 64, True, False, False),  # fwd causal
++        (2, 256, 256, 16, 4, 128, False, False, False),  # fwd GQA non-causal
++        (1, 128, 128, 8, 8, 64, True, True, False),  # fwd_varlen causal
++        (1, 128, 128, 8, 8, 64, True, False, True),  # bwd causal
++        (1, 128, 128, 8, 8, 64, True, True, True),  # bwd_varlen causal
++    ],
++)
++def test_mha_dao_ai(
++    dao_ai_impl,
++    BATCH: int,
++    SEQLEN_Q: int,
++    SEQLEN_K: int,
++    NUM_Q_HEADS: int,
++    NUM_K_HEADS: int,
++    HEAD_SZ: int,
++    CAUSAL: bool,
++    VARLEN: bool,
++    BWD: bool,
++    dtype=torch.float16,
++):
++    """Test dao_ai impl dispatch for fwd/bwd x varlen against PyTorch reference."""
++    torch.cuda.empty_cache()
++    torch.manual_seed(20)
++
++    q = torch.randn(
++        BATCH,
++        SEQLEN_Q,
++        NUM_Q_HEADS,
++        HEAD_SZ,
++        device="cuda",
++        dtype=dtype,
++        requires_grad=BWD,
++    )
++    k = torch.randn(
++        BATCH,
++        SEQLEN_K,
++        NUM_K_HEADS,
++        HEAD_SZ,
++        device="cuda",
++        dtype=dtype,
++        requires_grad=BWD,
++    )
++    v = torch.randn(
++        BATCH,
++        SEQLEN_K,
++        NUM_K_HEADS,
++        HEAD_SZ,
++        device="cuda",
++        dtype=dtype,
++        requires_grad=BWD,
++    )
++
++    if VARLEN:
++        query_padding_mask = generate_random_padding_mask(
++            SEQLEN_Q, BATCH, "cuda", mode="full"
++        )
++        key_padding_mask = generate_random_padding_mask(
++            SEQLEN_K, BATCH, "cuda", mode="full"
++        )
++        (
++            q_unpad,
++            k_unpad,
++            v_unpad,
++            cu_seqlens_q,
++            cu_seqlens_k,
++            max_seqlen_q,
++            max_seqlen_k,
++            q,
++            k,
++            v,
++            output_pad_fn,
++            dq_pad_fn,
++            dk_pad_fn,
++        ) = generate_qkv(q, k, v, query_padding_mask, key_padding_mask, kvpacked=False)
++        q_unpad.requires_grad_(BWD)
++        k_unpad.requires_grad_(BWD)
++        v_unpad.requires_grad_(BWD)
++
++        with torch.set_grad_enabled(BWD):
++            triton_out = flash_attn_varlen_func(
++                q_unpad,
++                k_unpad,
++                v_unpad,
++                cu_seqlens_q,
++                cu_seqlens_k,
++                max_seqlen_q,
++                max_seqlen_k,
++                causal=CAUSAL,
++            )
++    else:
++        query_padding_mask = None
++        key_padding_mask = None
++        with torch.set_grad_enabled(BWD):
++            triton_out = flash_attn_func(q, k, v, causal=CAUSAL)
++
++    # Forward check against PyTorch reference
++    q_ref = q.detach().clone().requires_grad_(BWD)
++    k_ref = k.detach().clone().requires_grad_(BWD)
++    v_ref = v.detach().clone().requires_grad_(BWD)
++    torch_out, _, _ = attention_ref(
++        q_ref,
++        k_ref,
++        v_ref,
++        causal=CAUSAL,
++        query_padding_mask=query_padding_mask,
++        key_padding_mask=key_padding_mask,
++    )
++    if VARLEN:
++        triton_out_padded = output_pad_fn(triton_out)
++        torch.testing.assert_close(triton_out_padded, torch_out, atol=1e-2, rtol=1e-2)
++    else:
++        torch.testing.assert_close(triton_out, torch_out, atol=1e-2, rtol=1e-2)
++
++    # Backward check against PyTorch reference
++    if BWD:
++        do = torch.randn_like(q)
++        if VARLEN:
++            triton_out = output_pad_fn(triton_out)
++            triton_dq, triton_dk, triton_dv = torch.autograd.grad(
++                triton_out, (q_unpad, k_unpad, v_unpad), do
++            )
++            triton_dq = dq_pad_fn(triton_dq)
++            triton_dk = dk_pad_fn(triton_dk)
++            triton_dv = dk_pad_fn(triton_dv)
++        else:
++            triton_dq, triton_dk, triton_dv = torch.autograd.grad(
++                triton_out, (q, k, v), do
++            )
++
++        torch_dq, torch_dk, torch_dv = torch.autograd.grad(
++            torch_out, (q_ref, k_ref, v_ref), do
++        )
++
++        torch.testing.assert_close(
++            triton_dq,
++            torch_dq,
++            atol=1e-2,
++            rtol=1e-2,
++            msg=lambda msg: f"dao_ai bwd dq mismatch\n\n{msg}\n",
++        )
++        torch.testing.assert_close(
++            triton_dk,
++            torch_dk,
++            atol=1e-2,
++            rtol=1e-2,
++            msg=lambda msg: f"dao_ai bwd dk mismatch\n\n{msg}\n",
++        )
++        torch.testing.assert_close(
++            triton_dv,
++            torch_dv,
++            atol=1e-2,
++            rtol=1e-2,
++            msg=lambda msg: f"dao_ai bwd dv mismatch\n\n{msg}\n",
++        )

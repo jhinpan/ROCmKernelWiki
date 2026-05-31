@@ -1,0 +1,618 @@
+diff --git a/aiter/configs/bf16_untuned_gemm.csv b/aiter/configs/bf16_untuned_gemm.csv
+index c15174cbc5..96d6e8a6c8 100644
+--- a/aiter/configs/bf16_untuned_gemm.csv
++++ b/aiter/configs/bf16_untuned_gemm.csv
+@@ -8,4 +8,4 @@ M,N,K,bias,dtype,outdtype,scaleAB,bpreshuffle
+ 256,256,5120,False,torch.bfloat16,torch.float32,False,False
+ 384,256,5120,False,torch.bfloat16,torch.float32,False,False
+ 448,256,5120,False,torch.bfloat16,torch.float32,False,False
+-512,256,5120,False,torch.bfloat16,torch.float32,False,False
+\ No newline at end of file
++512,256,5120,False,torch.bfloat16,torch.float32,False,False
+diff --git a/aiter/tuned_gemm.py b/aiter/tuned_gemm.py
+index 797867c43c..c7c8b5994f 100644
+--- a/aiter/tuned_gemm.py
++++ b/aiter/tuned_gemm.py
+@@ -127,7 +127,6 @@ def get_GEMM_A16W16_config(
+                 eval(dtype) == dtypes.bf16
+                 and N % 64 == 0
+                 and K % 64 == 0
+-                and not bias
+                 and (eval(otype) == dtypes.bf16 or eval(otype) == dtypes.fp32)
+             ):
+                 default_config["libtype"] = "asm"
+diff --git a/csrc/py_itfs_cu/asm_gemm_a16w16.cu b/csrc/py_itfs_cu/asm_gemm_a16w16.cu
+index 75befee2ab..b627f06af9 100644
+--- a/csrc/py_itfs_cu/asm_gemm_a16w16.cu
++++ b/csrc/py_itfs_cu/asm_gemm_a16w16.cu
+@@ -12,13 +12,13 @@
+ // start to prepare the input and output buffer
+ struct __attribute__((packed)) KernelArgs
+ {
+-    void* ptr_D;
++    void *ptr_D;
+     p2 _p0;
+-    void* ptr_C;
++    void *ptr_C;
+     p2 _p1;
+-    void* ptr_A;
++    void *ptr_A;
+     p2 _p2;
+-    void* ptr_B;
++    void *ptr_B;
+     p2 _p3;
+     float alpha;
+     p3 _p4;
+@@ -50,6 +50,10 @@ struct __attribute__((packed)) KernelArgs
+     p3 _p17;
+     unsigned int is_out_b16;
+     p3 _p18;
++    void *ptr_Bias;
++    p2 _p19;
++    unsigned int add_bias;
++    p3 _p20;
+ };
+ 
+ std::tuple<std::string, int>
+@@ -59,6 +63,7 @@ get_heuristic_kernel(int M,
+                      CFG* cfgs,
+                      std::string arch_id,
+                      bool bpreshuffle,
++                     int add_bias,
+                      std::optional<int> splitk             = std::nullopt,
+                      std::optional<std::string> kernelName = std::nullopt)
+ {
+@@ -84,7 +89,20 @@ get_heuristic_kernel(int M,
+         const auto& cfg = el.second;
+         if(kernelName.has_value() && el.first != (arch_id + kernelName.value()))
+             continue;
+-        if(N % cfg.tileN == 0 && cfg.bPreshuffle == (bpreshuffle ? 1 : 0))
++        if(kernelName.has_value())
++        {
++            TORCH_CHECK(
++                N % cfg.tileN == 0 && 
++                cfg.bPreshuffle == (bpreshuffle ? 1 : 0) && 
++                (add_bias == 0 || cfg.bias == 1),
++                __func__, 
++                " the specified kernel name ", el.first, 
++                " cannot support the input shape (N=", N, ", tileN=", cfg.tileN, 
++                ") or bias/preshuffle setting (preshuffle=", bpreshuffle, 
++                ", bias=", add_bias, ")."
++            );
++        }
++        if(N % cfg.tileN == 0 && cfg.bPreshuffle == (bpreshuffle ? 1 : 0) && (add_bias == 0 || cfg.bias == 1))
+         {
+             // 1. select splitK
+             int split_K = 1;
+@@ -96,7 +114,11 @@ get_heuristic_kernel(int M,
+                     ((M + cfg.tileM - 1) / cfg.tileM) * (N / cfg.tileN); // M-orient support OOB
+                 if(pure_tg_num < num_cu)
+                 {
+-                    int max_split = (num_cu / pure_tg_num) < 64 ? (num_cu / pure_tg_num) : 64;
++                    TORCH_CHECK(cfg.subK > 0, __func__, " cfg.subK must be greater than 0 to avoid division by zero.");
++                    int max_split = std::min(
++                        std::min(static_cast<int>(num_cu / pure_tg_num), 16),
++                        static_cast<int>(K / cfg.subK)    // “K-dim must satisfy min 128 bytes. BF16 are 2 bytes each, this means min ele of K is 64.”
++                    );
+                     for(int i = max_split; i >= 1; i--)
+                     {
+                         if(K % 64 == 0)
+@@ -165,6 +187,7 @@ torch::Tensor gemm_a16w16_asm(torch::Tensor& A,   // A:[M, K] bf16
+     int szA           = Mdim * Kdim;
+     int szB           = Kdim * Ndim;
+     int szC           = Mdim * Ndim;
++    int szBias = 1 * Ndim;
+     int sz_A_pad      = 0;
+     int sz_B_pad      = 0;
+     int sz_C_pad      = 0;
+@@ -177,9 +200,10 @@ torch::Tensor gemm_a16w16_asm(torch::Tensor& A,   // A:[M, K] bf16
+     int strideB0      = 0;
+     int strideB1      = 0;
+     int is_out_b16   = 0;
++    int add_bias = bias.has_value() ? 1 : 0;
+     // A row major, B col major, C row major
+-    strideA0 = strideA1 = Kdim * 2; // in bytes
+-    strideB0 = strideB1 = Kdim * 2;
++    strideA0 = strideA1 = A.stride(0) * A.element_size(); // in bytes
++    strideB0 = strideB1 = B.stride(0) * B.element_size();
+     const auto elem_bytes = out.element_size(); 
+     strideC0 = strideC1 = strideD0 = strideD1 = Ndim * elem_bytes; // inbytes
+     if (out.dtype() == torch::ScalarType::BFloat16)
+@@ -196,6 +220,7 @@ torch::Tensor gemm_a16w16_asm(torch::Tensor& A,   // A:[M, K] bf16
+     args.ptr_C     = (void*)NULL;
+     args.ptr_A     = (void*)A.data_ptr();
+     args.ptr_B     = (void*)B.data_ptr();
++    args.ptr_Bias = bias.has_value() ? (void*)bias.value().data_ptr() : nullptr;
+     args.alpha     = alpha;
+     args.beta      = beta;
+     args.stride_C0 = strideC0;
+@@ -205,6 +230,7 @@ torch::Tensor gemm_a16w16_asm(torch::Tensor& A,   // A:[M, K] bf16
+     args.N         = Ndim;
+     args.K         = Kdim;
+     args.is_out_b16 = is_out_b16;
++    args.add_bias   = add_bias;
+ 
+     // args.stride_D0 = 25;
+     // args.stride_D1 = 80;
+@@ -228,6 +254,7 @@ torch::Tensor gemm_a16w16_asm(torch::Tensor& A,   // A:[M, K] bf16
+                                            config_map,
+                                            arch_id,
+                                            bpreshuffle,
++                                           add_bias,
+                                            splitK.has_value() ? splitK : std::nullopt,
+                                            kernelName.has_value() ? kernelName : std::nullopt);
+         selectedKernelName = std::get<0>(it_sel);
+@@ -254,6 +281,7 @@ torch::Tensor gemm_a16w16_asm(torch::Tensor& A,   // A:[M, K] bf16
+     // printf("K: %u\n", args.K);
+     // printf("splitk: %u\n", args.splitk);
+     // printf("is_out_b16: %u\n", args.is_out_b16);
++    // printf("add_bias: %u\n", args.add_bias);
+     // printf("=======================================\n");
+ 
+     auto it_kl = config_map->find(selectedKernelName);
+@@ -284,6 +312,7 @@ torch::Tensor gemm_a16w16_asm(torch::Tensor& A,   // A:[M, K] bf16
+     if(selectedksplit > 1)
+     {
+         out.zero_();
++        // HIP_CALL(hipMemsetAsync(out.data_ptr(), 0, elem_bytes * szC, stream))
+         int k_per_tg = Kdim / selectedksplit;
+         gdz          = selectedksplit;
+     }
+diff --git a/gradlib/gradlib/GemmTuner.py b/gradlib/gradlib/GemmTuner.py
+index ab7e8d3003..8b83ca742b 100644
+--- a/gradlib/gradlib/GemmTuner.py
++++ b/gradlib/gradlib/GemmTuner.py
+@@ -30,6 +30,7 @@
+ from aiter.ops.shuffle import shuffle_weight
+ from aiter.utility.base_tuner import GemmCommonTuner
+ from aiter.utility.mp_tuner import mp_tuner
++from aiter.ops.triton.gemm_a16w16 import gemm_a16w16 as triton_gemm_a16w16
+ 
+ aiter.hipb_create_extension()
+ 
+@@ -69,6 +70,10 @@ def run_gemm_bf16_asm(
+     )
+ 
+ 
++def run_triton_gemm_bf16(input, weight, bias=None, otype=dtypes.bf16):
++    return triton_gemm_a16w16(input, weight, bias=bias, dtype=otype)
++
++
+ @functools.lru_cache(maxsize=1024)
+ def compute_gemm_SplitK(M: int, N: int, K: int, tile_m: int, tile_n: int, tile_k: int):
+     cu_num = get_cu_num()
+@@ -106,7 +111,7 @@ def generate_data(
+     bias = torch.randn(n, device=device).to(outdtype) if bias else None
+     scale_half = torch.tensor(0.5, dtype=dtypes.fp32, device=device)
+     scale_one = torch.tensor(1, dtype=dtypes.fp32, device=device)
+-    scale = scale_half if scaleAB else scale_one
++    scale = scale_half if scaleAB else None
+     # if scaleAB:
+     #    scaleB = scaleB.t()
+     out_asm = torch.empty(m, n, dtype=outdtype, device=device)
+@@ -135,9 +140,12 @@ def get_gemm_ref(inp, weights, bias, scale, indtype, outdtype):
+             ref = ref[0]
+     else:
+         ref = (
+-            F.linear(inp, weights).to(outdtype) + bias.to(outdtype)
++            (
++                F.linear(inp.to(dtypes.fp32), weights.to(dtypes.fp32))
++                + bias.to(dtypes.fp32)
++            ).to(outdtype)
+             if bias is not None
+-            else F.linear(inp, weights).to(outdtype)
++            else F.linear(inp.to(dtypes.fp32), weights.to(dtypes.fp32)).to(outdtype)
+         )
+     return ref
+ 
+@@ -171,8 +179,7 @@ def __init__(
+         self.m = m
+         self.k = k
+         self.n = n
+-        self.bias = torch.randn(n, device="cuda").to(outdtype) if bias else None
+-
++        self.bias = torch.randn(n, device="cuda").to(indtype) if bias else None
+         self.indtype = indtype
+         self.outdtype = outdtype
+         self.scaleAB = scaleAB
+@@ -183,8 +190,8 @@ def __init__(
+         self.blob = torch.ones(128 * 1024 * 1024, dtype=dtypes.fp32, device="cuda")
+         self.topn = 20  # number of top solutions from each source
+         self.hipb_sols = []
+-        self.rtol = 1e-2
+-        self.atol = 1e-2
++        self.rtol = 5e-2 if outdtype == dtypes.bf16 else 1e-2
++        self.atol = 5e-2 if outdtype == dtypes.bf16 else 1e-2
+         # self.ref = self.get_gemm_ref()
+         self.check_err_ratio = err_ratio
+         self.splitK = None
+@@ -262,25 +269,20 @@ def get_asm_kernels(self, file, is_shuffle=False):
+             print(f"ASM kernel list file not exist: {file}")
+             return {}
+         df = pd.read_csv(file)
+-        if "bPreshuffle" in df.columns:
+-            shuffle_int = 1 if is_shuffle else 0
+-            df = df[df["bPreshuffle"] == shuffle_int]
++
+         kernel_dict = (
+-            df.groupby(["tileM", "tileN", "pf", "splitK"])["knl_name"]
++            df.groupby(
++                ["tileM", "tileN", "pf", "splitK", "subK", "bias", "bPreshuffle"]
++            )["knl_name"]
+             .apply(list)
+             .to_dict()
+         )
+         return kernel_dict
+ 
+     def asm_gemm_all_solutions(self):
+-        if self.bias is not None:
+-            print("[Warning]: asm not support bias")
+-            return []
++
+         if (
+-            self.scaleAB
+-            or self.k % 64 != 0
+-            or self.indtype != dtypes.bf16
+-            or self.outdtype != dtypes.fp32
++            self.scaleAB or self.k % 64 != 0 or self.indtype != dtypes.bf16
+         ) and get_gfx() == "gfx942":
+             print(
+                 f"only indtype=bf16 and outdtype=fp32 and k%64==0 and not scaleAB is supported in {get_gfx()}, but actual indtype is {self.indtype}, outdtype is {self.outdtype}, k is  {self.k}, scaleAB is {self.scaleAB}"
+@@ -289,10 +291,9 @@ def asm_gemm_all_solutions(self):
+             return []
+         if (
+             self.scaleAB
+-            or self.k % 256 != 0
+-            or self.n % 256 != 0  # mismatch randomly
++            or self.k % 64 != 0
++            or self.n % 64 != 0  # mismatch randomly
+             or self.indtype != dtypes.bf16
+-            or self.outdtype != dtypes.bf16
+         ) and get_gfx() == "gfx950":
+             print(
+                 f"only indtype=bf16 and outdtype=bf16 and k%256==0 and not scaleAB is supported in {get_gfx()}, but actual indtype is {self.indtype}, outdtype is {self.outdtype}, k is  {self.k}, scaleAB is {self.scaleAB}"
+@@ -308,8 +309,10 @@ def asm_gemm_all_solutions(self):
+ 
+         solutions = 0
+         for key in asm_tiles:
+-            tile_m, tile_n, pf, splitK = key
+-            print(f"ASM Tile - M: {tile_m}, N: {tile_n}, PF: {pf}")
++            tile_m, tile_n, pf, splitK, subK, bias, bPreshuffle = key
++            print(
++                f"ASM Tile - M: {tile_m}, N: {tile_n}, PF: {pf}, splitK: {splitK}, subK: {subK}, bias:{bias}"
++            )
+             kernelName = asm_kernels[key][0]
+             if splitK:
+                 maxSplitK = compute_gemm_SplitK(
+@@ -317,6 +320,14 @@ def asm_gemm_all_solutions(self):
+                 )  # if self.splitK else 1
+             else:
+                 maxSplitK = 1
++            maxSplitK = min(maxSplitK, 64)
++            # maxSplitK = 1
++            if not bias and self.bias is not None:
++                continue
++            if (bPreshuffle == 0 and self.is_shuffle) or (
++                bPreshuffle == 1 and not self.is_shuffle
++            ):
++                continue
+             solidx = solidx + 1
+             self.asm_map[solidx] = kernelName
+             for splitK in range(1, maxSplitK + 1):
+@@ -336,6 +347,8 @@ def asm_gemm_all_solutions(self):
+                     "asm",
+                     kernelName,
+                 )
++                if self.k / splitK < subK:
++                    break
+                 task_asm.append(
+                     (
+                         info,
+@@ -370,9 +383,74 @@ def asm_gemm_all_solutions(self):
+                 (),
+             )
+         ]
+-        ret = mp_tuner(task_asm, in_data, self.mp, False)
++        # ret = mp_tuner(task_asm, in_data, self.mp, False)
++        return task_asm
++
++    def run_asm_triton_sols(self):
++        tasks = []
++        tasks.extend(self.triton_egmm_all_sols())
++        tasks.extend(self.asm_gemm_all_solutions())
++        solutions = len(tasks)
++        in_data = [
++            (
++                solutions,
++                (),
++            )
++        ]
++        ret = mp_tuner(tasks, in_data, self.mp, False)
+         return ret
+ 
++    def triton_egmm_all_sols(self):
++        if self.scaleAB or self.is_shuffle or self.outdtype == dtypes.fp32:
++            print(
++                f"Triton gemm_a16w16 does not support scaling{self.scaleAB} or weight shuffle {self.is_shuffle}  or fp32 output {self.outdtype} yet"
++            )
++            return []
++        info = (
++            (
++                self.m,
++                self.n,
++                self.k,
++                False if self.bias is None else True,
++                str(self.indtype),
++                str(self.outdtype),
++                self.scaleAB,
++                self.is_shuffle,
++            ),
++            0,
++            0,
++            "triton",
++            "auto",
++        )
++        task = []
++        task.append(
++            (
++                info,
++                generate_data,
++                (
++                    self.m,
++                    self.n,
++                    self.k,
++                    self.indtype,
++                    self.outdtype,
++                    self.scaleAB,
++                    self.is_shuffle,
++                    0,
++                    True if self.bias is not None else False,
++                ),
++                run_triton_gemm_bf16,
++                ([0, 1, 3], self.outdtype),
++                {},
++                get_gemm_ref,
++                ([0, 1, 3, 4], self.indtype, self.outdtype),
++                {},
++                None,  # self.ref if fast_mode == 0 else None,
++                self.rtol,
++                self.atol,
++            )
++        )
++        return task
++
+     def hipb_time_all_sols(self, fast_mode=0, top_sols=0):
+         coldi = 20
+         warmi = 20
+@@ -494,7 +572,7 @@ def run_fast_solutions(self):
+     def run_best_solutions(self):
+         self.warmup()
+         rets_hipb = self.hipb_time_all_sols(fast_mode=0, top_sols=1)
+-        rets_asm = self.asm_gemm_all_solutions()
++        rets_asm = self.run_asm_triton_sols()
+         return rets_hipb + rets_asm
+ 
+     def run_solutions(self):
+diff --git a/gradlib/gradlib/gemm_tuner.py b/gradlib/gradlib/gemm_tuner.py
+index a4649df91d..7c47ae468d 100644
+--- a/gradlib/gradlib/gemm_tuner.py
++++ b/gradlib/gradlib/gemm_tuner.py
+@@ -177,7 +177,7 @@ def clean():
+             process = mp.Process(target=runGemmTuner, args=(), daemon=False)
+             process.start()
+             process.join()
+-            if process.exitcode != 0:
++            if process.exitcode > 1:
+                 time.sleep(0.5 * retries)
+                 print(
+                     "!Error when run GemmTuner process exitcode is ", process.exitcode
+diff --git a/hsa/gfx942/bf16gemm/bf16gemm_fp32bf16.csv b/hsa/gfx942/bf16gemm/bf16gemm_fp32bf16.csv
+index e89235c7d2..3e58803dd2 100755
+--- a/hsa/gfx942/bf16gemm/bf16gemm_fp32bf16.csv
++++ b/hsa/gfx942/bf16gemm/bf16gemm_fp32bf16.csv
+@@ -1,10 +1,11 @@
+-knl_name,co_name,tn,tileM,tileN,pf,bPreshuffle,splitK
+-_ZN5aiter36bf16gemm_fp32bf16_tn_128x64_bshuffleE,bf16gemm_fp32bf16_tn_128x64_bshuffle.co,1,128,64,0,1,1
+-_ZN5aiter36bf16gemm_fp32bf16_tn_160x64_bshuffleE,bf16gemm_fp32bf16_tn_160x64_bshuffle.co,1,160,64,0,1,1
+-_ZN5aiter30bf16gemm_fp32bf16_tn_32x64_pf3E,bf16gemm_fp32bf16_tn_32x64_pf3.co,1,32,64,3,0,1
+-_ZN5aiter35bf16gemm_fp32bf16_tn_48x64_bshuffleE,bf16gemm_fp32bf16_tn_48x64_bshuffle.co,1,48,64,0,1,1
+-_ZN5aiter30bf16gemm_fp32bf16_tn_48x64_pf3E,bf16gemm_fp32bf16_tn_48x64_pf3.co,1,48,64,3,0,1
+-_ZN5aiter35bf16gemm_fp32bf16_tn_64x64_bshuffleE,bf16gemm_fp32bf16_tn_64x64_bshuffle.co,1,64,64,0,1,1
+-_ZN5aiter30bf16gemm_fp32bf16_tn_64x64_pf3E,bf16gemm_fp32bf16_tn_64x64_pf3.co,1,64,64,3,0,1
+-_ZN5aiter35bf16gemm_fp32bf16_tn_96x64_bshuffleE,bf16gemm_fp32bf16_tn_96x64_bshuffle.co,1,96,64,0,1,1
+-_ZN5aiter30bf16gemm_fp32bf16_tn_96x64_pf3E,bf16gemm_fp32bf16_tn_96x64_pf3.co,1,96,64,3,0,1
++knl_name,co_name,tn,tileM,tileN,pf,bPreshuffle,splitK,subK,bias
++_ZN5aiter37bf16gemm_fp32bf16_tn_32x64_pf3_splitkE,bf16gemm_fp32bf16_tn_32x64_pf3_splitk.co,1,32,64,3,0,1,64,1
++_ZN5aiter37bf16gemm_fp32bf16_tn_48x64_pf3_splitkE,bf16gemm_fp32bf16_tn_48x64_pf3_splitk.co,1,48,64,3,0,1,64,1
++_ZN5aiter37bf16gemm_fp32bf16_tn_64x64_pf3_splitkE,bf16gemm_fp32bf16_tn_64x64_pf3_splitk.co,1,64,64,3,0,1,64,1
++_ZN5aiter43bf16gemm_fp32bf16_tn_160x64_bshuffle_splitkE,bf16gemm_fp32bf16_tn_160x64_bshuffle_splitk.co,1,160,64,0,1,1,64,1
++_ZN5aiter42bf16gemm_fp32bf16_tn_64x64_bshuffle_splitkE,bf16gemm_fp32bf16_tn_64x64_bshuffle_splitk.co,1,64,64,0,1,1,64,1
++_ZN5aiter42bf16gemm_fp32bf16_tn_32x64_bshuffle_splitkE,bf16gemm_fp32bf16_tn_32x64_bshuffle_splitk.co,1,32,64,0,1,1,64,1
++_ZN5aiter42bf16gemm_fp32bf16_tn_96x64_bshuffle_splitkE,bf16gemm_fp32bf16_tn_96x64_bshuffle_splitk.co,1,96,64,0,1,1,64,1
++_ZN5aiter42bf16gemm_fp32bf16_tn_48x64_bshuffle_splitkE,bf16gemm_fp32bf16_tn_48x64_bshuffle_splitk.co,1,48,64,0,1,1,64,1
++_ZN5aiter37bf16gemm_fp32bf16_tn_96x64_pf3_splitkE,bf16gemm_fp32bf16_tn_96x64_pf3_splitk.co,1,96,64,3,0,1,64,1
++_ZN5aiter43bf16gemm_fp32bf16_tn_128x64_bshuffle_splitkE,bf16gemm_fp32bf16_tn_128x64_bshuffle_splitk.co,1,128,64,0,1,1,64,1
+diff --git a/hsa/gfx942/bf16gemm/bf16gemm_fp32bf16_tn_128x64_bshuffle_splitk.co b/hsa/gfx942/bf16gemm/bf16gemm_fp32bf16_tn_128x64_bshuffle_splitk.co
+new file mode 100755
+index 0000000000..4251d02063
+Binary files /dev/null and b/hsa/gfx942/bf16gemm/bf16gemm_fp32bf16_tn_128x64_bshuffle_splitk.co differ
+diff --git a/hsa/gfx942/bf16gemm/bf16gemm_fp32bf16_tn_160x64_bshuffle_splitk.co b/hsa/gfx942/bf16gemm/bf16gemm_fp32bf16_tn_160x64_bshuffle_splitk.co
+new file mode 100755
+index 0000000000..fa4eb2214f
+Binary files /dev/null and b/hsa/gfx942/bf16gemm/bf16gemm_fp32bf16_tn_160x64_bshuffle_splitk.co differ
+diff --git a/hsa/gfx942/bf16gemm/bf16gemm_fp32bf16_tn_32x64_bshuffle_splitk.co b/hsa/gfx942/bf16gemm/bf16gemm_fp32bf16_tn_32x64_bshuffle_splitk.co
+new file mode 100755
+index 0000000000..3d83f83bcc
+Binary files /dev/null and b/hsa/gfx942/bf16gemm/bf16gemm_fp32bf16_tn_32x64_bshuffle_splitk.co differ
+diff --git a/hsa/gfx942/bf16gemm/bf16gemm_fp32bf16_tn_32x64_pf3_splitk.co b/hsa/gfx942/bf16gemm/bf16gemm_fp32bf16_tn_32x64_pf3_splitk.co
+new file mode 100755
+index 0000000000..b4113e54d2
+Binary files /dev/null and b/hsa/gfx942/bf16gemm/bf16gemm_fp32bf16_tn_32x64_pf3_splitk.co differ
+diff --git a/hsa/gfx942/bf16gemm/bf16gemm_fp32bf16_tn_48x64_bshuffle_splitk.co b/hsa/gfx942/bf16gemm/bf16gemm_fp32bf16_tn_48x64_bshuffle_splitk.co
+new file mode 100755
+index 0000000000..111caeeefa
+Binary files /dev/null and b/hsa/gfx942/bf16gemm/bf16gemm_fp32bf16_tn_48x64_bshuffle_splitk.co differ
+diff --git a/hsa/gfx942/bf16gemm/bf16gemm_fp32bf16_tn_48x64_pf3_splitk.co b/hsa/gfx942/bf16gemm/bf16gemm_fp32bf16_tn_48x64_pf3_splitk.co
+new file mode 100755
+index 0000000000..01c541a018
+Binary files /dev/null and b/hsa/gfx942/bf16gemm/bf16gemm_fp32bf16_tn_48x64_pf3_splitk.co differ
+diff --git a/hsa/gfx942/bf16gemm/bf16gemm_fp32bf16_tn_64x64_bshuffle_splitk.co b/hsa/gfx942/bf16gemm/bf16gemm_fp32bf16_tn_64x64_bshuffle_splitk.co
+new file mode 100755
+index 0000000000..7c4e36a2c5
+Binary files /dev/null and b/hsa/gfx942/bf16gemm/bf16gemm_fp32bf16_tn_64x64_bshuffle_splitk.co differ
+diff --git a/hsa/gfx942/bf16gemm/bf16gemm_fp32bf16_tn_64x64_pf3_splitk.co b/hsa/gfx942/bf16gemm/bf16gemm_fp32bf16_tn_64x64_pf3_splitk.co
+new file mode 100755
+index 0000000000..f2169de751
+Binary files /dev/null and b/hsa/gfx942/bf16gemm/bf16gemm_fp32bf16_tn_64x64_pf3_splitk.co differ
+diff --git a/hsa/gfx942/bf16gemm/bf16gemm_fp32bf16_tn_96x64_bshuffle_splitk.co b/hsa/gfx942/bf16gemm/bf16gemm_fp32bf16_tn_96x64_bshuffle_splitk.co
+new file mode 100755
+index 0000000000..926fdd57d1
+Binary files /dev/null and b/hsa/gfx942/bf16gemm/bf16gemm_fp32bf16_tn_96x64_bshuffle_splitk.co differ
+diff --git a/hsa/gfx942/bf16gemm/bf16gemm_fp32bf16_tn_96x64_pf3_splitk.co b/hsa/gfx942/bf16gemm/bf16gemm_fp32bf16_tn_96x64_pf3_splitk.co
+new file mode 100755
+index 0000000000..a43f1a90a8
+Binary files /dev/null and b/hsa/gfx942/bf16gemm/bf16gemm_fp32bf16_tn_96x64_pf3_splitk.co differ
+diff --git a/hsa/gfx950/bf16gemm/bf16gemm_fp32bf16.csv b/hsa/gfx950/bf16gemm/bf16gemm_fp32bf16.csv
+index 3d5cdbbcc6..9f2183e46a 100644
+--- a/hsa/gfx950/bf16gemm/bf16gemm_fp32bf16.csv
++++ b/hsa/gfx950/bf16gemm/bf16gemm_fp32bf16.csv
+@@ -1,13 +1,13 @@
+-knl_name,co_name,tn,tileM,tileN,pf,bPreshuffle,splitK
+-_ZN5aiter36bf16gemm_bf16_tn_256x256_bpreshuffleE,bf16gemm_bf16_tn_256x256_bpreshuffle.co,1,256,256,0,1,0
+-_ZN5aiter24bf16gemm_bf16_tn_256x256E,bf16gemm_bf16_tn_256x256.co,1,256,256,0,0,0
+-_ZN5aiter37bf16gemm_fp32bf16_tn_32x64_pf3_splitkE,bf16gemm_fp32bf16_tn_32x64_pf3_splitk.co,1,32,64,3,0,1
+-_ZN5aiter37bf16gemm_fp32bf16_tn_48x64_pf3_splitkE,bf16gemm_fp32bf16_tn_48x64_pf3_splitk.co,1,48,64,3,0,1
+-_ZN5aiter37bf16gemm_fp32bf16_tn_64x64_pf3_splitkE,bf16gemm_fp32bf16_tn_64x64_pf3_splitk.co,1,64,64,3,0,1
+-_ZN5aiter43bf16gemm_fp32bf16_tn_160x64_bshuffle_splitkE,bf16gemm_fp32bf16_tn_160x64_bshuffle_splitk.co,1,160,64,0,1,1
+-_ZN5aiter42bf16gemm_fp32bf16_tn_64x64_bshuffle_splitkE,bf16gemm_fp32bf16_tn_64x64_bshuffle_splitk.co,1,64,64,0,1,1
+-_ZN5aiter42bf16gemm_fp32bf16_tn_32x64_bshuffle_splitkE,bf16gemm_fp32bf16_tn_32x64_bshuffle_splitk.co,1,32,64,0,1,1
+-_ZN5aiter42bf16gemm_fp32bf16_tn_96x64_bshuffle_splitkE,bf16gemm_fp32bf16_tn_96x64_bshuffle_splitk.co,1,96,64,0,1,1
+-_ZN5aiter42bf16gemm_fp32bf16_tn_48x64_bshuffle_splitkE,bf16gemm_fp32bf16_tn_48x64_bshuffle_splitk.co,1,48,64,0,1,1
+-_ZN5aiter37bf16gemm_fp32bf16_tn_96x64_pf3_splitkE,bf16gemm_fp32bf16_tn_96x64_pf3_splitk.co,1,96,64,3,0,1
+-_ZN5aiter43bf16gemm_fp32bf16_tn_128x64_bshuffle_splitkE,bf16gemm_fp32bf16_tn_128x64_bshuffle_splitk.co,1,128,64,0,1,1
++knl_name,co_name,tn,tileM,tileN,pf,bPreshuffle,splitK,subK,bias
++_ZN5aiter36bf16gemm_bf16_tn_256x256_bpreshuffleE,bf16gemm_bf16_tn_256x256_bpreshuffle.co,1,256,256,0,1,0,64,0
++_ZN5aiter24bf16gemm_bf16_tn_256x256E,bf16gemm_bf16_tn_256x256.co,1,256,256,0,0,0,64,0
++_ZN5aiter37bf16gemm_fp32bf16_tn_32x64_pf3_splitkE,bf16gemm_fp32bf16_tn_32x64_pf3_splitk.co,1,32,64,3,0,1,64,1
++_ZN5aiter37bf16gemm_fp32bf16_tn_48x64_pf3_splitkE,bf16gemm_fp32bf16_tn_48x64_pf3_splitk.co,1,48,64,3,0,1,64,1
++_ZN5aiter37bf16gemm_fp32bf16_tn_64x64_pf3_splitkE,bf16gemm_fp32bf16_tn_64x64_pf3_splitk.co,1,64,64,3,0,1,64,1
++_ZN5aiter43bf16gemm_fp32bf16_tn_160x64_bshuffle_splitkE,bf16gemm_fp32bf16_tn_160x64_bshuffle_splitk.co,1,160,64,0,1,1,64,1
++_ZN5aiter42bf16gemm_fp32bf16_tn_64x64_bshuffle_splitkE,bf16gemm_fp32bf16_tn_64x64_bshuffle_splitk.co,1,64,64,0,1,1,64,1
++_ZN5aiter42bf16gemm_fp32bf16_tn_32x64_bshuffle_splitkE,bf16gemm_fp32bf16_tn_32x64_bshuffle_splitk.co,1,32,64,0,1,1,64,1
++_ZN5aiter42bf16gemm_fp32bf16_tn_96x64_bshuffle_splitkE,bf16gemm_fp32bf16_tn_96x64_bshuffle_splitk.co,1,96,64,0,1,1,64,1
++_ZN5aiter42bf16gemm_fp32bf16_tn_48x64_bshuffle_splitkE,bf16gemm_fp32bf16_tn_48x64_bshuffle_splitk.co,1,48,64,0,1,1,64,1
++_ZN5aiter37bf16gemm_fp32bf16_tn_96x64_pf3_splitkE,bf16gemm_fp32bf16_tn_96x64_pf3_splitk.co,1,96,64,3,0,1,64,1
++_ZN5aiter43bf16gemm_fp32bf16_tn_128x64_bshuffle_splitkE,bf16gemm_fp32bf16_tn_128x64_bshuffle_splitk.co,1,128,64,0,1,1,64,1
+diff --git a/hsa/gfx950/bf16gemm/bf16gemm_fp32bf16_tn_128x64_bshuffle_splitk.co b/hsa/gfx950/bf16gemm/bf16gemm_fp32bf16_tn_128x64_bshuffle_splitk.co
+index 7a77b44ef3..ecd5fc0791 100755
+Binary files a/hsa/gfx950/bf16gemm/bf16gemm_fp32bf16_tn_128x64_bshuffle_splitk.co and b/hsa/gfx950/bf16gemm/bf16gemm_fp32bf16_tn_128x64_bshuffle_splitk.co differ
+diff --git a/hsa/gfx950/bf16gemm/bf16gemm_fp32bf16_tn_160x64_bshuffle_splitk.co b/hsa/gfx950/bf16gemm/bf16gemm_fp32bf16_tn_160x64_bshuffle_splitk.co
+index 4c95cb89ba..9b1fd23a12 100755
+Binary files a/hsa/gfx950/bf16gemm/bf16gemm_fp32bf16_tn_160x64_bshuffle_splitk.co and b/hsa/gfx950/bf16gemm/bf16gemm_fp32bf16_tn_160x64_bshuffle_splitk.co differ
+diff --git a/hsa/gfx950/bf16gemm/bf16gemm_fp32bf16_tn_32x64_bshuffle_splitk.co b/hsa/gfx950/bf16gemm/bf16gemm_fp32bf16_tn_32x64_bshuffle_splitk.co
+index d354bc9423..89551adf71 100755
+Binary files a/hsa/gfx950/bf16gemm/bf16gemm_fp32bf16_tn_32x64_bshuffle_splitk.co and b/hsa/gfx950/bf16gemm/bf16gemm_fp32bf16_tn_32x64_bshuffle_splitk.co differ
+diff --git a/hsa/gfx950/bf16gemm/bf16gemm_fp32bf16_tn_32x64_pf3_splitk.co b/hsa/gfx950/bf16gemm/bf16gemm_fp32bf16_tn_32x64_pf3_splitk.co
+index af4a8504ad..30566e4878 100755
+Binary files a/hsa/gfx950/bf16gemm/bf16gemm_fp32bf16_tn_32x64_pf3_splitk.co and b/hsa/gfx950/bf16gemm/bf16gemm_fp32bf16_tn_32x64_pf3_splitk.co differ
+diff --git a/hsa/gfx950/bf16gemm/bf16gemm_fp32bf16_tn_48x64_bshuffle_splitk.co b/hsa/gfx950/bf16gemm/bf16gemm_fp32bf16_tn_48x64_bshuffle_splitk.co
+index e4252bead5..f3dde986c8 100755
+Binary files a/hsa/gfx950/bf16gemm/bf16gemm_fp32bf16_tn_48x64_bshuffle_splitk.co and b/hsa/gfx950/bf16gemm/bf16gemm_fp32bf16_tn_48x64_bshuffle_splitk.co differ
+diff --git a/hsa/gfx950/bf16gemm/bf16gemm_fp32bf16_tn_48x64_pf3_splitk.co b/hsa/gfx950/bf16gemm/bf16gemm_fp32bf16_tn_48x64_pf3_splitk.co
+index 1085fe3207..17d12b148e 100755
+Binary files a/hsa/gfx950/bf16gemm/bf16gemm_fp32bf16_tn_48x64_pf3_splitk.co and b/hsa/gfx950/bf16gemm/bf16gemm_fp32bf16_tn_48x64_pf3_splitk.co differ
+diff --git a/hsa/gfx950/bf16gemm/bf16gemm_fp32bf16_tn_64x64_bshuffle_splitk.co b/hsa/gfx950/bf16gemm/bf16gemm_fp32bf16_tn_64x64_bshuffle_splitk.co
+index 533c5a7964..caeec1799a 100755
+Binary files a/hsa/gfx950/bf16gemm/bf16gemm_fp32bf16_tn_64x64_bshuffle_splitk.co and b/hsa/gfx950/bf16gemm/bf16gemm_fp32bf16_tn_64x64_bshuffle_splitk.co differ
+diff --git a/hsa/gfx950/bf16gemm/bf16gemm_fp32bf16_tn_64x64_pf3_splitk.co b/hsa/gfx950/bf16gemm/bf16gemm_fp32bf16_tn_64x64_pf3_splitk.co
+index c03f2e8f7b..eeb6fac03f 100755
+Binary files a/hsa/gfx950/bf16gemm/bf16gemm_fp32bf16_tn_64x64_pf3_splitk.co and b/hsa/gfx950/bf16gemm/bf16gemm_fp32bf16_tn_64x64_pf3_splitk.co differ
+diff --git a/hsa/gfx950/bf16gemm/bf16gemm_fp32bf16_tn_96x64_bshuffle_splitk.co b/hsa/gfx950/bf16gemm/bf16gemm_fp32bf16_tn_96x64_bshuffle_splitk.co
+index 17e7b194f7..07ab47b24a 100755
+Binary files a/hsa/gfx950/bf16gemm/bf16gemm_fp32bf16_tn_96x64_bshuffle_splitk.co and b/hsa/gfx950/bf16gemm/bf16gemm_fp32bf16_tn_96x64_bshuffle_splitk.co differ
+diff --git a/hsa/gfx950/bf16gemm/bf16gemm_fp32bf16_tn_96x64_pf3_splitk.co b/hsa/gfx950/bf16gemm/bf16gemm_fp32bf16_tn_96x64_pf3_splitk.co
+index 9e404a8cd4..a33db1be92 100755
+Binary files a/hsa/gfx950/bf16gemm/bf16gemm_fp32bf16_tn_96x64_pf3_splitk.co and b/hsa/gfx950/bf16gemm/bf16gemm_fp32bf16_tn_96x64_pf3_splitk.co differ
+diff --git a/op_tests/test_gemm_a16w16.py b/op_tests/test_gemm_a16w16.py
+index 8d26da33ff..1b1573715d 100755
+--- a/op_tests/test_gemm_a16w16.py
++++ b/op_tests/test_gemm_a16w16.py
+@@ -106,8 +106,8 @@ def test_gemm(dtype, m, n, k, bias=False, otype=None, scaleA=None, scaleB=None):
+         scaleA = torch.tensor(scaleA, dtype=dtypes.fp32, device="cuda")
+     if scaleB is not None:
+         scaleB = torch.tensor(scaleB, dtype=dtypes.fp32, device="cuda")
+-    (a, *_), avg_a = run_torch(x, weight, bias, otype, scaleA, scaleB)
+-    (b, *_), avg_b = run_gemm_b(x, weight, bias, otype, scaleA, scaleB)
++    a, avg_a = run_torch(x, weight, bias, otype, scaleA, scaleB)
++    b, avg_b = run_gemm_b(x, weight, bias, otype, scaleA, scaleB)
+     if (
+         n % 16 == 0
+         and k % 32 == 0
+@@ -117,7 +117,7 @@ def test_gemm(dtype, m, n, k, bias=False, otype=None, scaleA=None, scaleB=None):
+     ):
+         init_hipblas()
+         weight_bpreshuffle = shuffle_weight(weight, layout=(16, 16), use_int4=False)
+-        (c, *_), avg_c = aiter_hip_bpreshuffle(x, weight_bpreshuffle, None, None, otype)
++        c, avg_c = aiter_hip_bpreshuffle(x, weight_bpreshuffle, None, None, otype)
+         if bias is not None:
+             c = c + bias
+     else:
+@@ -147,30 +147,22 @@ def test_gemm(dtype, m, n, k, bias=False, otype=None, scaleA=None, scaleB=None):
+     ### run bf16gemm_f32 asm
+     if (
+         dtype == dtypes.bf16
+-        and bias is None
+-        and (
+-            (
+-                get_gfx() == "gfx942"
+-                and (otype == dtypes.fp32 or otype == dtypes.bf16)
+-                and k % 64 == 0
+-                and n % 64 == 0
+-            )
+-            or (
+-                get_gfx() == "gfx950"
+-                and otype == dtypes.bf16
+-                and k % 256 == 0
+-                and n % 256 == 0
+-            )
+-        )
++        and (otype == dtypes.fp32 or otype == dtypes.bf16)
++        and k % 64 == 0
++        and n % 64 == 0
+     ):
+-        # out_asm = torch.empty((m + 191) // 192 * 192, n, dtype=otype)
+         out_asm = torch.empty(m, n, dtype=otype, device=x.device)
++        ### b preshuffle
+         wshuffle = shuffle_weight(weight, layout=(16, 16))
+-        (d, *_), avg_d = run_bf16gemm_asm(
+-            x, wshuffle, out_asm, bpreshuffle=wshuffle.is_shuffled
++        d, avg_d = run_bf16gemm_asm(
++            x, wshuffle, out_asm, bias, bpreshuffle=wshuffle.is_shuffled
+         )
+-        msg = f"[perf] dim: {str(dim):<20} dtype: {dtype}, B avg: {avg_b:<8.2f} us, asm avg: {avg_d:<8.2f} us, uplift: {avg_b/avg_d-1:<5.1%}"
++        msg = f"[perf] dim: {str(dim):<20} dtype: {dtype}, B avg: {avg_b:<8.2f} us, asm-bpreshuffle avg: {avg_d:<8.2f} us, uplift: {avg_b/avg_d-1:<5.1%}"
+         err_asm = checkAllclose(b, d, msg=msg)
++        ### no shuffle
++        e, avg_e = run_bf16gemm_asm(x, weight, out_asm, bias)
++        msg = f"[perf] dim: {str(dim):<20} dtype: {dtype}, B avg: {avg_b:<8.2f} us, asm-noshuffle avg: {avg_e:<8.2f} us, uplift: {avg_b/avg_e-1:<5.1%}"
++        err_asm_noshuffle = checkAllclose(b, e, msg=msg)
+ 
+     ret = {
+         "torch us": avg_a,
+@@ -178,11 +170,13 @@ def test_gemm(dtype, m, n, k, bias=False, otype=None, scaleA=None, scaleB=None):
+         "tgemm err (vs torch)": err_tgemm,
+         "hipb us": locals().get("avg_c", ""),
+         "hipb err (vs torch)": locals().get("err_hipb", ""),
+-        "asm us": locals().get("avg_d", ""),
+-        "asm err (vs tgemm)": locals().get("err_asm", ""),
++        "asm-bpshuff us": locals().get("avg_d", ""),
++        "asm-bpshuff err (vs tgemm)": locals().get("err_asm", ""),
++        "asm-nshuff us": locals().get("avg_e", ""),
++        "asm-nshuff err (vs tgemm)": locals().get("err_asm_noshuffle", ""),
+     }
+ 
+-    (a, *_), us = run_gemm_triton(x, weight, bias, otype, scaleA, scaleB)
++    a, us = run_gemm_triton(x, weight, bias, otype, scaleA, scaleB)
+     err = checkAllclose(b, a)
+     ret["triton us"] = us
+ 

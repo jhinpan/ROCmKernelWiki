@@ -1,0 +1,332 @@
+diff --git a/ater/fused_moe_bf16_asm.py b/ater/fused_moe_bf16_asm.py
+index 094783d110..426790aff1 100644
+--- a/ater/fused_moe_bf16_asm.py
++++ b/ater/fused_moe_bf16_asm.py
+@@ -31,7 +31,7 @@ def moe_sorting_ck(topk_ids, topk_weights, num_experts, model_dim, moebuf_dtype)
+                           dtype=moebuf_dtype,
+                           device=device)
+     ater.moe_sorting_fwd(topk_ids, topk_weights, sorted_ids, sorted_weights,  sorted_expert_ids,
+-                     num_tokens_post_pad, moe_buf, num_experts, BLOCK_SIZE_M)
++                         num_tokens_post_pad, moe_buf, num_experts, BLOCK_SIZE_M)
+     return sorted_ids, sorted_weights, sorted_expert_ids, num_tokens_post_pad, moe_buf
+ 
+ 
+@@ -41,6 +41,7 @@ def asm_moe(hidden_states, w1, w2, topk_weight, topk_ids,
+             fc2_scale=None,  # [expert, model_dim, 1]
+             fc1_smooth_scale=None,  # [expert, 1, model_dim]
+             fc2_smooth_scale=None,  # [expert, 1, inter_dim]
++            a16=False
+             ):
+     E, _, model_dim = w1.shape
+     M, topk = topk_ids.shape
+@@ -51,6 +52,14 @@ def asm_moe(hidden_states, w1, w2, topk_weight, topk_ids,
+     if fc1_scale is None:
+         ater.fmoe(moe_buf, hidden_states, w1, w2, sorted_ids,
+                   sorted_weights, sorted_expert_ids, num_tokens_post_padded, topk)
++    elif a16:
++        ater.fmoe_int8_g1u0_a16(moe_buf, hidden_states, w1, w2, sorted_ids,
++                                sorted_weights, sorted_expert_ids, num_tokens_post_padded,
++                                topk,
++                                fc1_scale,
++                                fc2_scale,
++                                fc1_smooth_scale,
++                                fc2_smooth_scale)
+     else:
+         a8 = torch.empty((topk * M, model_dim),
+                          dtype=torch.int8, device=device)
+diff --git a/ater/ops/moe_op.py b/ater/ops/moe_op.py
+index 407762f8a7..fdb3abd7d6 100644
+--- a/ater/ops/moe_op.py
++++ b/ater/ops/moe_op.py
+@@ -73,3 +73,21 @@ def fmoe_int8_g1u0(
+     fc2_scale: Tensor,
+     fc2_smooth_scale: Tensor,
+ ): ...
++
++
++@compile_ops(**compile_ops_)
++def fmoe_int8_g1u0_a16(
++    out: Tensor,
++    input: Tensor,  # bf16
++    gate: Tensor,
++    down: Tensor,
++    sorted_token_ids: Tensor,
++    sorted_weight_buf: Tensor,
++    sorted_expert_ids: Tensor,
++    num_tokens_post_padded: Tensor,
++    topk: int,
++    fc1_scale: Tensor,
++    fc2_scale: Tensor,
++    fc1_smooth_scale: Tensor,
++    fc2_smooth_scale: Tensor,
++): ...
+diff --git a/ater/test_common.py b/ater/test_common.py
+index 2743d919fd..14a57008d9 100644
+--- a/ater/test_common.py
++++ b/ater/test_common.py
+@@ -6,7 +6,7 @@
+ # @Email: lingpeng.jin@amd.com
+ # @Create At: 2024-11-03 15:53:32
+ # @Last Modified By: valarLip
+-# @Last Modified At: 2024-12-10 14:11:39
++# @Last Modified At: 2024-12-14 23:24:27
+ # @Description: This is description.
+ 
+ import torch
+@@ -17,40 +17,58 @@
+ from ater import logger
+ 
+ 
+-def perftest(num_iters=100, num_warmup=20):
++def perftest(num_iters=100, num_warmup=20, testGraph=False):
+     def decorator(func):
+         def wrapper(*args, **kwargs):
++            for _ in range(num_warmup):
++                data = func(*args, **kwargs)
++
+             if int(os.environ.get('ATER_LOG_MORE', 0)):
+                 latencies = []
+                 start_event = torch.cuda.Event(enable_timing=True)
+                 end_event = torch.cuda.Event(enable_timing=True)
+-                for _ in range(num_iters+num_warmup):
++                for _ in range(num_iters):
+                     start_event.record()
+                     data = func(*args, **kwargs)
+                     end_event.record()
+                     end_event.synchronize()
+                     latencies.append(start_event.elapsed_time(end_event))
+-                avg = np.mean(latencies[num_warmup:]) * 1000
++                avg = np.mean(latencies) * 1000
+                 logger.info(f'avg: {avg} ms/iter from cuda.Event')
++
++            if testGraph:
++                graph = torch.cuda.CUDAGraph()
++                with torch.cuda.graph(graph):
++                    data = func(*args, **kwargs)
++                with tpf.profile(activities=[tpf.ProfilerActivity.CPU, tpf.ProfilerActivity.CUDA],
++                                 profile_memory=True,
++                                 with_stack=True,
++                                 with_modules=True,
++                                 ) as prof:
++                    run_iters(num_iters, graph.replay)
++                avg = get_trace_perf(prof, num_iters)
++                logger.info(f'avg: {avg} ms/iter with hipgraph')
+             with tpf.profile(activities=[tpf.ProfilerActivity.CPU, tpf.ProfilerActivity.CUDA],
+                              profile_memory=True,
+                              with_stack=True,
+                              with_modules=True,
+-                             record_shapes=True,
++                             #  record_shapes=True,
+                              #  on_trace_ready=tpf.tensorboard_trace_handler(
+                              #      './ater_logs/'),
+-                             schedule=tpf.schedule(wait=1,
+-                                                   warmup=num_warmup,
+-                                                   active=num_iters),) as prof:
+-                for _ in range(1+num_iters+num_warmup):
+-                    data = func(*args, **kwargs)
+-                    prof.step()
++                             ) as prof:
++                data = run_iters(num_iters, func, *args, **kwargs)
+             avg = get_trace_perf(prof, num_iters)
+             return data, avg
+         return wrapper
+     return decorator
+ 
+ 
++def run_iters(num_iters, func, *args, **kwargs):
++    for _ in range(num_iters):
++        data = func(*args, **kwargs)
++    return data
++
++
+ def get_trace_perf(prof, num_iters):
+     df = []
+     for el in prof.key_averages():
+@@ -60,7 +78,7 @@ def get_trace_perf(prof, num_iters):
+     cols = ['key', 'count',
+             'cpu_time_total', 'self_cpu_time_total',
+             'device_time_total', 'self_device_time_total',
+-            'self_device_memory_usage',
++            # 'self_device_memory_usage',
+             'device_type',]
+     cols = [el for el in df.columns if el in cols]
+     df = df[(df.self_cpu_time_total > 0) | (df.self_device_time_total > 0)]
+diff --git a/csrc/include/moe_op.h b/csrc/include/moe_op.h
+index 5f4f9adc23..4342d97afa 100644
+--- a/csrc/include/moe_op.h
++++ b/csrc/include/moe_op.h
+@@ -39,4 +39,19 @@ void fmoe_int8_g1u0(torch::Tensor &out,                    // [token_cnt, dim]
+                     torch::Tensor &fc2_smooth_scale        // [expert, 1, hidden_dim]
+ );
+ 
++void fmoe_int8_g1u0_a16(torch::Tensor &out,                    // [token_cnt, dim]
++                        torch::Tensor &input,                  // [token_cnt, dim] M,K
++                        torch::Tensor &gate,                   // [expert, inter_dim, dim] N,K
++                        torch::Tensor &down,                   // [expert, dim, inter_dim]
++                        torch::Tensor &sorted_token_ids,       // [max_num_tokens_padded]
++                        torch::Tensor &sorted_weight_buf,      // [max_num_tokens_padded]
++                        torch::Tensor &sorted_expert_ids,      // [max_num_m_blocks]
++                        torch::Tensor &num_tokens_post_padded, // [1]
++                        uint32_t topk,                         //
++                        torch::Tensor &fc1_scale,              // [expert, 1, hidden_dim]
++                        torch::Tensor &fc2_scale,              // [expert, 1, dim]
++                        torch::Tensor &fc1_smooth_scale,       // [expert, 1, hidden_dim]
++                        torch::Tensor &fc2_smooth_scale        // [expert, 1, hidden_dim]
++);
++
+ void moe_sum(torch::Tensor &input, torch::Tensor &output);
+diff --git a/csrc/py_itfs_cu/asm_fmoe.cpp b/csrc/py_itfs_cu/asm_fmoe.cpp
+index 3fe9bd7bad..2ca3f69c97 100644
+--- a/csrc/py_itfs_cu/asm_fmoe.cpp
++++ b/csrc/py_itfs_cu/asm_fmoe.cpp
+@@ -95,7 +95,7 @@ class FMoeKernel
+         HIP_CALL(hipModuleGetFunction(&kernel_func, module, name));
+     };
+ 
+-    template <typename T, typename T_O>
++    template <typename T, typename T_O, bool switchGxy = false>
+     void launch_kernel(torch::Tensor &out,                    // [token_cnt, dim]
+                        torch::Tensor &input,                  // [token_cnt, dim] M,K
+                        torch::Tensor &w1,                     // [expert, inter_dim, dim] N,K
+@@ -120,7 +120,7 @@ class FMoeKernel
+         uint32_t I_elemSize = sizeof(T);
+         uint32_t O_elemSize = sizeof(T_O);
+ 
+-        int stride_X = dim * I_elemSize;
++        int stride_X = input.stride(0) * input.element_size();
+         int stride_GU = dim * I_elemSize;
+         int stride_D = hidden_dim * I_elemSize;
+         int stride_expert_GU = stride_GU * hidden_dim;
+@@ -182,10 +182,20 @@ class FMoeKernel
+         int gdy = sub_X_cnt;
+         int gdz = 1;
+         const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+-        HIP_CALL(hipModuleLaunchKernel(kernel_func,
+-                                       gdx, gdy, gdz,
+-                                       bdx, 1, 1,
+-                                       0, stream, nullptr, (void **)&config));
++        if constexpr (switchGxy)
++        {
++            HIP_CALL(hipModuleLaunchKernel(kernel_func,
++                                           gdy, gdx, gdz,
++                                           bdx, 1, 1,
++                                           0, stream, nullptr, (void **)&config));
++        }
++        else
++        {
++            HIP_CALL(hipModuleLaunchKernel(kernel_func,
++                                           gdx, gdy, gdz,
++                                           bdx, 1, 1,
++                                           0, stream, nullptr, (void **)&config));
++        }
+     };
+ };
+ 
+@@ -243,3 +253,35 @@ void fmoe_int8_g1u0(torch::Tensor &out,                    // [token_cnt, dim]
+                                           fc2_scale,
+                                           fc2_smooth_scale);
+ }
++
++void fmoe_int8_g1u0_a16(torch::Tensor &out,                    // [token_cnt, dim]
++                        torch::Tensor &input,                  // [token_cnt, dim] M,K
++                        torch::Tensor &gate,                   // [expert, inter_dim, dim] N,K
++                        torch::Tensor &down,                   // [expert, dim, inter_dim]
++                        torch::Tensor &sorted_token_ids,       // [max_num_tokens_padded]
++                        torch::Tensor &sorted_weight_buf,      // [max_num_tokens_padded]
++                        torch::Tensor &sorted_expert_ids,      // [max_num_m_blocks]
++                        torch::Tensor &num_tokens_post_padded, // [1]
++                        uint32_t topk,                         //
++                        torch::Tensor &fc1_scale,              // [expert, 1, hidden_dim]
++                        torch::Tensor &fc2_scale,              // [expert, 1, dim]
++                        torch::Tensor &fc1_smooth_scale,       // [expert, 1, hidden_dim]
++                        torch::Tensor &fc2_smooth_scale        // [expert, 1, hidden_dim]
++)
++{
++    static FMoeKernel impl("fmoe_kernel_func", "fmoe_int8_g1u0_smf.co");
++    impl.launch_kernel<uint8_t, uint16_t, true>(out,
++                                                input,
++                                                gate,
++                                                down,
++                                                sorted_token_ids,
++                                                sorted_weight_buf,
++                                                sorted_expert_ids,
++                                                num_tokens_post_padded,
++                                                topk,
++                                                // quant args
++                                                fc1_smooth_scale,
++                                                fc1_scale,
++                                                fc2_scale,
++                                                fc2_smooth_scale);
++}
+\ No newline at end of file
+diff --git a/csrc/pybind/moe_op_pybind.cu b/csrc/pybind/moe_op_pybind.cu
+index 0167593ae6..944a52bbdc 100644
+--- a/csrc/pybind/moe_op_pybind.cu
++++ b/csrc/pybind/moe_op_pybind.cu
+@@ -9,5 +9,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
+             "that it is divisible by the block size.");
+       m.def("fmoe", &fmoe);
+       m.def("fmoe_int8_g1u0", &fmoe_int8_g1u0);
++      m.def("fmoe_int8_g1u0_a16", &fmoe_int8_g1u0_a16);
+       m.def("moe_sum", &moe_sum, "moe_sum(Tensor! input, Tensor output) -> ()");
+ }
+\ No newline at end of file
+diff --git a/hsa/fmoe_int8_g1u0_smf.co b/hsa/fmoe_int8_g1u0_smf.co
+new file mode 100755
+index 0000000000..4e03a760a5
+Binary files /dev/null and b/hsa/fmoe_int8_g1u0_smf.co differ
+diff --git a/op_tests/test_moe.py b/op_tests/test_moe.py
+index cb32f65ef9..78c07c10fb 100644
+--- a/op_tests/test_moe.py
++++ b/op_tests/test_moe.py
+@@ -144,12 +144,13 @@ def asm_moe_test(hidden_states, w1, w2, topk_weight, topk_ids,
+                  fc2_scale=None,  # [expert, model_dim, 1]
+                  fc1_smooth_scale=None,  # [expert, 1, model_dim]
+                  fc2_smooth_scale=None,  # [expert, 1, inter_dim]
++                 a16=False,
+                  ):
+     return asm_moe(hidden_states,
+                    w1,
+                    w2,
+                    topk_weight,
+-                   topk_ids, fc1_scale, fc2_scale, fc1_smooth_scale, fc2_smooth_scale)
++                   topk_ids, fc1_scale, fc2_scale, fc1_smooth_scale, fc2_smooth_scale, a16)
+ 
+ 
+ @perftest()
+@@ -213,18 +214,23 @@ def test_fmoe(dtype, token, model_dim, inter_dim, E, topk, quant=False):
+                                      w2,
+                                      topk_weights,
+                                      topk_ids, fc1_scale, fc2_scale, fc1_smooth_scale, fc2_smooth_scale)
+-        print(f'{ref2=}')
++        # print(f'{ref2=}')
+ 
+         # b implement
+         w1b = shuffle_weight(w1)
+         w2b = shuffle_weight(w2)
+         out_b, avg_b = asm_moe_test(input, w1b, w2b, topk_weights, topk_ids,
+                                     fc1_scale, fc2_scale, fc1_smooth_scale, fc2_smooth_scale)
+-        print(f'{out_b=}')
++        # print(f'{out_b=}')
++        out_b2, avg_b2 = asm_moe_test(input, w1b, w2b, topk_weights, topk_ids,
++                                      fc1_scale, fc2_scale, fc1_smooth_scale, fc2_smooth_scale, a16=True)
++        # print(f'{out_c=}')
++        msg = f'asm: {avg_b:.2f} vs fuseQuant: {avg_b2:.2f}'
++        checkAllclose(out_b, out_b2, atol=100, msg=msg)
+ 
+-    msg = f"[perf] {token=}, {model_dim=}, {inter_dim=}, {E=}, {topk=}, dtype: {dtype}, torch_avg: {avg_a:<8.2f} us, asm_avg: {avg_b:<8.2f} us,smtorch_k_avg: {avg_c:.2f} us, uplift: {avg_c/avg_b-1:.1%}"
++    msg = f"[perf] {token=}, {model_dim=}, {inter_dim=}, {E=}, {topk=}, dtype: {dtype}, torch_avg: {avg_a:<8.2f} us, asm_avg: {avg_b2:<8.2f} us,smtorch_k_avg: {avg_c:.2f} us, uplift: {avg_c/avg_b2-1:.1%}"
+     # checkAllclose(ref1, ref2, rtol=0.05, atol=20)
+-    checkAllclose(ref2, out_b, rtol=0.01, atol=100, msg=msg)
++    checkAllclose(ref2, out_b2, rtol=0.01, atol=100, msg=msg)
+ 
+ 
+ print('test test_fmoe 16 bit')
+@@ -232,5 +238,5 @@ def test_fmoe(dtype, token, model_dim, inter_dim, E, topk, quant=False):
+     for m in [1, 2, 4, 8, 16, 26, 32, 64, 128, 160, 192, 224, 256][-5:-4]:
+         for dim in [4096, 8192, 16384, 32768][1:1+1]:
+             for hdim in [1024, 2048, 3584, 4096, 8192, 16384, 32768][0:1]:
+-                test_fmoe(dtype, m, dim, hdim, 32, 5)
+-                # test_fmoe(dtype, m, dim, hdim, 32, 5, quant=True)
++                # test_fmoe(dtype, m, dim, hdim, 32, 5)
++                test_fmoe(dtype, m, dim, hdim, 32, 5, quant=True)

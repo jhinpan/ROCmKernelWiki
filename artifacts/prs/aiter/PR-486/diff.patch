@@ -1,0 +1,3253 @@
+diff --git a/aiter/ops/triton/batched_gemm_afp4wfp4.py b/aiter/ops/triton/batched_gemm_afp4wfp4.py
+new file mode 100644
+index 0000000000..30570d81ab
+--- /dev/null
++++ b/aiter/ops/triton/batched_gemm_afp4wfp4.py
+@@ -0,0 +1,457 @@
++from typing import Optional
++import os
++import torch
++import triton
++import triton.language as tl
++from aiter.ops.triton.utils.pid_preprocessing import pid_grid, remap_xcd
++
++
++@triton.heuristics(
++    {
++        "EVEN_K": lambda args: (args["K"] % (args["BLOCK_SIZE_K"] // 2) == 0)
++        and (args["SPLITK_BLOCK_SIZE"] % args["BLOCK_SIZE_K"] == 0)
++        and (args["K"] % (args["SPLITK_BLOCK_SIZE"] // 2) == 0),
++        "GRID_MN": lambda args: triton.cdiv(args["M"], args["BLOCK_SIZE_M"])
++        * triton.cdiv(args["N"], args["BLOCK_SIZE_N"]),
++    }
++)
++@triton.jit
++def _batched_gemm_afp4_wfp4_kernel(
++    a_ptr,
++    b_ptr,
++    c_ptr,
++    a_scales_ptr,
++    b_scales_ptr,
++    M,
++    N,
++    K,
++    stride_ab,
++    stride_am,
++    stride_ak,
++    stride_bb,
++    stride_bk,
++    stride_bn,
++    stride_cb,
++    stride_ck,
++    stride_cm,
++    stride_cn,
++    stride_asb,
++    stride_asm,
++    stride_ask,
++    stride_bsb,
++    stride_bsn,
++    stride_bsk,
++    # Meta-parameters
++    BLOCK_SIZE_M: tl.constexpr,
++    BLOCK_SIZE_N: tl.constexpr,
++    BLOCK_SIZE_K: tl.constexpr,
++    GROUP_SIZE_M: tl.constexpr,
++    NUM_KSPLIT: tl.constexpr,
++    SPLITK_BLOCK_SIZE: tl.constexpr,
++    EVEN_K: tl.constexpr,
++    GRID_MN: tl.constexpr,
++    cache_modifier: tl.constexpr,
++):
++    """Kernel for computing the matmul C = A x B.
++    A and B inputs are in the microscale fp4 (mxfp4) format.
++    A_scales and B_scales are in e8m0 format.
++    A has shape (M, K), B has shape (K, N) and C has shape (M, N)
++    """
++
++    tl.assume(stride_am > 0)
++    tl.assume(stride_ak > 0)
++    tl.assume(stride_bk > 0)
++    tl.assume(stride_bn > 0)
++    tl.assume(stride_cm > 0)
++    tl.assume(stride_cn > 0)
++    tl.assume(stride_asm > 0)
++    tl.assume(stride_ask > 0)
++    tl.assume(stride_bsk > 0)
++    tl.assume(stride_bsn > 0)
++
++    # -----------------------------------------------------------
++    # Map program ids `pid` to the block of C it should compute.
++    # This is done in a grouped ordering to promote L2 data reuse.
++    pid_batch = tl.program_id(axis=0)
++    pid_unified = tl.program_id(axis=1)
++    pid_k = pid_unified % NUM_KSPLIT
++    pid = pid_unified // NUM_KSPLIT
++    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
++    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
++
++    if NUM_KSPLIT == 1:
++        remap_xcd(pid, GRID_MN)
++
++        pid_m, pid_n = pid_grid(pid, num_pid_m, num_pid_n, GROUP_SIZE_M=GROUP_SIZE_M)
++    else:
++        pid_m = pid // num_pid_n
++        pid_n = pid % num_pid_n
++
++    tl.assume(pid_batch > 0)
++    tl.assume(pid_m > 0)
++    tl.assume(pid_n > 0)
++    # We assume 32 elements along K share the same scale.
++    SCALE_GROUP_SIZE: tl.constexpr = 32
++
++    if (pid_k * SPLITK_BLOCK_SIZE // 2) < K:
++
++        num_k_iter = tl.cdiv(SPLITK_BLOCK_SIZE // 2, BLOCK_SIZE_K // 2)
++
++        # Create pointers for first block of A and B input matrices
++        # The BLOCK sizes are of the elements and in fp4 we pack 2 per uint8 container.
++        offs_k = tl.arange(0, BLOCK_SIZE_K // 2)
++        offs_k_split = pid_k * (SPLITK_BLOCK_SIZE // 2) + offs_k
++        offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
++        offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
++        a_ptrs = a_ptr + (
++            pid_batch * stride_ab
++            + offs_am[:, None] * stride_am
++            + offs_k_split[None, :] * stride_ak
++        )
++        b_ptrs = b_ptr + (
++            pid_batch * stride_bb
++            + offs_k_split[:, None] * stride_bk
++            + offs_bn[None, :] * stride_bn
++        )
++        # Create pointers for the first block of A and B scales
++        offs_ks = (pid_k * (SPLITK_BLOCK_SIZE // SCALE_GROUP_SIZE)) + tl.arange(
++            0, BLOCK_SIZE_K // SCALE_GROUP_SIZE
++        )
++        a_scale_ptrs = (
++            a_scales_ptr
++            + pid_batch * stride_asb
++            + offs_am[:, None] * stride_asm
++            + offs_ks[None, :] * stride_ask
++        )
++        # B scales are N x K even though B operand is K x N.
++        b_scale_ptrs = (
++            b_scales_ptr
++            + pid_batch * stride_bsb
++            + offs_bn[:, None] * stride_bsn
++            + offs_ks[None, :] * stride_bsk
++        )
++
++        accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
++
++        for k in range(pid_k * num_k_iter, (pid_k + 1) * num_k_iter):
++            a_scales = tl.load(a_scale_ptrs)
++            b_scales = tl.load(b_scale_ptrs)
++            # a_scales = tl.full((BLOCK_SIZE_M, BLOCK_SIZE_K//SCALE_GROUP_SIZE), 127, dtype=tl.uint8)
++            # b_scales = tl.full((BLOCK_SIZE_N, BLOCK_SIZE_K//SCALE_GROUP_SIZE), 127, dtype=tl.uint8)
++            # Load the next block of A and B, generate a mask by checking the K dimension.
++            # If it is out of bounds, set it to 0.
++            if EVEN_K:
++                a = tl.load(a_ptrs)
++                b = tl.load(b_ptrs, cache_modifier=cache_modifier)
++            else:
++                a = tl.load(
++                    a_ptrs, mask=offs_k[None, :] < K - k * (BLOCK_SIZE_K // 2), other=0
++                )
++                b = tl.load(
++                    b_ptrs, mask=offs_k[:, None] < K - k * (BLOCK_SIZE_K // 2), other=0
++                )
++
++            accumulator += tl.dot_scaled(a, a_scales, "e2m1", b, b_scales, "e2m1")
++
++            # Advance the ptrs to the next K block.
++            a_ptrs += (BLOCK_SIZE_K // 2) * stride_ak
++            b_ptrs += (BLOCK_SIZE_K // 2) * stride_bk
++            a_scale_ptrs += (BLOCK_SIZE_K // SCALE_GROUP_SIZE) * stride_ask
++            b_scale_ptrs += (BLOCK_SIZE_K // SCALE_GROUP_SIZE) * stride_bsk
++
++        c = accumulator.to(c_ptr.type.element_ty)
++
++        # Write back the block of the output matrix C with masks.
++        offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M).to(tl.int64)
++        offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N).to(tl.int64)
++        c_ptrs = (
++            c_ptr
++            + pid_batch * stride_cb
++            + stride_cm * offs_cm[:, None]
++            + stride_cn * offs_cn[None, :]
++            + pid_k * stride_ck
++        )
++        c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
++        tl.store(c_ptrs, c, mask=c_mask)
++
++
++@triton.jit
++def _batched_gemm_afp4_wfp4_reduce_kernel(
++    c_in_ptr,
++    c_out_ptr,
++    M,
++    N,
++    stride_c_in_b,
++    stride_c_in_k,
++    stride_c_in_m,
++    stride_c_in_n,
++    stride_c_out_b,
++    stride_c_out_m,
++    stride_c_out_n,
++    BLOCK_SIZE_M: tl.constexpr,
++    BLOCK_SIZE_N: tl.constexpr,
++    ACTUAL_KSPLIT: tl.constexpr,
++    MAX_KSPLIT: tl.constexpr,
++):
++    pid_batch = tl.program_id(axis=0)
++    pid_m = tl.program_id(axis=1)
++    pid_n = tl.program_id(axis=2)
++
++    offs_m = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
++    offs_n = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
++    offs_k = tl.arange(0, MAX_KSPLIT)
++    c_in_ptrs = (
++        c_in_ptr
++        + pid_batch * stride_c_in_b
++        + (offs_k[:, None, None] * stride_c_in_k)
++        + (offs_m[None, :, None] * stride_c_in_m)
++        + (offs_n[None, None, :] * stride_c_in_n)
++    )
++
++    if ACTUAL_KSPLIT == MAX_KSPLIT:
++        c = tl.load(c_in_ptrs)
++    else:
++        c = tl.load(c_in_ptrs, mask=offs_k[:, None, None] < ACTUAL_KSPLIT)
++    c = tl.sum(c, axis=0)
++
++    c = c.to(c_out_ptr.type.element_ty)
++
++    c_out_ptrs = (
++        c_out_ptr
++        + pid_batch * stride_c_out_b
++        + (offs_m[:, None] * stride_c_out_m)
++        + (offs_n[None, :] * stride_c_out_n)
++    )
++
++    tl.store(c_out_ptrs, c)
++
++
++def get_splitk(K: int, BLOCK_SIZE_K: int, NUM_KSPLIT: int):
++    # heuristics for make "EVEN_K == True" as much as possible
++    NUM_KSPLIT_STEP = 4
++    BLOCK_SIZE_K_STEP = 4
++    SPLITK_BLOCK_SIZE = (
++        triton.cdiv((2 * triton.cdiv(K, NUM_KSPLIT)), BLOCK_SIZE_K) * BLOCK_SIZE_K
++    )
++    while NUM_KSPLIT > 1 and BLOCK_SIZE_K > 16:
++        # print(K, SPLITK_BLOCK_SIZE, BLOCK_SIZE_K, NUM_KSPLIT)
++        # print(K % (SPLITK_BLOCK_SIZE // 2) == 0, SPLITK_BLOCK_SIZE % BLOCK_SIZE_K == 0, K % (BLOCK_SIZE_K // 2) == 0)
++
++        if (
++            K % (SPLITK_BLOCK_SIZE // 2) == 0
++            and SPLITK_BLOCK_SIZE % BLOCK_SIZE_K == 0
++            and K % (BLOCK_SIZE_K // 2) == 0
++        ):
++            break
++        elif K % (SPLITK_BLOCK_SIZE // 2) != 0 and NUM_KSPLIT > 1:
++            NUM_KSPLIT = NUM_KSPLIT // NUM_KSPLIT_STEP
++        elif SPLITK_BLOCK_SIZE % BLOCK_SIZE_K != 0:
++            if NUM_KSPLIT > 1:
++                NUM_KSPLIT = NUM_KSPLIT // NUM_KSPLIT_STEP
++            elif BLOCK_SIZE_K > 16:
++                BLOCK_SIZE_K = BLOCK_SIZE_K // BLOCK_SIZE_K_STEP
++        elif K % (BLOCK_SIZE_K // 2) != 0 and BLOCK_SIZE_K > 16:
++            BLOCK_SIZE_K = BLOCK_SIZE_K // BLOCK_SIZE_K_STEP
++        else:
++            break
++
++        SPLITK_BLOCK_SIZE = (
++            triton.cdiv((2 * triton.cdiv(K, NUM_KSPLIT)), BLOCK_SIZE_K) * BLOCK_SIZE_K
++        )
++
++    # print(K, SPLITK_BLOCK_SIZE // 2, BLOCK_SIZE_K // 2, NUM_KSPLIT)
++    # print(K % (SPLITK_BLOCK_SIZE // 2) == 0, SPLITK_BLOCK_SIZE % BLOCK_SIZE_K == 0, K % (BLOCK_SIZE_K // 2) == 0)
++    return SPLITK_BLOCK_SIZE, BLOCK_SIZE_K, NUM_KSPLIT
++
++
++def batched_gemm_afp4wfp4(
++    x: torch.Tensor,
++    w: torch.Tensor,
++    y: torch.Tensor,
++    x_scales: torch.Tensor,
++    w_scales: torch.Tensor,
++    dtype: Optional[float] = torch.bfloat16,
++):
++    """
++    Computes the matmul Y = X x W
++    X and W are e2m1 fp4 tensors.
++    x_scales and w_scales are e8m0 tensors.
++    Every 32 elements in the K dimension share one e8m0 scale.
++
++
++    Key parameters:
++    - X: Matrix X with shape (B, M, K).
++    - W: Matrix W with shape (B, K, N).
++    - X_scales: Matrix with shape (B, M, K // 32)
++    - W_scales: Matrix with shape (B, N, K // 32)
++
++    Returns:
++    - Y: The output matrix with shape (M, N).
++    """
++
++    Bx, M, K = x.shape
++    Bw, K, N = w.shape
++    By, _, _ = y.shape
++    assert Bx == Bw == By
++    Batch = Bx
++
++    if M < 32:
++        BLOCK_SIZE_M = 16
++        BLOCK_SIZE_N = 64
++        BLOCK_SIZE_K = 256
++        GROUP_SIZE_M = 1
++        waves_per_eu = 6
++        kpack = 1
++        num_warps = 4
++        num_stages = 2
++        matrix_instr_nonkdim = 16
++        cache_modifier = ".cg"
++
++        NUM_KSPLIT = 4
++        SPLITK_BLOCK_SIZE, BLOCK_SIZE_K, NUM_KSPLIT = get_splitk(
++            K, BLOCK_SIZE_K, NUM_KSPLIT
++        )
++
++        if os.getenv("VLLM_TRITON_FP4_GEMM_SPLITK_USE_BF16") == "1":
++            y_pp = torch.empty(
++                (Batch, NUM_KSPLIT, M, N), dtype=y.dtype, device=y.device
++            )
++        else:
++            y_pp = torch.empty(
++                (Batch, NUM_KSPLIT, M, N), dtype=torch.float32, device=y.device
++            )
++    elif M <= 128:
++        BLOCK_SIZE_M = triton.next_power_of_2(M)
++        BLOCK_SIZE_N = 128
++        BLOCK_SIZE_K = 256
++        GROUP_SIZE_M = 1
++        waves_per_eu = 4
++        kpack = 1
++        num_warps = 4
++        num_stages = 2
++        matrix_instr_nonkdim = 16
++        cache_modifier = ".cg"
++
++        NUM_KSPLIT = 4
++        SPLITK_BLOCK_SIZE, BLOCK_SIZE_K, NUM_KSPLIT = get_splitk(
++            K, BLOCK_SIZE_K, NUM_KSPLIT
++        )
++
++        if os.getenv("VLLM_TRITON_FP4_GEMM_SPLITK_USE_BF16") == "1":
++            y_pp = torch.empty(
++                (Batch, NUM_KSPLIT, M, N), dtype=y.dtype, device=y.device
++            )
++        else:
++            y_pp = torch.empty(
++                (Batch, NUM_KSPLIT, M, N), dtype=torch.float32, device=y.device
++            )
++    elif M <= 256:
++        BLOCK_SIZE_M = 128
++        BLOCK_SIZE_N = 128
++        BLOCK_SIZE_K = 256
++        GROUP_SIZE_M = 2
++        waves_per_eu = 4
++        kpack = 1
++        num_warps = 4
++        num_stages = 2
++        matrix_instr_nonkdim = 16
++        cache_modifier = ".cg"
++
++        NUM_KSPLIT = 1
++        SPLITK_BLOCK_SIZE = 2 * K
++        y_pp = None
++    else:
++        BLOCK_SIZE_M = 256
++        BLOCK_SIZE_N = 256
++        BLOCK_SIZE_K = 256
++        GROUP_SIZE_M = 64
++        waves_per_eu = 1
++        kpack = 1
++        num_warps = 8
++        num_stages = 2
++        matrix_instr_nonkdim = 16
++        cache_modifier = None
++
++        NUM_KSPLIT = 1
++        SPLITK_BLOCK_SIZE = 2 * K
++        y_pp = None
++
++    grid = lambda META: (  # noqa: E731
++        Batch,
++        (
++            NUM_KSPLIT
++            * triton.cdiv(M, META["BLOCK_SIZE_M"])
++            * triton.cdiv(N, META["BLOCK_SIZE_N"])
++        ),
++    )
++    _batched_gemm_afp4_wfp4_kernel[grid](
++        x,
++        w,
++        y if NUM_KSPLIT == 1 else y_pp,
++        x_scales,
++        w_scales,
++        M,
++        N,
++        K,
++        x.stride(0),
++        x.stride(1),
++        x.stride(2),
++        w.stride(0),
++        w.stride(1),
++        w.stride(2),
++        y.stride(0) if NUM_KSPLIT == 1 else y_pp.stride(0),
++        0 if NUM_KSPLIT == 1 else y_pp.stride(1),
++        y.stride(1) if NUM_KSPLIT == 1 else y_pp.stride(2),
++        y.stride(2) if NUM_KSPLIT == 1 else y_pp.stride(3),
++        x_scales.stride(0),
++        x_scales.stride(1),
++        x_scales.stride(2),
++        w_scales.stride(0),
++        w_scales.stride(1),
++        w_scales.stride(2),
++        BLOCK_SIZE_M,
++        BLOCK_SIZE_N,
++        BLOCK_SIZE_K,
++        GROUP_SIZE_M,
++        NUM_KSPLIT,
++        SPLITK_BLOCK_SIZE,
++        cache_modifier=cache_modifier,
++        waves_per_eu=waves_per_eu,
++        kpack=kpack,
++        num_warps=num_warps,
++        num_stages=num_stages,
++        matrix_instr_nonkdim=matrix_instr_nonkdim,
++    )
++
++    if NUM_KSPLIT > 1:
++        REDUCE_BLOCK_SIZE_M = 16
++        # TODO: Need to debug - REDUCE_BLOCK_SIZE_N=128 with fp32 partials fails
++        # NOTE: REDUCE_BLOCK_SIZE_N=16 gives best perf with fp32 partials and
++        # REDUCE_BLOCK_SIZE_N=128 gives best perf with bf16 partials
++        REDUCE_BLOCK_SIZE_N = (
++            128 if os.getenv("VLLM_TRITON_FP4_GEMM_SPLITK_USE_BF16") == "1" else 64
++        )
++        ACTUAL_KSPLIT = triton.cdiv(K, (SPLITK_BLOCK_SIZE // 2))
++
++        grid_reduce = (
++            Batch,
++            triton.cdiv(M, REDUCE_BLOCK_SIZE_M),
++            triton.cdiv(N, REDUCE_BLOCK_SIZE_N),
++        )
++        _batched_gemm_afp4_wfp4_reduce_kernel[grid_reduce](
++            y_pp,
++            y,
++            M,
++            N,
++            y_pp.stride(0),
++            y_pp.stride(1),
++            y_pp.stride(2),
++            y_pp.stride(3),
++            y.stride(0),
++            y.stride(1),
++            y.stride(2),
++            REDUCE_BLOCK_SIZE_M,
++            REDUCE_BLOCK_SIZE_N,
++            ACTUAL_KSPLIT,
++            NUM_KSPLIT,
++        )
+diff --git a/aiter/ops/triton/configs/MI300X-GEMM-A16W16.json b/aiter/ops/triton/configs/MI300X-GEMM-A16W16.json
+new file mode 100644
+index 0000000000..19f9e57986
+--- /dev/null
++++ b/aiter/ops/triton/configs/MI300X-GEMM-A16W16.json
+@@ -0,0 +1,13 @@
++{
++  "any": {
++    "BLOCK_SIZE_M": 256,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 64,
++    "GROUP_SIZE_M": 4,
++    "num_warps": 8,
++    "num_stages": 2,
++    "waves_per_eu": 2,
++    "matrix_instr_nonkdim": 16,
++    "kpack": 1
++  }
++}
+\ No newline at end of file
+diff --git a/aiter/ops/triton/configs/MI300X-GEMM-A8W8.json b/aiter/ops/triton/configs/MI300X-GEMM-A8W8.json
+new file mode 100644
+index 0000000000..2c731811f4
+--- /dev/null
++++ b/aiter/ops/triton/configs/MI300X-GEMM-A8W8.json
+@@ -0,0 +1,13 @@
++{
++  "any": {
++    "BLOCK_SIZE_M": 128,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 4,
++    "num_warps": 4,
++    "num_stages": 2,
++    "waves_per_eu": 2,
++    "matrix_instr_nonkdim": 16,
++    "kpack": 2
++  }
++}
+\ No newline at end of file
+diff --git a/aiter/ops/triton/configs/MI300X-GEMM-AFP4WFP4.json b/aiter/ops/triton/configs/MI300X-GEMM-AFP4WFP4.json
+new file mode 100644
+index 0000000000..eaf0465f22
+--- /dev/null
++++ b/aiter/ops/triton/configs/MI300X-GEMM-AFP4WFP4.json
+@@ -0,0 +1,81 @@
++{
++  "small": {
++    "BLOCK_SIZE_M": 16,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 2,
++    "waves_per_eu": 6,
++    "matrix_instr_nonkdim": 16,
++    "kpack": 1,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 4
++  },
++  "medium_M32": {
++    "BLOCK_SIZE_M": 32,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 2,
++    "waves_per_eu": 4,
++    "matrix_instr_nonkdim": 16,
++    "kpack": 1,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 4
++  },
++  "medium_M64": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 2,
++    "waves_per_eu": 4,
++    "matrix_instr_nonkdim": 16,
++    "kpack": 1,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 4
++  },
++  "medium_M128": {
++    "BLOCK_SIZE_M": 128,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "kpack": 1,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 1
++  },
++  "large": {
++    "BLOCK_SIZE_M": 128,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 2,
++    "num_warps": 4,
++    "num_stages": 2,
++    "waves_per_eu": 4,
++    "matrix_instr_nonkdim": 16,
++    "kpack": 1,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 1
++  }, 
++   "xlarge": {
++    "BLOCK_SIZE_M": 256,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 32,
++    "num_warps": 8,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "kpack": 1,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  }
++
++}
+diff --git a/aiter/ops/triton/configs/MI350X-GEMM-A16W16.json b/aiter/ops/triton/configs/MI350X-GEMM-A16W16.json
+new file mode 100644
+index 0000000000..9c81a09d4e
+--- /dev/null
++++ b/aiter/ops/triton/configs/MI350X-GEMM-A16W16.json
+@@ -0,0 +1,13 @@
++{
++  "any": {
++    "BLOCK_SIZE_M": 256,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 64,
++    "GROUP_SIZE_M": 4,
++    "num_warps": 8,
++    "num_stages": 2,
++    "waves_per_eu": 2,
++    "matrix_instr_nonkdim": 32,
++    "kpack": 1
++  }
++}
+diff --git a/aiter/ops/triton/configs/MI350X-GEMM-A8W8.json b/aiter/ops/triton/configs/MI350X-GEMM-A8W8.json
+new file mode 100644
+index 0000000000..5c24b1495a
+--- /dev/null
++++ b/aiter/ops/triton/configs/MI350X-GEMM-A8W8.json
+@@ -0,0 +1,13 @@
++{
++  "any": {
++    "BLOCK_SIZE_M": 128,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 4,
++    "num_warps": 4,
++    "num_stages": 2,
++    "waves_per_eu": 2,
++    "matrix_instr_nonkdim": 16,
++    "kpack": 1
++  }
++}
+\ No newline at end of file
+diff --git a/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4-N=106496-K=16384.json b/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4-N=106496-K=16384.json
+new file mode 100644
+index 0000000000..5e21f0d078
+--- /dev/null
++++ b/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4-N=106496-K=16384.json
+@@ -0,0 +1,75 @@
++{
++  "small": {
++    "BLOCK_SIZE_M": 16,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 2,
++    "waves_per_eu": 6,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 4
++  },
++  "medium_M32": {
++    "BLOCK_SIZE_M": 32,
++    "BLOCK_SIZE_N": 64,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 2,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 4
++  },
++  "medium_M64": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 1
++  },
++  "medium_M128": {
++    "BLOCK_SIZE_M": 128,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 1
++  },
++  "large": {
++    "BLOCK_SIZE_M": 256,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 1
++  }, 
++   "xlarge": {
++    "BLOCK_SIZE_M": 256,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 32,
++    "num_warps": 8,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  }
++
++}
+diff --git a/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4-N=13312-K=16384.json b/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4-N=13312-K=16384.json
+new file mode 100644
+index 0000000000..26cb7c4bdc
+--- /dev/null
++++ b/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4-N=13312-K=16384.json
+@@ -0,0 +1,75 @@
++{
++  "small": {
++    "BLOCK_SIZE_M": 16,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 2,
++    "waves_per_eu": 6,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 4
++  },
++  "medium_M32": {
++    "BLOCK_SIZE_M": 32,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 512,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 2
++  },
++  "medium_M64": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 512,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 2
++  },
++  "medium_M128": {
++    "BLOCK_SIZE_M": 128,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 2
++  },
++  "large": {
++    "BLOCK_SIZE_M": 256,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 8,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 4
++  }, 
++   "xlarge": {
++    "BLOCK_SIZE_M": 256,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 32,
++    "num_warps": 8,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  }
++
++}
+diff --git a/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4-N=16384-K=13312.json b/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4-N=16384-K=13312.json
+new file mode 100644
+index 0000000000..8badc4d075
+--- /dev/null
++++ b/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4-N=16384-K=13312.json
+@@ -0,0 +1,75 @@
++{
++  "small": {
++    "BLOCK_SIZE_M": 16,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 2,
++    "waves_per_eu": 6,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 4
++  },
++  "medium_M32": {
++    "BLOCK_SIZE_M": 32,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 512,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 2
++  },
++  "medium_M64": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 512,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 2
++  },
++  "medium_M128": {
++    "BLOCK_SIZE_M": 128,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 2
++  },
++  "large": {
++    "BLOCK_SIZE_M": 256,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 8,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 2
++  }, 
++   "xlarge": {
++    "BLOCK_SIZE_M": 256,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 32,
++    "num_warps": 8,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  }
++
++}
+diff --git a/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4-N=16384-K=16384.json b/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4-N=16384-K=16384.json
+new file mode 100644
+index 0000000000..a31865c6ad
+--- /dev/null
++++ b/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4-N=16384-K=16384.json
+@@ -0,0 +1,75 @@
++{
++  "small": {
++    "BLOCK_SIZE_M": 16,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 2,
++    "waves_per_eu": 6,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 4
++  },
++  "medium_M32": {
++    "BLOCK_SIZE_M": 32,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 4
++  },
++  "medium_M64": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 4
++  },
++  "medium_M128": {
++    "BLOCK_SIZE_M": 128,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 4
++  },
++  "large": {
++    "BLOCK_SIZE_M": 256,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 8,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 2
++  }, 
++   "xlarge": {
++    "BLOCK_SIZE_M": 256,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 32,
++    "num_warps": 8,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  }
++
++}
+diff --git a/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4-N=16384-K=2048.json b/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4-N=16384-K=2048.json
+new file mode 100644
+index 0000000000..beea2ceef9
+--- /dev/null
++++ b/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4-N=16384-K=2048.json
+@@ -0,0 +1,75 @@
++{
++  "small": {
++    "BLOCK_SIZE_M": 16,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 512,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 2,
++    "waves_per_eu": 6,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 1
++  },
++  "medium_M32": {
++    "BLOCK_SIZE_M": 16,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 512,
++    "GROUP_SIZE_M": 2,
++    "num_warps": 4,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  },
++  "medium_M64": {
++    "BLOCK_SIZE_M": 32,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 512,
++    "GROUP_SIZE_M": 2,
++    "num_warps": 4,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  },
++  "medium_M128": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 512,
++    "GROUP_SIZE_M": 2,
++    "num_warps": 4,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  },
++  "large": {
++    "BLOCK_SIZE_M": 128,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 2,
++    "num_warps": 4,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 1
++  }, 
++   "xlarge": {
++    "BLOCK_SIZE_M": 256,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 32,
++    "num_warps": 8,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  }
++
++}
+diff --git a/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4-N=16384-K=26624.json b/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4-N=16384-K=26624.json
+new file mode 100644
+index 0000000000..a31865c6ad
+--- /dev/null
++++ b/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4-N=16384-K=26624.json
+@@ -0,0 +1,75 @@
++{
++  "small": {
++    "BLOCK_SIZE_M": 16,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 2,
++    "waves_per_eu": 6,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 4
++  },
++  "medium_M32": {
++    "BLOCK_SIZE_M": 32,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 4
++  },
++  "medium_M64": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 4
++  },
++  "medium_M128": {
++    "BLOCK_SIZE_M": 128,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 4
++  },
++  "large": {
++    "BLOCK_SIZE_M": 256,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 8,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 2
++  }, 
++   "xlarge": {
++    "BLOCK_SIZE_M": 256,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 32,
++    "num_warps": 8,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  }
++
++}
+diff --git a/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4-N=16384-K=4096.json b/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4-N=16384-K=4096.json
+new file mode 100644
+index 0000000000..1a882dd390
+--- /dev/null
++++ b/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4-N=16384-K=4096.json
+@@ -0,0 +1,75 @@
++{
++  "small": {
++    "BLOCK_SIZE_M": 16,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 3,
++    "waves_per_eu": 6,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 2
++  },
++  "medium_M32": {
++    "BLOCK_SIZE_M": 16,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 512,
++    "GROUP_SIZE_M": 2,
++    "num_warps": 4,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  },
++  "medium_M64": {
++    "BLOCK_SIZE_M": 32,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 512,
++    "GROUP_SIZE_M": 2,
++    "num_warps": 4,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  },
++  "medium_M128": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 512,
++    "GROUP_SIZE_M": 2,
++    "num_warps": 4,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  },
++  "large": {
++    "BLOCK_SIZE_M": 256,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 8,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 2
++  }, 
++   "xlarge": {
++    "BLOCK_SIZE_M": 256,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 32,
++    "num_warps": 8,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  }
++
++}
+diff --git a/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4-N=16384-K=53248.json b/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4-N=16384-K=53248.json
+new file mode 100644
+index 0000000000..1cd5bf603e
+--- /dev/null
++++ b/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4-N=16384-K=53248.json
+@@ -0,0 +1,75 @@
++{
++  "small": {
++    "BLOCK_SIZE_M": 16,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 2,
++    "waves_per_eu": 6,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 4
++  },
++  "medium_M32": {
++    "BLOCK_SIZE_M": 32,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 4
++  },
++  "medium_M64": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 4
++  },
++  "medium_M128": {
++    "BLOCK_SIZE_M": 128,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 4
++  },
++  "large": {
++    "BLOCK_SIZE_M": 256,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 8,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 4
++  }, 
++   "xlarge": {
++    "BLOCK_SIZE_M": 256,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 32,
++    "num_warps": 8,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  }
++
++}
+diff --git a/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4-N=16384-K=6656.json b/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4-N=16384-K=6656.json
+new file mode 100644
+index 0000000000..a24fbb09e4
+--- /dev/null
++++ b/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4-N=16384-K=6656.json
+@@ -0,0 +1,75 @@
++{
++  "small": {
++    "BLOCK_SIZE_M": 16,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 512,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 3,
++    "waves_per_eu": 6,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 1
++  },
++  "medium_M32": {
++    "BLOCK_SIZE_M": 32,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 512,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 1
++  },
++  "medium_M64": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 512,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 1
++  },
++  "medium_M128": {
++    "BLOCK_SIZE_M": 128,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 2
++  },
++  "large": {
++    "BLOCK_SIZE_M": 128,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 8,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 1
++  }, 
++   "xlarge": {
++    "BLOCK_SIZE_M": 256,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 32,
++    "num_warps": 8,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  }
++
++}
+diff --git a/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4-N=16384-K=8192.json b/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4-N=16384-K=8192.json
+new file mode 100644
+index 0000000000..8a4f6bff25
+--- /dev/null
++++ b/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4-N=16384-K=8192.json
+@@ -0,0 +1,75 @@
++{
++  "small": {
++    "BLOCK_SIZE_M": 16,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 2,
++    "waves_per_eu": 6,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 4
++  },
++  "medium_M32": {
++    "BLOCK_SIZE_M": 32,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 512,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 2
++  },
++  "medium_M64": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 512,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 2
++  },
++  "medium_M128": {
++    "BLOCK_SIZE_M": 128,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 4,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 2
++  },
++  "large": {
++    "BLOCK_SIZE_M": 256,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 8,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 2
++  }, 
++   "xlarge": {
++    "BLOCK_SIZE_M": 256,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 32,
++    "num_warps": 8,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  }
++
++}
+diff --git a/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4-N=18432-K=16384.json b/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4-N=18432-K=16384.json
+new file mode 100644
+index 0000000000..10eca0c682
+--- /dev/null
++++ b/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4-N=18432-K=16384.json
+@@ -0,0 +1,75 @@
++{
++  "small": {
++    "BLOCK_SIZE_M": 16,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 2,
++    "waves_per_eu": 6,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 4
++  },
++  "medium_M32": {
++    "BLOCK_SIZE_M": 32,
++    "BLOCK_SIZE_N": 64,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 2,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 4
++  },
++  "medium_M64": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 4
++  },
++  "medium_M128": {
++    "BLOCK_SIZE_M": 128,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 2,
++    "num_warps": 4,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 4
++  },
++  "large": {
++    "BLOCK_SIZE_M": 256,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 8,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 2
++  }, 
++   "xlarge": {
++    "BLOCK_SIZE_M": 256,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 32,
++    "num_warps": 8,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  }
++
++}
+diff --git a/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4-N=2304-K=16384.json b/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4-N=2304-K=16384.json
+new file mode 100644
+index 0000000000..9ad940349b
+--- /dev/null
++++ b/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4-N=2304-K=16384.json
+@@ -0,0 +1,75 @@
++{
++  "small": {
++    "BLOCK_SIZE_M": 16,
++    "BLOCK_SIZE_N": 64,
++    "BLOCK_SIZE_K": 1024,
++    "GROUP_SIZE_M": 2,
++    "num_warps": 2,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 4
++  },
++  "medium_M32": {
++    "BLOCK_SIZE_M": 32,
++    "BLOCK_SIZE_N": 64,
++    "BLOCK_SIZE_K": 1024,
++    "GROUP_SIZE_M": 2,
++    "num_warps": 2,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 4
++  },
++  "medium_M64": {
++    "BLOCK_SIZE_M": 32,
++    "BLOCK_SIZE_N": 64,
++    "BLOCK_SIZE_K": 1024,
++    "GROUP_SIZE_M": 2,
++    "num_warps": 2,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 2
++  },
++  "medium_M128": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 512,
++    "GROUP_SIZE_M": 2,
++    "num_warps": 4,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 4
++  },
++  "large": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 512,
++    "GROUP_SIZE_M": 32,
++    "num_warps": 4,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 4
++  }, 
++   "xlarge": {
++    "BLOCK_SIZE_M": 256,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 32,
++    "num_warps": 8,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  }
++
++}
+diff --git a/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4-N=26624-K=16384.json b/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4-N=26624-K=16384.json
+new file mode 100644
+index 0000000000..2fc80a9967
+--- /dev/null
++++ b/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4-N=26624-K=16384.json
+@@ -0,0 +1,75 @@
++{
++  "small": {
++    "BLOCK_SIZE_M": 16,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 2,
++    "waves_per_eu": 6,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 4
++  },
++  "medium_M32": {
++    "BLOCK_SIZE_M": 32,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 512,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 1
++  },
++  "medium_M64": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 512,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 1
++  },
++  "medium_M128": {
++    "BLOCK_SIZE_M": 128,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 1
++  },
++  "large": {
++    "BLOCK_SIZE_M": 256,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 8,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 2
++  }, 
++   "xlarge": {
++    "BLOCK_SIZE_M": 256,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 32,
++    "num_warps": 8,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  }
++
++}
+diff --git a/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4-N=4608-K=16384.json b/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4-N=4608-K=16384.json
+new file mode 100644
+index 0000000000..b8bc5e3a88
+--- /dev/null
++++ b/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4-N=4608-K=16384.json
+@@ -0,0 +1,74 @@
++{
++  "small": {
++    "BLOCK_SIZE_M": 16,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 512,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 2,
++    "waves_per_eu": 6,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 4
++  },
++  "medium_M32": {
++    "BLOCK_SIZE_M": 32,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 512,
++    "GROUP_SIZE_M": 2,
++    "num_warps": 4,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 4
++  },
++  "medium_M64": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 512,
++    "GROUP_SIZE_M": 2,
++    "num_warps": 4,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 4
++  },
++  "medium_M128": {
++    "BLOCK_SIZE_M": 128,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 2,
++    "num_warps": 4,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 4
++  },
++  "large": {
++    "BLOCK_SIZE_M": 256,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 8,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 4
++  }, 
++   "xlarge": {
++    "BLOCK_SIZE_M": 256,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 32,
++    "num_warps": 8,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  }
++}
+diff --git a/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4-N=53248-K=16384.json b/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4-N=53248-K=16384.json
+new file mode 100644
+index 0000000000..f796671138
+--- /dev/null
++++ b/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4-N=53248-K=16384.json
+@@ -0,0 +1,75 @@
++{
++  "small": {
++    "BLOCK_SIZE_M": 16,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 2,
++    "waves_per_eu": 6,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 4
++  },
++  "medium_M32": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 1
++  },
++  "medium_M64": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 1
++  },
++  "medium_M128": {
++    "BLOCK_SIZE_M": 128,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 1
++  },
++  "large": {
++    "BLOCK_SIZE_M": 256,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 8,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 2
++  }, 
++   "xlarge": {
++    "BLOCK_SIZE_M": 256,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 32,
++    "num_warps": 8,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  }
++
++}
+diff --git a/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4-N=9216-K=16384.json b/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4-N=9216-K=16384.json
+new file mode 100644
+index 0000000000..a91a78af83
+--- /dev/null
++++ b/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4-N=9216-K=16384.json
+@@ -0,0 +1,75 @@
++{
++  "small": {
++    "BLOCK_SIZE_M": 16,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 2,
++    "waves_per_eu": 6,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 4
++  },
++  "medium_M32": {
++    "BLOCK_SIZE_M": 32,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 4
++  },
++  "medium_M64": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 4
++  },
++  "medium_M128": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 2,
++    "num_warps": 4,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 4
++  },
++  "large": {
++    "BLOCK_SIZE_M": 256,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 8,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 4
++  }, 
++   "xlarge": {
++    "BLOCK_SIZE_M": 256,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 32,
++    "num_warps": 8,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  }
++
++}
+diff --git a/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4.json b/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4.json
+new file mode 100644
+index 0000000000..6c2c0cbd09
+--- /dev/null
++++ b/aiter/ops/triton/configs/MI350X-GEMM-AFP4WFP4.json
+@@ -0,0 +1,75 @@
++{
++  "small": {
++    "BLOCK_SIZE_M": 16,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 2,
++    "waves_per_eu": 6,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 4
++  },
++  "medium_M32": {
++    "BLOCK_SIZE_M": 32,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 2,
++    "waves_per_eu": 4,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 4
++  },
++  "medium_M64": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 1
++  },
++  "medium_M128": {
++    "BLOCK_SIZE_M": 128,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 1
++  },
++  "large": {
++    "BLOCK_SIZE_M": 128,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 2,
++    "num_warps": 4,
++    "num_stages": 2,
++    "waves_per_eu": 2,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  }, 
++   "xlarge": {
++    "BLOCK_SIZE_M": 256,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 256,
++    "GROUP_SIZE_M": 32,
++    "num_warps": 8,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  }
++
++}
+diff --git a/aiter/ops/triton/gemm_a16w16.py b/aiter/ops/triton/gemm_a16w16.py
+index e2f1600778..3529c3888e 100644
+--- a/aiter/ops/triton/gemm_a16w16.py
++++ b/aiter/ops/triton/gemm_a16w16.py
+@@ -1,11 +1,15 @@
+ # SPDX-License-Identifier: MIT
+-# Copyright (c) 2024, Advanced Micro Devices, Inc. All rights reserved.
++# Copyright (C) 2024-2025, Advanced Micro Devices, Inc. All rights reserved.
+ 
+ from typing import Optional
++import functools
++import json
+ import torch
+ import triton
+ import triton.language as tl
+ from aiter.ops.triton.utils.pid_preprocessing import pid_grid, remap_xcd
++import aiter.ops.triton.utils.arch_info as arch_info
++from aiter.ops.triton.utils.core import AITER_TRITON_CONFIGS_PATH
+ 
+ 
+ @triton.heuristics(
+@@ -98,12 +102,29 @@ def _gemm_a16_w16_kernel(
+     tl.store(c_ptrs, c, mask=c_mask)
+ 
+ 
++@functools.lru_cache(maxsize=1024)
++def _get_config(
++    M: int,
++    N: int,
++    K: int,
++):
++    if not hasattr(_get_config, "_config_dict"):
++        dev = arch_info.get_device()
++        fpath = f"{AITER_TRITON_CONFIGS_PATH}/{dev}-GEMM-A16W16.json"
++        with open(fpath, "r") as file:
++            config = json.load(file)
++        _get_config._config_dict = config
++
++    return _get_config._config_dict["any"]
++
++
+ # Wrapper for gemm kernel.
+ def gemm_a16w16(
+     x,
+     w,
+     dtype: Optional[float] = torch.bfloat16,
+     y: Optional[torch.Tensor] = None,
++    config: Optional[dict] = None,
+ ):
+     """
+     Computes the 16 bit matmul Y = X x W
+@@ -124,15 +145,9 @@ def gemm_a16w16(
+     if y is None:
+         y = torch.empty((M, N), dtype=dtype, device=x.device)
+ 
+-    BLOCK_SIZE_M = 256
+-    BLOCK_SIZE_N = 256
+-    BLOCK_SIZE_K = 64
+-    GROUP_SIZE_M = 4
+-    waves_per_eu = 2
+-    kpack = 1
+-    matrix_instr_nonkdim = 16
+-    num_warps = 8
+-    num_stages = 2
++    if config is None:
++        config = _get_config(M, N, K)
++
+     grid = lambda META: (  # noqa: E731
+         triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]),
+     )
+@@ -149,15 +164,7 @@ def gemm_a16w16(
+         w.stride(1),
+         y.stride(0),
+         y.stride(1),
+-        BLOCK_SIZE_M,
+-        BLOCK_SIZE_N,
+-        BLOCK_SIZE_K,
+-        GROUP_SIZE_M,
+-        waves_per_eu=waves_per_eu,
+-        kpack=kpack,
+-        matrix_instr_nonkdim=matrix_instr_nonkdim,
+-        num_warps=num_warps,
+-        num_stages=num_stages,
++        **config,
+     )
+ 
+     return y
+diff --git a/aiter/ops/triton/gemm_a8w8.py b/aiter/ops/triton/gemm_a8w8.py
+index 4ce5fdd047..175388c988 100644
+--- a/aiter/ops/triton/gemm_a8w8.py
++++ b/aiter/ops/triton/gemm_a8w8.py
+@@ -4,15 +4,14 @@
+ # SPDX-License-Identifier: MIT
+ # Copyright (C) 2024-2025, Advanced Micro Devices, Inc. All rights reserved.
+ 
++from typing import Optional
++import functools
++import json
+ import torch
+ import triton
+ import triton.language as tl
+-from typing import Optional
+-
+-
+-# TODO Move this to a common folder. Will need to add future arch list
+-def get_arch():
+-    return triton.runtime.driver.active.get_current_target().arch
++import aiter.ops.triton.utils.arch_info as arch_info
++from aiter.ops.triton.utils.core import AITER_TRITON_CONFIGS_PATH
+ 
+ 
+ @triton.heuristics(
+@@ -178,6 +177,23 @@ def _gemm_a8w8_kernel(
+     tl.store(c_ptrs, c, mask=c_mask)
+ 
+ 
++@functools.lru_cache(maxsize=1024)
++def _get_config(
++    M: int,
++    N: int,
++    K: int,
++):
++    if not hasattr(_get_config, "_config_dict"):
++        dev = arch_info.get_device()
++        fpath = f"{AITER_TRITON_CONFIGS_PATH}/{dev}-GEMM-A8W8.json"
++        with open(fpath, "r") as file:
++            config = json.load(file)
++        _get_config._config_dict = config
++
++    # TODO: Update this logic
++    return _get_config._config_dict["any"]
++
++
+ def gemm_a8w8(
+     x: torch.Tensor,
+     w: torch.Tensor,
+@@ -186,6 +202,7 @@ def gemm_a8w8(
+     bias: Optional[torch.Tensor] = None,
+     dtype: Optional[float] = torch.bfloat16,
+     y: Optional[torch.Tensor] = None,
++    config: Optional[dict] = None,
+ ):
+     """
+     Computes the 8 bit matmul Y = X x WT, applies a conversion scale and optionally adds a bias
+@@ -217,17 +234,12 @@ def gemm_a8w8(
+     if y is None:
+         y = torch.empty((M, N), dtype=dtype, device=x.device)
+ 
+-    BLOCK_SIZE_M = 128
+-    BLOCK_SIZE_N = 128
+-    BLOCK_SIZE_K = 128
+-    GROUP_SIZE_M = 4
+-    waves_per_eu = 2
+-    kpack = 1 if get_arch() in ("gfx950") else 2
+-    matrix_instr_nonkdim = 16
+-    num_warps = 4
+-    num_stages = 2
+-
+-    grid = (triton.cdiv(M, BLOCK_SIZE_M) * triton.cdiv(N, BLOCK_SIZE_N),)
++    if config is None:
++        config = _get_config(M, N, K)
++
++    grid = (
++        triton.cdiv(M, config["BLOCK_SIZE_M"]) * triton.cdiv(N, config["BLOCK_SIZE_N"]),
++    )
+     _gemm_a8w8_kernel[grid](
+         x,
+         w,
+@@ -245,15 +257,7 @@ def gemm_a8w8(
+         y.stride(0),
+         y.stride(1),
+         bias is not None,
+-        BLOCK_SIZE_M,
+-        BLOCK_SIZE_N,
+-        BLOCK_SIZE_K,
+-        GROUP_SIZE_M,
+-        waves_per_eu=waves_per_eu,
+-        kpack=kpack,
+-        matrix_instr_nonkdim=matrix_instr_nonkdim,
+-        num_warps=num_warps,
+-        num_stages=num_stages,
++        **config,
+     )
+ 
+     return y
+diff --git a/aiter/ops/triton/gemm_afp4wfp4.py b/aiter/ops/triton/gemm_afp4wfp4.py
+index 7f3c2da36d..42b95bea45 100644
+--- a/aiter/ops/triton/gemm_afp4wfp4.py
++++ b/aiter/ops/triton/gemm_afp4wfp4.py
+@@ -1,12 +1,16 @@
+ # SPDX-License-Identifier: MIT
+-# Copyright (c) 2024, Advanced Micro Devices, Inc. All rights reserved.
++# Copyright (C) 2024-2025, Advanced Micro Devices, Inc. All rights reserved.
+ 
+ from typing import Optional
++import functools
++import json
+ import os
+ import torch
+ import triton
+ import triton.language as tl
+ from aiter.ops.triton.utils.pid_preprocessing import pid_grid, remap_xcd
++import aiter.ops.triton.utils.arch_info as arch_info
++from aiter.ops.triton.utils.core import AITER_TRITON_CONFIGS_PATH
+ 
+ 
+ @triton.heuristics(
+@@ -160,6 +164,190 @@ def _gemm_afp4_wfp4_kernel(
+         tl.store(c_ptrs, c, mask=c_mask)
+ 
+ 
++@triton.heuristics(
++    {
++        "EVEN_K": lambda args: (args["K"] % (args["BLOCK_SIZE_K"] // 2) == 0)
++        and (args["SPLITK_BLOCK_SIZE"] % args["BLOCK_SIZE_K"] == 0)
++        and (args["K"] % (args["SPLITK_BLOCK_SIZE"] // 2) == 0),
++        "GRID_MN": lambda args: triton.cdiv(args["M"], args["BLOCK_SIZE_M"])
++        * triton.cdiv(args["N"], args["BLOCK_SIZE_N"]),
++    }
++)
++@triton.jit
++def _gemm_afp4_wfp4_kernel_preshuffled_scales(
++    a_ptr,
++    b_ptr,
++    c_ptr,
++    a_scales_ptr,
++    b_scales_ptr,
++    M,
++    N,
++    K,
++    stride_am,
++    stride_ak,
++    stride_bk,
++    stride_bn,
++    stride_ck,
++    stride_cm,
++    stride_cn,
++    stride_asm,
++    stride_ask,
++    stride_bsn,
++    stride_bsk,
++    # Meta-parameters
++    BLOCK_SIZE_M: tl.constexpr,
++    BLOCK_SIZE_N: tl.constexpr,
++    BLOCK_SIZE_K: tl.constexpr,
++    GROUP_SIZE_M: tl.constexpr,
++    NUM_KSPLIT: tl.constexpr,
++    SPLITK_BLOCK_SIZE: tl.constexpr,
++    EVEN_K: tl.constexpr,
++    GRID_MN: tl.constexpr,
++    cache_modifier: tl.constexpr,
++):
++    """Kernel for computing the matmul C = A x B.
++    A and B inputs are in the microscale fp4 (mxfp4) format.
++    A_scales and B_scales are in e8m0 format.
++    A has shape (M, K), B has shape (K, N) and C has shape (M, N)
++    """
++
++    tl.assume(stride_am > 0)
++    tl.assume(stride_ak > 0)
++    tl.assume(stride_bk > 0)
++    tl.assume(stride_bn > 0)
++    tl.assume(stride_cm > 0)
++    tl.assume(stride_cn > 0)
++    tl.assume(stride_asm > 0)
++    tl.assume(stride_ask > 0)
++    tl.assume(stride_bsk > 0)
++    tl.assume(stride_bsn > 0)
++
++    # -----------------------------------------------------------
++    # Map program ids `pid` to the block of C it should compute.
++    # This is done in a grouped ordering to promote L2 data reuse.
++    pid_unified = tl.program_id(axis=0)
++    pid_k = pid_unified % NUM_KSPLIT
++    pid = pid_unified // NUM_KSPLIT
++    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
++    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
++
++    if NUM_KSPLIT == 1:
++        remap_xcd(pid, GRID_MN)
++
++        pid_m, pid_n = pid_grid(pid, num_pid_m, num_pid_n, GROUP_SIZE_M=GROUP_SIZE_M)
++    else:
++        pid_m = pid // num_pid_n
++        pid_n = pid % num_pid_n
++
++    tl.assume(pid_m > 0)
++    tl.assume(pid_n > 0)
++    # We assume 32 elements along K share the same scale.
++    SCALE_GROUP_SIZE: tl.constexpr = 32
++
++    if (pid_k * SPLITK_BLOCK_SIZE // 2) < K:
++
++        num_k_iter = tl.cdiv(SPLITK_BLOCK_SIZE // 2, BLOCK_SIZE_K // 2)
++
++        # Create pointers for first block of A and B input matrices
++        # The BLOCK sizes are of the elements and in fp4 we pack 2 per uint8 container.
++        offs_k = tl.arange(0, BLOCK_SIZE_K // 2)
++        offs_k_split = pid_k * (SPLITK_BLOCK_SIZE // 2) + offs_k
++        offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
++        offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
++        a_ptrs = a_ptr + (
++            offs_am[:, None] * stride_am + offs_k_split[None, :] * stride_ak
++        )
++        b_ptrs = b_ptr + (
++            offs_k_split[:, None] * stride_bk + offs_bn[None, :] * stride_bn
++        )
++        # Create pointers for the first block of A and B scales
++
++        offs_asn = (
++            pid_n * (BLOCK_SIZE_N // 32) + tl.arange(0, (BLOCK_SIZE_N // 32))
++        ) % N
++        offs_ks = (pid_k * (SPLITK_BLOCK_SIZE // SCALE_GROUP_SIZE) * 32) + tl.arange(
++            0, BLOCK_SIZE_K // SCALE_GROUP_SIZE * 32
++        )
++        # B scales are N x K even though B operand is K x N.
++        b_scale_ptrs = (
++            b_scales_ptr
++            + offs_asn[:, None] * stride_bsn
++            + offs_ks[None, :] * stride_bsk
++        )
++
++        if BLOCK_SIZE_M < 32:
++            offs_ks_non_shufl = (
++                pid_k * (SPLITK_BLOCK_SIZE // SCALE_GROUP_SIZE)
++            ) + tl.arange(0, BLOCK_SIZE_K // SCALE_GROUP_SIZE)
++            a_scale_ptrs = (
++                a_scales_ptr
++                + offs_am[:, None] * stride_asm
++                + offs_ks_non_shufl[None, :] * stride_ask
++            )
++        else:
++            offs_asm = (
++                pid_m * (BLOCK_SIZE_M // 32) + tl.arange(0, (BLOCK_SIZE_M // 32))
++            ) % M
++            a_scale_ptrs = (
++                a_scales_ptr
++                + offs_asm[:, None] * stride_asm
++                + offs_ks[None, :] * stride_ask
++            )
++
++        accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
++
++        for k in range(pid_k * num_k_iter, (pid_k + 1) * num_k_iter):
++            a_scales = tl.load(a_scale_ptrs)
++            b_scales = tl.load(b_scale_ptrs, cache_modifier=cache_modifier)
++            if BLOCK_SIZE_M >= 32:
++                a_scales = tl.reshape(
++                    a_scales, (BLOCK_SIZE_M, BLOCK_SIZE_K // SCALE_GROUP_SIZE)
++                )
++            b_scales = tl.reshape(
++                b_scales, (BLOCK_SIZE_N, BLOCK_SIZE_K // SCALE_GROUP_SIZE)
++            )
++
++            # a_scales = tl.full((BLOCK_SIZE_M, BLOCK_SIZE_K//SCALE_GROUP_SIZE), 127, dtype=tl.uint8)
++            # b_scales = tl.full((BLOCK_SIZE_N, BLOCK_SIZE_K//SCALE_GROUP_SIZE), 127, dtype=tl.uint8)
++            # Load the next block of A and B, generate a mask by checking the K dimension.
++            # If it is out of bounds, set it to 0.
++            if EVEN_K:
++                a = tl.load(a_ptrs)
++                b = tl.load(b_ptrs, cache_modifier=cache_modifier)
++            else:
++                a = tl.load(
++                    a_ptrs, mask=offs_k[None, :] < K - k * (BLOCK_SIZE_K // 2), other=0
++                )
++                b = tl.load(
++                    b_ptrs, mask=offs_k[:, None] < K - k * (BLOCK_SIZE_K // 2), other=0
++                )
++
++            accumulator += tl.dot_scaled(a, a_scales, "e2m1", b, b_scales, "e2m1")
++
++            # Advance the ptrs to the next K block.
++            a_ptrs += (BLOCK_SIZE_K // 2) * stride_ak
++            b_ptrs += (BLOCK_SIZE_K // 2) * stride_bk
++            if BLOCK_SIZE_M < 32:
++                a_scale_ptrs += (BLOCK_SIZE_K // SCALE_GROUP_SIZE) * stride_ask
++            else:
++                a_scale_ptrs += BLOCK_SIZE_K * stride_ask
++            b_scale_ptrs += BLOCK_SIZE_K * stride_bsk
++
++        c = accumulator.to(c_ptr.type.element_ty)
++
++        # Write back the block of the output matrix C with masks.
++        offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M).to(tl.int64)
++        offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N).to(tl.int64)
++        c_ptrs = (
++            c_ptr
++            + stride_cm * offs_cm[:, None]
++            + stride_cn * offs_cn[None, :]
++            + pid_k * stride_ck
++        )
++        c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
++        tl.store(c_ptrs, c, mask=c_mask, cache_modifier=".wt")
++
++
+ @triton.jit
+ def _gemm_afp4_wfp4_reduce_kernel(
+     c_in_ptr,
+@@ -209,8 +397,8 @@ def _gemm_afp4_wfp4_reduce_kernel(
+ 
+ def get_splitk(K: int, BLOCK_SIZE_K: int, NUM_KSPLIT: int):
+     # heuristics for make "EVEN_K == True" as much as possible
+-    NUM_KSPLIT_STEP = 4
+-    BLOCK_SIZE_K_STEP = 4
++    NUM_KSPLIT_STEP = 2
++    BLOCK_SIZE_K_STEP = 2
+     SPLITK_BLOCK_SIZE = (
+         triton.cdiv((2 * triton.cdiv(K, NUM_KSPLIT)), BLOCK_SIZE_K) * BLOCK_SIZE_K
+     )
+@@ -240,19 +428,49 @@ def get_splitk(K: int, BLOCK_SIZE_K: int, NUM_KSPLIT: int):
+             triton.cdiv((2 * triton.cdiv(K, NUM_KSPLIT)), BLOCK_SIZE_K) * BLOCK_SIZE_K
+         )
+ 
+-    # print(K, SPLITK_BLOCK_SIZE // 2, BLOCK_SIZE_K // 2, NUM_KSPLIT)
+-    # print(K % (SPLITK_BLOCK_SIZE // 2) == 0, SPLITK_BLOCK_SIZE % BLOCK_SIZE_K == 0, K % (BLOCK_SIZE_K // 2) == 0)
+     return SPLITK_BLOCK_SIZE, BLOCK_SIZE_K, NUM_KSPLIT
+ 
+ 
++@functools.lru_cache(maxsize=1024)
++def _get_config(
++    M: int,
++    N: int,
++    K: int,
++):
++    dev = arch_info.get_device()
++    fpath = f"{AITER_TRITON_CONFIGS_PATH}/{dev}-GEMM-AFP4WFP4-N={N}-K={2*K}.json"
++    if not os.path.exists(fpath):
++        fpath = f"{AITER_TRITON_CONFIGS_PATH}/{dev}-GEMM-AFP4WFP4.json"
++
++    with open(fpath, "r") as file:
++        config = json.load(file)
++    _get_config._config_dict = config
++
++    if M < 32:
++        return _get_config._config_dict["small"]
++    elif M <= 128:
++        BLK_M = triton.next_power_of_2(M)
++        if BLK_M == 32:
++            return _get_config._config_dict["medium_M32"]
++        elif BLK_M == 64:
++            return _get_config._config_dict["medium_M64"]
++        elif BLK_M == 128:
++            return _get_config._config_dict["medium_M128"]
++    elif M <= 256:
++        return _get_config._config_dict["large"]
++    else:
++        return _get_config._config_dict["xlarge"]
++
++
+ # Wrapper for gemm kernel.
+ def gemm_afp4wfp4(
+     x,
+     w,
+-    y,
+     x_scales,
+     w_scales,
+     dtype: Optional[float] = torch.bfloat16,
++    y: Optional[torch.Tensor] = None,
++    config: Optional[dict] = None,
+ ):
+     """
+     Computes the matmul Y = X x W
+@@ -274,90 +492,165 @@ def gemm_afp4wfp4(
+     M, K = x.shape
+     K, N = w.shape
+ 
+-    if M < 32:
+-        BLOCK_SIZE_M = 16
+-        BLOCK_SIZE_N = 64
+-        BLOCK_SIZE_K = 256
+-        GROUP_SIZE_M = 1
+-        waves_per_eu = 6
+-        kpack = 1
+-        num_warps = 4
+-        num_stages = 2
+-        matrix_instr_nonkdim = 16
+-        cache_modifier = ".cg"
+-
+-        NUM_KSPLIT = 4
++    if y is None:
++        y = torch.empty((M, N), dtype=dtype, device=x.device)
++
++    if config is None:
++        config = _get_config(M, N, K)
++    # print(f"AFP4WFP4_config={config}")
++    if config["NUM_KSPLIT"] > 1:
+         SPLITK_BLOCK_SIZE, BLOCK_SIZE_K, NUM_KSPLIT = get_splitk(
+-            K, BLOCK_SIZE_K, NUM_KSPLIT
++            K, config["BLOCK_SIZE_K"], config["NUM_KSPLIT"]
+         )
+ 
++        config["SPLITK_BLOCK_SIZE"] = SPLITK_BLOCK_SIZE
++        config["BLOCK_SIZE_K"] = BLOCK_SIZE_K
++        config["NUM_KSPLIT"] = NUM_KSPLIT
++
+         if os.getenv("VLLM_TRITON_FP4_GEMM_SPLITK_USE_BF16") == "1":
+-            y_pp = torch.empty((NUM_KSPLIT, M, N), dtype=y.dtype, device=y.device)
++            y_pp = torch.empty(
++                (config["NUM_KSPLIT"], M, N), dtype=y.dtype, device=y.device
++            )
+         else:
+-            y_pp = torch.empty((NUM_KSPLIT, M, N), dtype=torch.float32, device=y.device)
+-    elif M <= 128:
+-        BLOCK_SIZE_M = triton.next_power_of_2(M)
+-        BLOCK_SIZE_N = 128
+-        BLOCK_SIZE_K = 256
+-        GROUP_SIZE_M = 1
+-        waves_per_eu = 4
+-        kpack = 1
+-        num_warps = 4
+-        num_stages = 2
+-        matrix_instr_nonkdim = 16
+-        cache_modifier = ".cg"
+-
+-        NUM_KSPLIT = 4
++            y_pp = torch.empty(
++                (config["NUM_KSPLIT"], M, N), dtype=torch.float32, device=y.device
++            )
++    else:
++        config["SPLITK_BLOCK_SIZE"] = 2 * K
++        y_pp = None
++
++    grid = lambda META: (  # noqa: E731
++        (
++            META["NUM_KSPLIT"]
++            * triton.cdiv(M, META["BLOCK_SIZE_M"])
++            * triton.cdiv(N, META["BLOCK_SIZE_N"])
++        ),
++    )
++    _gemm_afp4_wfp4_kernel[grid](
++        x,
++        w,
++        y if config["NUM_KSPLIT"] == 1 else y_pp,
++        x_scales,
++        w_scales,
++        M,
++        N,
++        K,
++        x.stride(0),
++        x.stride(1),
++        w.stride(0),
++        w.stride(1),
++        0 if config["NUM_KSPLIT"] == 1 else y_pp.stride(0),
++        y.stride(0) if config["NUM_KSPLIT"] == 1 else y_pp.stride(1),
++        y.stride(1) if config["NUM_KSPLIT"] == 1 else y_pp.stride(2),
++        x_scales.stride(0),
++        x_scales.stride(1),
++        w_scales.stride(0),
++        w_scales.stride(1),
++        **config,
++    )
++
++    if config["NUM_KSPLIT"] > 1:
++        REDUCE_BLOCK_SIZE_M = 16
++        # TODO: Need to debug - REDUCE_BLOCK_SIZE_N=128 with fp32 partials fails
++        # NOTE: REDUCE_BLOCK_SIZE_N=16 gives best perf with fp32 partials and
++        # REDUCE_BLOCK_SIZE_N=128 gives best perf with bf16 partials
++        REDUCE_BLOCK_SIZE_N = (
++            128 if os.getenv("VLLM_TRITON_FP4_GEMM_SPLITK_USE_BF16") == "1" else 64
++        )
++        ACTUAL_KSPLIT = triton.cdiv(K, (config["SPLITK_BLOCK_SIZE"] // 2))
++
++        grid_reduce = (
++            triton.cdiv(M, REDUCE_BLOCK_SIZE_M),
++            triton.cdiv(N, REDUCE_BLOCK_SIZE_N),
++        )
++        _gemm_afp4_wfp4_reduce_kernel[grid_reduce](
++            y_pp,
++            y,
++            M,
++            N,
++            y_pp.stride(0),
++            y_pp.stride(1),
++            y_pp.stride(2),
++            y.stride(0),
++            y.stride(1),
++            REDUCE_BLOCK_SIZE_M,
++            REDUCE_BLOCK_SIZE_N,
++            ACTUAL_KSPLIT,
++            config["NUM_KSPLIT"],
++        )
++
++    return y
++
++
++# Wrapper for gemm kernel.
++def gemm_afp4wfp4_preshuffled_scales(
++    x,
++    w,
++    x_scales,
++    w_scales,
++    dtype: Optional[float] = torch.bfloat16,
++    y: Optional[torch.Tensor] = None,
++    config: Optional[dict] = None,
++):
++    """
++    Computes the matmul Y = X x W
++    X and W are e2m1 fp4 tensors.
++    x_scales and w_scales are e8m0 tensors.
++    Every 32 elements in the K dimension share one e8m0 scale.
++
++
++    Key parameters:
++    - X: Matrix X with shape (M, K).
++    - W: Matrix W with shape (K, N).
++    - X_scales: Matrix with shape (M // 32, K)
++    - W_scales: Matrix with shape (N // 32, K)
++
++    Returns:
++    - Y: The output matrix with shape (M, N).
++    """
++
++    M, K = x.shape
++    K, N = w.shape
++
++    if y is None:
++        y = torch.empty((M, N), dtype=dtype, device=x.device)
++
++    if config is None:
++        config = _get_config(M, N, K)
++    # print(f"AFP4WFP4_config={config}")
++    if config["NUM_KSPLIT"] > 1:
+         SPLITK_BLOCK_SIZE, BLOCK_SIZE_K, NUM_KSPLIT = get_splitk(
+-            K, BLOCK_SIZE_K, NUM_KSPLIT
++            K, config["BLOCK_SIZE_K"], config["NUM_KSPLIT"]
+         )
+ 
++        config["SPLITK_BLOCK_SIZE"] = SPLITK_BLOCK_SIZE
++        config["BLOCK_SIZE_K"] = BLOCK_SIZE_K
++        config["NUM_KSPLIT"] = NUM_KSPLIT
++
+         if os.getenv("VLLM_TRITON_FP4_GEMM_SPLITK_USE_BF16") == "1":
+-            y_pp = torch.empty((NUM_KSPLIT, M, N), dtype=y.dtype, device=y.device)
++            y_pp = torch.empty(
++                (config["NUM_KSPLIT"], M, N), dtype=y.dtype, device=y.device
++            )
+         else:
+-            y_pp = torch.empty((NUM_KSPLIT, M, N), dtype=torch.float32, device=y.device)
+-    elif M <= 256:
+-        BLOCK_SIZE_M = 128
+-        BLOCK_SIZE_N = 128
+-        BLOCK_SIZE_K = 256
+-        GROUP_SIZE_M = 2
+-        waves_per_eu = 4
+-        kpack = 1
+-        num_warps = 4
+-        num_stages = 2
+-        matrix_instr_nonkdim = 16
+-        cache_modifier = ".cg"
+-
+-        NUM_KSPLIT = 1
+-        SPLITK_BLOCK_SIZE = 2 * K
+-        y_pp = None
++            y_pp = torch.empty(
++                (config["NUM_KSPLIT"], M, N), dtype=torch.float32, device=y.device
++            )
+     else:
+-        BLOCK_SIZE_M = 256
+-        BLOCK_SIZE_N = 256
+-        BLOCK_SIZE_K = 256
+-        GROUP_SIZE_M = 32
+-        waves_per_eu = 1
+-        kpack = 1
+-        num_warps = 8
+-        num_stages = 2
+-        matrix_instr_nonkdim = 32
+-        cache_modifier = None
+-
+-        NUM_KSPLIT = 1
+-        SPLITK_BLOCK_SIZE = 2 * K
++        config["SPLITK_BLOCK_SIZE"] = 2 * K
+         y_pp = None
+ 
++    config["BLOCK_SIZE_N"] = max(config["BLOCK_SIZE_N"], 32)
+     grid = lambda META: (  # noqa: E731
+         (
+-            NUM_KSPLIT
++            META["NUM_KSPLIT"]
+             * triton.cdiv(M, META["BLOCK_SIZE_M"])
+             * triton.cdiv(N, META["BLOCK_SIZE_N"])
+         ),
+     )
+-    _gemm_afp4_wfp4_kernel[grid](
++    _gemm_afp4_wfp4_kernel_preshuffled_scales[grid](
+         x,
+         w,
+-        y if NUM_KSPLIT == 1 else y_pp,
++        y if config["NUM_KSPLIT"] == 1 else y_pp,
+         x_scales,
+         w_scales,
+         M,
+@@ -367,28 +660,17 @@ def gemm_afp4wfp4(
+         x.stride(1),
+         w.stride(0),
+         w.stride(1),
+-        0 if NUM_KSPLIT == 1 else y_pp.stride(0),
+-        y.stride(0) if NUM_KSPLIT == 1 else y_pp.stride(1),
+-        y.stride(1) if NUM_KSPLIT == 1 else y_pp.stride(2),
++        0 if config["NUM_KSPLIT"] == 1 else y_pp.stride(0),
++        y.stride(0) if config["NUM_KSPLIT"] == 1 else y_pp.stride(1),
++        y.stride(1) if config["NUM_KSPLIT"] == 1 else y_pp.stride(2),
+         x_scales.stride(0),
+         x_scales.stride(1),
+         w_scales.stride(0),
+         w_scales.stride(1),
+-        BLOCK_SIZE_M,
+-        BLOCK_SIZE_N,
+-        BLOCK_SIZE_K,
+-        GROUP_SIZE_M,
+-        NUM_KSPLIT,
+-        SPLITK_BLOCK_SIZE,
+-        cache_modifier=cache_modifier,
+-        waves_per_eu=waves_per_eu,
+-        kpack=kpack,
+-        num_warps=num_warps,
+-        num_stages=num_stages,
+-        matrix_instr_nonkdim=matrix_instr_nonkdim,
++        **config,
+     )
+ 
+-    if NUM_KSPLIT > 1:
++    if config["NUM_KSPLIT"] > 1:
+         REDUCE_BLOCK_SIZE_M = 16
+         # TODO: Need to debug - REDUCE_BLOCK_SIZE_N=128 with fp32 partials fails
+         # NOTE: REDUCE_BLOCK_SIZE_N=16 gives best perf with fp32 partials and
+@@ -396,7 +678,7 @@ def gemm_afp4wfp4(
+         REDUCE_BLOCK_SIZE_N = (
+             128 if os.getenv("VLLM_TRITON_FP4_GEMM_SPLITK_USE_BF16") == "1" else 64
+         )
+-        ACTUAL_KSPLIT = triton.cdiv(K, (SPLITK_BLOCK_SIZE // 2))
++        ACTUAL_KSPLIT = triton.cdiv(K, (config["SPLITK_BLOCK_SIZE"] // 2))
+ 
+         grid_reduce = (
+             triton.cdiv(M, REDUCE_BLOCK_SIZE_M),
+@@ -415,5 +697,7 @@ def gemm_afp4wfp4(
+             REDUCE_BLOCK_SIZE_M,
+             REDUCE_BLOCK_SIZE_N,
+             ACTUAL_KSPLIT,
+-            NUM_KSPLIT,
++            config["NUM_KSPLIT"],
+         )
++
++    return y
+diff --git a/aiter/ops/triton/utils/arch_info.py b/aiter/ops/triton/utils/arch_info.py
+new file mode 100644
+index 0000000000..be1bdd6a65
+--- /dev/null
++++ b/aiter/ops/triton/utils/arch_info.py
+@@ -0,0 +1,23 @@
++import triton
++
++# For now, there is 1-to-1 correspondence between arch and device
++ARCH_TO_DEVICE = {
++    "gfx942": "MI300X",
++    "gfx950": "MI350X",
++}
++
++
++def get_arch():
++    return triton.runtime.driver.active.get_current_target().arch
++
++
++def get_device():
++    return ARCH_TO_DEVICE[get_arch()]
++
++
++def arch_supports_fp4():
++    return get_arch() in ("gfx950")
++
++
++def arch_supports_fp8():
++    return get_arch() in ("gfx942", "gfx950")
+diff --git a/aiter/ops/triton/utils/core.py b/aiter/ops/triton/utils/core.py
+new file mode 100644
+index 0000000000..d270cc0216
+--- /dev/null
++++ b/aiter/ops/triton/utils/core.py
+@@ -0,0 +1,6 @@
++import os
++
++
++this_dir = os.path.dirname(os.path.abspath(__file__))
++AITER_TRITON_OPS_PATH = os.path.abspath(f"{this_dir}/../")
++AITER_TRITON_CONFIGS_PATH = os.path.abspath(f"{this_dir}/../configs")
+diff --git a/op_tests/op_benchmarks/triton/bench_gemm_afp4wfp4.py b/op_tests/op_benchmarks/triton/bench_gemm_afp4wfp4.py
+index 8ae99abaa4..282a652368 100644
+--- a/op_tests/op_benchmarks/triton/bench_gemm_afp4wfp4.py
++++ b/op_tests/op_benchmarks/triton/bench_gemm_afp4wfp4.py
+@@ -1,11 +1,19 @@
+ import argparse
+ import sys
++import os
+ import torch
+ import triton
+-from aiter.ops.triton.gemm_afp4wfp4 import gemm_afp4wfp4
++from aiter.ops.triton.gemm_afp4wfp4 import (
++    gemm_afp4wfp4,
++    gemm_afp4wfp4_preshuffled_scales,
++)
+ from op_tests.triton_tests.test_gemm_afp4wfp4 import generate_gemm_afp4wfp4_inputs
+ from utils.benchmark_utils import get_model_configs, get_available_models
+ 
++TRITON_HIP_PRESHUFFLE_SCALES = (
++    os.environ.get("TRITON_HIP_PRESHUFFLE_SCALES", "0") == "1"
++)
++
+ 
+ def model_benchmark_shapes(args):
+     config_file = args.model_configs
+@@ -80,7 +88,9 @@ def run_benchmark(args):
+     @triton.testing.perf_report([benchmark])
+     def bench_gemm_afp4wfp4_blockscale(M, N, K, metric, provider):
+         c_dtype = torch.bfloat16
+-        x, w, x_scale, w_scale = generate_gemm_afp4wfp4_inputs(M, N, K)
++        x, w, _, _, x_scale, w_scale, _, _ = generate_gemm_afp4wfp4_inputs(
++            M, N, K, c_dtype
++        )
+         # flops
+         flops = 2.0 * M * N * K
+         # memory transfer
+@@ -93,11 +103,20 @@ def bench_gemm_afp4wfp4_blockscale(M, N, K, metric, provider):
+         mem = mem_read + mem_write
+         out = torch.empty(x.shape[0], w.shape[1], device=x.device, dtype=c_dtype)
+ 
+-        ms = triton.testing.do_bench(
+-            lambda: gemm_afp4wfp4(x, w, out, x_scale, w_scale, c_dtype),
+-            warmup=25,
+-            rep=100,
+-        )
++        if TRITON_HIP_PRESHUFFLE_SCALES:
++            ms = triton.testing.do_bench(
++                lambda: gemm_afp4wfp4_preshuffled_scales(
++                    x, w, x_scale, w_scale, c_dtype, out
++                ),
++                warmup=25,
++                rep=100,
++            )
++        else:
++            ms = triton.testing.do_bench(
++                lambda: gemm_afp4wfp4(x, w, x_scale, w_scale, c_dtype, out),
++                warmup=25,
++                rep=100,
++            )
+ 
+         # Return exactly one scalar depending on which metric is active
+         if metric == "time":
+diff --git a/op_tests/triton_tests/__init__.py b/op_tests/triton_tests/__init__.py
+index e562facbcf..0555317bed 100644
+--- a/op_tests/triton_tests/__init__.py
++++ b/op_tests/triton_tests/__init__.py
+@@ -1,6 +1,3 @@
+ # SPDX-License-Identifier: MIT
+ # Copyright (c) 2024, Advanced Micro Devices, Inc. All rights reserved.
+-
+-# SPDX-License-Identifier: MIT
+-# Copyright (c) 2024, Advanced Micro Devices, Inc. All rights reserved.
+-from .utils import *
++from .utils import *  # noqa: F403
+diff --git a/op_tests/triton_tests/test_batched_gemm_afp4wfp4.py b/op_tests/triton_tests/test_batched_gemm_afp4wfp4.py
+new file mode 100644
+index 0000000000..7668198a88
+--- /dev/null
++++ b/op_tests/triton_tests/test_batched_gemm_afp4wfp4.py
+@@ -0,0 +1,141 @@
++import torch
++import triton
++import pytest
++from aiter.ops.triton.batched_gemm_afp4wfp4 import batched_gemm_afp4wfp4
++
++# Note this is specified by the HW and cannot be changed.
++SCALE_GROUP_SIZE = 32
++
++
++def generate_batched_gemm_afp4wfp4_inputs(B, M, N, K):
++    torch.manual_seed(5)
++    # 34 is two packed e2m1 values 0010 which is 1.0.
++    x_low = torch.randint(0, 16, (B, M, K // 2), dtype=torch.uint8)
++    x_high = torch.randint(0, 16, (B, M, K // 2), dtype=torch.uint8)
++    x = x_low | x_high << 4  # Doing this computation with GPU tensors results in NaN
++    x = x.to(device="cuda")
++    w_low = torch.randint(0, 16, (B, N, K // 2), dtype=torch.uint8, device="cuda")
++    w_high = torch.randint(0, 16, (B, N, K // 2), dtype=torch.uint8, device="cuda")
++    w = w_low | w_high << 4
++    w = w.transpose(1, 2)
++    # Scale of 1.0 in e8m0, bias 127.
++    x_scales = torch.randint(
++        124, 128, (B, K // SCALE_GROUP_SIZE, M), dtype=torch.uint8, device="cuda"
++    )
++    w_scales = torch.randint(
++        124, 128, (B, K // SCALE_GROUP_SIZE, N), dtype=torch.uint8, device="cuda"
++    )
++    x_scales = x_scales.transpose(1, 2)
++    w_scales = w_scales.transpose(1, 2)
++
++    return x, w, x_scales, w_scales
++
++
++def get_x_vals():
++
++    x_vals = [(1024 * v, 1024 * v, 1024 * v) for v in range(1, 9)]
++    x_vals += [(4864, 4096, 8192), (9728, 8192, 65536), (4864, 8192, 4160)]
++    x_vals += [
++        (1, 1280, 8192),
++        (32, 1280, 8192),
++        (64, 1280, 8192),
++        (128, 1280, 8192),
++        (192, 1280, 8192),
++        (256, 1280, 8192),
++        (320, 1280, 8192),
++        (512, 1280, 8192),
++        (1024, 1280, 8192),
++        (2048, 1280, 8192),
++        (4096, 1280, 8192),
++        (8192, 1280, 8192),
++        (16384, 1280, 8192),
++        (1, 8192, 1024),
++        (32, 8192, 1024),
++        (64, 8192, 1024),
++        (128, 8192, 1024),
++        (192, 8192, 1024),
++        (256, 8192, 1024),
++        (320, 8192, 1024),
++        (512, 8192, 1024),
++        (1024, 8192, 1024),
++        (2048, 8192, 1024),
++        (4096, 8192, 1024),
++        (8192, 8192, 1024),
++        (16384, 8192, 1024),
++    ]
++    x_vals += [(2 ** (v - 1), 4096 * v, 4096 * v) for v in range(1, 6)]
++    # x_vals = [(128, 1024, 4096)]
++    x_vals += [(16, 16384, 3328 * 2), (128, 16384, 3328 * 2)]
++    x_vals = [(256, 3584, 2112)]
++    # add batch dim
++    batch_sizes = [1, 2, 3, 5, 7, 8]
++    num_batch_sizes = len(batch_sizes)
++    x_vals_with_batch = []
++    for i, (m, n, k) in enumerate(x_vals):
++        b = batch_sizes[i % num_batch_sizes]
++        x_vals_with_batch.append((b, m, n, k))
++    return x_vals_with_batch
++
++
++def mxfp4_to_f32(x):
++    # 2 because we pack fp4 in uint8.
++    x = x.repeat_interleave(2, dim=-1)
++    x[..., ::2] = x[..., ::2] & 0xF
++    x[..., 1::2] = x[..., 1::2] >> 4
++    mxfp4_list = [
++        0.0,
++        0.5,
++        1.0,
++        1.5,
++        2.0,
++        3.0,
++        4.0,
++        6.0,
++        -0.0,
++        -0.5,
++        -1.0,
++        -1.5,
++        -2.0,
++        -3.0,
++        -4.0,
++        -6.0,
++    ]
++    mxfp4_in_f32 = torch.tensor(mxfp4_list, dtype=torch.float32, device="cuda")
++    return mxfp4_in_f32[x.long()]
++
++
++def e8m0_to_f32(x):
++    x_f32 = 2 ** ((x - 127).to(torch.float32))
++    x_f32[x_f32 == 128] = float("nan")
++    return x_f32
++
++
++def run_torch(x, w, x_scales, w_scales, dtype):
++    # First convert the x and w inputs to f32.
++    x_f32 = mxfp4_to_f32(x)
++    w_f32 = mxfp4_to_f32(w.transpose(-2, -1))
++    w_f32 = w_f32.transpose(-2, -1)
++    # Next convert the e8m0 scales to f32.
++    x_scales = x_scales.repeat_interleave(SCALE_GROUP_SIZE, dim=-1).to(torch.float32)
++    x_scales_f32 = e8m0_to_f32(x_scales)
++    x_f32 = x_f32 * x_scales_f32
++    w_scales = w_scales.repeat_interleave(SCALE_GROUP_SIZE, dim=-1).to(torch.float32)
++    w_scales_f32 = e8m0_to_f32(w_scales)
++    w_f32 = w_f32 * w_scales_f32.transpose(-2, -1)
++    return torch.bmm(x_f32, w_f32).to(dtype)
++
++
++@pytest.mark.parametrize("B, M, N, K", get_x_vals())
++@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
++def test_batched_gemm_afp4_wfp4(B: int, M: int, N: int, K: int, dtype):
++    if triton.runtime.driver.active.get_current_target().arch not in ("gfx950"):
++        pytest.skip("MXFP4 not supported on this architecture")
++
++    x, w, x_scales, w_scales = generate_batched_gemm_afp4wfp4_inputs(B, M, N, K)
++    out = torch.empty(B, x.shape[1], w.shape[2], device=x.device, dtype=dtype)
++
++    torch_out = run_torch(x, w, x_scales, w_scales, dtype).to(dtype)
++
++    batched_gemm_afp4wfp4(x, w, out, x_scales, w_scales, dtype)
++
++    torch.testing.assert_close(torch_out, out)
+diff --git a/op_tests/triton_tests/test_gemm_a16w16.py b/op_tests/triton_tests/test_gemm_a16w16.py
+index 9f1955796b..5099868263 100644
+--- a/op_tests/triton_tests/test_gemm_a16w16.py
++++ b/op_tests/triton_tests/test_gemm_a16w16.py
+@@ -5,9 +5,13 @@
+ import triton
+ import pytest
+ from aiter.ops.triton.gemm_a16w16 import gemm_a16w16
++from op_tests.triton_tests.utils.types import str_to_torch_dtype
+ 
+ 
+ def generate_gemm_a16w16_inputs(M, N, K, dtype, layout="TN", output=True):
++    if isinstance(dtype, str):
++        dtype = str_to_torch_dtype[dtype]
++
+     if layout[0] == "T":
+         x = torch.randn((M, K), dtype=dtype).cuda()
+     else:
+@@ -21,8 +25,11 @@ def generate_gemm_a16w16_inputs(M, N, K, dtype, layout="TN", output=True):
+     y = None
+     if output:
+         y = torch.empty((M, N), dtype=dtype).cuda()
++        out_dtype = (None,)
++    else:
++        out_dtype = dtype
+ 
+-    return x, weight, y
++    return x, weight, out_dtype, y
+ 
+ 
+ def get_x_vals():
+@@ -64,13 +71,13 @@ def get_x_vals():
+ @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+ @pytest.mark.parametrize("output", [True, False])
+ def test_gemm_a16_w16(M: int, N: int, K: int, dtype, output):
+-    x, w, y = generate_gemm_a16w16_inputs(M, N, K, dtype, output=output)
++    x, w, out_dtype, y = generate_gemm_a16w16_inputs(M, N, K, dtype, output=output)
+ 
+     torch_out = torch.matmul(x, w)
+ 
+     if output:
+-        triton_out = gemm_a16w16(x, w, dtype, y)
++        triton_out = gemm_a16w16(x, w, out_dtype, y)
+     else:
+-        triton_out = gemm_a16w16(x, w, dtype)
++        triton_out = gemm_a16w16(x, w, out_dtype)
+ 
+     triton.testing.assert_close(triton_out, torch_out, atol=1e-1, rtol=1e-1)
+diff --git a/op_tests/triton_tests/test_gemm_a8w8.py b/op_tests/triton_tests/test_gemm_a8w8.py
+index 3c04e3f07a..7d6e52affa 100644
+--- a/op_tests/triton_tests/test_gemm_a8w8.py
++++ b/op_tests/triton_tests/test_gemm_a8w8.py
+@@ -4,8 +4,8 @@
+ import torch
+ import triton
+ import pytest
+-from aiter.ops.triton.gemm_a8w8 import gemm_a8w8
+ import torch.nn.functional as F
++from aiter.ops.triton.gemm_a8w8 import gemm_a8w8
+ 
+ 
+ def run_torch(x, weight, x_scale, w_scale, bias=None, dtype=torch.bfloat16):
+diff --git a/op_tests/triton_tests/test_gemm_afp4wfp4.py b/op_tests/triton_tests/test_gemm_afp4wfp4.py
+index 3cfb8971c8..cf912f96ce 100644
+--- a/op_tests/triton_tests/test_gemm_afp4wfp4.py
++++ b/op_tests/triton_tests/test_gemm_afp4wfp4.py
+@@ -1,36 +1,90 @@
+ # SPDX-License-Identifier: MIT
+ # Copyright (c) 2024, Advanced Micro Devices, Inc. All rights reserved.
+-
++import pytest
++import os
+ import torch
+ import triton
+-import pytest
+-from aiter.ops.triton.gemm_afp4wfp4 import gemm_afp4wfp4
++from aiter.ops.triton.gemm_afp4wfp4 import (
++    gemm_afp4wfp4,
++    gemm_afp4wfp4_preshuffled_scales,
++)
++from op_tests.triton_tests.utils.types import str_to_torch_dtype
++
++TRITON_HIP_PRESHUFFLE_SCALES = (
++    os.environ.get("TRITON_HIP_PRESHUFFLE_SCALES", "0") == "1"
++)
++
++
++def shuffle_scales(scales: torch.Tensor):
++    scales_shuffled = scales.clone()
++    sm, sn = scales_shuffled.shape
++    scales_shuffled = scales_shuffled.view(sm // 32, 2, 16, sn // 8, 2, 4, 1)
++    scales_shuffled = scales_shuffled.permute(0, 3, 5, 2, 4, 1, 6).contiguous()
++    scales_shuffled = scales_shuffled.view(sm // 32, sn * 32)
++    return scales_shuffled
++
+ 
+ # Note this is specified by the HW and cannot be changed.
+ SCALE_GROUP_SIZE = 32
+ 
+ 
+-def generate_gemm_afp4wfp4_inputs(M, N, K):
++def generate_gemm_afp4wfp4_inputs(M, N, K, dtype, output=True):
+     torch.manual_seed(5)
++    if isinstance(dtype, str):
++        dtype = str_to_torch_dtype[dtype]
++
+     # 34 is two packed e2m1 values 0010 which is 1.0.
+-    x_low = torch.randint(0, 16, (M, K // 2), dtype=torch.uint8, device="cuda")
+-    x_high = torch.randint(0, 16, (M, K // 2), dtype=torch.uint8, device="cuda")
+-    x = x_low | x_high << 4
++    x_low = torch.randint(0, 16, (M, K // 2), dtype=torch.uint8)
++    x_high = torch.randint(0, 16, (M, K // 2), dtype=torch.uint8)
++    x = (
++        x_high << 4 | x_low
++    )  # Doing this computation on GPU tensors results in NaNs, so move it to GPU afterwards
++    x = x.to(device="cuda")
++
+     w_low = torch.randint(0, 16, (N, K // 2), dtype=torch.uint8, device="cuda")
+     w_high = torch.randint(0, 16, (N, K // 2), dtype=torch.uint8, device="cuda")
+     w = w_low | w_high << 4
+     w = w.T
+     # Scale of 1.0 in e8m0, bias 127.
++    if M >= 32 and TRITON_HIP_PRESHUFFLE_SCALES:
++        M_pad = (M + 255) // 256 * 256
++    else:
++        M_pad = M
+     x_scales = torch.randint(
+-        124, 128, (K // SCALE_GROUP_SIZE, M), dtype=torch.uint8, device="cuda"
++        124, 128, (K // SCALE_GROUP_SIZE, M_pad), dtype=torch.uint8, device="cuda"
+     )
+     w_scales = torch.randint(
+         124, 128, (K // SCALE_GROUP_SIZE, N), dtype=torch.uint8, device="cuda"
+     )
+     x_scales = x_scales.T
+     w_scales = w_scales.T
+-
+-    return x, w, x_scales, w_scales
++    if TRITON_HIP_PRESHUFFLE_SCALES:
++        if M >= 32:
++            x_scales_shuffled = shuffle_scales(x_scales)
++        else:
++            x_scales_shuffled = x_scales
++        w_scales_shuffled = shuffle_scales(w_scales)
++    else:
++        x_scales_shuffled = x_scales
++        w_scales_shuffled = w_scales
++
++    y = None
++    if output:
++        y = torch.empty((M, N), dtype=dtype).cuda()
++        out_dtype = (None,)
++    else:
++        out_dtype = dtype
++
++    return (
++        x,
++        w,
++        x_scales[:M],
++        w_scales,
++        x_scales_shuffled,
++        w_scales_shuffled,
++        out_dtype,
++        y,
++    )
+ 
+ 
+ def get_x_vals():
+@@ -68,6 +122,7 @@ def get_x_vals():
+     x_vals += [(2 ** (v - 1), 4096 * v, 4096 * v) for v in range(1, 6)]
+     # x_vals = [(128, 1024, 4096)]
+     x_vals += [(16, 16384, 3328 * 2), (128, 16384, 3328 * 2)]
++    x_vals += [(256, 3584, 2112)]
+     return x_vals
+ 
+ 
+@@ -121,15 +176,40 @@ def run_torch(x, w, x_scales, w_scales, dtype):
+ 
+ @pytest.mark.parametrize("M, N, K", get_x_vals())
+ @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+-def test_gemm_afp4_wfp4(M: int, N: int, K: int, dtype):
++@pytest.mark.parametrize("output", [True, False])
++def test_gemm_afp4_wfp4(M: int, N: int, K: int, dtype, output):
+     if triton.runtime.driver.active.get_current_target().arch not in ("gfx950"):
+         pytest.skip("MXFP4 not supported on this architecture")
+ 
+-    x, w, x_scales, w_scales = generate_gemm_afp4wfp4_inputs(M, N, K)
+-    out = torch.empty(x.shape[0], w.shape[1], device=x.device, dtype=dtype)
++    if TRITON_HIP_PRESHUFFLE_SCALES:
++        if N % 32 > 0:
++            pytest.skip(
++                f"N = {N} is not divisible by 32, skip this test for preshuffled scales tests"
++            )
++        elif K % 256 > 0:
++            pytest.skip(
++                f"K = {K} is not divisible by 256, skip this test for preshuffled scales tests"
++            )
++
++    x, w, x_scales, w_scales, x_scales_triton, w_scales_triton, out_dtype, y = (
++        generate_gemm_afp4wfp4_inputs(M, N, K, dtype, output)
++    )
+ 
+     torch_out = run_torch(x, w, x_scales, w_scales, dtype).to(dtype)
+ 
+-    gemm_afp4wfp4(x, w, out, x_scales, w_scales, dtype)
+-
+-    torch.testing.assert_close(torch_out, out)
++    if TRITON_HIP_PRESHUFFLE_SCALES:
++        if output:
++            triton_out = gemm_afp4wfp4_preshuffled_scales(
++                x, w, x_scales_triton, w_scales_triton, dtype, y
++            )
++        else:
++            triton_out = gemm_afp4wfp4_preshuffled_scales(
++                x, w, x_scales_triton, w_scales_triton, dtype
++            )
++    else:
++        if output:
++            triton_out = gemm_afp4wfp4(x, w, x_scales_triton, w_scales_triton, dtype, y)
++        else:
++            triton_out = gemm_afp4wfp4(x, w, x_scales_triton, w_scales_triton, dtype)
++
++    torch.testing.assert_close(torch_out, triton_out)
+diff --git a/op_tests/triton_tests/utils/__init__.py b/op_tests/triton_tests/utils/__init__.py
+index 894fbea142..268cd8a839 100644
+--- a/op_tests/triton_tests/utils/__init__.py
++++ b/op_tests/triton_tests/utils/__init__.py
+@@ -6,3 +6,4 @@
+ from .mla_decode_ref import *
+ from .mla_extend_ref import *
+ from .rotary_embedding import *
++from .types import *  # noqa: F403
+diff --git a/op_tests/triton_tests/utils/types.py b/op_tests/triton_tests/utils/types.py
+new file mode 100644
+index 0000000000..cc6b4dee08
+--- /dev/null
++++ b/op_tests/triton_tests/utils/types.py
+@@ -0,0 +1,6 @@
++import torch
++
++str_to_torch_dtype = {
++    "bfloat16": torch.bfloat16,
++    "float16": torch.float16,
++}

@@ -1,0 +1,1444 @@
+diff --git a/Tensile/ClientWriter.py b/Tensile/ClientWriter.py
+index 2f60bf469..e27ef54d8 100644
+--- a/Tensile/ClientWriter.py
++++ b/Tensile/ClientWriter.py
+@@ -295,9 +295,9 @@ def writeClientParameters(forBenchmark, solutions, problemSizes, stepName, \
+   h += "\n"
+ 
+   h += "// Debug Params\n";
+-  h += "const bool printTensorA=%s;\n" % toCppBool(globalParameters["PrintTensorA"])
+-  h += "const bool printTensorB=%s;\n" % toCppBool(globalParameters["PrintTensorB"])
+-  h += "const bool printTensorC=%s;\n" % toCppBool(globalParameters["PrintTensorC"])
++  h += "const unsigned printTensorA=%x;\n" % int(globalParameters["PrintTensorA"])
++  h += "const unsigned printTensorB=%x;\n" % int(globalParameters["PrintTensorB"])
++  h += "const unsigned printTensorC=%x;\n" % int(globalParameters["PrintTensorC"])
+ 
+   h += "const bool printWinnersOnly=%s;\n" % toCppBool(globalParameters["PrintWinnersOnly"])
+   h += "\n";
+diff --git a/Tensile/Common.py b/Tensile/Common.py
+index a529b8587..c3eddef1b 100644
+--- a/Tensile/Common.py
++++ b/Tensile/Common.py
+@@ -91,9 +91,9 @@
+ globalParameters["LibraryPrintDebug"] = False     # solutions will print enqueue info when enqueueing a kernel
+ 
+ # Tensor printing controls:
+-globalParameters["PrintTensorA"] = False          # Print TensorA after initialization
+-globalParameters["PrintTensorB"] = False          # Print TensorB after initialization
+-globalParameters["PrintTensorC"] = False          # Print TensorC after computation
++globalParameters["PrintTensorA"] = 0          # Print TensorA after initialization
++globalParameters["PrintTensorB"] = 0          # Print TensorB after initialization
++globalParameters["PrintTensorC"] = 0          # Print TensorC.  0x1=after init; 0x2=after copy-back; 0x3=both
+ globalParameters["PrintWinnersOnly"] = False      # Only print the solutions which become the fastest
+ 
+ # PrintMaxCols applies to dimensions where multiple cols are printed per line.
+@@ -428,7 +428,7 @@
+     {"MacroTileShapeMax":         [ 64 ] },
+     {"PersistentKernel":          [ 0 ] },
+     {"FractionalLoad":            [ 0 ] },
+-    {"VectorAtomicWidth":         [ -1 ] },
++    {"VectorAtomicWidth":         [ 1 ] },
+ 
+     {"NumLoadsCoalescedA":        [ 1 ] },
+     {"NumLoadsCoalescedB":        [ 1 ] },
+diff --git a/Tensile/KernelWriterAssembly.py b/Tensile/KernelWriterAssembly.py
+index 919bc2525..124dd5abf 100644
+--- a/Tensile/KernelWriterAssembly.py
++++ b/Tensile/KernelWriterAssembly.py
+@@ -299,6 +299,7 @@ def __init__( self, kernelMinNaming, kernelSerialNaming ):
+     self.do["Sync"]        = True
+     self.do["MAC"]         = True
+     self.do["PostLoop"]    = True
++    self.do["ApplyAlpha"]  = True
+     self.do["GlobalWrite"] = True
+ 
+     self.do["EdgeWrite"]   = True
+@@ -4322,6 +4323,32 @@ def complexDeclareTmpRegisters(self, kernel):
+       kStr += "  double type_mac_tmp" + self.endLine
+     return kStr
+ 
++  ##############################################################################
++  # isLds = true if querying about LDS operations (which can use dword operations)
++  #     isLds=False if we want element step for the VALU add operations
++  ##############################################################################
++  def getLocalSplitUElementStep(self, kernel, isLds):
++
++    if isLds and \
++       kernel["VectorWidth"]*self.bpeCinternal >= 8 and \
++       kernel["GlobalWriteVectorWidth"]*self.bpeCinternal >= 8:
++      useDwordX2 = 1
++    else:
++      useDwordX2 = 0
++
++    #useDwordX2 = 0
++
++    if kernel["ProblemType"]["DataType"].isHalf() and not kernel["ProblemType"]["HighPrecisionAccumulate"]:
++      assert(kernel["VectorWidth"]%2 == 0)
++      elementStep = 2*(useDwordX2+1)
++    elif kernel["ProblemType"]["DataType"].isSingle():
++      elementStep = 1*(useDwordX2+1)
++    elif kernel["ProblemType"]["DataType"].isDouble():
++      if isLds:
++        assert (useDwordX2==1)
++      elementStep = 1
++
++    return (elementStep, useDwordX2)
+ 
+   ##############################################################################
+   # LocalSplitU: Local Write
+@@ -4377,10 +4404,44 @@ def localSplitULocalWrite(self, kernel):
+     #kStr += dump(vgpr(addr))
+ 
+     # do writes
++    # LDS Layout example (for Sgemm, LSU=4, TT=8x8, WG=[8,4,4]), 128 WI/WG
++    # VectorWidth = GlobalWriteVectorWidth = 4
++    # SubGroup0 (WI:00-32)  : LDS 0x0000-
++    # SubGroup1 (WI:33-64)  : LDS 0x2000-
++    # SubGroup2 (WI:65-95)  : LDS 0x4000-
++    # SubGroup3 (WI:96-127) : LDS 0x6000-
++
++    # Interleave within a subgroup is interesting...
++    #       Start LDS Addr
++    # WI00 - 0x000
++    # WI01 - 0x010
++    # ...
++    # WI07 - 0x070
++    # WI08 - 0x400
++    # WI09 - 0x410
++    # ...
++    # WI0F - 0x470
++    # WI10 - 0x800
++    # ...
++    # ...
++    # WI1f - 0xc70
++    # WI20 - 0x1000  (start SubGroup1)
++
++    # so a zoom-in on the pattern at beginning of LDS, for the case above:
++    #   WI (hex) |x00-|x01-|...   |x07-|0x0-|0x1-|...|0x7-|0x0-| ... ... ||0x8-|
++    # ValuC      |0123|0123|...   |0123|4567|4567|...|4567|89AB| ... ... ||0123
++    #            |                     |                  |               |
++    # LDS Addr  0x0                  0x80               0x100           0x400
++
++    # Perhaps could optimize this into something simpler with fewer bank conflicts
++    (elementStep, useDwordX2) = self.getLocalSplitUElementStep(kernel, True)
+     for j in range(0, kernel["ThreadTile1"]/kernel["VectorWidth"]):
+       for i in range(0, kernel["ThreadTile0"]/kernel["VectorWidth"]):
+         for s in range(0, kernel["VectorWidth"]):
+-          for vc in range(0, kernel["VectorWidth"]):
++          for vc in range(0, kernel["VectorWidth"], elementStep):
++            # for half, write 2 elements (4 bytes)
++            # for single, write 1 element (4 bytes)
++            # double doesn't work yet
+             writeOffset = vc \
+                 + i*kernel["SubGroup0"]*kernel["VectorWidth"] \
+                 + s*kernel["MacroTile0"] \
+@@ -4389,13 +4450,23 @@ def localSplitULocalWrite(self, kernel):
+                 + i*kernel["VectorWidth"] \
+                 + s*kernel["ThreadTile0"] \
+                 + j*kernel["ThreadTile0"]*kernel["VectorWidth"]
+-            kStr += "ds_write_b32 %s, %s offset:%u%s" \
+-                % (vgpr(addr), vgpr(regIdx), writeOffset*self.bpeCinternal, self.endLine)
++            writeOffset /= elementStep
++            if useDwordX2:
++              regIdx = regIdx * self.bpeCinternal / 4
++              kStr += inst("ds_write_b64", vgpr(addr), vgpr("ValuC+%u"%regIdx,2), \
++                           "offset:%u"%(elementStep*writeOffset*self.bpeCinternal), 
++                           "j=%u i=%u s=%u vc=%u"%(j,i,s,vc))
++            else:
++              regIdx /= elementStep
++              kStr += inst("ds_write_b32", vgpr(addr), vgpr("ValuC+%u"%regIdx), \
++                           "offset:%u"%(elementStep*writeOffset*self.bpeCinternal), 
++                           "j=%u i=%u s=%u vc=%u"%(j,i,s,vc))
+             # ds_write value
+             #kStr += dump(vgpr(regIdx))
+     kStr += inst("s_waitcnt", "lgkmcnt(0)", "wait for all writes")
+     kStr += self.syncThreads(kernel, "post-lsu local write")
+     #kStr += self.dumpLds(kernel, 0, 16)
++    #kStr += self.bomb(5)
+     return kStr
+ 
+   ##############################################################################
+@@ -4407,13 +4478,21 @@ def localSplitULocalRead(self, kernel):
+     baseAddr = self.vgprPool.checkOut(1)
+ #jgolds which bpe should we use?
+     kStr += staticMultiply(vgpr(baseAddr), vgpr("Serial"), kernel["GlobalWriteVectorWidth"]*self.bpeAB, sgpr(tmpSgpr))
++    (elementStep, useDwordX2) = self.getLocalSplitUElementStep(kernel, True)
++    # Load values for each subgroup
+     for r in range(0, kernel["LocalSplitU"]):
+       for i in range(0, kernel["NumGlobalWriteVectorsPerThread"]):
+-        for s in range(0, kernel["GlobalWriteVectorWidth"]):
++        for s in range(0, kernel["GlobalWriteVectorWidth"], elementStep):
+           offset = s + i*kernel["NumThreads"]*kernel["GlobalWriteVectorWidth"] + r * kernel["MacroTile0"]*kernel["MacroTile1"]
+           regIdx = s + i*kernel["GlobalWriteVectorWidth"] + r*kernel["GlobalWriteVectorWidth"]*kernel["NumGlobalWriteVectorsPerThread"]
+-          kStr += "ds_read_b32 %s, %s offset:%u%s" % (vgpr("ValuC+%u"%regIdx), \
+-              vgpr(baseAddr), offset*self.bpeAB, self.endLine)
++          if useDwordX2:
++            regIdx = regIdx * self.bpeCinternal / 4
++            kStr += inst("ds_read_b64", vgpr("ValuC+%u"%regIdx,2), \
++                vgpr(baseAddr), "offset:%u"%(offset*self.bpeCinternal), "r=%u i=%u s=%u"%(r,i,s))
++          else:
++            regIdx /= elementStep
++            kStr += inst("ds_read_b32", vgpr("ValuC+%u"%regIdx), \
++                vgpr(baseAddr), "offset:%u"%(offset*self.bpeCinternal), "r=%u i=%u s=%u"%(r,i,s))
+     kStr += inst("s_waitcnt", "lgkmcnt(0)", "wait for all reads")
+     self.vgprPool.checkIn(baseAddr)
+     return kStr
+@@ -4423,14 +4502,31 @@ def localSplitULocalRead(self, kernel):
+   ##############################################################################
+   def localSplitUReduction(self, kernel):
+     kStr = ""
++    (elementStep, useDwordX2) = self.getLocalSplitUElementStep(kernel, False)
+     for r in range(1, kernel["LocalSplitU"]):
+       for i in range(0, kernel["NumGlobalWriteVectorsPerThread"]):
+-        for s in range(0, kernel["GlobalWriteVectorWidth"]):
++        for s in range(0, kernel["GlobalWriteVectorWidth"],elementStep):
+           cIdx = s + i*kernel["GlobalWriteVectorWidth"]
+           regIdx = s + i*kernel["GlobalWriteVectorWidth"] \
+               + r*kernel["GlobalWriteVectorWidth"]*kernel["NumGlobalWriteVectorsPerThread"]
+-          kStr += inst("v_add_f32", vgpr("ValuC+%u"%cIdx), \
+-              vgpr("ValuC+%u" % regIdx), vgpr("ValuC+%u"%cIdx), "c[%u] += c[%u]"%(cIdx, regIdx) )
++
++          if kernel["ProblemType"]["DataType"].isHalf() and not kernel["ProblemType"]["HighPrecisionAccumulate"]:
++            cIdx /= elementStep
++            regIdx /= elementStep
++            kStr += inst("v_pk_add_f16", vgpr("ValuC+%u"%cIdx), \
++                vgpr("ValuC+%u" % regIdx), vgpr("ValuC+%u"%cIdx), "c[%u] += c[%u]"%(cIdx, regIdx) )
++          elif kernel["ProblemType"]["DataType"].isSingle():
++            cIdx /= elementStep
++            regIdx /= elementStep
++            kStr += inst("v_add_f32", vgpr("ValuC+%u"%cIdx), \
++                vgpr("ValuC+%u" % regIdx), vgpr("ValuC+%u"%cIdx), "c[%u] += c[%u]"%(cIdx, regIdx) )
++          elif kernel["ProblemType"]["DataType"].isDouble():
++            cIdx *= 2
++            regIdx *= 2 # for doubles, each element takes two regs
++            kStr += inst("v_add_f64", vgpr("ValuC+%u"%cIdx,2), \
++                vgpr("ValuC+%u" % regIdx,2), vgpr("ValuC+%u"%cIdx,2), "c[%u] += c[%u]"%(cIdx, regIdx) )
++          else:
++            assert(0) # unsupported data type, need to modify here and LSU write/read code
+     return kStr
+ 
+   ##############################################################################
+@@ -4603,6 +4699,7 @@ def cleanupGlobalWrite(self, kernel):
+     if self.betaVgpr != None:
+       self.vgprPool.checkIn(self.betaVgpr)
+ 
++  ##############################################################################
+   # Return max global write vector width, in elements
+   def maxGwvw(self, kernel):
+     atomic = kernel["GlobalSplitU"] > 1
+@@ -4684,7 +4781,7 @@ def localSplitUGlobalWrite(self, kernel):
+     # then use a conservative 1
+     edgeVw = kernel["GlobalWriteVectorWidth"] if kernel["VectorStore"] else 1
+     edgeVw = min(edgeVw, self.maxGwvw(kernel), kernel["AssertFree0ElementMultiple"])
+-    assert(kernel["VectorWidth"]%edgeVw == 0)
++    assert(kernel["GlobalWriteVectorWidth"]%edgeVw == 0)
+     for tt1 in range(0, kernel["NumGlobalWriteVectorsPerThread"]):
+       for tt0 in range(0, 1):
+         for vc1 in range(0, 1):
+@@ -4873,17 +4970,16 @@ def globalWriteElements(self, kernel, lsu, vectorWidths, elements):
+         # 3 for GLOBAL_OFFSET_C calculation (can overlap below, therefore max)
+         # if beta gwvw*rpe for new value
+         # if atomic 2*rpe for old and cmp values
++
++        # Use bpeCexternal for all external values
++
+         numVgprsPerAddr = self.rpgo if kernel["BufferStore"] else self.rpga
+ #jgolds which bpe should we use?
+         numVgprsPerDataPerVI = 0
+         if atomic:
+-          numVgprsPerDataPerVI = (3*self.bpeCinternal)/self.bpr
++          numVgprsPerDataPerVI = (3*self.bpeCexternal)/self.bpr
+         elif beta:
+-#jgolds aren't these the same?
+-          if self.bpeCinternal >= self.bpr:
+-            numVgprsPerDataPerVI = (1*self.bpeCinternal)/self.bpr
+-          else:
+-            numVgprsPerDataPerVI = (1.0*self.bpeCinternal)/self.bpr
++          numVgprsPerDataPerVI = (1.0*self.bpeCexternal)/self.bpr
+         numVgprsPerElement = numVgprsPerAddr + int(ceil(numVgprsPerDataPerVI * gwvw))
+ 
+         #print self.vgprPool.state()
+@@ -4987,6 +5083,7 @@ def globalWriteElements(self, kernel, lsu, vectorWidths, elements):
+   # chooseGlobalLoad :
+   # create the store instruction for requested vector width and other parms
+   #
++  # bps = bytes per memory op
+   # rpv = regs per vector
+   ##############################################################################
+   def chooseGlobalLoad(self, useBuffer, bps, destVgpr, rpv, \
+@@ -5074,6 +5171,7 @@ def chooseGlobalStore(self, useBuffer, bps, srcVgpr, rpv, \
+ 
+   ##############################################################################
+   # Global Write Batch
++  # numVgprsPerDataPerVI : Uses bpeCinternal
+   ##############################################################################
+   def globalWriteBatch(self, kernel, beta, edge, lsu, atomic, gwvw, \
+       batchElements, coord0, coord1, addrC,  \
+@@ -5105,6 +5203,9 @@ def globalWriteBatch(self, kernel, beta, edge, lsu, atomic, gwvw, \
+       # gpr assignments for element
+       addr = batchElementVgprs + addrVgprOffset + elementIdx*numVgprsPerAddr # elementVgprs+0
+       elementAddr.append(addr)
++      # if numVgprsPerDataPerVI == 0.5, then two consecutive elements
++      # should have same data pointer, next should move.
++
+       data = batchElementVgprs + dataVgprOffset + int(elementIdx*numVgprsPerDataPerVI*gwvw) # elementVgprs+self.rpga
+       elementData.append(data)
+       mask = batchElementSgprs + elementIdx * numSgprsPerElement # elementSgprs+0
+@@ -5279,7 +5380,7 @@ def globalWriteBatch(self, kernel, beta, edge, lsu, atomic, gwvw, \
+         for vi in range(0, gwvw):
+           # TODO: use chooseGlobalLoad, could use vector loads here too perhaps:
+           dataV = elementData[elementIdx] + int(vi*numVgprsPerDataPerVI)
+-          if kernel["BufferStore"]: # yes, check store here since this is write loop.  All the addr calc is done with 
++          if kernel["BufferStore"]: # yes, check store here since this is write loop.  All the addr calc is done in format that requires buffer for loads too
+             kStr += inst("buffer_load_dword", vgpr(dataV+1), vgpr(addr), \
+                       sgpr("SrdC", 4), 0, "offen", "offset:%u"%(vi*bps), "load C (atomic) vi=%u"%vi)
+           else:
+@@ -5296,13 +5397,10 @@ def globalWriteBatch(self, kernel, beta, edge, lsu, atomic, gwvw, \
+           addr1 = ""
+         extraFields = ""
+         useBuffer = kernel["BufferStore"]
++        kStr += self.comment("beta loads")
+         if kernel["ProblemType"]["DataType"].isHalf():
+-          if not kernel["ProblemType"]["HighPrecisionAccumulate"]:
+-            kStr += self.chooseGlobalLoad(useBuffer, bps, data, rpv, \
+-                      addr0, addr1, 0, extraFields, hi16=sumIdx%2)
+-          else:
+-            kStr += self.chooseGlobalLoad(useBuffer, bps, data, rpv, \
+-                      addr0, addr1, 0, extraFields, hi16=0)
++          kStr += self.chooseGlobalLoad(useBuffer, bps, data, rpv, \
++                    addr0, addr1, 0, extraFields, hi16=sumIdx%2)
+         elif kernel["ProblemType"]["DataType"].isSingle() or \
+              kernel["ProblemType"]["DataType"].isDouble():
+           kStr += self.chooseGlobalLoad(useBuffer, bps, data, rpv, \
+@@ -5315,26 +5413,22 @@ def globalWriteBatch(self, kernel, beta, edge, lsu, atomic, gwvw, \
+ 
+     ########################################
+     # rC *= alpha
+-    kStr += self.comment("rC *= alpha batchEements=%s"%batchElements)
+-    for elementIdx in range(0, len(batchElements)):
+-      for vi in range(0, gwvw):
+-        sumIdxV = elementSumIdx[elementIdx] + vi
+-        if kernel["ProblemType"]["DataType"].isHalf():
+-          if not kernel["ProblemType"]["HighPrecisionAccumulate"]:
+-            if sumIdxV%2:
+-              kStr += inst("v_pk_mul_f16", vgpr(sumIdxV/2), vgpr(self.alphaVgpr), vgpr(sumIdxV/2), "*= alpha sumIdx=%u vi=%u"%(elementSumIdx[elementIdx], vi))
+-          else: # HPA
+-            kStr += inst("v_mul_f32", vgpr(sumIdxV), vgpr(self.alphaVgpr), vgpr(sumIdxV), "*= alpha")
+-            kStr += inst("v_cvt_f16_f32", vgpr(sumIdxV), vgpr(sumIdxV), "convert C to fp16" )
+-            if vi%2 == 1:
+-              assert (gwvw % 2 == 0)
+-              d = elementSumIdx[elementIdx] + vi/2
+-              kStr += inst("v_pack_b32_f16", vgpr(d), vgpr(sumIdxV-1), vgpr(sumIdxV), "Pack with neighbor" )
++    if self.do["ApplyAlpha"]:
++      kStr += self.comment("rC *= alpha batchEements=%s"%batchElements)
++      for elementIdx in range(0, len(batchElements)):
++        for vi in range(0, gwvw):
++          sumIdxV = elementSumIdx[elementIdx] + vi
++          if kernel["ProblemType"]["DataType"].isHalf():
++            if not kernel["ProblemType"]["HighPrecisionAccumulate"]:
++              if sumIdxV%2:
++                kStr += inst("v_pk_mul_f16", vgpr(sumIdxV/2), vgpr(self.alphaVgpr), vgpr(sumIdxV/2), "*= alpha sumIdx=%u vi=%u"%(elementSumIdx[elementIdx], vi))
++            else: # HPA
++              kStr += inst("v_mul_f32", vgpr(sumIdxV), vgpr(self.alphaVgpr), vgpr(sumIdxV), "*= alpha")
+ 
+-        elif kernel["ProblemType"]["DataType"].isSingle():
+-          kStr += inst("v_mul_f32", vgpr(sumIdxV), sgpr("Alpha"), vgpr(sumIdxV), "*= alpha" )
+-        elif kernel["ProblemType"]["DataType"].isDouble():
+-          kStr += inst("v_mul_f64", vgpr(sumIdxV*2,2), sgpr("Alpha",2), vgpr(sumIdxV*2,2), "*= alpha")
++          elif kernel["ProblemType"]["DataType"].isSingle():
++            kStr += inst("v_mul_f32", vgpr(sumIdxV), sgpr("Alpha"), vgpr(sumIdxV), "*= alpha" )
++          elif kernel["ProblemType"]["DataType"].isDouble():
++            kStr += inst("v_mul_f64", vgpr(sumIdxV*2,2), sgpr("Alpha",2), vgpr(sumIdxV*2,2), "*= alpha")
+ 
+     ########################################
+     # Atomic
+@@ -5373,6 +5467,7 @@ def globalWriteBatch(self, kernel, beta, edge, lsu, atomic, gwvw, \
+ 
+       ########################################
+       # wait for batched load
++      # TODO - we are always atomic here?
+       if beta or atomic:
+         kStr += inst("s_waitcnt", "vmcnt(0)", "wait C" )
+ 
+@@ -5573,6 +5668,10 @@ def globalWriteBatch(self, kernel, beta, edge, lsu, atomic, gwvw, \
+           kStr += inst("s_mov_b64", "exec", sgpr(mask,2), "sgprs -> exec" )
+ 
+         if beta:
++          # if GWVW=1 the half path still assumes we have
++          # at least two stores so does some combining across VI -
++          # for example assuming we can have two elements and can use pk_mul
++          # here:
+           for vi in range(0, gwvw):
+             dataV = elementData[elementIdx] + int(vi*numVgprsPerDataPerVI)
+             sumIdxV = elementSumIdx[elementIdx] + vi
+@@ -5587,27 +5686,43 @@ def globalWriteBatch(self, kernel, beta, edge, lsu, atomic, gwvw, \
+                       "sum*alpha + C*beta")
+                 else:
+                   pass # add will have been done previously
+-              else:
++              else: # HPA
+                 # dataV+0 = new c = old c*beta + rC
+-                kStr += "v_mad_mix_f32 %s, %s, %s, %s op_sel:[0,0,0] op_sel_hi:[0,1,0]%s" % \
+-                  (vgpr(sumIdxV), vgpr(self.betaVgpr), vgpr(dataV+0), vgpr(sumIdxV), self.endLine)
+-
++                # src0 = beta = f32 = opsel 00
++                # src1 = dataV = f16.lo = opsel 10 or 11 depending on even/odd
++                # src2 = sumIdxV = f32 = opsel 00
++                dataCExternal = elementData[elementIdx] + vi/2
++                hi16 = sumIdxV%2
++                kStr += inst("v_mad_mix_f32", vgpr(sumIdxV), vgpr(self.betaVgpr), \
++                    vgpr(dataCExternal), vgpr(sumIdxV), \
++                    "op_sel:[0,%u,0] op_sel_hi:[0,1,0]" % (hi16), \
++                    "//C*=beta")
+             elif kernel["ProblemType"]["DataType"].isSingle():
+-              # dataV+0 = new c = old c*beta
+-              kStr += inst("v_mul_f32", vgpr(dataV+0), sgpr("Beta"), vgpr(dataV+0), \
+-                  "%s = C*beta"%vgpr(dataV+0) )
+-              # dataV+0 = new c = old c*beta + rC
+-              kStr += inst("v_add_f32", vgpr(sumIdxV), vgpr(dataV+0), vgpr(sumIdxV), \
+-                  "sum*alpha + C*beta")
++              kStr += inst("v_mac_f32", vgpr(sumIdxV), vgpr(dataV+0), sgpr("Beta"), \
++                  "finalSum = sum*alpha + C*beta")
++
+             elif kernel["ProblemType"]["DataType"].isDouble():
+               # dataV+0 = new c = old c*beta
+-              kStr += inst("v_mul_f64", vgpr(dataV+0,2), sgpr("Beta",2), vgpr(dataV+0,2), \
+-                  "%s = C*beta"%vgpr(dataV+0,2) )
+-              # dataV+0 = new c = old c*beta + rC
+-              kStr += inst("v_add_f64", vgpr(sumIdxV*2,2), vgpr(dataV+0,2), vgpr(sumIdxV*2,2), \
+-                  "sum*alpha + C*beta")
++              kStr += inst("v_fma_f64", vgpr(sumIdxV*2,2), vgpr(dataV+0,2), sgpr("Beta",2), vgpr(sumIdxV*2,2), \
++                  "finalSum = sum*alpha + C*beta")
++
++
++       # pack stores:
++        for vi in range(0, gwvw):
++          dataV = elementData[elementIdx] + int(vi*numVgprsPerDataPerVI)
++          sumIdxV = elementSumIdx[elementIdx] + vi
++          if kernel["ProblemType"]["DataType"].isHalf():
++            if kernel["ProblemType"]["HighPrecisionAccumulate"]:
++              kStr += inst("v_cvt_f16_f32", vgpr(sumIdxV), vgpr(sumIdxV), "convert C to fp16" )
++              if vi%2 == 1:
++                assert (gwvw % 2 == 0)
++                d = elementSumIdx[elementIdx] + vi/2
++                kStr += inst("v_pack_b32_f16", vgpr(d), vgpr(sumIdxV-1), vgpr(sumIdxV), "Pack with neighbor" )
+ 
+         if self.do["GlobalWrite"]:
++          # perform vector stores here, so no VI indexing.
++          # if GWVW > Vw, might need to support loops to 
++          # implement wider stores
+           ntStr = ""
+           if kernel["NonTemporalC"]%2==1:
+             ntStr += " glc"
+@@ -5639,6 +5754,8 @@ def globalWriteBatch(self, kernel, beta, edge, lsu, atomic, gwvw, \
+             kStr += self.chooseGlobalStore(useBuffer, bps, sumIdx*2, rpv, \
+                       addr0, addr1, 0, ntStr)
+ 
++          #kStr += self.bomb(5)
++
+       if edge: # subsequent batch must start with full exec mask
+         kStr += inst("s_mov_b64", "exec", sgpr(fullExecMaskSgpr,2), "full mask -> exec" )
+ 
+diff --git a/Tensile/Source/Client.h b/Tensile/Source/Client.h
+index e09e8e207..acfce5ea0 100644
+--- a/Tensile/Source/Client.h
++++ b/Tensile/Source/Client.h
+@@ -383,15 +383,15 @@ bool callLibrary(
+                   indexAssignmentsB[problemTypeIdx]);
+   }
+ 
+-  if (printTensorC) {
++  if (printTensorC & 0x1) {
+     std::vector<unsigned int> indexAssignmentsC;
+     for (unsigned  int i = 0; i < numIndicesC[problemTypeIdx]; i++) {
+       indexAssignmentsC.push_back(i);
+     }
+-    printTensor("C", initialC, numIndicesC[problemTypeIdx],
++    printTensor("C_in", initialC, numIndicesC[problemTypeIdx],
+                   numIndicesC[problemTypeIdx], userSizes,
+                   indexAssignmentsC.data());
+-    }
++  }
+ 
+   size_t currentElementSizeC = 1;
+   size_t currentMemorySizeC = 1;
+@@ -461,12 +461,12 @@ bool callLibrary(
+     hipMemcpy(deviceOnHostC, deviceC, sizeToCopy, hipMemcpyDeviceToHost);
+ #endif
+ 
+-    if (printTensorC) {
++    if (printTensorC & 0x2) {
+       std::vector<unsigned int> indexAssignmentsC;
+       for (unsigned  int i = 0; i < numIndicesC[problemTypeIdx]; i++) {
+         indexAssignmentsC.push_back(i);
+       }
+-      printTensor("C", deviceOnHostC, numIndicesC[problemTypeIdx],
++      printTensor("C_result", deviceOnHostC, numIndicesC[problemTypeIdx],
+                   numIndicesC[problemTypeIdx], userSizes,
+                   indexAssignmentsC.data());
+     }
+@@ -803,6 +803,15 @@ bool benchmarkAllSolutionsForSize(
+                 numIndicesC[problemTypeIdx], sizes, 
+                 indexAssignmentsB[problemTypeIdx]);
+   }
++  if (printTensorC & 0x1) {
++    std::vector<unsigned int> indexAssignmentsC;
++    for (unsigned  int i = 0; i < numIndicesC[problemTypeIdx]; i++) {
++      indexAssignmentsC.push_back(i);
++    }
++    printTensor("C_in", initialC, numIndicesC[problemTypeIdx],
++                numIndicesC[problemTypeIdx], sizes,
++                indexAssignmentsC.data());
++  }
+ 
+   // pre-compute referenceCPU if validating
+   if (numElementsToValidate) {
+@@ -866,12 +875,12 @@ bool benchmarkAllSolutionsForSize(
+ #else
+         hipMemcpy(deviceOnHostC, deviceC, sizeToCopy, hipMemcpyDeviceToHost);
+ #endif
+-        if (printTensorC) {
++        if (printTensorC & 0x2) {
+           std::vector<unsigned int> indexAssignmentsC;
+           for (unsigned  int i = 0; i < numIndicesC[problemTypeIdx]; i++) {
+             indexAssignmentsC.push_back(i);
+           }
+-          printTensor("C", deviceOnHostC, numIndicesC[problemTypeIdx],
++          printTensor("C_out", deviceOnHostC, numIndicesC[problemTypeIdx],
+                       numIndicesC[problemTypeIdx], sizes,
+                       indexAssignmentsC.data());
+         }
+@@ -1172,12 +1181,14 @@ bool benchmarkProblemSizes(
+ } // benchmarkProblemSizes
+ #endif // benchmark
+ 
++enum InitOp {None, Abs, AltSign};
+ template<typename DataType>
+ void initInput(
+     const std::string &tag,
+     unsigned dataInitType,
+     DataType **initial,
+-    size_t     maxSize)
++    size_t     maxSize,
++    InitOp     initOp)
+ {
+   if (dataInitType == 0) {
+     for (size_t i = 0; i < maxSize; i++) {
+@@ -1193,7 +1204,15 @@ void initInput(
+     std::cout << ".";
+   } else if (dataInitType == 3) {
+     for (size_t i = 0; i < maxSize; i++) {
+-      (*initial)[i] = tensileGetRandom<DataType>(); }
++      auto v = tensileGetRandom<DataType>();
++      if (initOp == Abs) {
++        v = fabs(v);
++      } else if (initOp == AltSign) {
++        DataType s = (i&0x1) ? -1:1;
++        v = s*fabs(v);
++      }
++      (*initial)[i] = v;
++    }
+     std::cout << ".";
+   } else if (dataInitType == 4) {
+     for (size_t i = 0; i < maxSize; i++) {
+@@ -1270,9 +1289,9 @@ void initData(
+   std::cout << ".";
+ 
+   // initialize buffers
+-  initInput("DataInitTypeA", initA, initialA, maxSizeA);
+-  initInput("DataInitTypeB", initB, initialB, maxSizeB);
+-  initInput("DataInitTypeC", initC, initialC, maxSizeC);
++  initInput("DataInitTypeA", initA, initialA, maxSizeA, Abs);
++  initInput("DataInitTypeB", initB, initialB, maxSizeB, AltSign);
++  initInput("DataInitTypeC", initC, initialC, maxSizeC, None);
+ 
+   // create device buffers and copy data
+ #if Tensile_RUNTIME_LANGUAGE_OCL
+diff --git a/Tensile/Source/MathTemplates.cpp b/Tensile/Source/MathTemplates.cpp
+index a1151397d..6a7654173 100644
+--- a/Tensile/Source/MathTemplates.cpp
++++ b/Tensile/Source/MathTemplates.cpp
+@@ -75,7 +75,7 @@ template<> TensileComplexDouble tensileGetOne<TensileComplexDouble>() {
+ * Random Templates
+ ******************************************************************************/
+ #ifdef Tensile_ENABLE_HALF
+-template<> TensileHalf tensileGetRandom<TensileHalf>() { return static_cast<TensileHalf>((rand()%21) - 10); }
++template<> TensileHalf tensileGetRandom<TensileHalf>() { return static_cast<TensileHalf>((rand()%7) - 3); }
+ #endif
+ template<> float tensileGetRandom<float>() { return static_cast<float>((rand()%201) - 100); }
+ template<> double tensileGetRandom<double>() { return static_cast<double>((rand()%2001) - 1000); }
+diff --git a/Tensile/Source/TensorUtils.h b/Tensile/Source/TensorUtils.h
+index b855ac561..7adfd0392 100644
+--- a/Tensile/Source/TensorUtils.h
++++ b/Tensile/Source/TensorUtils.h
+@@ -173,7 +173,7 @@ void printTensor(
+     //unsigned printMode=PrintRowAddress + PrintRowElementCoord + PrintElementIndex + PrintElementValue + PrintElementValueHex) {
+     //unsigned printMode= PrintRowElementCoord + PrintElementIndex + PrintElementValue + PrintElementValueHex) {
+     //unsigned printMode= PrintRowElementCoord + PrintElementIndex + PrintElementValue + PrintElementValueHex) {
+-    unsigned printMode=PrintElementValueHex+PrintRowElementCoord+PrintElementValue) {
++    unsigned printMode=PrintRowElementCoord+PrintElementValue) {
+ 
+     TensorDims td(name, numIndices, firstSummationIndex, indexedSizes, indexAssignments);
+ 
+diff --git a/Tensile/Tests/bugs/hgemm_lsu.yaml b/Tensile/Tests/bugs/hgemm_lsu.yaml
+deleted file mode 100644
+index 57a2d4191..000000000
+--- a/Tensile/Tests/bugs/hgemm_lsu.yaml
++++ /dev/null
+@@ -1,92 +0,0 @@
+-# bug occurs with LocalSplitU != 1
+-# # Bug in store path, ie:
+-# Disassembly of section .text:
+-#label_0008:
+-# v_addc_co_u32_e64 v45, vcc, v40, 0, vcc                    // 0000000025FC: D11C6A2D 01A90128
+-# v_lshlrev_b64 v[44:45], 1, v[44:45]                        // 000000002604: D28F002C 00025881
+-# v_add_co_u32_e32 v44, vcc, v34, v44                        // 00000000260C: 32585922
+-# v_addc_co_u32_e32 v45, vcc, v35, v45, vcc                  // 000000002610: 385A5B23
+-# v_pk_mul_f16 v0, v36, v0                                   // 000000002614: D3900000 18020124
+-# ***flat_store_short v[42:43], v0                              // 00000000261C: DC680000 0000002A
+-# flat_store_short_d16_hi v[44:45], v0                       // 000000002624: DC6C0000 0000002C
+-# v_add_co_u32_e64 v37, vcc, v32, 2                          // 00000000262C: D1196A25 00010520
+-# v_mul_lo_u32 v39, s20, v33                                 // 000000002634: D2850027 00024214
+-
+-# Don't care for these:
+-#  BufferStore=x, BufferLoad=x, VectorStore=x
+-#  VectorWidth=8 is required to reproduce ; VW=4 means no bug.
+-GlobalParameters:
+-  MinimumRequiredVersion: 4.2.0
+-  PrintLevel: 1
+-  ForceRedoBenchmarkProblems: True
+-  ForceRedoLibraryLogic: True
+-  ForceRedoLibraryClient: True
+-  CMakeBuildType: Release
+-  EnqueuesPerSync: 1
+-  SyncsPerBenchmark: 1
+-  LibraryPrintDebug: False
+-  NumElementsToValidate: 0
+-  ValidationMaxToPrint: 4
+-  ValidationPrintValids: False
+-  ShortNames: False
+-  MergeFiles: True
+-  Platform: 0
+-  Device: 0
+-  KernelTime: True
+-  PinClocks: True
+-  SleepPercent: 200
+-  DataInitTypeBeta : 0
+-  CodeFromFiles: 1
+-  SolutionSelectionAlg: 1
+-  PrintWinnersOnly: 1
+-
+-
+-BenchmarkProblems:
+-  ########################################
+-  # NN - standard
+-  ########################################
+-  -
+-    - # ProblemType
+-      OperationType: GEMM
+-      DataType: h
+-      TransposeA: False
+-      TransposeB: False
+-      UseBeta: False
+-      Batched: True
+-
+-  ########################################
+-  # NN - MI workloads (DeepBench, ResNet, etc)
+-  ########################################
+-    - # NN workloads
+-      InitialSolutionParameters:
+-      BenchmarkCommonParameters:
+-        - EdgeType: ["ShiftPtr"]
+-        - LoopTail: [True]
+-        - KernelLanguage: ["Assembly"]
+-      ForkParameters:
+-        - FractionalLoad: [0]
+-        - BufferLoad: [1]
+-        - BufferStore: [0]
+-        - VectorStore: [0] 
+-        - AssertSummationElementMultiple: [8]
+-        - PrefetchGlobalRead: [ False]
+-        - PrefetchLocalRead: [ False]
+-        - ThreadTile:
+-          - [ 8, 8 ]
+-        - WorkGroup:
+-          - [ 16, 8, 2 ]
+-          #- GlobalSplitU: [1,3,5]
+-        - GlobalSplitU: [1]
+-        - WorkGroupMapping: [64]
+-        - DepthU: [ 16]
+-        - VectorWidth: [8]
+-        - GlobalReadVectorWidth: [8]
+-        - LdsPadB: [0 ]
+-      BenchmarkForkParameters:
+-      JoinParameters:
+-      BenchmarkJoinParameters:
+-      BenchmarkFinalParameters:
+-        - ProblemSizes:
+-          # DeepBench batch>1 conv sizes 
+-          - Exact: [256, 256, 16, 512]
+-            #- Exact: [196, 192, 16, 512]
+diff --git a/Tensile/Tests/create_tests.py b/Tensile/Tests/create_tests.py
+index 75fd71b4a..9117b5e64 100755
+--- a/Tensile/Tests/create_tests.py
++++ b/Tensile/Tests/create_tests.py
+@@ -14,7 +14,7 @@
+ print "info: writing test script to %s" % targetFile
+ outfile = open(targetFile, "w" )
+ outfile.write("import Tensile.Tensile as Tensile\n\n")
+-for f in glob.glob("%s/test*yaml"%targetDir):
++for f in glob.glob("%s/*yaml"%targetDir):
+     baseName = os.path.basename(f)
+     testName = os.path.splitext(baseName)[0]
+     outfile.write ("def %s(tmpdir):\n" % (testName))
+diff --git a/Tensile/Tests/nightly/local_split_u/test_dgemm_lsu.yaml b/Tensile/Tests/nightly/local_split_u/test_dgemm_lsu.yaml
+new file mode 100644
+index 000000000..d3c13b832
+--- /dev/null
++++ b/Tensile/Tests/nightly/local_split_u/test_dgemm_lsu.yaml
+@@ -0,0 +1,77 @@
++GlobalParameters:
++  MinimumRequiredVersion: 4.2.0
++  PrintLevel: 1
++  ForceRedoBenchmarkProblems: True
++  ForceRedoLibraryLogic: True
++  ForceRedoLibraryClient: True
++  CMakeBuildType: Release
++  EnqueuesPerSync: 1
++  SyncsPerBenchmark: 1
++  LibraryPrintDebug: False
++  NumElementsToValidate: -1
++  ValidationMaxToPrint: 8
++  ValidationPrintValids: False
++  ShortNames: False
++  MergeFiles: True
++  Platform: 0
++  Device: 0
++  KernelTime: True
++  PinClocks: True
++  SleepPercent: 200
++  DataInitTypeA : 3
++  DataInitTypeB : 3
++  DataInitTypeBeta : 0
++  CodeFromFiles: 1
++  SolutionSelectionAlg: 1
++  PrintWinnersOnly: 0
++  PrintTensorA: 0
++  PrintTensorB: 0
++  PrintSolutionRejectionReason: 0
++
++
++BenchmarkProblems:
++  ########################################
++  # NN - standard
++  ########################################
++  -
++    - # ProblemType
++      OperationType: GEMM
++      DataType: d
++      TransposeA: False
++      TransposeB: False
++      UseBeta: False
++      Batched: True
++
++  ########################################
++  # NN - MI workloads (DeepBench, ResNet, etc)
++  ########################################
++    -
++      InitialSolutionParameters:
++      BenchmarkCommonParameters:
++        - EdgeType: ["ShiftPtr"]
++        - LoopTail: [True]
++        - KernelLanguage: ["Source"]
++      ForkParameters:
++        - VectorStore: [0,1]
++        - PrefetchGlobalRead: [ False]
++        - PrefetchLocalRead: [ False]
++        - ThreadTile:
++          - [ 4, 8 ]
++          - [ 8, 8 ]
++        - WorkGroup:
++          - [ 8, 4, 2 ]
++          - [ 8, 4, 4 ]
++          - [ 8, 4, 8 ]
++        - GlobalSplitU: [1]
++        - WorkGroupMapping: [64]
++        - DepthU: [ 8 ]
++        - VectorWidth: [1,2,4]
++        - GlobalReadVectorWidth: [1,2,4]
++        - AssertFree0ElementMultiple: [4]  # so we can test GRVW sweep
++      BenchmarkForkParameters:
++      JoinParameters:
++      BenchmarkJoinParameters:
++      BenchmarkFinalParameters:
++        - ProblemSizes:
++          # Use step=4 to match assertions
++          - Range: [[60,4,66], [60,4,66], [1,1,2], [64, 64, 34, 4096]]
+diff --git a/Tensile/Tests/nightly/local_split_u/test_hgemm_lsu.yaml b/Tensile/Tests/nightly/local_split_u/test_hgemm_lsu.yaml
+new file mode 100644
+index 000000000..3f8eac335
+--- /dev/null
++++ b/Tensile/Tests/nightly/local_split_u/test_hgemm_lsu.yaml
+@@ -0,0 +1,79 @@
++GlobalParameters:
++  MinimumRequiredVersion: 4.2.0
++  PrintLevel: 1
++  ForceRedoBenchmarkProblems: True
++  ForceRedoLibraryLogic: True
++  ForceRedoLibraryClient: True
++  CMakeBuildType: Release
++  EnqueuesPerSync: 1
++  SyncsPerBenchmark: 1
++  LibraryPrintDebug: False
++  NumElementsToValidate: -1
++  ValidationMaxToPrint: 8
++  ValidationPrintValids: False
++  ShortNames: False
++  MergeFiles: True
++  Platform: 0
++  Device: 0
++  KernelTime: True
++  PinClocks: True
++  SleepPercent: 200
++  DataInitTypeA : 3
++  DataInitTypeB : 3
++  DataInitTypeBeta : 0
++  CodeFromFiles: 1
++  SolutionSelectionAlg: 1
++  PrintWinnersOnly: 0
++  PrintTensorA: 0
++  PrintTensorB: 0
++  PrintSolutionRejectionReason: 0
++
++
++BenchmarkProblems:
++  ########################################
++  # NN - standard
++  ########################################
++  -
++    - # ProblemType
++      OperationType: GEMM
++      DataType: h
++      TransposeA: False
++      TransposeB: False
++      UseBeta: False
++      Batched: True
++
++  ########################################
++  # NN - MI workloads (DeepBench, ResNet, etc)
++  ########################################
++    - 
++      InitialSolutionParameters:
++      BenchmarkCommonParameters:
++        - EdgeType: ["ShiftPtr"]
++        - LoopTail: [True]
++        - KernelLanguage: ["Assembly"]
++      ForkParameters:
++        - VectorStore: [0,1]
++        - PrefetchGlobalRead: [ False]
++        - PrefetchLocalRead: [ False]
++        - ThreadTile:
++          - [ 4, 8 ]
++          - [ 8, 8 ]
++        - WorkGroup:
++          #- [ 8, 16, 1 ] # control
++          - [ 8, 4, 2 ]
++          - [ 8, 4, 4 ]
++          - [ 8, 4, 8 ]
++        - GlobalSplitU: [1]
++        - WorkGroupMapping: [64]
++        - DepthU: [ 8,16,32 ]
++        - VectorWidth: [2,4,8]
++        - GlobalReadVectorWidth: [2,4,8]
++        - AssertFree0ElementMultiple: [8]  # so we can test GRVW sweep
++      BenchmarkForkParameters:
++      JoinParameters:
++      BenchmarkJoinParameters:
++      BenchmarkFinalParameters:
++        - ProblemSizes:
++          # Note for K>1024 the operation order change with LSU doesn't consistently match CPU
++          #- Range: [[64,8,64], [64,8,64], [1,1,2], [64, 64, 64, 1024]]
++          - Range: [[56,8,72], [56,8,72], [1,1,2], [64, 64, 34, 1024]]
+diff --git a/Tensile/Tests/nightly/local_split_u/test_hgemm_lsu_grvw1.yaml b/Tensile/Tests/nightly/local_split_u/test_hgemm_lsu_grvw1.yaml
+new file mode 100644
+index 000000000..0b9b2ead9
+--- /dev/null
++++ b/Tensile/Tests/nightly/local_split_u/test_hgemm_lsu_grvw1.yaml
+@@ -0,0 +1,80 @@
++# no GRVW assertions
++
++GlobalParameters:
++  MinimumRequiredVersion: 4.2.0
++  PrintLevel: 1
++  ForceRedoBenchmarkProblems: True
++  ForceRedoLibraryLogic: True
++  ForceRedoLibraryClient: True
++  CMakeBuildType: Release
++  EnqueuesPerSync: 1
++  SyncsPerBenchmark: 1
++  LibraryPrintDebug: False
++  NumElementsToValidate: -1
++  ValidationMaxToPrint: 8
++  ValidationPrintValids: False
++  ShortNames: False
++  MergeFiles: True
++  Platform: 0
++  Device: 0
++  KernelTime: True
++  PinClocks: True
++  SleepPercent: 200
++  DataInitTypeA : 3
++  DataInitTypeB : 3
++  DataInitTypeBeta : 0
++  CodeFromFiles: 1
++  SolutionSelectionAlg: 1
++  PrintWinnersOnly: 0
++  PrintTensorA: 0
++  PrintTensorB: 0
++  PrintSolutionRejectionReason: 0
++
++
++BenchmarkProblems:
++  ########################################
++  # NN - standard
++  ########################################
++  -
++    - # ProblemType
++      OperationType: GEMM
++      DataType: h
++      TransposeA: False
++      TransposeB: False
++      UseBeta: False
++      Batched: True
++
++  ########################################
++  # NN - MI workloads (DeepBench, ResNet, etc)
++  ########################################
++    -
++      InitialSolutionParameters:
++      BenchmarkCommonParameters:
++        - EdgeType: ["ShiftPtr"]
++        - LoopTail: [True]
++        - KernelLanguage: ["Assembly"]
++      ForkParameters:
++        - VectorStore: [0,1]
++        - PrefetchGlobalRead: [ False]
++        - PrefetchLocalRead: [ False]
++        - ThreadTile:
++          - [ 4, 8 ]
++          - [ 8, 8 ]
++        - WorkGroup:
++          #- [ 8, 16, 1 ] # control
++          - [ 8, 4, 2 ]
++          - [ 8, 4, 4 ]
++          - [ 8, 4, 8 ]
++        - GlobalSplitU: [1]
++        - WorkGroupMapping: [64]
++        - DepthU: [ 8,16,32 ]
++        - VectorWidth: [2,4,8]
++        - GlobalReadVectorWidth: [1]
++      BenchmarkForkParameters:
++      JoinParameters:
++      BenchmarkJoinParameters:
++      BenchmarkFinalParameters:
++        - ProblemSizes:
++          # Note for K>1024 the operation order change with LSU doesn't consistently match CPU
++          #- Range: [[62,1,66], [62,1,66], [1,1,2], [64, 64, 64, 1024]]
++          - Range: [[62,2,66], [62,2,66], [1,1,2], [64, 64, 34, 1024]]
+diff --git a/Tensile/Tests/nightly/local_split_u/test_local_split_u.py b/Tensile/Tests/nightly/local_split_u/test_local_split_u.py
+new file mode 100644
+index 000000000..c0ca2d4a2
+--- /dev/null
++++ b/Tensile/Tests/nightly/local_split_u/test_local_split_u.py
+@@ -0,0 +1,14 @@
++import Tensile.Tensile as Tensile
++
++def test_dgemm_lsu(tmpdir):
++ Tensile.Tensile([Tensile.TensileTestPath("nightly/local_split_u/test_dgemm_lsu.yaml"), tmpdir.strpath])
++
++def test_hgemm_lsu_grvw1(tmpdir):
++ Tensile.Tensile([Tensile.TensileTestPath("nightly/local_split_u/test_hgemm_lsu_grvw1.yaml"), tmpdir.strpath])
++
++def test_hgemm_lsu(tmpdir):
++ Tensile.Tensile([Tensile.TensileTestPath("nightly/local_split_u/test_hgemm_lsu.yaml"), tmpdir.strpath])
++
++def test_sgemm_lsu(tmpdir):
++ Tensile.Tensile([Tensile.TensileTestPath("nightly/local_split_u/test_sgemm_lsu.yaml"), tmpdir.strpath])
++
+diff --git a/Tensile/Tests/nightly/local_split_u/test_sgemm_lsu.yaml b/Tensile/Tests/nightly/local_split_u/test_sgemm_lsu.yaml
+new file mode 100644
+index 000000000..295e0e24e
+--- /dev/null
++++ b/Tensile/Tests/nightly/local_split_u/test_sgemm_lsu.yaml
+@@ -0,0 +1,80 @@
++GlobalParameters:
++  MinimumRequiredVersion: 4.2.0
++  PrintLevel: 1
++  ForceRedoBenchmarkProblems: True
++  ForceRedoLibraryLogic: True
++  ForceRedoLibraryClient: True
++  CMakeBuildType: Release
++  EnqueuesPerSync: 1
++  SyncsPerBenchmark: 1
++  LibraryPrintDebug: False
++  NumElementsToValidate: -1
++  ValidationMaxToPrint: 8
++  ValidationPrintValids: False
++  ShortNames: False
++  MergeFiles: True
++  Platform: 0
++  Device: 0
++  KernelTime: True
++  PinClocks: True
++  SleepPercent: 200
++  DataInitTypeA : 3
++  DataInitTypeB : 3
++  DataInitTypeBeta : 0
++  CodeFromFiles: 1
++  SolutionSelectionAlg: 1
++  PrintWinnersOnly: 0
++  PrintTensorA: 0
++  PrintTensorB: 0
++  PrintSolutionRejectionReason: 0
++
++
++BenchmarkProblems:
++  ########################################
++  # NN - standard
++  ########################################
++  -
++    - # ProblemType
++      OperationType: GEMM
++      DataType: s
++      TransposeA: False
++      TransposeB: False
++      UseBeta: False
++      Batched: True
++
++  ########################################
++  # NN - MI workloads (DeepBench, ResNet, etc)
++  ########################################
++    -
++      InitialSolutionParameters:
++      BenchmarkCommonParameters:
++        - EdgeType: ["ShiftPtr"]
++        - LoopTail: [True]
++        - KernelLanguage: ["Source"]
++      ForkParameters:
++        - VectorStore: [0,1]
++        - PrefetchGlobalRead: [ False]
++        - PrefetchLocalRead: [ False]
++        - ThreadTile:
++          - [ 2, 2 ]
++          - [ 4, 8 ]
++          - [ 8, 8 ]
++        - WorkGroup:
++          #- [ 8, 16, 1 ] # control
++          - [ 8, 4, 2 ]
++          - [ 8, 4, 4 ]
++          - [ 8, 4, 8 ]
++        - GlobalSplitU: [1]
++        - WorkGroupMapping: [64]
++        - DepthU: [ 16 ]
++        - VectorWidth: [1,2,4]
++        - GlobalReadVectorWidth: [1,2,4]
++        - AssertFree0ElementMultiple: [4]  # so we can test GRVW sweep
++      BenchmarkForkParameters:
++      JoinParameters:
++      BenchmarkJoinParameters:
++      BenchmarkFinalParameters:
++        - ProblemSizes:
++          # Use step=4 so many GRVW work OK
++          - Range: [[60,4,66], [60,4,66], [1,1,2], [64, 64, 34, 4096]]
++          - Range: [[508,4,516], [256,4,256], [2], [64, 64, 128, 1024]]
+diff --git a/Tensile/Tests/pre_checkin/test_hgemm_hpa_asm_nn.yaml b/Tensile/Tests/pre_checkin/test_hgemm_hpa_asm_nn.yaml
+new file mode 100644
+index 000000000..83374af46
+--- /dev/null
++++ b/Tensile/Tests/pre_checkin/test_hgemm_hpa_asm_nn.yaml
+@@ -0,0 +1,132 @@
++# benchmark assembly and source kernels
++GlobalParameters:
++  MinimumRequiredVersion: 4.2.0
++  NumElementsToValidate: -1
++  KernelTime: True
++
++BenchmarkProblems:
++
++  - # hgemm NN
++    - # ProblemType
++      OperationType: GEMM
++      DataType: h
++      HighPrecisionAccumulate: True
++      TransposeA: False
++      TransposeB: False
++      UseBeta: True
++      Batched: True
++
++    - # BenchmarkProblemSizeGroup - Assembly
++      InitialSolutionParameters:
++      BenchmarkCommonParameters:
++        - LoopTail: [True]
++        - EdgeType: ["ShiftPtr"]
++        - KernelLanguage: ["Assembly"]
++      ForkParameters:
++        - GlobalSplitU: [1, 3]
++        - PrefetchLocalRead: [False]
++        - PrefetchGlobalRead: [True]
++        - ThreadTile:
++          - [ 2, 4 ]
++          - [ 4, 8 ]
++          - [ 16, 8 ]
++        - WorkGroup:
++          - [ 32,  4,  1 ]
++          - [  8,  8,  1 ]
++        - DepthU: [8]
++        - VectorWidth: [-1]
++      BenchmarkForkParameters:
++      JoinParameters:
++      BenchmarkJoinParameters:
++      BenchmarkFinalParameters:
++        - ProblemSizes:
++          - Range: [ [127,1,129], 0, [2], [63,1,65] ]
++
++    - # BenchmarkProblemSizeGroup - Assembly
++      InitialSolutionParameters:
++      BenchmarkCommonParameters:
++        - LoopTail: [True]
++        - EdgeType: ["ShiftPtr"]
++      ForkParameters:
++        - KernelLanguage: ["Assembly"]
++        - GlobalSplitU: [1, 3]
++        - PrefetchLocalRead: [False]
++        - PrefetchGlobalRead: [True]
++        - ThreadTile:
++          - [ 4, 2 ]
++          - [ 4, 8 ]
++          - [ 16, 16 ]
++          - [ 8, 8 ]
++        - WorkGroup:
++          - [ 16, 16,  1 ]
++          - [  8,  8,  1 ]
++        - DepthU: [16]
++        - VectorWidth: [-1]
++      BenchmarkForkParameters:
++      JoinParameters:
++      BenchmarkJoinParameters:
++      BenchmarkFinalParameters:
++        - ProblemSizes:
++          - Range: [ [127,1,129], 0, [2], [63,1,65] ]
++
++  - # hgemm NT
++    - # ProblemType
++      OperationType: GEMM
++      DataType: h
++      HighPrecisionAccumulate: True
++      TransposeA: False
++      TransposeB: True
++      UseBeta: True
++      Batched: True
++
++    - # BenchmarkProblemSizeGroup - Assembly
++      InitialSolutionParameters:
++      BenchmarkCommonParameters:
++        - LoopTail: [True]
++        - EdgeType: ["ShiftPtr"]
++        - KernelLanguage: ["Assembly"]
++      ForkParameters:
++        - GlobalSplitU: [1, 3]
++        - PrefetchLocalRead: [True]
++        - PrefetchGlobalRead: [True]
++        - ThreadTile:
++          - [ 2, 2 ]
++          - [ 4, 4 ]
++          - [ 8, 16 ]
++        - WorkGroup:
++          - [ 16, 16,  1 ]
++          - [  8, 16,  1 ]
++        - DepthU: [32]
++        - VectorWidth: [-1]
++      BenchmarkForkParameters:
++      JoinParameters:
++      BenchmarkJoinParameters:
++      BenchmarkFinalParameters:
++        - ProblemSizes:
++          - Range: [ [127,1,129], 0, [2], [63,1,65] ]
++
++    - # BenchmarkProblemSizeGroup - Assembly
++      InitialSolutionParameters:
++      BenchmarkCommonParameters:
++        - LoopTail: [True]
++        - EdgeType: ["ShiftPtr"]
++      ForkParameters:
++        - KernelLanguage: ["Assembly"]
++        - GlobalSplitU: [1, 3]
++        - PrefetchLocalRead: [True]
++        - PrefetchGlobalRead: [True]
++        - ThreadTile:
++          - [ 4, 2 ]
++          - [ 8, 8 ]
++          - [ 8, 4 ]
++        - WorkGroup:
++          - [ 16, 16,  1 ]
++          - [ 16,  8,  1 ]
++        - DepthU: [16]
++        - VectorWidth: [-1]
++      BenchmarkForkParameters:
++      JoinParameters:
++      BenchmarkJoinParameters:
++      BenchmarkFinalParameters:
++        - ProblemSizes:
++          - Range: [ [127,1,129], 0, [2], [63,1,65] ]
+diff --git a/Tensile/Tests/pre_checkin/test_hgemm_hpa_asm_nt.yaml b/Tensile/Tests/pre_checkin/test_hgemm_hpa_asm_nt.yaml
+new file mode 100644
+index 000000000..54f1d3c0d
+--- /dev/null
++++ b/Tensile/Tests/pre_checkin/test_hgemm_hpa_asm_nt.yaml
+@@ -0,0 +1,69 @@
++# benchmark assembly and source kernels
++GlobalParameters:
++  MinimumRequiredVersion: 4.2.0
++  NumElementsToValidate: -1
++  KernelTime: True
++
++BenchmarkProblems:
++  - # hgemm TN
++    - # ProblemType
++      OperationType: GEMM
++      DataType: h
++      HighPrecisionAccumulate: True
++      TransposeA: True
++      TransposeB: False
++      UseBeta: True
++      Batched: True
++
++    - # BenchmarkProblemSizeGroup - Assembly
++      InitialSolutionParameters:
++      BenchmarkCommonParameters:
++        - LoopTail: [True]
++        - EdgeType: ["ShiftPtr"]
++        - KernelLanguage: ["Assembly"]
++      ForkParameters:
++        - GlobalSplitU: [1, 3]
++        - PrefetchLocalRead: [True]
++        - PrefetchGlobalRead: [False]
++        - ThreadTile:
++          - [ 4, 2 ]
++          - [ 4, 8 ]
++          - [ 8, 8 ]
++        - WorkGroup:
++          - [ 16, 16,  1 ]
++          - [ 32,  4,  1 ]
++        - DepthU: [8]
++        - VectorWidth: [-1]
++      BenchmarkForkParameters:
++      JoinParameters:
++      BenchmarkJoinParameters:
++      BenchmarkFinalParameters:
++        - ProblemSizes:
++          - Range: [ [127,1,129], 0, [2], [63,1,65] ]
++
++    - # BenchmarkProblemSizeGroup - Assembly
++      InitialSolutionParameters:
++      BenchmarkCommonParameters:
++        - LoopTail: [True]
++        - EdgeType: ["ShiftPtr"]
++      ForkParameters:
++        - KernelLanguage: ["Assembly"]
++        - GlobalSplitU: [1, 3]
++        - PrefetchLocalRead: [True]
++        - PrefetchGlobalRead: [False]
++        - ThreadTile:
++          - [ 8, 2 ]
++          - [ 2, 8 ]
++          - [ 16, 2 ]
++          - [ 2, 16 ]
++        - WorkGroup:
++          - [ 16, 16,  1 ]
++          - [  8,  8,  1 ]
++        - DepthU: [16]
++        - VectorWidth: [-1]
++      BenchmarkForkParameters:
++      JoinParameters:
++      BenchmarkJoinParameters:
++      BenchmarkFinalParameters:
++        - ProblemSizes:
++          - Range: [ [127,1,129], 0, [2], [63,1,65] ]
+diff --git a/Tensile/Tests/pre_checkin/test_hgemm_hpa_asm_tn.yaml b/Tensile/Tests/pre_checkin/test_hgemm_hpa_asm_tn.yaml
+new file mode 100644
+index 000000000..4f8e9f3db
+--- /dev/null
++++ b/Tensile/Tests/pre_checkin/test_hgemm_hpa_asm_tn.yaml
+@@ -0,0 +1,71 @@
++# benchmark assembly and source kernels
++GlobalParameters:
++  MinimumRequiredVersion: 4.2.0
++  NumElementsToValidate: -1
++  KernelTime: True
++
++BenchmarkProblems:
++
++  - # hgemm TN
++    - # ProblemType
++      OperationType: GEMM
++      DataType: h
++      HighPrecisionAccumulate: True
++      TransposeA: True
++      TransposeB: False
++      UseBeta: True
++      Batched: True
++
++    - # BenchmarkProblemSizeGroup - Assembly
++      InitialSolutionParameters:
++      BenchmarkCommonParameters:
++        - LoopTail: [True]
++        - EdgeType: ["ShiftPtr"]
++        - KernelLanguage: ["Assembly"]
++      ForkParameters:
++        - GlobalSplitU: [1, 3]
++        - PrefetchLocalRead: [True]
++        - PrefetchGlobalRead: [False]
++        - ThreadTile:
++          - [ 4, 2 ]
++          - [ 4, 8 ]
++          - [ 8, 8 ]
++        - WorkGroup:
++          - [ 16, 16,  1 ]
++          - [ 32,  4,  1 ]
++        - DepthU: [8]
++        - VectorWidth: [-1]
++      BenchmarkForkParameters:
++      JoinParameters:
++      BenchmarkJoinParameters:
++      BenchmarkFinalParameters:
++        - ProblemSizes:
++          - Range: [ [127,1,129], 0, [2], [63,1,65] ]
++
++    - # BenchmarkProblemSizeGroup - Assembly
++      InitialSolutionParameters:
++      BenchmarkCommonParameters:
++        - LoopTail: [True]
++        - EdgeType: ["ShiftPtr"]
++      ForkParameters:
++        - KernelLanguage: ["Assembly"]
++        - GlobalSplitU: [1, 3]
++        - PrefetchLocalRead: [True]
++        - PrefetchGlobalRead: [False]
++        - ThreadTile:
++          - [ 8, 2 ]
++          - [ 2, 8 ]
++          - [ 16, 2 ]
++          - [ 2, 16 ]
++        - WorkGroup:
++          - [ 16, 16,  1 ]
++          - [  8,  8,  1 ]
++        - DepthU: [16]
++        - VectorWidth: [-1]
++      BenchmarkForkParameters:
++      JoinParameters:
++      BenchmarkJoinParameters:
++      BenchmarkFinalParameters:
++        - ProblemSizes:
++          - Range: [ [127,1,129], 0, [2], [63,1,65] ]
++
+diff --git a/Tensile/Tests/pre_checkin/test_hgemm_hpa_asm_tt.yaml b/Tensile/Tests/pre_checkin/test_hgemm_hpa_asm_tt.yaml
+new file mode 100644
+index 000000000..32d83b61f
+--- /dev/null
++++ b/Tensile/Tests/pre_checkin/test_hgemm_hpa_asm_tt.yaml
+@@ -0,0 +1,66 @@
++GlobalParameters:
++  MinimumRequiredVersion: 4.2.0
++  NumElementsToValidate: -1
++  KernelTime: True
++
++BenchmarkProblems:
++  - # hgemm TT
++    - # ProblemType
++      OperationType: GEMM
++      DataType: h
++      HighPrecisionAccumulate: True
++      TransposeA: True
++      TransposeB: True
++      UseBeta: True
++      Batched: True
++
++    - # BenchmarkProblemSizeGroup - Assembly
++      InitialSolutionParameters:
++      BenchmarkCommonParameters:
++        - LoopTail: [True]
++        - EdgeType: ["ShiftPtr"]
++        - KernelLanguage: ["Assembly"]
++      ForkParameters:
++        - PrefetchLocalRead: [False]
++        - PrefetchGlobalRead: [False]
++        - ThreadTile:
++          - [ 16, 4 ]
++          - [ 16, 8 ]
++          - [ 8, 8 ]
++        - WorkGroup:
++          - [ 16, 16,  1 ]
++          - [  8,  8,  1 ]
++        - DepthU: [32]
++        - VectorWidth: [-1]
++      BenchmarkForkParameters:
++      JoinParameters:
++      BenchmarkJoinParameters:
++      BenchmarkFinalParameters:
++        - ProblemSizes:
++          - Range: [ [127,1,129], 0, [2], [63,1,65] ]
++
++    - # BenchmarkProblemSizeGroup - Assembly
++      InitialSolutionParameters:
++      BenchmarkCommonParameters:
++        - LoopTail: [True]
++        - EdgeType: ["ShiftPtr"]
++      ForkParameters:
++        - KernelLanguage: ["Assembly"]
++        - PrefetchLocalRead: [False]
++        - PrefetchGlobalRead: [False]
++        - ThreadTile:
++          - [ 8, 2 ]
++          - [ 2, 2 ]
++          - [ 4, 2 ]
++          - [ 8, 4 ]
++        - WorkGroup:
++          - [ 16, 16,  1 ]
++          - [  8,  8,  1 ]
++        - DepthU: [16]
++        - VectorWidth: [-1]
++      BenchmarkForkParameters:
++      JoinParameters:
++      BenchmarkJoinParameters:
++      BenchmarkFinalParameters:
++        - ProblemSizes:
++          - Range: [ [127,1,129], 0, [2], [63,1,65] ]
+diff --git a/Tensile/Tests/pre_checkin/test_pre_checkin.py b/Tensile/Tests/pre_checkin/test_pre_checkin.py
+index df2b029cc..f5e88b261 100644
+--- a/Tensile/Tests/pre_checkin/test_pre_checkin.py
++++ b/Tensile/Tests/pre_checkin/test_pre_checkin.py
+@@ -9,12 +9,24 @@ def test_hgemm_asm_nn(tmpdir):
+ def test_dgemm_asm(tmpdir):
+  Tensile.Tensile([Tensile.TensileTestPath("pre_checkin/test_dgemm_asm.yaml"), tmpdir.strpath])
+ 
++def test_hgemm_hpa_asm_tn(tmpdir):
++ Tensile.Tensile([Tensile.TensileTestPath("pre_checkin/test_hgemm_hpa_asm_tn.yaml"), tmpdir.strpath])
++
++def test_hgemm_hpa_asm_nn(tmpdir):
++ Tensile.Tensile([Tensile.TensileTestPath("pre_checkin/test_hgemm_hpa_asm_nn.yaml"), tmpdir.strpath])
++
+ def test_hgemm_asm_tt(tmpdir):
+  Tensile.Tensile([Tensile.TensileTestPath("pre_checkin/test_hgemm_asm_tt.yaml"), tmpdir.strpath])
+ 
++def test_hgemm_hpa_asm_tt(tmpdir):
++ Tensile.Tensile([Tensile.TensileTestPath("pre_checkin/test_hgemm_hpa_asm_tt.yaml"), tmpdir.strpath])
++
+ def test_hgemm_asm_nt(tmpdir):
+  Tensile.Tensile([Tensile.TensileTestPath("pre_checkin/test_hgemm_asm_nt.yaml"), tmpdir.strpath])
+ 
+ def test_hgemm_asm_tn(tmpdir):
+  Tensile.Tensile([Tensile.TensileTestPath("pre_checkin/test_hgemm_asm_tn.yaml"), tmpdir.strpath])
+ 
++def test_hgemm_hpa_asm_nt(tmpdir):
++ Tensile.Tensile([Tensile.TensileTestPath("pre_checkin/test_hgemm_hpa_asm_nt.yaml"), tmpdir.strpath])
++

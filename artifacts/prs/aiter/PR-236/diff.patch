@@ -1,0 +1,744 @@
+diff --git a/aiter/fused_moe_bf16_asm.py b/aiter/fused_moe_bf16_asm.py
+old mode 100644
+new mode 100755
+index f5271b4d28..92bf9492b4
+--- a/aiter/fused_moe_bf16_asm.py
++++ b/aiter/fused_moe_bf16_asm.py
+@@ -9,6 +9,7 @@
+ from typing import Any, Callable, Dict, Optional, Tuple
+ import aiter
+ from aiter import logger
++from aiter import pertoken_quant
+ from aiter import ActivationType
+ BLOCK_SIZE_M = 32
+ 
+@@ -152,6 +153,117 @@ def asm_moe(hidden_states,
+                 #   fc2_smooth_scale)
+     return moe_buf
+ 
++def asm_moe_tkw1(hidden_states,
++            w1,  # [expert(local_expert:EP), inter_dim*2, dim] N,K
++            w2,  # [expert(local_expert:EP), dim, inter_dim]
++            topk_weight, topk_ids,
++            # following for int8 quant
++            fc1_scale=None,  # [expert(local_expert:EP), inter_dim, 1]
++            fc2_scale=None,  # [expert(local_expert:EP), model_dim, 1]
++            fc1_smooth_scale=None,  # [expert(local_expert:EP), 1, model_dim]
++            fc2_smooth_scale=None,  # [expert(local_expert:EP), 1, inter_dim]
++            a16=False,
++            per_tensor_quant_scale=None,
++            expert_mask=None,
++            activation = ActivationType.Silu
++            ):
++    E, model_dim, inter_dim = w2.shape
++    global_E = E
++    if expert_mask is not None:
++        global_E = expert_mask.numel()
++    M, topk = topk_ids.shape
++    dtype = hidden_states.dtype
++    device = topk_ids.device
++    lastdim_mul = 8 if w1.dtype in {torch.int32, torch.uint32} else 1
++    sorted_ids, sorted_weights, sorted_expert_ids, num_valid_ids, moe_buf = moe_sorting_ck(topk_ids, topk_weight, global_E,
++                                                                                           model_dim, dtype, BLOCK_SIZE_M, expert_mask)
++    
++    if fc1_scale is None:
++        # pure bf16
++        aiter.fmoe(moe_buf, hidden_states, w1, w2, sorted_ids,
++                   sorted_weights, sorted_expert_ids, num_valid_ids, topk)
++    elif a16:
++        # a16w8 smooth quant fmoe
++        if w1.dtype == torch.float8_e4m3fnuz and inter_dim*2 == w1.shape[1]:
++            aiter.fmoe_fp8_g1u1_a16(moe_buf, hidden_states, w1, w2, sorted_ids,
++                                    sorted_weights, sorted_expert_ids, num_valid_ids,
++                                    topk,
++                                    fc1_scale,
++                                    fc2_scale,
++                                    fc1_smooth_scale,
++                                    fc2_smooth_scale)
++        elif w1.dtype == torch.int8 and inter_dim == w1.shape[1]:
++            aiter.fmoe_int8_g1u0_a16(moe_buf, hidden_states, w1, w2, sorted_ids,
++                                     sorted_weights, sorted_expert_ids, num_valid_ids,
++                                     topk,
++                                     fc1_scale,
++                                     fc2_scale,
++                                     fc1_smooth_scale,
++                                     fc2_smooth_scale)
++        else:
++            raise ValueError(
++                f"Invalid args: {w1.dtype} {w1.shape=} {w2.shape=}")
++
++    else:
++        # a8w8 fmoe, opt: smooth quant
++        a8_type = w1.dtype if w1.dtype != torch.int32 and w1.dtype != torch.uint32 else torch.float8_e4m3fnuz
++        if fc1_smooth_scale is not None:
++            a8 = torch.empty((topk * M, model_dim),
++                             dtype=a8_type, device=device)
++            a8_scale = torch.empty(
++                (topk * M), dtype=torch.float, device=device)
++
++            # moe_smoothquant_fwd need topk_ids which contains local_expert_id
++            if expert_mask is not None:
++                local_expert_hash = expert_mask.cumsum(0, dtype=torch.int32)
++                local_expert_hash[local_expert_hash > 0] -= 1
++                topk_ids = local_expert_hash[topk_ids]
++
++            aiter.moe_smoothquant_fwd(
++                a8, hidden_states, fc1_smooth_scale, topk_ids, a8_scale)
++        else:
++            if w1.dtype == torch.float8_e4m3fnuz or w1.dtype == torch.int32 and w1.dtype == torch.uint32:
++                a8 = torch.empty(
++                    (M, model_dim), dtype=a8_type, device=device)
++                a8_scale = torch.empty(M, dtype=torch.float, device=device)
++                if per_tensor_quant_scale is None:
++                    aiter.dynamic_per_token_scaled_fp8_quant(
++                        a8, hidden_states, a8_scale)
++                else:
++                    aiter.static_scaled_fp8_quant(
++                        a8, hidden_states, per_tensor_quant_scale)
++                    a8_scale.fill_(per_tensor_quant_scale)
++            elif w1.dtype == torch.int8:
++                a8 = torch.empty(
++                    (M, model_dim), dtype=w1.dtype, device=device)
++                a8_scale = torch.empty(M, dtype=torch.float, device=device)
++                fc1_smooth_scale = torch.ones(
++                    model_dim, dtype=torch.float, device=device)
++                aiter.smoothquant_fwd(a8,
++                                      hidden_states,
++                                      fc1_smooth_scale,
++                                      a8_scale)
++            else:
++                logger.warning(f'FMOE fall into pure torch quant...')
++                a8, a8_scale = aiter.pertoken_quant(
++                    hidden_states, torch.float, quant_dtype=w1.dtype)
++        if w2.shape[2] * 2 * lastdim_mul == w1.shape[1]:
++            fmoe_func = aiter.fmoe_g1u1_tkw1
++
++        else:
++            raise ValueError(
++                f"Invalid MoE weight: {w1.shape=} {w2.shape=} {lastdim_mul}")
++
++        fmoe_func(moe_buf, a8, w1, w2, sorted_ids,
++                  sorted_weights, sorted_expert_ids, num_valid_ids,
++                  topk,
++                  a8_scale,
++                  fc1_scale,
++                  fc2_scale,
++                  fc2_smooth_scale, activation)
++                #   fc2_smooth_scale)
++    return moe_buf
++
+ 
+ def get_block_size(token, topk, expert):
+     token_per_expert = token * topk / expert
+@@ -304,6 +416,82 @@ def torch_moe(hidden_states, w1, w2, topk_weight, topk_ids,
+         out * topk_weight.view(B, -1, 1)
+     ).sum(dim=1).to(dtype)
+ 
++def torch_moe_tkw1(hidden_states, w1, w2, topk_weight, topk_ids,
++              # following for int8 quant
++              fc1_scale=None,  # [expert(local_expert:EP), inter_dim, 1]
++              fc2_scale=None,  # [expert(local_expert:EP), model_dim, 1]
++              fc1_smooth_scale=None,  # [expert(local_expert:EP), 1, model_dim]
++              fc2_smooth_scale=None,  # [expert(local_expert:EP), 1, inter_dim]
++              expert_mask=None,
++              activation = ActivationType.Silu):
++    computeType = torch.float
++    dtype = hidden_states.dtype
++    hidden_states = hidden_states.to(computeType)
++    w1 = w1.to(computeType)
++    w2 = w2.to(computeType)
++    B, D = hidden_states.shape
++    topk = topk_weight.shape[1]
++    if expert_mask is not None:
++        local_expert_hash = (expert_mask.cumsum(0, dtype=torch.int32) - 1)
++        local_expert_hash[expert_mask == 0] = -1
++        topk_ids = local_expert_hash[topk_ids]
++
++    hidden_states = hidden_states.view(
++        B, -1, D).repeat(1, topk, 1)
++    out = torch.zeros(
++        (B, topk, D),
++        dtype=computeType,
++        device=hidden_states.device,
++    )
++
++    inter_dim = w2.shape[2]
++    if w2.shape[2]*2 == w1.shape[1]:
++        # g1u1(w1 include gate and up)
++        moeType = "g1u1"
++    else:
++        # g1u0(w1 only include gate)
++        moeType = "g1u0"
++
++    if fc1_scale is not None:
++        # gose to quant D_w8a8/w8a8
++        expert = w1.shape[0]
++        w2D = w2.shape[-1]
++        w1 = (w1.view(-1, D)*fc1_scale.view(-1, 1)).view(expert, -1, D)
++        w2 = (w2.view(-1, w2D)*fc2_scale.view(-1, 1)).view(expert, -1, w2D)
++
++    if fc1_smooth_scale is not None:
++        expert = fc1_smooth_scale.shape[0]
++        fc1_smooth_scale = fc1_smooth_scale.view(expert, -1)
++        fc2_smooth_scale = fc2_smooth_scale.view(expert, -1)
++
++    for E_id in range(w1.shape[0]):
++        mask = topk_ids == E_id
++        if mask.sum():
++            sub_tokens = hidden_states[mask]
++            if fc1_smooth_scale is not None:
++                sub_tokens = sub_tokens * (fc1_smooth_scale[E_id])
++
++            act_input = sub_tokens @ (w1[E_id].transpose(0, 1))
++            if moeType == "g1u1":
++                gate, up = act_input.split([inter_dim, inter_dim], dim=-1)
++                gate = gate * (topk_weight.view(B, -1, 1)[mask])
++                up = up * (topk_weight.view(B, -1, 1)[mask])
++                if activation == ActivationType.Gelu:
++                    act_out = F.gelu(gate) * up
++                else:
++                    act_out = F.silu(gate) * up
++            else:
++                if activation == ActivationType.Gelu:
++                    act_out = F.gelu(act_input)
++                else:
++                    act_out = F.silu(act_input)
++            if fc2_smooth_scale is not None:
++                act_out = act_out * (fc2_smooth_scale[E_id])
++            act_out, act_out_scale =  pertoken_quant(
++                 act_out, torch.float, quant_dtype = torch.float8_e4m3fnuz, dtypeMax=None)
++            out[mask] = act_out.to(computeType) @ (w2[E_id].transpose(0, 1))*act_out_scale.view(-1, 1)
++
++    return out.sum(dim=1).to(dtype) 
+ 
+ def fused_topk(
+     hidden_states: torch.Tensor,
+diff --git a/aiter/ops/moe_op.py b/aiter/ops/moe_op.py
+old mode 100644
+new mode 100755
+index adce5ea2c4..83f3ba991a
+--- a/aiter/ops/moe_op.py
++++ b/aiter/ops/moe_op.py
+@@ -92,6 +92,23 @@ def fmoe_g1u1(
+     activation: Optional[_ActivationType] = ActivationType.Silu,
+ ): ...
+ 
++@compile_ops("module_moe_asm")
++def fmoe_g1u1_tkw1(
++    out: Tensor,
++    input: Tensor,
++    gate: Tensor,
++    down: Tensor,
++    sorted_token_ids: Tensor,
++    sorted_weight_buf: Tensor,
++    sorted_expert_ids: Tensor,
++    num_valid_ids: Tensor,
++    topk: int,
++    input_scale: Tensor,
++    fc1_scale: Tensor,
++    fc2_scale: Tensor,
++    fc2_smooth_scale: Optional[Tensor] = None,
++    activation: Optional[_ActivationType] = ActivationType.Silu,
++): ...
+ 
+ @compile_ops("module_moe_asm")
+ def fmoe_int8_g1u0_a16(
+diff --git a/csrc/include/moe_op.h b/csrc/include/moe_op.h
+old mode 100644
+new mode 100755
+index 82a9afab45..e357455a5a
+--- a/csrc/include/moe_op.h
++++ b/csrc/include/moe_op.h
+@@ -81,6 +81,21 @@ void fmoe_g1u1(torch::Tensor &out,                                           //
+                torch::Tensor &fc2_scale,                                     // [expert, 1, dim]
+                std::optional<torch::Tensor> fc2_smooth_scale = std::nullopt, // [expert, 1, hidden_dim]
+                ActivationType activation = ActivationType::Silu);
++               
++void fmoe_g1u1_tkw1(torch::Tensor &out,                                           // [token_cnt, dim]
++                torch::Tensor &input,                                         // [token_cnt, dim] M,K
++                torch::Tensor &gate,                                          // [expert, hidden_dim*2, dim] N,K
++                torch::Tensor &down,                                          // [expert, hidden_dim, dim]
++                torch::Tensor &sorted_token_ids,                              // [max_num_tokens_padded]
++                torch::Tensor &sorted_weight_buf,                             // [max_num_tokens_padded]
++                torch::Tensor &sorted_expert_ids,                             // [max_num_m_blocks]
++                torch::Tensor &num_valid_ids,                                 // [1]
++                uint32_t topk,                                                //
++                torch::Tensor &input_scale,                                   // [token_cnt, 1]
++                torch::Tensor &fc1_scale,                                     // [expert, 1, hidden_dim]
++                torch::Tensor &fc2_scale,                                     // [expert, 1, dim]
++                std::optional<torch::Tensor> fc2_smooth_scale = std::nullopt, // [expert, 1, hidden_dim]
++                ActivationType activation = ActivationType::Silu);
+ 
+ void fmoe_int8_g1u0_a16(torch::Tensor &out,               // [token_cnt, dim]
+                         torch::Tensor &input,             // [token_cnt, dim] M,K
+diff --git a/csrc/include/rocm_ops.hpp b/csrc/include/rocm_ops.hpp
+old mode 100644
+new mode 100755
+index 950b542f3c..794cdeafcb
+--- a/csrc/include/rocm_ops.hpp
++++ b/csrc/include/rocm_ops.hpp
+@@ -359,6 +359,15 @@
+             py::arg("fc1_scale"), py::arg("fc2_scale"),                          \
+             py::arg("fc2_smooth_scale") = std::nullopt,                          \
+             py::arg("activation") = ActivationType::Silu);                       \
++      m.def("fmoe_g1u1_tkw1", &fmoe_g1u1_tkw1,                                   \
++            py::arg("out"), py::arg("input"),                                    \
++            py::arg("gate"), py::arg("down"),                                    \
++            py::arg("sorted_token_ids"), py::arg("sorted_weight_buf"),           \
++            py::arg("sorted_expert_ids"), py::arg("num_valid_ids"),              \
++            py::arg("topk"), py::arg("input_scale"),                             \
++            py::arg("fc1_scale"), py::arg("fc2_scale"),                          \
++            py::arg("fc2_smooth_scale") = std::nullopt,                          \
++            py::arg("activation") = ActivationType::Silu);                       \
+       m.def("fmoe_int8_g1u0_a16", &fmoe_int8_g1u0_a16);                          \
+       m.def("fmoe_g1u1_a16", &fmoe_g1u1_a16);                                    \
+       m.def("fmoe_fp8_blockscale_g1u1", &fmoe_fp8_blockscale_g1u1,               \
+diff --git a/csrc/py_itfs_cu/asm_fmoe.cpp b/csrc/py_itfs_cu/asm_fmoe.cpp
+old mode 100644
+new mode 100755
+index fbd1ba0df2..660f6da4e7
+--- a/csrc/py_itfs_cu/asm_fmoe.cpp
++++ b/csrc/py_itfs_cu/asm_fmoe.cpp
+@@ -604,6 +604,112 @@ void fmoe_g1u1(torch::Tensor &out,                            // [token_cnt, dim
+                                                fc2_smooth_scale);
+ }
+ 
++void fmoe_g1u1_tkw1(torch::Tensor &out,                            // [token_cnt, dim]
++               torch::Tensor &input,                          // [token_cnt, dim] M,K
++               torch::Tensor &gate,                           // [expert, inter_dim*2, dim] N,K
++               torch::Tensor &down,                           // [expert, dim, inter_dim]
++               torch::Tensor &sorted_token_ids,               // [max_num_tokens_padded]
++               torch::Tensor &sorted_weight_buf,              // [max_num_tokens_padded]
++               torch::Tensor &sorted_expert_ids,              // [max_num_m_blocks]
++               torch::Tensor &num_valid_ids,                  // [1]
++               uint32_t topk,                                 //
++               torch::Tensor &input_scale,                    // [token_cnt, 1]
++               torch::Tensor &fc1_scale,                      // [expert, 1, inter_dim]
++               torch::Tensor &fc2_scale,                      // [expert, 1, dim]
++               std::optional<torch::Tensor> fc2_smooth_scale, // [expert, 1, inter_dim]
++               ActivationType activation)
++{
++    struct FMoeKernelConfig
++    {
++        std::string name;
++        std::string co_name;
++        int tile_size;
++    };
++    FMoeKernel *impl_ptr = nullptr;
++    int inter_dim = down.size(2);
++    int sub_X_cnt = sorted_expert_ids.size(0);
++    static std::unordered_map<std::string, std::unique_ptr<FMoeKernel>> impl_ptr_map;
++    if (input.dtype() == at::ScalarType::Float8_e4m3fnuz)
++    {
++        static std::unordered_map<int, FMoeKernelConfig> silu_kernel_fp8_configs = {
++            {512, {"fmoe_fp8_g1u1_subGU_512_silu_tkw1", "fmoe/silu/fmoe_fp8_g1u1_subGU_512_silu_tkw1.co", 512}},
++            {448, {"fmoe_fp8_g1u1_subGU_448_silu_tkw1", "fmoe/silu/fmoe_fp8_g1u1_subGU_448_silu_tkw1.co", 448}},
++            {384, {"fmoe_fp8_g1u1_subGU_384_silu_tkw1", "fmoe/silu/fmoe_fp8_g1u1_subGU_384_silu_tkw1.co", 384}},
++            {320, {"fmoe_fp8_g1u1_subGU_320_silu_tkw1", "fmoe/silu/fmoe_fp8_g1u1_subGU_320_silu_tkw1.co", 320}},
++            {256, {"fmoe_fp8_g1u1_subGU_256_silu_tkw1", "fmoe/silu/fmoe_fp8_g1u1_subGU_256_silu_tkw1.co", 256}},
++            {192, {"fmoe_fp8_g1u1_subGU_192_silu_tkw1", "fmoe/silu/fmoe_fp8_g1u1_subGU_192_silu_tkw1.co", 192}},
++            {128, {"fmoe_fp8_g1u1_subGU_128_silu_tkw1", "fmoe/silu/fmoe_fp8_g1u1_subGU_128_silu_tkw1.co", 128}}};
++
++        static std::unordered_map<int, FMoeKernelConfig> gelu_kernel_fp8_configs = {
++            {512, {"fmoe_fp8_g1u1_subGU_512_gelu_tkw1", "fmoe/gelu/fmoe_fp8_g1u1_subGU_512_gelu_tkw1.co", 512}},
++            {448, {"fmoe_fp8_g1u1_subGU_448_gelu_tkw1", "fmoe/gelu/fmoe_fp8_g1u1_subGU_448_gelu_tkw1.co", 448}},
++            {384, {"fmoe_fp8_g1u1_subGU_384_gelu_tkw1", "fmoe/gelu/fmoe_fp8_g1u1_subGU_384_gelu_tkw1.co", 384}},
++            {320, {"fmoe_fp8_g1u1_subGU_320_gelu_tkw1", "fmoe/gelu/fmoe_fp8_g1u1_subGU_320_gelu_tkw1.co", 320}},
++            {256, {"fmoe_fp8_g1u1_subGU_256_gelu_tkw1", "fmoe/gelu/fmoe_fp8_g1u1_subGU_256_gelu_tkw1.co", 256}},
++            {192, {"fmoe_fp8_g1u1_subGU_192_gelu_tkw1", "fmoe/gelu/fmoe_fp8_g1u1_subGU_192_gelu_tkw1.co", 192}},
++            {128, {"fmoe_fp8_g1u1_subGU_128_gelu_tkw1", "fmoe/gelu/fmoe_fp8_g1u1_subGU_128_gelu_tkw1.co", 128}}};
++
++        int selectedTile = get_heuristic_tile(inter_dim, sub_X_cnt, {512, 448, 384, 320, 256, 192, 128});
++
++        std::unordered_map<int, FMoeKernelConfig> *config_map = nullptr;
++        if (fc2_smooth_scale.has_value())
++        {
++            TORCH_CHECK(false, __func__, " Only supput non-smooth tkw1!");
++        }
++        else if (activation == ActivationType::Gelu)
++        {
++            config_map = &gelu_kernel_fp8_configs;
++        }
++        else if (activation == ActivationType::Silu)
++        {
++            config_map = &silu_kernel_fp8_configs;
++        }
++
++        if (config_map)
++        {
++            auto it = config_map->find(selectedTile);
++            if (it != config_map->end())
++            {
++                const auto &config = it->second;
++                const char *name = config.name.c_str();
++                const char *co_name = config.co_name.c_str();
++
++                auto result = impl_ptr_map.emplace(name, nullptr);
++                if (result.second)
++                {
++                    result.first->second = std::make_unique<FMoeKernel>(name, co_name, config.tile_size);
++                }
++                impl_ptr = result.first->second.get();
++            }
++            else
++                TORCH_CHECK(false, __func__, " Unsupported inter_dim " + std::to_string(inter_dim) + ", which should be divisible by 128, 192, 256, 320, 384, 448 or 512");
++        }
++        else
++        {
++            TORCH_CHECK(false, __func__, "No valid kernel selected!");
++        }
++    }
++    else
++    {
++        TORCH_CHECK(false, __func__, " Input only supput Fp8!");
++    }
++
++    impl_ptr->launch_kernel<uint8_t, uint16_t>(out,
++                                               input,
++                                               gate,
++                                               down,
++                                               sorted_token_ids,
++                                               sorted_weight_buf,
++                                               sorted_expert_ids,
++                                               num_valid_ids,
++                                               topk,
++                                               // quant args
++                                               input_scale,
++                                               fc1_scale,
++                                               fc2_scale,
++                                               fc2_smooth_scale);
++}
++
+ void fmoe_int8_g1u0_a16(torch::Tensor &out,               // [token_cnt, dim]
+                         torch::Tensor &input,             // [token_cnt, dim] M,K
+                         torch::Tensor &gate,              // [expert, inter_dim, dim] N,K
+diff --git a/hsa/fmoe/gelu/fmoe_fp8_g1u1_subGU_128_gelu_tkw1.co b/hsa/fmoe/gelu/fmoe_fp8_g1u1_subGU_128_gelu_tkw1.co
+new file mode 100755
+index 0000000000..73c5dafe62
+Binary files /dev/null and b/hsa/fmoe/gelu/fmoe_fp8_g1u1_subGU_128_gelu_tkw1.co differ
+diff --git a/hsa/fmoe/gelu/fmoe_fp8_g1u1_subGU_192_gelu_tkw1.co b/hsa/fmoe/gelu/fmoe_fp8_g1u1_subGU_192_gelu_tkw1.co
+new file mode 100755
+index 0000000000..6ccebec555
+Binary files /dev/null and b/hsa/fmoe/gelu/fmoe_fp8_g1u1_subGU_192_gelu_tkw1.co differ
+diff --git a/hsa/fmoe/gelu/fmoe_fp8_g1u1_subGU_256_gelu_tkw1.co b/hsa/fmoe/gelu/fmoe_fp8_g1u1_subGU_256_gelu_tkw1.co
+new file mode 100755
+index 0000000000..fb0e659016
+Binary files /dev/null and b/hsa/fmoe/gelu/fmoe_fp8_g1u1_subGU_256_gelu_tkw1.co differ
+diff --git a/hsa/fmoe/gelu/fmoe_fp8_g1u1_subGU_320_gelu_tkw1.co b/hsa/fmoe/gelu/fmoe_fp8_g1u1_subGU_320_gelu_tkw1.co
+new file mode 100755
+index 0000000000..946b229f29
+Binary files /dev/null and b/hsa/fmoe/gelu/fmoe_fp8_g1u1_subGU_320_gelu_tkw1.co differ
+diff --git a/hsa/fmoe/gelu/fmoe_fp8_g1u1_subGU_384_gelu_tkw1.co b/hsa/fmoe/gelu/fmoe_fp8_g1u1_subGU_384_gelu_tkw1.co
+new file mode 100755
+index 0000000000..775dfec875
+Binary files /dev/null and b/hsa/fmoe/gelu/fmoe_fp8_g1u1_subGU_384_gelu_tkw1.co differ
+diff --git a/hsa/fmoe/gelu/fmoe_fp8_g1u1_subGU_448_gelu_tkw1.co b/hsa/fmoe/gelu/fmoe_fp8_g1u1_subGU_448_gelu_tkw1.co
+new file mode 100755
+index 0000000000..a343142e4e
+Binary files /dev/null and b/hsa/fmoe/gelu/fmoe_fp8_g1u1_subGU_448_gelu_tkw1.co differ
+diff --git a/hsa/fmoe/gelu/fmoe_fp8_g1u1_subGU_512_gelu_tkw1.co b/hsa/fmoe/gelu/fmoe_fp8_g1u1_subGU_512_gelu_tkw1.co
+new file mode 100755
+index 0000000000..f4402683c4
+Binary files /dev/null and b/hsa/fmoe/gelu/fmoe_fp8_g1u1_subGU_512_gelu_tkw1.co differ
+diff --git a/hsa/fmoe/silu/fmoe_fp8_g1u1_subGU_128_silu_tkw1.co b/hsa/fmoe/silu/fmoe_fp8_g1u1_subGU_128_silu_tkw1.co
+new file mode 100755
+index 0000000000..140a5a662c
+Binary files /dev/null and b/hsa/fmoe/silu/fmoe_fp8_g1u1_subGU_128_silu_tkw1.co differ
+diff --git a/hsa/fmoe/silu/fmoe_fp8_g1u1_subGU_192_silu_tkw1.co b/hsa/fmoe/silu/fmoe_fp8_g1u1_subGU_192_silu_tkw1.co
+new file mode 100755
+index 0000000000..634e8b3b63
+Binary files /dev/null and b/hsa/fmoe/silu/fmoe_fp8_g1u1_subGU_192_silu_tkw1.co differ
+diff --git a/hsa/fmoe/silu/fmoe_fp8_g1u1_subGU_256_silu_tkw1.co b/hsa/fmoe/silu/fmoe_fp8_g1u1_subGU_256_silu_tkw1.co
+new file mode 100755
+index 0000000000..6a6e7ac237
+Binary files /dev/null and b/hsa/fmoe/silu/fmoe_fp8_g1u1_subGU_256_silu_tkw1.co differ
+diff --git a/hsa/fmoe/silu/fmoe_fp8_g1u1_subGU_320_silu_tkw1.co b/hsa/fmoe/silu/fmoe_fp8_g1u1_subGU_320_silu_tkw1.co
+new file mode 100755
+index 0000000000..18cf2eee47
+Binary files /dev/null and b/hsa/fmoe/silu/fmoe_fp8_g1u1_subGU_320_silu_tkw1.co differ
+diff --git a/hsa/fmoe/silu/fmoe_fp8_g1u1_subGU_384_silu_tkw1.co b/hsa/fmoe/silu/fmoe_fp8_g1u1_subGU_384_silu_tkw1.co
+new file mode 100755
+index 0000000000..f70556bde4
+Binary files /dev/null and b/hsa/fmoe/silu/fmoe_fp8_g1u1_subGU_384_silu_tkw1.co differ
+diff --git a/hsa/fmoe/silu/fmoe_fp8_g1u1_subGU_448_silu_tkw1.co b/hsa/fmoe/silu/fmoe_fp8_g1u1_subGU_448_silu_tkw1.co
+new file mode 100755
+index 0000000000..d4e0737f6d
+Binary files /dev/null and b/hsa/fmoe/silu/fmoe_fp8_g1u1_subGU_448_silu_tkw1.co differ
+diff --git a/hsa/fmoe/silu/fmoe_fp8_g1u1_subGU_512_silu_tkw1.co b/hsa/fmoe/silu/fmoe_fp8_g1u1_subGU_512_silu_tkw1.co
+new file mode 100755
+index 0000000000..d1dca2e360
+Binary files /dev/null and b/hsa/fmoe/silu/fmoe_fp8_g1u1_subGU_512_silu_tkw1.co differ
+diff --git a/op_tests/test_moe.py b/op_tests/test_moe.py
+old mode 100644
+new mode 100755
+index 3216b95d01..54bcf4c60e
+--- a/op_tests/test_moe.py
++++ b/op_tests/test_moe.py
+@@ -244,7 +244,6 @@ def calculateTensorsSize(*args):
+         # out_ck, avg_ck = ck_moe_test(input, w1b, w2b, topk_weights, topk_ids,
+         #                              fc1_scale, fc2_scale,
+         #                              fc1_smooth_scale, fc2_smooth_scale)
+-
+         msg = f"[perf] {use_g1u1=} {token=}, quant={quantstr}, {model_dim=}, {inter_dim=}, {E=}, {shared_E=}, {topk=}, dtype: {dtype}, torch_avg: {avg_c:<8.2f} us, asm_avg: {avg_b:.2f} us ...... uplift: {avg_c/avg_b-1:.1%}"
+         checkAllclose(ref2, out_b, rtol=0.01, atol=100, msg=msg)
+         # checkAllclose(ref2, avg_ck, rtol=0.01, atol=100)
+diff --git a/op_tests/test_moe_tkw1.py b/op_tests/test_moe_tkw1.py
+new file mode 100644
+index 0000000000..caefea9179
+--- /dev/null
++++ b/op_tests/test_moe_tkw1.py
+@@ -0,0 +1,254 @@
++# SPDX-License-Identifier: MIT
++# Copyright (c) 2024, Advanced Micro Devices, Inc. All rights reserved.
++
++import torch
++import torch.nn.functional as F
++import triton.language as tl
++import numpy as np
++import sys
++import os
++from typing import Any, Callable, Dict, Optional, Tuple
++from aiter.test_common import checkAllclose, perftest
++from aiter.fused_moe_bf16_asm import asm_moe_tkw1, torch_moe_tkw1, moe_sorting_ck,torch_moe
++from aiter.fused_moe_gelu import fused_topk, moe_align_block_size, fused_experts
++from aiter.ops.shuffle import shuffle_weight
++from aiter import pertoken_quant, ck_moe
++from int4_utils import *
++from aiter import ActivationType
++
++BLOCK_SIZE_M = 32
++
++def permute_weight_a(x: torch.Tensor) -> torch.Tensor:
++    # Hardcode BLOCK_K and BLOCK_N
++    BK = 128
++    BN = 128
++    x_ = x
++    x_ = x_.view(x.shape[0],
++                 x.shape[1]//BN, BN//16, 16,
++                 x.shape[2]//BK, BK//32, 4, 8)
++    x_ = x_.permute(0, 1, 5, 2, 6, 4, 3, 7)
++    x_ = x_.contiguous()
++    x_ = x_.view(x.shape[0], x.shape[1], x.shape[2])
++    return x_
++
++@perftest(num_warmup=1, num_iters=2)
++def torch_moe_test(hidden_states, w1, w2, topk_weight, topk_ids,
++                   # following for int8 quant
++                   fc1_scale=None,  # [expert, inter_dim, 1]
++                   fc2_scale=None,  # [expert, model_dim, 1]
++                   fc1_smooth_scale=None,  # [expert, 1, model_dim]
++                   fc2_smooth_scale=None,  # [expert, 1, inter_dim]
++                   activation = ActivationType.Silu
++                   ):
++    return torch_moe_tkw1(hidden_states,
++                     w1,
++                     w2,
++                     topk_weight,
++                     topk_ids, fc1_scale, fc2_scale, fc1_smooth_scale, fc2_smooth_scale,
++                     None, activation)
++
++
++@perftest()
++def asm_moe_test(hidden_states, w1, w2, topk_weight, topk_ids,
++                 # following for int8 quant
++                 fc1_scale=None,  # [expert, inter_dim, 1]
++                 fc2_scale=None,  # [expert, model_dim, 1]
++                 fc1_smooth_scale=None,  # [expert, 1, model_dim]
++                 fc2_smooth_scale=None,  # [expert, 1, inter_dim]
++                 a16=False,
++                 activation = ActivationType.Silu
++                 ):
++    return asm_moe_tkw1(hidden_states,
++                   w1,
++                   w2,
++                   topk_weight,
++                   topk_ids, fc1_scale, fc2_scale, fc1_smooth_scale, fc2_smooth_scale, a16, None, None, activation)
++
++
++@perftest()
++def ck_moe_test(hidden_states, w1, w2, topk_weight, topk_ids,
++                # following for int8 quant
++                fc1_scale=None,  # [expert, inter_dim, 1]
++                fc2_scale=None,  # [expert, model_dim, 1]
++                fc1_smooth_scale=None,  # [expert, 1, model_dim]
++                fc2_smooth_scale=None,  # [expert, 1, inter_dim]
++                ):
++    return ck_moe(hidden_states,
++                  w1,
++                  w2,
++                  topk_weight,
++                  topk_ids,
++                  fc1_scale, fc2_scale, fc1_smooth_scale, fc2_smooth_scale)
++
++
++@perftest()
++def vllm_moe(hidden_states, w1, w2, topk_weight, topk_ids):
++    return fused_experts(hidden_states,
++                         w1,
++                         w2,
++                         topk_weight,
++                         topk_ids,
++                         inplace=False)
++
++
++quant_algo = [
++    "No",  # g1u0/ck(g1ux) support
++    "int8quant",  # g1u1 support
++    "fp8quant",  # g1u1 support
++    "int8smoothquant",  # g1u1/g1u0 support
++    "fp8smoothquant",  # g1u1 support
++    "wint4afp8smoothquant", # g1u1 support
++]
++
++
++def test_fmoe(dtype, token, model_dim, inter_dim, E, topk, quant='No', use_g1u1=False, shared_E=0, activation = ActivationType.Silu):
++    quantAlgoId = quant_algo.index(quant)
++    if quantAlgoId not in [0, 3] and not use_g1u1:
++        print("g1u0 only could test no quant and int8smoothquant")
++        return
++
++    quantstr = quant_algo[quantAlgoId]
++    use_int4 = "wint4" in quantstr
++    quant_dtype = torch.int8 if use_int4 or quantstr.startswith(
++        'int8') else torch.float8_e4m3fnuz
++    use_smooth = 'smooth' in quantstr
++    input = torch.randn((token, model_dim), dtype=dtype, device="cuda")
++    if use_g1u1:
++        w1 = torch.randn((E+shared_E, inter_dim*2, model_dim),
++                         dtype=dtype, device="cuda") /10
++    else:
++        w1 = torch.randn((E+shared_E, inter_dim, model_dim),
++                         dtype=dtype, device="cuda")
++    w2 = torch.randn((E+shared_E, model_dim, inter_dim),
++                     dtype=dtype, device="cuda") 
++    score = torch.randn((token, E), device="cuda", dtype=dtype)
++    topk_weights, topk_ids = fused_topk(input, score, topk, True)
++    if shared_E > 0:
++        shared_E_score = 0.5
++        s_topk_weights = torch.tensor([[shared_E_score, shared_E_score],] * token,
++                                      dtype=torch.float32,
++                                      device=input.device)
++        topk_weights = torch.cat((topk_weights, s_topk_weights), dim=1)
++        s_topk_ids = torch.tensor([[E, E+1],] * token,
++                                  dtype=torch.int32,
++                                  device=input.device)
++        topk_ids = torch.cat((topk_ids, s_topk_ids), dim=1)
++
++    # ref implement
++    # w1a = permute_weight_a(w1)
++    # w2a = permute_weight_a(w2)
++    w1a = w1
++    w2a = w2
++    avg_a = 1
++    # ref1, avg_a = vllm_moe(input,
++    #                        w1a,
++    #                        w2a,
++    #                        topk_weights,
++    #                        topk_ids)
++    # print(f'{ref1=}')
++    #print("quantAlgoId" ,quantAlgoId)
++    if quantAlgoId == 0:
++        # ref2 implement
++        ref2, avg_c = torch_moe_test(input,
++                                     w1,
++                                     w2,
++                                     topk_weights,
++                                     topk_ids)
++
++        # b implement
++        w1b = shuffle_weight(w1)
++        w2b = shuffle_weight(w2)
++
++        if use_g1u1:
++            out_b = ref2
++            avg_b = 9999
++            print("asm g1u1 only support quant/smoothquant Now")
++        else:
++            out_b, avg_b = asm_moe_test(
++                input, w1b, w2b, topk_weights, topk_ids)
++
++        # test ck moe
++        out_ck, avg_ck = ck_moe_test(input, w1b, w2b, topk_weights, topk_ids,
++                                     None, None,
++                                     None, None)
++
++        msg = f"[perf] {token=}, quant={quantstr}, {model_dim=}, {inter_dim=}, {E=}, {topk=}, dtype: {dtype}, torch_avg: {avg_c:<8.2f} us, asm_avg: {avg_b:.2f} us, ck_avg: {avg_ck:.2f} us, uplift: {avg_c/avg_b-1:.1%}"
++        checkAllclose(ref2, out_b, rtol=0.01, atol=100, msg=msg)
++        checkAllclose(ref2, out_ck, rtol=0.01, atol=100, msg="ck check")
++    else:
++        dtypeMax = 7 if use_int4 else None
++        w1, fc1_scale = pertoken_quant(
++            w1, torch.float, quant_dtype=quant_dtype, dtypeMax=dtypeMax)
++        w2, fc2_scale = pertoken_quant(
++            w2, torch.float, quant_dtype=quant_dtype, dtypeMax=dtypeMax)
++
++        sp1 = (E+shared_E, inter_dim)
++        sp2 = (E+shared_E, model_dim)
++
++        if not use_smooth:
++            fc1_smooth_scale = None
++            fc2_smooth_scale = None
++        else:
++            if use_int4:
++                #fixme @felix: hack here, int4 kernel need this buffer but not used, so ones.
++                # [expert, 1, model_dim]
++                fc1_smooth_scale = torch.ones(sp2, dtype=torch.float, device="cuda")
++                # [expert, 1, inter_dim]
++                fc2_smooth_scale = torch.ones(sp1, dtype=torch.float, device="cuda")
++            else:
++                # [expert, 1, model_dim]
++                fc1_smooth_scale = torch.randn(sp2, dtype=torch.float, device="cuda")
++                # [expert, 1, inter_dim]
++                fc2_smooth_scale = torch.randn(sp1, dtype=torch.float, device="cuda")
++
++        # ref2 implement
++        ref2, avg_c = torch_moe_test(input, w1, w2, topk_weights, topk_ids,
++                                     fc1_scale, fc2_scale,
++                                     fc1_smooth_scale, fc2_smooth_scale, activation)
++
++        # b implement
++        if use_int4:
++            w1 = rearrange_4bit_elements(convert_int8_to_uint32_int4(w1))
++            w2 = rearrange_4bit_elements(convert_int8_to_uint32_int4(w2))
++        w1b = shuffle_weight(w1)
++        w2b = shuffle_weight(w2)
++        out_b, avg_b = asm_moe_test(input, w1b, w2b, topk_weights, topk_ids,
++                                    fc1_scale, fc2_scale,
++                                    fc1_smooth_scale, fc2_smooth_scale,
++                                    a16=False, activation=activation)
++
++        def calculateTensorsSize(*args):
++            num_btype = 0
++            for el in args:
++                if isinstance(el, torch.Tensor):
++                    num_btype += el.element_size() * el.numel()
++            return num_btype
++
++        num_tb = calculateTensorsSize(input, input, w1b, w2b, topk_weights, topk_ids,
++                                      fc1_scale, fc2_scale,
++                                      fc1_smooth_scale, fc2_smooth_scale) / (1024*1024*1024*1024.0)
++        bw = num_tb * 1e6 / avg_b
++        print(f"[BW  ] {token=}, quant={quantstr}, {model_dim=}, {inter_dim=}, {E=}, {shared_E=}, {topk=}, dtype: {dtype}, asm_bandwidth: {bw:.2f}TB/s")
++
++        if use_smooth and (inter_dim % 512 == 0 or
++                           inter_dim % 320 == 0
++                           ) and (
++            (w1b.dtype == torch.float8_e4m3fnuz and inter_dim*2 == w1b.shape[1]) or
++                (w1b.dtype == torch.int8 and inter_dim == w1b.shape[1])):
++            out_b2, avg_b2 = asm_moe_test(input, w1b, w2b, topk_weights, topk_ids,
++                                          fc1_scale, fc2_scale, fc1_smooth_scale, fc2_smooth_scale, a16=True, activation=activation)
++            msg = f'[perf] a8w8 asm: {avg_b:.2f} vs a16w8 asm: {avg_b2:.2f} ......'
++            checkAllclose(ref2, out_b2, atol=100, msg=msg)
++
++        msg = f"[perf] {use_g1u1=} {token=}, quant={quantstr}, {model_dim=}, {inter_dim=}, {E=}, {shared_E=}, {topk=}, dtype: {dtype}, torch_avg: {avg_c:<8.2f} us, asm_avg: {avg_b:.2f} us ...... uplift: {avg_c/avg_b-1:.1%}"
++        checkAllclose(ref2, out_b, rtol=0.01, atol=100, msg=msg)
++        # checkAllclose(ref2, avg_ck, rtol=0.01, atol=100)
++
++print('\ng1u1 fp8quant')
++for dtype in [torch.bfloat16]:
++    for m in [128,256]:
++        for dim in [4096,8192]:
++            for hdim in [1024,2048]:
++                test_fmoe(dtype, m, dim, hdim, 32, 5,
++                          quant='fp8quant', use_g1u1=True, shared_E=0, activation=ActivationType.Gelu)
++                        #   quant='fp8quant', use_g1u1=True)

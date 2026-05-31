@@ -1,0 +1,1292 @@
+diff --git a/aiter/fused_moe.py b/aiter/fused_moe.py
+index e1151a1624..cf4ba6ecda 100644
+--- a/aiter/fused_moe.py
++++ b/aiter/fused_moe.py
+@@ -10,10 +10,9 @@
+ from aiter import ActivationType, QuantType, dtypes
+ from aiter.utility import fp4_utils
+ 
+-from aiter import get_hip_quant as get_quant
+-
+ # from aiter import get_torch_quant as get_quant
+-# from aiter import get_triton_quant as get_quant
++from aiter import get_hip_quant as get_quant
++from aiter.utility.fp4_utils import moe_mxfp4_sort
+ from aiter.jit.core import AITER_ROOT_DIR, PY, get_asm_dir, bd_dir, mp_lock
+ from aiter.jit.utils.chip_info import get_cu_num
+ 
+@@ -128,7 +127,8 @@ def fused_moe(
+             doweight_stage1,
+         )
+     run_1stage = M < 256
+-    run_1stage = quant_type in [QuantType.per_128x128, QuantType.per_1x32]
++    # run_1stage = quant_type in [QuantType.per_128x128, QuantType.per_1x32]
++    run_1stage = quant_type in [QuantType.per_128x128]
+     block_size_M = 32 if run_1stage else block_size_M
+ 
+     sorted_ids, sorted_weights, sorted_expert_ids, num_valid_ids, moe_buf = moe_sorting(
+@@ -404,7 +404,12 @@ def FinalFunc():
+     tag = f"({kernelName1=}, {kernelName2=})"
+     logger.info(f"[fused_moe] using {'default' if cfg is None else tag} for {keys} ")
+ 
+-    if "ck" in kernelName1 or q_dtype_w in [dtypes.bf16, dtypes.fp16, torch.uint32]:
++    if "ck" in kernelName1 or q_dtype_w in [
++        dtypes.bf16,
++        dtypes.fp16,
++        torch.uint32,
++        torch.uint8,
++    ]:
+         return (
+             functools.partial(
+                 aiter.ck_moe_stage1_fwd,
+@@ -446,11 +451,6 @@ def FinalFunc():
+     )
+ 
+ 
+-@functools.lru_cache()
+-def get1tensor(device):
+-    return torch.tensor(1.0, dtype=torch.float, device=device)
+-
+-
+ def fused_moe_2stages(
+     hidden_states,
+     w1,  # [expert(local_expert:EP), inter_dim*2, dim] N,K
+@@ -497,7 +497,16 @@ def fused_moe_2stages(
+         doweight_stage1,
+     )
+ 
+-    if hidden_states.dtype != q_dtype_a:
++    if quant_type == QuantType.per_1x32:
++        a1, a1_scale = quant_func(hidden_states, scale=a1_scale, quant_dtype=q_dtype_a)
++        a1_scale = moe_mxfp4_sort(
++            a1_scale,
++            sorted_ids=sorted_ids,
++            num_valid_ids=num_valid_ids,
++            token_num=token_num,
++            block_size=block_size_M,
++        )
++    elif hidden_states.dtype != q_dtype_a:
+         a1, a1_scale = quant_func(hidden_states, scale=a1_scale, quant_dtype=q_dtype_a)
+     else:
+         assert (
+@@ -527,13 +536,25 @@ def fused_moe_2stages(
+         num_valid_ids,
+         a2,
+         topk,
+-        block_m=block_m,
++        block_m=block_size_M,
+         a1_scale=a1_scale,
+         w1_scale=w1_scale,
+         sorted_weights=sorted_weights if doweight_stage1 else None,
+     )
+ 
+-    if quant_type != QuantType.per_128x128:
++    if quant_type == QuantType.per_1x32:
++        a2 = a2.view(-1, inter_dim)
++        a2, a2_scale = quant_func(a2, scale=a2_scale, quant_dtype=q_dtype_a)
++        a2 = a2.view(token_num, topk, -1)
++        a2_scale = moe_mxfp4_sort(
++            a2_scale[: token_num * topk, :].view(token_num, topk, -1),
++            sorted_ids=sorted_ids,
++            num_valid_ids=num_valid_ids,
++            token_num=token_num,
++            block_size=block_size_M,
++        )
++
++    elif quant_type != QuantType.per_128x128:
+         a2, a2_scale = quant_func(a2, scale=a2_scale, quant_dtype=q_dtype_a)
+         a2 = a2.view(token_num, topk, inter_dim)
+     else:
+@@ -546,9 +567,6 @@ def fused_moe_2stages(
+         )
+         a2 = a2_v
+ 
+-    if quant_type == aiter.QuantType.No:
+-        a2_scale = get1tensor(device)
+-
+     stage2(
+         a2,
+         w1,
+@@ -783,7 +801,6 @@ def torch_moe_stage1(
+             if doweight:
+                 act_input = act_input * topk_weight[mask].view(-1, 1)
+             out[mask] = act_input
+-
+     use_g1u1 = w1.shape[1] == (2 * inter_dim)
+     torch_act = aiter.get_torch_act(activation)
+     if use_g1u1:
+@@ -839,6 +856,7 @@ def torch_moe_stage2(
+         w2 = w2.view(w2_shape)
+     elif quant_type == QuantType.per_1x32:
+         a2_shape = hidden_states.shape
++        a2_scale = a2_scale[: a2_shape[0] * topk]
+         a2_scale = a2_scale.view(token_num, topk, inter_dim // 32, 1)
+         hidden_states = (
+             hidden_states.view(token_num, topk, inter_dim // 32, 32) * a2_scale
+diff --git a/aiter/jit/optCompilerConfig.json b/aiter/jit/optCompilerConfig.json
+index b744be6164..9055c841b5 100644
+--- a/aiter/jit/optCompilerConfig.json
++++ b/aiter/jit/optCompilerConfig.json
+@@ -297,6 +297,7 @@
+             "f'{AITER_CSRC_DIR}/pybind/moe_ck_2stages_pybind.cu'",
+             "f'{AITER_CSRC_DIR}/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages.cu'",
+             "f'{AITER_CSRC_DIR}/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages_common.cuh'",
++            "f'{AITER_CSRC_DIR}/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages_common_mxfp4.cuh'",
+             "f'{AITER_CSRC_DIR}/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages_common_blockscale.cuh'",
+             "f'{AITER_CSRC_DIR}/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages.h'"
+         ],
+@@ -305,11 +306,16 @@
+             "f'-DMOE_STAGE2_ASM_DIR=\\\\\"{CK_DIR}/example/65_gemm_multiply_multiply/hsa/{get_gfx()}/\\\\\"'"
+         ],
+         "flags_extra_hip": [
+-            "'-mllvm --amdgpu-enable-max-ilp-scheduling-strategy=1'"
++            "'-mllvm --amdgpu-enable-max-ilp-scheduling-strategy=1'",
++            "'-mllvm -greedy-reverse-local-assignment=1'",
++            "'-mllvm --amdgpu-use-amdgpu-trackers=1'",
++            "'-mllvm --slp-threshold=-32'",
++            "'-mllvm --misched-bottomup=1'"
+         ],
+         "extra_ldflags": "None",
+         "extra_include": [],
+         "verbose": "False",
++        "hip_clang_path": "os.environ.get('GEMM_A4W4_BLOCKWISE_HIP_CLANG_PATH')",
+         "blob_gen_cmd": "''"
+     },
+     "module_moe_sorting": {
+diff --git a/aiter/ops/moe_op.py b/aiter/ops/moe_op.py
+index 0e4c46562b..fc33e21ab5 100755
+--- a/aiter/ops/moe_op.py
++++ b/aiter/ops/moe_op.py
+@@ -228,6 +228,7 @@ def ck_moe_stage2(
+     dtypes.bf16: "b16",
+     dtypes.fp8: "f8",
+     dtypes.i8: "i8",
++    torch.uint8: "fp4x2",
+     torch.uint32: "i4",
+ }
+ 
+diff --git a/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages.cu b/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages.cu
+index e66c4bf99c..25fcbf3827 100644
+--- a/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages.cu
++++ b/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages.cu
+@@ -13,7 +13,7 @@ using MoeKernelMap = std::unordered_map<std::string, MoeKernel>;
+ // API for user aiter.ck_moe_stage1(...)
+ 
+ template <int stage = 1>
+-MoeKernel moe_dispatch(std::string &kernelName, int block_m)
++MoeKernel moe_dispatch(std::string &kernelName, int block_m, int inter_dim)
+ {
+     static const auto lookup = []
+     {
+@@ -36,7 +36,7 @@ MoeKernel moe_dispatch(std::string &kernelName, int block_m)
+     }
+     else
+     {
+-        return moe_stage2_heuristic_dispatch(block_m);
++        return moe_stage2_heuristic_dispatch(block_m, inter_dim);
+     }
+ }
+ 
+@@ -83,7 +83,12 @@ void ck_moe_stage1(torch::Tensor &hidden_states,     // [m, k], input token
+         return;
+     }
+ 
+-    auto kernel = moe_dispatch<1>(kernelName, MPerBlock);
++    if (hidden_states.dtype() == at::ScalarType::Byte && w1.dtype() == at::ScalarType::Byte)
++    {
++        K *= 2;
++    }
++
++    auto kernel = moe_dispatch<1>(kernelName, MPerBlock, N);
+ 
+     kernel(at::cuda::getCurrentCUDAStream().stream(),
+            tokens, sorted_size, N, K, topk,
+@@ -129,8 +134,11 @@ void ck_moe_stage2(torch::Tensor &inter_states,      // [m, k], input token
+         std::cerr << "detect null ptr !" << std::endl;
+         return;
+     }
+-
+-    auto kernel = moe_dispatch<2>(kernelName, MPerBlock);
++    if (inter_states.dtype() == at::ScalarType::Byte && w2.dtype() == at::ScalarType::Byte)
++    {
++        K *= 2;
++    }
++    auto kernel = moe_dispatch<2>(kernelName, MPerBlock, K);
+ 
+     kernel(at::cuda::getCurrentCUDAStream().stream(),
+            tokens, sorted_size, N, K, topk,
+diff --git a/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages.h b/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages.h
+index dc2c84b7b5..9a7acbc3e6 100644
+--- a/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages.h
++++ b/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages.h
+@@ -18,14 +18,16 @@
+ #include <torch/torch.h>
+ 
+ template <ck::index_t... Is>
+-using S   = ck::Sequence<Is...>;
+-using I4  = ck::pk_i4_t;
+-using I8  = int8_t;
+-using I32 = int;
+-using F16 = ck::half_t;
+-using B16 = ck::bhalf_t;
+-using F8  = ck::f8_t;
+-using F32 = float;
++using S     = ck::Sequence<Is...>;
++using I4    = ck::pk_i4_t;
++using I8    = int8_t;
++using I32   = int;
++using F16   = ck::half_t;
++using B16   = ck::bhalf_t;
++using F8    = ck::f8_t;
++using F32   = float;
++using FP4X2 = ck::f4x2_pk_t;
++using E8M0  = ck::e8m0_bexp_t;
+ 
+ using Row = ck::tensor_layout::gemm::RowMajor;
+ using Col = ck::tensor_layout::gemm::ColumnMajor;
+diff --git a/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages_common.cuh b/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages_common.cuh
+index 1f3df2e542..4c04cbf614 100644
+--- a/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages_common.cuh
++++ b/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages_common.cuh
+@@ -250,7 +250,7 @@ void ck_moe_stage2_gemm(const hipStream_t &stream, int tokens, int sorted_size,
+               MXDLPerWave, NXDLPerWave,
+               S<K0_A, K0_M, 1>, S<1, 0, 2>, S<1, 0, 2>, 2, AK1, AK1, 0,
+               S<K0_B, K0_N, 1>, S<1, 0, 2>, S<1, 0, 2>, 2, BK1, BK1, 0,
+-              CShuffleMXDLPerWave,    1,   S<1, CShuffleMLane, 1, CShuffleNLane>, S<EVec, D0Vec, D1Vec, D2Vec>,
++              2,    CShuffleNXDLPerWave,   S<1, CShuffleMLane, 1, CShuffleNLane>, S<EVec, D0Vec, D1Vec, D2Vec>,
+               ck::BlockGemmPipelineScheduler::Intrawave, PipelineVer, 0, Nswizzle, false, MulRoutedWeight, !PerTensorQuant, ck::index_t, A0DataType>;
+ 
+ 
+diff --git a/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages_common.py b/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages_common.py
+index 4644f2e652..20f6131c15 100644
+--- a/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages_common.py
++++ b/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages_common.py
+@@ -1,6 +1,7 @@
+ # SPDX-License-Identifier: MIT
+ # Copyright (C) 2024-2025, Advanced Micro Devices, Inc. All rights reserved.
+ from dataclasses import dataclass
++from aiter.jit.utils.chip_info import get_gfx
+ 
+ 
+ @dataclass
+@@ -89,23 +90,64 @@ def name(self) -> str:
+ 
+ # fmt: off
+ # gemm1 out&AB:bf16/fp16
++a16w16_gemm1_kernels_list_gfx950= {
++#   id: kernel:             BLOCK_SIZE| MPerBLOCK| NPerBLOCK| KPerBLOCK| MWaves| NWaves|GemmPipelineVersion
++     0: kernelInstanceGEMM1(       256,        32,        64,       128,     1,       4,        1,),
++     1: kernelInstanceGEMM1(       256,        32,        64,        64,     1,       4,        1,),
++     2: kernelInstanceGEMM1(       256,        64,        64,       128,     1,       4,        1,),
++     3: kernelInstanceGEMM1(       256,        64,        64,        64,     1,       4,        1,),
++     4: kernelInstanceGEMM1(       256,       128,        64,        64,     1,       4,        1,),
++
++    #  5: kernelInstanceGEMM1(       256,        64,        64,       128,     1,       4,        3,),
++    #  6: kernelInstanceGEMM1(       256,        64,        64,        64,     1,       4,        3,),
++#      7: kernelInstanceGEMM1(       256,       128,        64,       128,     1,       4,        3,),
++#      8: kernelInstanceGEMM1(       256,       128,        64,        64,     1,       4,        3,),
++     9: kernelInstanceGEMM1(       256,       128,       128,        64,     1,       4,        3,),
++     10: kernelInstanceGEMM1(      256,       256,       128,        64,     1,       4,        3,),
++}
++
+ a16w16_gemm1_kernels_list= {
+ #   id: kernel:             BLOCK_SIZE| MPerBLOCK| NPerBLOCK| KPerBLOCK| MWaves| NWaves|GemmPipelineVersion
+      0: kernelInstanceGEMM1(       256,        32,        64,       128,     1,       4,        1,),
+      1: kernelInstanceGEMM1(       256,        32,        64,        64,     1,       4,        1,),
+      2: kernelInstanceGEMM1(       256,        64,        64,       128,     1,       4,        1,),
+      3: kernelInstanceGEMM1(       256,        64,        64,        64,     1,       4,        1,),
+-     4: kernelInstanceGEMM1(       256,       128,        64,        64,     2,       2,        1,),
+-    # 5: kernelInstanceGEMM1(       256,       128,       128,        64,     1,       4,        3,),
++     4: kernelInstanceGEMM1(       256,       128,        64,        64,     1,       4,        1,),
++
++     5: kernelInstanceGEMM1(       256,        64,       128,       128,     1,       4,        3,),
++    #  6: kernelInstanceGEMM1(       256,        64,       128,        64,     1,       4,        3,),
++     7: kernelInstanceGEMM1(       256,       128,       128,       128,     1,       4,        3,),
++     8: kernelInstanceGEMM1(       256,       128,       128,        64,     1,       4,        3,),
++     9: kernelInstanceGEMM1(      256,       256,       128,        64,     1,       4,        3,),
+ }
+ # gemm1 out:bf16/fp16 AB:fp8/i8
++a8w8_gemm1_kernels_list_gfx950= {
++     0: kernelInstanceGEMM1(       256,       32,         64,       256,     1,       4,        1,),
++     1: kernelInstanceGEMM1(       256,       32,         64,       128,     1,       4,        1,),
++     2: kernelInstanceGEMM1(       256,       64,         64,       256,     1,       4,        1,),
++     3: kernelInstanceGEMM1(       256,       64,         64,       128,     1,       4,        1,),
++     4: kernelInstanceGEMM1(       256,      128,         64,       128,     1,       4,        1,),
++
++    #  5: kernelInstanceGEMM1(       256,        64,        64,       256,     1,       4,        3,),
++    #  6: kernelInstanceGEMM1(       256,        64,        64,       128,     1,       4,        3,),
++    #  7: kernelInstanceGEMM1(       256,       128,        64,       256,     1,       4,        3,),
++    #  8: kernelInstanceGEMM1(       256,       128,        64,       128,     1,       4,        3,),
++     9: kernelInstanceGEMM1(       256,       128,       128,       128,     1,       4,        3,),
++     10: kernelInstanceGEMM1(      256,       256,       128,       128,     1,       4,        3,),
++}
++
+ a8w8_gemm1_kernels_list= {
+      0: kernelInstanceGEMM1(       256,       32,         64,       256,     1,       4,        1,),
+      1: kernelInstanceGEMM1(       256,       32,         64,       128,     1,       4,        1,),
+      2: kernelInstanceGEMM1(       256,       64,         64,       256,     1,       4,        1,),
+      3: kernelInstanceGEMM1(       256,       64,         64,       128,     1,       4,        1,),
+-     4: kernelInstanceGEMM1(       256,      128,         64,       128,     2,       2,        1,),
+-    # 5: kernelInstanceGEMM1(       256,      128,        128,       128,     1,       4,        3,),
++     4: kernelInstanceGEMM1(       256,      128,         64,       128,     1,       4,        1,),
++
++     5: kernelInstanceGEMM1(       256,        64,       128,       256,     1,       4,        3,),
++    #  6: kernelInstanceGEMM1(       256,        64,       128,       128,     1,       4,        3,),
++     7: kernelInstanceGEMM1(       256,       128,       128,       256,     1,       4,        3,),
++     8: kernelInstanceGEMM1(       256,       128,       128,       128,     1,       4,        3,),
++     9: kernelInstanceGEMM1(      256,       256,       128,       128,     1,       4,        3,),
+ }
+ # gemm1 blockscale out:bf16/fp16 AB:fp8/i8
+ a8w8_gemm1_blockscale_kernels_list= {
+@@ -119,31 +161,73 @@ def name(self) -> str:
+      0: kernelInstanceGEMM1(       256,       32,         64,       128,     1,       4,        1,),
+      1: kernelInstanceGEMM1(       256,       64,         64,       128,     1,       4,        1,),
+      2: kernelInstanceGEMM1(       256,      128,         64,       128,     1,       4,        1,),
+-    #3: kernelInstanceGEMM1(       256,      128,        256,       128,     1,       4,        3,),
++     3: kernelInstanceGEMM1(       256,      256,         64,       128,     1,       4,        1,),
++    #  3: kernelInstanceGEMM1(       256,       64,        128,       128,     1,       4,        3,),
++    #  4: kernelInstanceGEMM1(       256,      128,        128,       128,     1,       4,        3,),
++    #  5: kernelInstanceGEMM1(       256,      256,        128,       128,     1,       4,        3,),
++}
++
++# gemm1 out:bf16/fp16 A:mxfp4 B:mxfp4
++a4w4_gemm1_kernels_list= {
++     0: kernelInstanceGEMM1(       256,       32,         128,       128,     1,       4,        3,),
++     1: kernelInstanceGEMM1(       256,       64,          64,       128,     2,       2,        3,),
++     2: kernelInstanceGEMM1(       256,      128,          64,       128,     2,       2,        3,),
++    #  3: kernelInstanceGEMM1(       256,      256,         128,       128,     2,       2,        3,),
+ }
+ 
+ gemm1_kernels_dict = {
++    "a16w16_gfx950": a16w16_gemm1_kernels_list_gfx950,
+     "a16w16": a16w16_gemm1_kernels_list,
++    "a8w8_gfx950": a8w8_gemm1_kernels_list_gfx950,
+     "a8w8": a8w8_gemm1_kernels_list,
+     "a8w8blkscale": a8w8_gemm1_blockscale_kernels_list,
+     "a8w4": a8w4_gemm1_kernels_list,
++    "a4w4": a4w4_gemm1_kernels_list,
+ }
+ 
+ 
+-a16w16_gemm2_kernels_list= {
++a16w16_gemm2_kernels_list_gfx950= {
+ #   id: kernel:             BLOCK_SIZE| MPerBLOCK| NPerBLOCK| KPerBLOCK| MWaves| NWaves|GemmPipelineVersion
+ # gemm2 out&AB:bf16/fp16
+      0: kernelInstanceGEMM2(       256,        32,       128,       128,     1,       4,         1,),
+      1: kernelInstanceGEMM2(       256,        64,       128,       128,     1,       4,         1,),
+-     2: kernelInstanceGEMM2(       256,       128,       128,        64,     2,       2,         1,),
+-    # 3: kernelInstanceGEMM2(       256,       128,       256,        64,     1,       4,         3,),
++     2: kernelInstanceGEMM2(       256,       128,       128,        64,     1,       4,         1,),
++     3: kernelInstanceGEMM2(       256,       256,       128,        64,     1,       4,         1,),
++    #  4: kernelInstanceGEMM2(       256,        64,       128,       128,     1,       4,         3,),
++     5: kernelInstanceGEMM2(       256,       128,       128,        64,     1,       4,         3,),
++     6: kernelInstanceGEMM2(       256,       256,       128,        64,     1,       4,         3,),
++}
++
++a16w16_gemm2_kernels_list= {
++#   id: kernel:             BLOCK_SIZE| MPerBLOCK| NPerBLOCK| KPerBLOCK| MWaves| NWaves|GemmPipelineVersion
++# gemm2 out&AB:bf16/fp16
++     0: kernelInstanceGEMM2(       256,        32,        64,       128,     1,       4,         1,),
++     1: kernelInstanceGEMM2(       256,        64,        64,       128,     1,       4,         1,),
++     2: kernelInstanceGEMM2(       256,       128,        64,        64,     1,       4,         1,),
++     3: kernelInstanceGEMM2(       256,       256,        64,        64,     1,       4,         1,),
++     4: kernelInstanceGEMM2(       256,        64,       128,       128,     1,       4,         3,),
++     5: kernelInstanceGEMM2(       256,       128,       128,        64,     1,       4,         3,),
++     6: kernelInstanceGEMM2(       256,       256,       128,        64,     1,       4,         3,),
+ }
+ # gemm2 out:bf16/fp16 AB:fp8/i8
++a8w8_gemm2_kernels_list_gfx950= {
++     0: kernelInstanceGEMM2(       256,        32,       128,       256,     1,       4,         1,),
++     1: kernelInstanceGEMM2(       256,        64,       128,       256,     1,       4,         1,),
++     2: kernelInstanceGEMM2(       256,       128,       128,       128,     1,       4,         1,),
++     3: kernelInstanceGEMM2(       256,       256,       128,       128,     1,       4,         1,),
++    #  4: kernelInstanceGEMM2(       256,        64,       128,       256,     1,       4,         3,),
++     5: kernelInstanceGEMM2(       256,       128,       128,       128,     1,       4,         3,),
++     6: kernelInstanceGEMM2(       256,       256,       128,       128,     1,       4,         3,),
++}
++
+ a8w8_gemm2_kernels_list= {
+-     0: kernelInstanceGEMM2(       256,       32,        128,       256,     1,       4,         1,),
+-     1: kernelInstanceGEMM2(       256,       64,        128,       256,     1,       4,         1,),
+-     2: kernelInstanceGEMM2(       256,      128,        128,       128,     2,       2,         1,),
+-    # 3: kernelInstanceGEMM2(       256,      128,        256,       128,     1,       4,         3,),
++     0: kernelInstanceGEMM2(       256,        32,        64,       256,     1,       4,         1,),
++     1: kernelInstanceGEMM2(       256,        64,        64,       256,     1,       4,         1,),
++     2: kernelInstanceGEMM2(       256,       128,        64,       128,     1,       4,         1,),
++     3: kernelInstanceGEMM2(       256,       256,        64,       128,     1,       4,         1,),
++     4: kernelInstanceGEMM2(       256,        64,       128,       256,     1,       4,         3,),
++     5: kernelInstanceGEMM2(       256,       128,       128,       128,     1,       4,         3,),
++     6: kernelInstanceGEMM2(       256,       256,       128,       128,     1,       4,         3,),
+ }
+ 
+ # gemm2 MXDLPerWave out:bf16/fp16 AB:fp8/i8
+@@ -158,22 +242,38 @@ def name(self) -> str:
+      0: kernelInstanceGEMM2(       256,       32,        128,       128,     1,       4,         1,),
+      1: kernelInstanceGEMM2(       256,       64,        128,       128,     1,       4,         1,),
+      2: kernelInstanceGEMM2(       256,      128,        128,       128,     1,       4,         1,),
+-    #3: kernelInstanceGEMM2(       256,       64,        256,       128,     1,       4,         3,),
++     3: kernelInstanceGEMM2(       256,      256,        128,       128,     1,       4,         1,),
++    #  3: kernelInstanceGEMM2(       256,       64,        128,       128,     1,       4,         3,),
++    #  4: kernelInstanceGEMM2(       256,      128,        128,       128,     1,       4,         3,),
++    #  5: kernelInstanceGEMM2(       256,      256,        128,       128,     1,       4,         3,),
++}
++# gemm2 out:bf16/fp16 A:fp8 B:in4
++a4w4_gemm2_kernels_list= {
++     0: kernelInstanceGEMM2(       64,        32,         32,       128,     1,       1,         1,),
++     1: kernelInstanceGEMM2(       64,        64,         64,       128,     1,       1,         1,),
++     2: kernelInstanceGEMM2(       64,       128,        128,       128,     1,       1,         1,),
++     4: kernelInstanceGEMM2(      256,        32,        128,       128,     1,       4,         3,),
++     5: kernelInstanceGEMM2(      256,        64,         64,       128,     2,       2,         3,),
++     6: kernelInstanceGEMM2(      256,       128,         64,       128,     2,       2,         3,),
++    #  7: kernelInstanceGEMM2(      256,       256,         64,       128,     2,       2,         3,),
+ }
+ 
+ # fmt: on
+ gemm2_kernels_dict = {
++    "a16w16_gfx950": a16w16_gemm2_kernels_list_gfx950,
+     "a16w16": a16w16_gemm2_kernels_list,
++    "a8w8_gfx950": a8w8_gemm2_kernels_list_gfx950,
+     "a8w8": a8w8_gemm2_kernels_list,
+     "a8w8blkscale": a8w8_gemm2_blockscale_kernels_list,
+     "a8w4": a8w4_gemm2_kernels_list,
++    "a4w4": a4w4_gemm2_kernels_list,
+ }
+ 
+ 
+ bit8_list = ["F8", "I8", "f8", "i8"]
+ bit16_list = ["B16", "F16", "b16", "f16"]
+-bit4_list = ["I4", "i4"]
+-QuantType_list = ["per_128x128"]
++bit4_list = ["I4", "i4", "FP4X2", "fp4x2"]
++QuantType_list = ["per_128x128", "per_1x32"]
+ 
+ 
+ def get_gemm1_kernels_list(
+@@ -184,9 +284,12 @@ def get_gemm1_kernels_list(
+     ActOP: bool,
+     MulRoutedWeight: bool,
+ ) -> list:
+-
++    arch = get_gfx()
+     if Adtype in bit16_list and Bdtype in bit16_list and Adtype == Adtype:
+-        tag = "a16w16"
++        if arch == "gfx950":
++            tag = "a16w16_gfx950"
++        else:
++            tag = "a16w16"
+     elif (
+         Adtype in bit8_list
+         and Bdtype in bit8_list
+@@ -195,9 +298,14 @@ def get_gemm1_kernels_list(
+     ):
+         tag = "a8w8blkscale"
+     elif Adtype in bit8_list and Bdtype in bit8_list and Adtype == Adtype:
+-        tag = "a8w8"
++        if arch == "gfx950":
++            tag = "a8w8_gfx950"
++        else:
++            tag = "a8w8"
+     elif Adtype in bit8_list and Bdtype in bit4_list and Adtype == "F8":
+         tag = "a8w4"
++    elif Adtype in bit4_list and Bdtype in bit4_list:
++        tag = "a4w4"
+     else:
+         raise ValueError(f"Unsupported data type combination: {Adtype}, {Bdtype}")
+     kernels_list = gemm1_kernels_dict[tag]
+@@ -210,7 +318,7 @@ def get_gemm1_kernels_list(
+             kernel.CDEElementOp = "MulABScaleWint4"
+         elif tag == "a8w8blkscale":
+             kernel.CDEElementOp = "MulABScaleExpertWeight"
+-        elif tag == "a8w8":
++        elif tag == "a8w8" or tag == "a4w4":
+             kernel.CDEElementOp = "MulABScale"
+         elif tag == "a16w16":
+             if MulRoutedWeight:
+@@ -223,8 +331,12 @@ def get_gemm1_kernels_list(
+ def get_gemm2_kernels_list(
+     Adtype: str, Bdtype: str, Nswizzle: bool, QuantType: str, MulRoutedWeight: bool
+ ) -> list:
++    arch = get_gfx()
+     if Adtype in bit16_list and Bdtype in bit16_list and Adtype == Adtype:
+-        tag = "a16w16"
++        if arch == "gfx950":
++            tag = "a16w16_gfx950"
++        else:
++            tag = "a16w16"
+     elif (
+         Adtype in bit8_list
+         and Bdtype in bit8_list
+@@ -233,9 +345,14 @@ def get_gemm2_kernels_list(
+     ):
+         tag = "a8w8blkscale"
+     elif Adtype in bit8_list and Bdtype in bit8_list and Adtype == Adtype:
+-        tag = "a8w8"
++        if arch == "gfx950":
++            tag = "a8w8_gfx950"
++        else:
++            tag = "a8w8"
+     elif Adtype in bit8_list and Bdtype in bit4_list and Adtype == "F8":
+         tag = "a8w4"
++    elif Adtype in bit4_list and Bdtype in bit4_list:
++        tag = "a4w4"
+     else:
+         raise ValueError(f"Unsupported data type combination: {Adtype}, {Bdtype}")
+     kernels_list = gemm2_kernels_dict[tag]
+@@ -247,7 +364,7 @@ def get_gemm2_kernels_list(
+             kernel.CDEElementOp = "MulABScaleExpertWeightWin4"
+         elif tag == "a8w8blkscale":
+             kernel.CDEElementOp = "MulABScaleExpertWeight"
+-        elif tag == "a8w8":
++        elif tag == "a8w8" or tag == "a4w4":
+             kernel.CDEElementOp = "MulABScaleExpertWeight"
+         elif tag == "a16w16":
+             if MulRoutedWeight:
+diff --git a/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages_common_mxfp4.cuh b/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages_common_mxfp4.cuh
+new file mode 100644
+index 0000000000..63d7b29d33
+--- /dev/null
++++ b/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages_common_mxfp4.cuh
+@@ -0,0 +1,367 @@
++// SPDX-License-Identifier: MIT
++// Copyright (C) 2024-2025, Advanced Micro Devices, Inc. All rights reserved.
++#pragma once
++#include "ck/tensor_operation/gpu/device/impl/device_gemm_multiple_d_xdl_cshuffle_v3.hpp"
++#include "ck/tensor_operation/gpu/device/impl/device_moe_mx_gemm_bns.hpp"
++#include "gemm_moe_ck2stages.h"
++#include <iostream>
++
++template <typename A0DataType,
++          typename B0DataType,
++          typename AccDataType,
++          typename EDataType,
++          typename CDEElementOp,
++          PipelineVersion PipelineVer,
++          int BLOCKSIZE,
++          int MPerBlock,
++          int NPerBlock,
++          int KPerBlock,
++          int MWaves,
++          int NWaves,
++          bool Nswizzle,
++          bool PerTensorQuant,
++          bool MulRoutedWeight,
++          int ActOP>
++void ck_moe_stage1_gemm(const hipStream_t& stream,
++                        int tokens,
++                        int sorted_size,
++                        int N,
++                        int K,
++                        int topk,
++                        void*& hidden_states, // [m, k], input token
++                        void*& w1,            // [e, n, k]/[e, 2*n, k], pre-shuffle([e, nr, kr, w])
++                        void*& w2, // [expert, dim, inter_dim], pre-shuffle([e, nr, kr, w])
++                        void*& sorted_token_ids,  // [max_num_tokens_padded]
++                        void*& sorted_expert_ids, // [max_num_m_blocks]
++                        void*& sorted_weights,
++                        void*& num_valid_ids,          // [1]
++                        void*& out,                    // [max_num_tokens_padded, inter_dim]
++                        std::optional<void*> w1_scale, // [e, 1, n], gate(up) scale
++                        std::optional<void*> a1_scale  // [m, 1], token scale
++)
++{
++    // ~~~~~~~~~~~~~~~~~~~~~~~~following start with ck things
++    using A1DataType                            = E8M0;
++    using B1DataType                            = E8M0;
++    static constexpr ck::index_t ScaleBlockSize = 32;
++    ck::index_t StrideA                         = K;
++    ck::index_t StrideB                         = K;
++    ck::index_t StrideD                         = 0;
++    ck::index_t StrideE                         = N;
++    ck::index_t KBatch                          = 1;
++    ck::index_t Scale_Stride_AM                 = (K + ScaleBlockSize - 1) / ScaleBlockSize;
++    ck::index_t Scale_Stride_BN                 = (K + ScaleBlockSize - 1) / ScaleBlockSize;
++    // using AccDataType = F32;
++    using CShuffleDataType = F32;
++    using DsDataType       = ck::Tuple<F32, F32, F32>;
++
++    using A0Layout = Row;
++    using B0Layout = Col;
++    using D0Layout = Row;
++    using D1Layout = Col;
++    using ELayout  = Row;
++    using D2Layout = ELayout;
++    using DsLayout = ck::Tuple<D0Layout, D1Layout, D2Layout>;
++
++    using PassThrough = ck::tensor_operation::element_wise::PassThrough;
++    using AElementOp  = PassThrough;
++    using BElementOp  = PassThrough;
++
++    static constexpr auto GemmSpec = ck::tensor_operation::device::GemmSpecialization::Default;
++    static constexpr ck::index_t MNPerXDL    = 16;
++    static constexpr ck::index_t WAVES       = BLOCKSIZE / 64;
++    static constexpr ck::index_t MXDLPerWave = MPerBlock / (MNPerXDL * MWaves);
++    static constexpr ck::index_t NXDLPerWave = NPerBlock / (MNPerXDL * NWaves);
++    // static constexpr ck::index_t NPerBlock = PipelineVer == ck::BlockGemmPipelineVersion::v1 ? 64
++    // : 128;
++    static constexpr ck::index_t CShuffleMXDLPerWave = MXDLPerWave;
++    static constexpr ck::index_t CShuffleNXDLPerWave = NXDLPerWave;
++    static constexpr ck::index_t CShuffleNLane       = NPerBlock / 2 / NXDLPerWave; // 64
++    static constexpr ck::index_t CShuffleMLane       = BLOCKSIZE / CShuffleNLane;
++    static constexpr ck::index_t AK1                 = 16 / sizeof(A0DataType);
++    static constexpr ck::index_t BK1                 = 16 / sizeof(B0DataType);
++    static constexpr ck::index_t EVec                = 16 / sizeof(EDataType);
++    static constexpr ck::index_t K0_A                = KPerBlock / AK1;
++    static constexpr ck::index_t K0_B                = KPerBlock / BK1;
++    static constexpr ck::index_t K0_M_A              = BLOCKSIZE / K0_A;
++    static constexpr ck::index_t K0_N_B              = BLOCKSIZE / K0_B;
++    static constexpr ck::index_t D0Vec               = 1;
++    static constexpr ck::index_t D1Vec               = PerTensorQuant ? 1 : EVec;
++    static constexpr ck::index_t D2Vec               = 1;
++
++    using DeviceOpInstance = ck::tensor_operation::device::DeviceMoeGemmMXBNS
++        // clang-format off
++///######|  ALayout|  BLayout| DsLayout| ELayout|      AData|      BData|     DsData|     EData|     AccData|         CShuffle|           A|           B|          CDE|           GEMM| Block|  MPer|  NPer|  KPer| AK1| BK1| MPer| NPer| MXdl| NXdl|  ABlockTransfer| ABlockTransfer| ABlockTransfer| ABlockTransfer| ABlockTransfer| ABlockTransfer| ABlockLds|  BBlockTransfer| BBlockTransfer| BBlockTransfer| BlockTransfer| BBlockTransfer| BBlockTransfer| BBlockLds|    CShuffle|    CShuffle| CBlockTransferClusterLengths|  CBlockTransfer|
++///######|         |         |         |        |       Type|       Type|       Type|      Type|        Type|         DataType| Elementwise| Elementwise|  Elementwise| Spacialization|  Size| Block| Block| Block|    |    |  XDL|  XDL|  Per|  Per|   ThreadCluster|  ThreadCluster| SrcAccessOrder|   SrcVectorDim|      SrcScalar|      DstScalar| AddExtraM|   ThreadCluster|  ThreadCluster| SrcAccessOrder|  SrcVectorDim|      SrcScalar|      DstScalar| AddExtraN| MXdlPerWave| NXdlPerWave|         _MBlock_MWaveMPerXdl| ScalarPerVector|
++///######|         |         |         |        |           |           |           |          |            |                 |   Operation|   Operation|    Operation|               |      |      |      |      |    |    |     |     | Wave| Wave| Lengths_K0_M_K1|   ArrangeOrder|               |               |      PerVector|   PerVector_K1|          | Lengths_K0_N_K1|   ArrangeOrder|               |              |      PerVector|   PerVector_K1|          |  PerShuffle|  PerShuffle|         _NBlock_NWaveNPerXdl|   _NWaveNPerXdl|
++///######|         |         |         |        |           |           |           |          |            |                 |            |            |             |               |      |      |      |      |    |    |     |     |     |     |                |               |               |               |               |               |          |                |               |               |              |               |               |          |            |            |                             |    S<C, D0, D1>|
++///###### RCR
++          <     Row,  Col,  DsLayout, ELayout, 
++                A0DataType, A1DataType, B0DataType, B1DataType, DsDataType, EDataType, AccDataType, CShuffleDataType,
++                AElementOp,  BElementOp, CDEElementOp,       GemmSpec, 
++                32,      BLOCKSIZE,   
++                MPerBlock,      NPerBlock,    128,
++                AK1,   BK1,
++                MNPerXDL,   MNPerXDL,
++                MXDLPerWave,     NXDLPerWave,
++                S<K0_A, K0_M_A, 1>, S<1, 0, 2>, S<1, 0, 2>, 2, AK1, AK1, 0,
++                S<K0_B, K0_N_B, 1>, S<1, 0, 2>, S<1, 0, 2>, 2, BK1, BK1, 0,
++                2,    CShuffleNXDLPerWave,   S<1, 32, 1, 8>, S<EVec, D0Vec, D1Vec>,
++                ck::BlockGemmPipelineScheduler::Intrawave, PipelineVer, ActOP, Nswizzle, true, MulRoutedWeight, ck::index_t, A0DataType>; // clang-format on
++    // clang-format on
++
++    auto a_element_op   = AElementOp{};
++    auto b_element_op   = BElementOp{};
++    auto cde_element_op = CDEElementOp{};
++
++    constexpr ck::index_t NumDTensor = DsDataType::Size();
++
++    constexpr auto I0             = ck::Number<0>{};
++    constexpr auto I1             = ck::Number<1>{};
++    static constexpr auto DStride = PerTensorQuant ? I0 : I1;
++
++    // do GEMM
++    auto device_op = DeviceOpInstance{};
++
++    auto invoker = device_op.MakeInvoker();
++    auto argument =
++        device_op.MakeArgument(sorted_token_ids,
++                               sorted_expert_ids,
++                               num_valid_ids,
++                               hidden_states,
++                               a1_scale.value(),
++                               w1,
++                               w1_scale.value(),
++                               std::array<const void*, NumDTensor>{
++                                   nullptr, nullptr, MulRoutedWeight ? sorted_weights : nullptr},
++                               out,
++                               tokens,
++                               topk,
++                               sorted_size,
++                               N,
++                               K,
++                               StrideA,
++                               Scale_Stride_AM,
++                               StrideB,
++                               Scale_Stride_BN,
++                               std::array<ck::index_t, NumDTensor>{DStride, DStride, I0},
++                               StrideE,
++                               KBatch,
++                               a_element_op,
++                               b_element_op,
++                               cde_element_op);
++
++    if(!device_op.IsSupportedArgument(argument))
++    {
++        throw std::runtime_error(
++            "wrong! device_gemm with the specified compilation parameters does "
++            "not support this GEMM problem");
++    }
++
++    invoker.Run(argument, StreamConfig{stream});
++}
++
++#define CK_MOE_STAGE1_GEMM_DEFINE(                                            \
++    BLOCKSIZE, MPerfBlock, NPerBlock, KPerBlock, MWaves, NWaves, PipelineVer) \
++    template void ck_moe_stage1_gemm<A0DataType,                              \
++                                     B0DataType,                              \
++                                     AccDataType,                             \
++                                     EDataType,                               \
++                                     CDEElementOp,                            \
++                                     PipelineVer,                             \
++                                     BLOCKSIZE,                               \
++                                     MPerfBlock,                              \
++                                     NPerBlock,                               \
++                                     KPerBlock,                               \
++                                     MWaves,                                  \
++                                     NWaves,                                  \
++                                     Nswizzle,                                \
++                                     PerTensorQuant,                          \
++                                     MulRoutedWeight,                         \
++                                     ActOP>(const hipStream_t& stream,        \
++                                            int tokens,                       \
++                                            int sorted_size,                  \
++                                            int N,                            \
++                                            int K,                            \
++                                            int topk,                         \
++                                            void*& hidden_states,             \
++                                            void*& w1,                        \
++                                            void*& w2,                        \
++                                            void*& sorted_token_ids,          \
++                                            void*& sorted_expert_ids,         \
++                                            void*& sorted_weights,            \
++                                            void*& num_valid_ids,             \
++                                            void*& out,                       \
++                                            std::optional<void*> w1_scale,    \
++                                            std::optional<void*> a1_scale);
++
++template <typename A0DataType,
++          typename B0DataType,
++          typename AccDataType,
++          typename EDataType,
++          typename CDEElementOp,
++          PipelineVersion PipelineVer,
++          int BLOCKSIZE,
++          int MPerBlock,
++          int NPerBlock,
++          int KPerBlock,
++          int MWaves,
++          int NWaves,
++          bool Nswizzle,
++          bool PerTensorQuant,
++          bool MulRoutedWeight,
++          int ActOP = 0>
++void ck_moe_stage2_gemm(const hipStream_t& stream,
++                        int tokens,
++                        int sorted_size,
++                        int N,
++                        int K,
++                        int topk,
++                        void*& inter_states, // [max_num_tokens_padded, k], input token
++                        void*& w1,           // [e, n, k]/[e, 2*n, k], pre-shuffle([e, nr, kr, w])
++                        void*& w2, // [expert, dim, inter_dim], pre-shuffle([e, nr, kr, w])
++                        void*& sorted_token_ids,       // [max_num_tokens_padded]
++                        void*& sorted_expert_ids,      // [max_num_m_blocks]
++                        void*& sorted_weights,         // [max_num_tokens_padded]
++                        void*& num_valid_ids,          //[1]
++                        void*& out,                    // [m, out_dim]
++                        std::optional<void*> w2_scale, // [e, 1, n], gate(up) scale
++                        std::optional<void*> a2_scale  // [max_num_tokens_padded, 1], token scale
++)
++{
++    // ~~~~~~~~~~~~~~~~~~~~~~~~following start with ck things
++    using A1DataType                            = E8M0;
++    using B1DataType                            = E8M0;
++    static constexpr ck::index_t ScaleBlockSize = 32;
++    ck::index_t StrideA                         = K;
++    ck::index_t StrideB                         = K;
++    ck::index_t StrideD                         = 0;
++    ck::index_t StrideE                         = N;
++    ck::index_t KBatch                          = 1;
++    ck::index_t Scale_Stride_AM                 = (K + ScaleBlockSize - 1) / ScaleBlockSize;
++    ck::index_t Scale_Stride_BN                 = (K + ScaleBlockSize - 1) / ScaleBlockSize;
++
++    // using AccDataType = F32;
++    using CShuffleDataType = F32;
++    using DsDataType       = ck::Tuple<F32, F32, F32>;
++
++    using A0Layout = Row;
++    using B0Layout = Col;
++    using ELayout  = Row;
++    using D0Layout = Row;
++    using D1Layout = Col;
++    using DsLayout = ck::Tuple<D0Layout, D1Layout, ELayout>;
++
++    using PassThrough = ck::tensor_operation::element_wise::PassThrough;
++    using AElementOp  = PassThrough;
++    using BElementOp  = PassThrough;
++
++    static constexpr auto GemmSpec = ck::tensor_operation::device::GemmSpecialization::Default;
++    // static constexpr ck::index_t BLOCKSIZE = 256;
++    static constexpr ck::index_t WAVES               = BLOCKSIZE / 64;
++    static constexpr ck::index_t MNPerXDL            = 16;
++    static constexpr ck::index_t MXDLPerWave         = MPerBlock / (MNPerXDL * MWaves);
++    static constexpr ck::index_t NXDLPerWave         = NPerBlock / (MNPerXDL * NWaves);
++    static constexpr ck::index_t CShuffleMXDLPerWave = MXDLPerWave;
++    static constexpr ck::index_t CShuffleNXDLPerWave = NXDLPerWave;
++    static constexpr ck::index_t CShuffleNLane =
++        BLOCKSIZE == 64 ? NPerBlock / 2 : NPerBlock / 2 / NXDLPerWave; // 64
++    static constexpr ck::index_t CShuffleMLane = BLOCKSIZE / CShuffleNLane;
++    static constexpr ck::index_t AK1           = 16 / sizeof(A0DataType);
++    static constexpr ck::index_t BK1           = 16 / sizeof(B0DataType);
++    static constexpr ck::index_t EVec          = 2;
++    static constexpr ck::index_t D0Vec         = 1;
++    static constexpr ck::index_t D1Vec         = PerTensorQuant ? 1 : EVec;
++    static constexpr ck::index_t D2Vec         = 1;
++    static constexpr ck::index_t K0_A          = KPerBlock / AK1;
++    static constexpr ck::index_t K0_B          = KPerBlock / BK1;
++    static constexpr ck::index_t K0_M          = BLOCKSIZE / K0_A;
++    static constexpr ck::index_t K0_N          = BLOCKSIZE / K0_B;
++
++    using DeviceOpInstance = ck::tensor_operation::device::DeviceMoeGemmMXBNS
++        // clang-format off
++///#####|  ALayout|  BLayout| DsLayout| ELayout|      AData|      BData|     DsData|     EData|     AccData|         CShuffle|           A|           B|          CDE|           GEMM| Block|  MPer|  NPer|  KPer| AK1| BK1| MPer| NPer| MXdl| NXdl|  ABlockTransfer| ABlockTransfer| ABlockTransfer| ABlockTransfer| ABlockTransfer| ABlockTransfer| ABlockLds|  BBlockTransfer| BBlockTransfer| BBlockTransfer| BlockTransfer| BBlockTransfer| BBlockTransfer| BBlockLds|    CShuffle|    CShuffle| CBlockTransferClusterLengths|  CBlockTransfer|
++///#####|         |         |         |        |       Type|       Type|       Type|      Type|        Type|         DataType| Elementwise| Elementwise|  Elementwise| Spacialization|  Size| Block| Block| Block|    |    |  XDL|  XDL|  Per|  Per|   ThreadCluster|  ThreadCluster| SrcAccessOrder|   SrcVectorDim|      SrcScalar|      DstScalar| AddExtraM|   ThreadCluster|  ThreadCluster| SrcAccessOrder|  SrcVectorDim|      SrcScalar|      DstScalar| AddExtraN| MXdlPerWave| NXdlPerWave|         _MBlock_MWaveMPerXdl| ScalarPerVector|
++///#####|         |         |         |        |           |           |           |          |            |                 |   Operation|   Operation|    Operation|               |      |      |      |      |    |    |     |     | Wave| Wave| Lengths_K0_M_K1|   ArrangeOrder|               |               |      PerVector|   PerVector_K1|          | Lengths_K0_N_K1|   ArrangeOrder|               |              |      PerVector|   PerVector_K1|          |  PerShuffle|  PerShuffle|         _NBlock_NWaveNPerXdl|   _NWaveNPerXdl|
++///#####|         |         |         |        |           |           |           |          |            |                 |            |            |             |               |      |      |      |      |    |    |     |     |     |     |                |               |               |               |               |               |          |                |               |               |              |               |               |          |            |            |                             |    S<C, D0, D1>|
++///##### RCR
++          <     Row,  Col,  DsLayout, ELayout, 
++                A0DataType, A1DataType, B0DataType, B1DataType, DsDataType, EDataType, AccDataType, CShuffleDataType,
++                AElementOp,  BElementOp, CDEElementOp,       GemmSpec,
++                32,      BLOCKSIZE,   
++                MPerBlock,      NPerBlock,    128,
++                AK1,   BK1,
++                MNPerXDL,   MNPerXDL,
++                MXDLPerWave,     NXDLPerWave,
++                S<K0_A, K0_M, 1>, S<1, 0, 2>, S<1, 0, 2>, 2, AK1, AK1, 0,
++                S<K0_B, K0_N, 1>, S<1, 0, 2>, S<1, 0, 2>, 2, BK1, BK1, 0,
++                2,    CShuffleNXDLPerWave,   S<1, CShuffleMLane, 1, CShuffleNLane>, S<EVec, D0Vec, D1Vec>,
++                ck::BlockGemmPipelineScheduler::Intrawave, PipelineVer, 0, Nswizzle, false, MulRoutedWeight, ck::index_t, A0DataType>;
++
++
++    auto a_element_op = AElementOp{};
++    auto b_element_op = BElementOp{};
++    auto cde_element_op = CDEElementOp{};
++
++    constexpr ck::index_t NumDTensor = DsDataType::Size();
++
++    constexpr auto I0 = ck::Number<0>{};
++    constexpr auto I1 = ck::Number<1>{};
++    static constexpr auto DStride = PerTensorQuant ? I0 : I1;
++
++    // do GEMM
++    auto device_op = DeviceOpInstance{};
++
++    auto invoker = device_op.MakeInvoker();
++    auto argument =
++        device_op.MakeArgument(sorted_token_ids,
++                               sorted_expert_ids,
++                               num_valid_ids,
++                               inter_states,
++                               a2_scale.value(),
++                               w2,
++                               w2_scale.value(),
++                               std::array<const void *, NumDTensor>{nullptr,
++                                                                    nullptr,
++                                                                    MulRoutedWeight ? sorted_weights : nullptr},
++                               out,
++                               tokens,
++                               topk,
++                               sorted_size,
++                               N,
++                               K,
++                               StrideA,
++                               Scale_Stride_AM,
++                               StrideB,
++                               Scale_Stride_BN,
++                               std::array<ck::index_t, NumDTensor>{DStride, DStride, I0},
++                               StrideE,
++                               KBatch,
++                               a_element_op,
++                               b_element_op,
++                               cde_element_op);
++
++    if (!device_op.IsSupportedArgument(argument))
++    {
++        throw std::runtime_error(
++            "wrong! device_gemm with the specified compilation parameters does "
++            "not support this GEMM problem");
++    }
++    invoker.Run(argument, StreamConfig{stream});
++}
++
++#define CK_MOE_STAGE2_GEMM_DEFINE(BLOCKSIZE, MPerfBlock, NPerfBlock, KPerBlock, MWaves, NWaves, PipelineVer)                                                                                    \
++    template void ck_moe_stage2_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, PipelineVer, BLOCKSIZE, MPerfBlock, NPerfBlock, KPerBlock, MWaves, NWaves, Nswizzle, PerTensorQuant, MulRoutedWeight, ActOP>( \
++        const hipStream_t &stream,                                                                                                                                   \
++        int tokens, int sorted_size, int N, int K,                                                                                                                   \
++        int topk,                                                                                                                                                    \
++        void *&inter_states,                                                                                                                                         \
++        void *&w1,                                                                                                                                                   \
++        void *&w2,                                                                                                                                                   \
++        void *&sorted_token_ids,                                                                                                                                     \
++        void *&sorted_expert_ids,                                                                                                                                    \
++        void *&sorted_weights,                                                                                                                                       \
++        void *&num_valid_ids,                                                                                                                                        \
++        void *&out,                                                                                                                                                  \
++        std::optional<void *> w2_scale,                                                                                                                              \
++        std::optional<void *> a2_scale);
+\ No newline at end of file
+diff --git a/csrc/ck_gemm_moe_2stages_codegen/gen_instances.py b/csrc/ck_gemm_moe_2stages_codegen/gen_instances.py
+index 23d5f0ae8f..7530eac9f7 100644
+--- a/csrc/ck_gemm_moe_2stages_codegen/gen_instances.py
++++ b/csrc/ck_gemm_moe_2stages_codegen/gen_instances.py
+@@ -38,7 +38,7 @@
+ 
+ """
+ 
+-A16W16_A8W8_gemm1_heuristic_dispatch = """#pragma once
++A16W16_A8W8_gemm1_gfx950_heuristic_dispatch = """#pragma once
+ // SPDX-License-Identifier: MIT
+ // Copyright (c) 2024, Advanced Micro Devices, Inc. All rights reserved.
+ #include "gemm_moe_ck2stages.h"
+@@ -55,7 +55,11 @@
+     }}
+     else if (block_m == 128)
+     {{
+-        return ck_moe_stage1_gemm<{A0DataType}, {B0DataType}, {AccDataType}, {EDataType}, {CDEElementOp}, V1, 256, 128, 64, 128/sizeof({A0DataType}), 2, 2, {Nswizzle}, {PerTensorQuant}, {MulRoutedWeight}, {ActOP}>;
++        return ck_moe_stage1_gemm<{A0DataType}, {B0DataType}, {AccDataType}, {EDataType}, {CDEElementOp}, V3, 256, 128, 128, 128/sizeof({A0DataType}), 1, 4, {Nswizzle}, {PerTensorQuant}, {MulRoutedWeight}, {ActOP}>;
++    }}
++    else if (block_m == 256)
++    {{
++        return ck_moe_stage1_gemm<{A0DataType}, {B0DataType}, {AccDataType}, {EDataType}, {CDEElementOp}, V3, 256, 256, 128, 128/sizeof({A0DataType}), 1, 4, {Nswizzle}, {PerTensorQuant}, {MulRoutedWeight}, {ActOP}>;
+     }}
+     else
+     {{
+@@ -68,6 +72,41 @@
+ 
+ """
+ 
++A16W16_A8W8_gemm1_heuristic_dispatch = """#pragma once
++// SPDX-License-Identifier: MIT
++// Copyright (c) 2024, Advanced Micro Devices, Inc. All rights reserved.
++#include "gemm_moe_ck2stages.h"
++
++MoeKernel moe_stage1_heuristic_dispatch(int block_m)
++{{
++    if (block_m == 32)
++    {{
++        return ck_moe_stage1_gemm<{A0DataType}, {B0DataType}, {AccDataType}, {EDataType}, {CDEElementOp}, V1, 256, 32, 64, 128/sizeof({A0DataType}), 1, 4, {Nswizzle}, {PerTensorQuant}, {MulRoutedWeight}, {ActOP}>;
++    }}
++    else if (block_m == 64)
++    {{
++        return ck_moe_stage1_gemm<{A0DataType}, {B0DataType}, {AccDataType}, {EDataType}, {CDEElementOp}, V3, 256, 64, 128, 256/sizeof({A0DataType}), 1, 4, {Nswizzle}, {PerTensorQuant}, {MulRoutedWeight}, {ActOP}>;
++    }}
++    else if (block_m == 128)
++    {{
++        return ck_moe_stage1_gemm<{A0DataType}, {B0DataType}, {AccDataType}, {EDataType}, {CDEElementOp}, V3, 256, 128, 128, 128/sizeof({A0DataType}), 1, 4, {Nswizzle}, {PerTensorQuant}, {MulRoutedWeight}, {ActOP}>;
++    }}
++    else if (block_m == 256)
++    {{
++        return ck_moe_stage1_gemm<{A0DataType}, {B0DataType}, {AccDataType}, {EDataType}, {CDEElementOp}, V3, 256, 256, 128, 128/sizeof({A0DataType}), 1, 4, {Nswizzle}, {PerTensorQuant}, {MulRoutedWeight}, {ActOP}>;
++    }}
++    else
++    {{
++        TORCH_CHECK(
++            false,
++            "Unsupported block_m value for moe heuristic dispatch: ",
++            block_m);
++    }}
++}}
++
++"""
++
++
+ A8W4_gemm1_heuristic_dispatch = """#pragma once
+ // SPDX-License-Identifier: MIT
+ // Copyright (c) 2024, Advanced Micro Devices, Inc. All rights reserved.
+@@ -87,6 +126,40 @@
+     {{
+         return ck_moe_stage1_gemm<{A0DataType}, {B0DataType}, {AccDataType}, {EDataType}, {CDEElementOp}, V1, 256, 128, 64, 128/sizeof({A0DataType}), 1, 4, {Nswizzle}, {PerTensorQuant}, {MulRoutedWeight}, {ActOP}>;
+     }}
++    else if (block_m == 256)
++    {{
++        return ck_moe_stage1_gemm<{A0DataType}, {B0DataType}, {AccDataType}, {EDataType}, {CDEElementOp}, V1, 256, 256, 64, 128/sizeof({A0DataType}), 1, 4, {Nswizzle}, {PerTensorQuant}, {MulRoutedWeight}, {ActOP}>;
++    }}
++    else
++    {{
++        TORCH_CHECK(
++            false,
++            "Unsupported block_m value for moe heuristic dispatch: ",
++            block_m);
++    }}
++}}
++
++"""
++
++A4W4_gemm1_heuristic_dispatch = """#pragma once
++// SPDX-License-Identifier: MIT
++// Copyright (c) 2024, Advanced Micro Devices, Inc. All rights reserved.
++#include "gemm_moe_ck2stages.h"
++
++MoeKernel moe_stage1_heuristic_dispatch(int block_m)
++{{
++    if (block_m == 32)
++    {{
++        return ck_moe_stage1_gemm<{A0DataType}, {B0DataType}, {AccDataType}, {EDataType}, {CDEElementOp}, V3, 256, 32, 128, 128/sizeof({A0DataType}), 1, 4, {Nswizzle}, {PerTensorQuant}, {MulRoutedWeight}, {ActOP}>;
++    }}
++    else if (block_m == 64)
++    {{
++        return ck_moe_stage1_gemm<{A0DataType}, {B0DataType}, {AccDataType}, {EDataType}, {CDEElementOp}, V3, 256, 64, 64, 128/sizeof({A0DataType}), 2, 2, {Nswizzle}, {PerTensorQuant}, {MulRoutedWeight}, {ActOP}>;
++    }}
++    else if (block_m == 128)
++    {{
++        return ck_moe_stage1_gemm<{A0DataType}, {B0DataType}, {AccDataType}, {EDataType}, {CDEElementOp}, V3, 256, 128, 64, 128/sizeof({A0DataType}), 2, 2, {Nswizzle}, {PerTensorQuant}, {MulRoutedWeight}, {ActOP}>;
++    }}
+     else
+     {{
+         TORCH_CHECK(
+@@ -121,9 +194,8 @@
+ 
+ """
+ 
+-
+-A16W16_A8W8_gemm2_heuristic_dispatch = """
+-MoeKernel moe_stage2_heuristic_dispatch(int block_m)
++A16W16_A8W8_gemm2_gfx950_heuristic_dispatch = """
++MoeKernel moe_stage2_heuristic_dispatch(int block_m, int inter_dim)
+ {{
+     if (block_m == 32)
+     {{
+@@ -135,7 +207,41 @@
+     }}
+     else if (block_m == 128)
+     {{
+-        return ck_moe_stage2_gemm<{A0DataType}, {B0DataType}, {AccDataType}, {EDataType}, {CDEElementOp}, V1, 256, 128, 128, 128/sizeof({A0DataType}), 2, 2, {Nswizzle}, {PerTensorQuant}, {MulRoutedWeight}, {ActOP}>;
++        return ck_moe_stage2_gemm<{A0DataType}, {B0DataType}, {AccDataType}, {EDataType}, {CDEElementOp}, V3, 256, 128, 128, 128/sizeof({A0DataType}), 1, 4, {Nswizzle}, {PerTensorQuant}, {MulRoutedWeight}, {ActOP}>;
++    }}
++    else if (block_m == 256)
++    {{
++        return ck_moe_stage2_gemm<{A0DataType}, {B0DataType}, {AccDataType}, {EDataType}, {CDEElementOp}, V3, 256, 256, 128, 128/sizeof({A0DataType}), 1, 4, {Nswizzle}, {PerTensorQuant}, {MulRoutedWeight}, {ActOP}>;
++    }}
++    else
++    {{
++        TORCH_CHECK(
++            false,
++            "Unsupported block_m value for moe heuristic dispatch: ",
++            block_m);
++    }}
++}}
++
++"""
++
++A16W16_A8W8_gemm2_heuristic_dispatch = """
++MoeKernel moe_stage2_heuristic_dispatch(int block_m, int inter_dim)
++{{
++    if (block_m == 32)
++    {{
++        return ck_moe_stage2_gemm<{A0DataType}, {B0DataType}, {AccDataType}, {EDataType}, {CDEElementOp}, V1, 256, 32, 64, 256/sizeof({A0DataType}), 1, 4, {Nswizzle}, {PerTensorQuant}, {MulRoutedWeight}, {ActOP}>;
++    }}
++    else if (block_m == 64)
++    {{
++        return ck_moe_stage2_gemm<{A0DataType}, {B0DataType}, {AccDataType}, {EDataType}, {CDEElementOp}, V3, 256, 64, 128, 256/sizeof({A0DataType}), 1, 4, {Nswizzle}, {PerTensorQuant}, {MulRoutedWeight}, {ActOP}>;
++    }}
++    else if (block_m == 128)
++    {{
++        return ck_moe_stage2_gemm<{A0DataType}, {B0DataType}, {AccDataType}, {EDataType}, {CDEElementOp}, V3, 256, 128, 128, 128/sizeof({A0DataType}), 1, 4, {Nswizzle}, {PerTensorQuant}, {MulRoutedWeight}, {ActOP}>;
++    }}
++    else if (block_m == 256)
++    {{
++        return ck_moe_stage2_gemm<{A0DataType}, {B0DataType}, {AccDataType}, {EDataType}, {CDEElementOp}, V3, 256, 256, 128, 128/sizeof({A0DataType}), 1, 4, {Nswizzle}, {PerTensorQuant}, {MulRoutedWeight}, {ActOP}>;
+     }}
+     else
+     {{
+@@ -149,7 +255,7 @@
+ """
+ 
+ A8W4_gemm2_heuristic_dispatch = """
+-MoeKernel moe_stage2_heuristic_dispatch(int block_m)
++MoeKernel moe_stage2_heuristic_dispatch(int block_m, int inter_dim)
+ {{
+     if (block_m == 32)
+     {{
+@@ -163,6 +269,10 @@
+     {{
+         return ck_moe_stage2_gemm<{A0DataType}, {B0DataType}, {AccDataType}, {EDataType}, {CDEElementOp}, V1, 256, 128, 128, 128/sizeof({A0DataType}), 1, 4, {Nswizzle}, {PerTensorQuant}, {MulRoutedWeight}, {ActOP}>;
+     }}
++    else if (block_m == 256)
++    {{
++        return ck_moe_stage2_gemm<{A0DataType}, {B0DataType}, {AccDataType}, {EDataType}, {CDEElementOp}, V1, 256, 256, 128, 128/sizeof({A0DataType}), 1, 4, {Nswizzle}, {PerTensorQuant}, {MulRoutedWeight}, {ActOP}>;
++    }}
+     else
+     {{
+         TORCH_CHECK(
+@@ -175,8 +285,60 @@
+ """
+ 
+ 
++A4W4_gemm2_heuristic_dispatch = """
++MoeKernel moe_stage2_heuristic_dispatch(int block_m, int inter_dim)
++{{
++    if (inter_dim <= 256)
++    {{
++        if (block_m == 32)
++        {{
++            return ck_moe_stage2_gemm<{A0DataType}, {B0DataType}, {AccDataType}, {EDataType}, {CDEElementOp}, V1, 64, 32, 32, 128/sizeof({A0DataType}), 1, 1, {Nswizzle}, {PerTensorQuant}, {MulRoutedWeight}, {ActOP}>;
++        }}
++        else if (block_m == 64)
++        {{
++            return ck_moe_stage2_gemm<{A0DataType}, {B0DataType}, {AccDataType}, {EDataType}, {CDEElementOp}, V1, 64, 64, 64, 128/sizeof({A0DataType}), 1, 1, {Nswizzle}, {PerTensorQuant}, {MulRoutedWeight}, {ActOP}>;
++        }}
++        else if (block_m == 128)
++        {{
++            return ck_moe_stage2_gemm<{A0DataType}, {B0DataType}, {AccDataType}, {EDataType}, {CDEElementOp}, V1, 64, 128, 128, 128/sizeof({A0DataType}), 1, 1, {Nswizzle}, {PerTensorQuant}, {MulRoutedWeight}, {ActOP}>;
++        }}
++        else
++        {{
++            TORCH_CHECK(
++                false,
++                "Unsupported block_m value for moe heuristic dispatch: ",
++                block_m);
++        }}
++    }}
++    else
++    {{
++        if (block_m == 32)
++        {{
++            return ck_moe_stage2_gemm<{A0DataType}, {B0DataType}, {AccDataType}, {EDataType}, {CDEElementOp}, V3, 256, 32, 128, 128/sizeof({A0DataType}), 1, 4, {Nswizzle}, {PerTensorQuant}, {MulRoutedWeight}, {ActOP}>;
++        }}
++        else if (block_m == 64)
++        {{
++            return ck_moe_stage2_gemm<{A0DataType}, {B0DataType}, {AccDataType}, {EDataType}, {CDEElementOp}, V3, 256, 64, 64, 128/sizeof({A0DataType}), 2, 2, {Nswizzle}, {PerTensorQuant}, {MulRoutedWeight}, {ActOP}>;
++        }}
++        else if (block_m == 128)
++        {{
++            return ck_moe_stage2_gemm<{A0DataType}, {B0DataType}, {AccDataType}, {EDataType}, {CDEElementOp}, V3, 256, 128, 64, 128/sizeof({A0DataType}), 2, 2, {Nswizzle}, {PerTensorQuant}, {MulRoutedWeight}, {ActOP}>;
++        }}
++        else
++        {{
++            TORCH_CHECK(
++                false,
++                "Unsupported block_m value for moe heuristic dispatch: ",
++                block_m);
++        }}
++    }}
++}}
++
++"""
++
++
+ A8W8_blockscale_gemm2_heuristic_dispatch = """
+-MoeKernel moe_stage2_heuristic_dispatch(int block_m)
++MoeKernel moe_stage2_heuristic_dispatch(int block_m, int inter_dim)
+ {{
+ 
+     if (block_m == 64)
+@@ -196,6 +358,10 @@
+ 
+ 
+ heuristic_dispatch_dict = {
++    "a8w8_gfx950": [
++        A16W16_A8W8_gemm1_gfx950_heuristic_dispatch,
++        A16W16_A8W8_gemm2_gfx950_heuristic_dispatch,
++    ],
+     "a8w8": [
+         A16W16_A8W8_gemm1_heuristic_dispatch,
+         A16W16_A8W8_gemm2_heuristic_dispatch,
+@@ -204,6 +370,10 @@
+         A8W8_blockscale_gemm1_heuristic_dispatch,
+         A8W8_blockscale_gemm2_heuristic_dispatch,
+     ],
++    "a16w16_gfx950": [
++        A16W16_A8W8_gemm1_gfx950_heuristic_dispatch,
++        A16W16_A8W8_gemm2_gfx950_heuristic_dispatch,
++    ],
+     "a16w16": [
+         A16W16_A8W8_gemm1_heuristic_dispatch,
+         A16W16_A8W8_gemm2_heuristic_dispatch,
+@@ -212,6 +382,10 @@
+         A8W4_gemm1_heuristic_dispatch,
+         A8W4_gemm2_heuristic_dispatch,
+     ],
++    "a4w4": [
++        A4W4_gemm1_heuristic_dispatch,
++        A4W4_gemm2_heuristic_dispatch,
++    ],
+ }
+ 
+ 
+@@ -267,11 +441,15 @@ def generate_instance_and_lookUpTable(self):
+                 )
+                 if os.path.exists(f_instance):
+                     os.remove(f_instance)
++                if "per_128x128" in self.quant_type:
++                    quanttype = "_blockscale"
++                elif "FP4" in self.a_dtype:
++                    quanttype = "_mxfp4"
++                else:
++                    quanttype = ""
+                 with open(f_instance, "w") as f_ins:
+                     stage_instance = STG_INSTANCE_IMPL.format(
+-                        quanttype=(
+-                            "_blockscale" if "per_128x128" in self.quant_type else ""
+-                        ),
++                        quanttype=quanttype,
+                         A0DataType=self.a_dtype,
+                         B0DataType=self.b_dtype,
+                         AccDataType="F32" if self.a_dtype != "I8" else "I32",
+@@ -365,7 +543,7 @@ def generate_instance_and_lookUpTable(self):
+         default="f8",
+         required=False,
+         type=str,
+-        choices=["f8", "i8", "f16", "b16"],
++        choices=["f8", "i8", "f16", "b16", "fp4x2"],
+         help="select input dtype",
+     )
+ 
+@@ -375,7 +553,7 @@ def generate_instance_and_lookUpTable(self):
+         default="f8",
+         required=False,
+         type=str,
+-        choices=["f8", "i8", "f16", "b16", "i4"],
++        choices=["f8", "i8", "f16", "b16", "i4", "fp4x2"],
+         help="select weight dtype",
+     )
+ 
+@@ -395,7 +573,7 @@ def generate_instance_and_lookUpTable(self):
+         default="per_tensor",
+         required=False,
+         type=str,
+-        choices=["per_tensor", "per_token", "per_128x128", "no"],
++        choices=["per_tensor", "per_token", "per_128x128", "per_1x32", "no"],
+         help="select quant_type",
+     )
+ 
+diff --git a/op_tests/test_moe_2stage.py b/op_tests/test_moe_2stage.py
+index 7495472c34..dd5ddb1970 100644
+--- a/op_tests/test_moe_2stage.py
++++ b/op_tests/test_moe_2stage.py
+@@ -200,8 +200,13 @@ def weight_per_128x128_quant(weight, quant_dtype):
+         w1_qt, w1_scale = torch_quant(w1, quant_dtype=WQDType)
+         w2_qt, w2_scale = torch_quant(w2, quant_dtype=WQDType)
+ 
+-    w1_qt_aiter = w1_qt
+-    w2_qt_aiter = w2_qt
++    if qType != aiter.QuantType.per_1x32:
++        w1_qt = w1_qt_aiter = w1_qt.view(w1.shape)
++        w2_qt = w2_qt_aiter = w2_qt.view(w2.shape)
++
++    else:
++        w1_qt = w1_qt_aiter = w1_qt.view(w1.shape[0], w1.shape[1], w1.shape[2] // 2)
++        w2_qt = w2_qt_aiter = w2_qt.view(w2.shape[0], w2.shape[1], w2.shape[2] // 2)
+ 
+     if qType == aiter.QuantType.per_128x128:
+         a1_qt, a1_scale = aiter.pertoken_quant(
+@@ -239,10 +244,9 @@ def weight_per_128x128_quant(weight, quant_dtype):
+                 shuffle_weight(w2_qt_aiter, (16, 16), use_int4=True)
+             )
+         )
+-    else:
++    elif WQDType != dtypes.fp4x2:
+         w1_qt_aiter = shuffle_weight(w1_qt_aiter, layout=(16, 16))
+         w2_qt_aiter = shuffle_weight(w2_qt_aiter, layout=(16, 16))
+-
+     # # ######################## ck stage 1 start ###########
+     # # a1_qt, a1_scale = torch_quant(input, quant_dtype=AQDType)
+     # # out1_ck = torch.empty((token, topk, inter_dim), dtype=dtype)
+@@ -407,7 +411,7 @@ def weight_per_128x128_quant(weight, quant_dtype):
+         return {"us": us_fuse, "err": err}
+ 
+ 
+-l_dtype = ["bf16", "fp16"]
++l_dtype = ["bf16", "fp16"][:1]
+ l_dim = [(6144, 4096)]
+ l_tokenNum = [
+     1,
+@@ -430,7 +434,7 @@ def weight_per_128x128_quant(weight, quant_dtype):
+     (aiter.QuantType.per_1x32, dtypes.fp4x2, dtypes.fp4x2),  # a4w4
+     # (aiter.QuantType.per_128x128, dtypes.fp8, dtypes.fp8),  # a8w8 TODO add test
+ ]
+-l_act = [aiter.ActivationType.Silu, aiter.ActivationType.Gelu]
++l_act = [aiter.ActivationType.Silu, aiter.ActivationType.Gelu][:1]
+ l_doweight_stage1 = [False, True]
+ 
+ parser = argparse.ArgumentParser(

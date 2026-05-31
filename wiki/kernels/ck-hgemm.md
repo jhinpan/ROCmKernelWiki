@@ -16,6 +16,7 @@ tags:
 - mfma-pipelining
 confidence: source-reported
 reproducibility: runnable
+artifact_dir: examples/ck-hgemm
 kernel_types:
 - gemm
 - hgemm
@@ -225,6 +226,33 @@ source-reported; the utilization band is inferred from the ratio to peak.
 Achievable efficiency drops sharply for memory-bound shapes (small M or N, large
 K), where the kernel becomes HBM-bandwidth bound (5.3 TB/s) rather than MFMA
 bound — split-K and tile resizing are the levers there.
+
+## Runnable example
+
+A portable, self-checking **rocWMMA** FP16 GEMM is in
+[`examples/ck-hgemm/`](../../examples/ck-hgemm/). It uses the same matrix-core
+abstraction (16×16×16 fragments, FP32 accumulate over K) that lowers to **WMMA**
+on RDNA4 (gfx1201) and to **MFMA** on CDNA (gfx942/gfx950) from one source. It is
+the demonstrable companion to the CK path above; CK/ck_tile remains the production
+route for peak FP16 GEMM on MI300X/MI350.
+
+```bash
+cd examples/ck-hgemm
+hipcc --offload-arch=gfx1201 -O3 -std=c++17 -I/opt/rocm/include \
+      hgemm_wmma.cpp -o hgemm_wmma && ./hgemm_wmma 256 256 256
+# same source cross-compiles for CDNA (lowers to MFMA):
+#   hipcc --offload-arch=gfx942 -c hgemm_wmma.cpp -o hgemm_gfx942.o
+```
+
+Expected output (captured on gfx1201, RX 9070 XT):
+
+```
+rocWMMA FP16 GEMM  M=256 N=256 K=256  (16x16x16 fragments)
+Device: AMD Radeon RX 9070 XT (gfx1201), warpSize=32
+max abs err = 0.0000   max rel err = 0.00783   (tol abs = 10.24)
+avg kernel time = 0.0081 ms   ~4120.5 GFLOP/s (4.121 TFLOPS)
+PASS
+```
 
 ## Sources
 

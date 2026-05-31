@@ -1,0 +1,2100 @@
+diff --git a/flydsl/src/flydsl/dialects/ext/rocdl.py b/flydsl/src/flydsl/dialects/ext/rocdl.py
+index 0d560b8c3..be82474d4 100644
+--- a/flydsl/src/flydsl/dialects/ext/rocdl.py
++++ b/flydsl/src/flydsl/dialects/ext/rocdl.py
+@@ -18,6 +18,7 @@
+ 
+ # Keep references to ODS-generated builders so we can wrap them without losing access.
+ _ods_mfma_f32_16x16x16f16 = mfma_f32_16x16x16f16
++_ods_mfma_f32_16x16x16bf16_1k = globals().get("mfma_f32_16x16x16bf16_1k", None)
+ _ods_mfma_f32_16x16x32_fp8_fp8 = mfma_f32_16x16x32_fp8_fp8
+ _ods_mfma_i32_16x16x32_i8 = mfma_i32_16x16x32_i8
+ _ods_mfma_scale_f32_16x16x128_f8f6f4 = (
+@@ -67,6 +68,19 @@ def mfma_f32_16x16x16f16(result_type, operands, *, loc=None, ip=None):
+     """Return the op result directly (no `.result` needed at call sites)."""
+     return mfma_f32_16x16x16f16_op(result_type, operands, loc=loc, ip=ip).result
+ 
++# for bf16 version mfma
++def mfma_f32_16x16x16bf16_1k_op(result_type, operands, *, loc=None, ip=None):
++    """Return the op view (original behavior)."""
++    if _ods_mfma_f32_16x16x16bf16_1k is None:
++        raise AttributeError("ROCDL op not found: mfma_f32_16x16x16bf16_1k")
++    ops = [_unwrap_mfma_operand(v, loc=loc) for v in operands]
++    return _ods_mfma_f32_16x16x16bf16_1k(result_type, ops, loc=loc, ip=ip)
++
++
++def mfma_f32_16x16x16bf16_1k(result_type, operands, *, loc=None, ip=None):
++    """Return the op result directly (no `.result` needed at call sites)."""
++    return mfma_f32_16x16x16bf16_1k_op(result_type, operands, loc=loc, ip=ip).result
++
+ 
+ def mfma_f32_16x16x32_fp8_fp8_op(result_type, operands, *, loc=None, ip=None):
+     """Return the op view (original behavior)."""
+@@ -162,12 +176,14 @@ def raw_ptr_buffer_atomic_fadd(val, rsrc, voffset, soffset, cache, *, loc=None,
+     
+     # Matrix operations - MFMA (Matrix Fused Multiply-Add)
+     'mfma_f32_32x32x8f16', 'mfma_f32_16x16x16f16',
++    'mfma_f32_16x16x16bf16_1k',
+     'mfma_f32_32x32x4bf16', 'mfma_f32_16x16x8bf16',
+     'mfma_i32_32x32x8i8', 'mfma_i32_16x16x16i8',
+     'mfma_i32_16x16x32_i8',
+     'mfma_scale_f32_16x16x128_f8f6f4',
+     # Raw-op constructors (return op view) for the above
+     'mfma_f32_16x16x16f16_op', 'mfma_f32_16x16x32_fp8_fp8_op',
++    'mfma_f32_16x16x16bf16_1k_op',
+     'mfma_i32_16x16x32_i8_op',
+     'mfma_scale_f32_16x16x128_f8f6f4_op',
+     
+diff --git a/kernels/mfma_preshuffle_pipeline.py b/kernels/mfma_preshuffle_pipeline.py
+index 551cd8017..e0f80091c 100644
+--- a/kernels/mfma_preshuffle_pipeline.py
++++ b/kernels/mfma_preshuffle_pipeline.py
+@@ -22,7 +22,15 @@ class PreshuffleBLayout:
+     kpack_bytes: int
+ 
+ 
+-def make_preshuffle_b_layout(flir, arith, *, c_n: ir.Value, c_k: ir.Value, kpack_bytes: int = 16) -> PreshuffleBLayout:
++def make_preshuffle_b_layout(
++    flir,
++    arith,
++    *,
++    c_n: ir.Value,
++    c_k: ir.Value,
++    kpack_bytes: int = 16,
++    elem_bytes: int = 1,
++) -> PreshuffleBLayout:
+     """Build B layout matching aiter/CK preshuffle for A8 MFMA kernels.
+ 
+     Shape: (N0, K0, KLane, NLane, KPackBytes) = (N/16, K/64, 4, 16, kpack_bytes)
+@@ -39,15 +47,27 @@ def make_preshuffle_b_layout(flir, arith, *, c_n: ir.Value, c_k: ir.Value, kpack
+     c4 = arith.constant(4, index=True)
+     c_kpack = arith.constant(kpack_bytes, index=True)
+ 
+-    c_k0 = c_k / c64
++    # This layout is fundamentally byte-addressed along K:
++    # - For 1B types (fp8/i8): KBytes == K
++    # - For 2B types (fp16/bf16): KBytes == 2*K
++    #
++    # We keep the same 64B K0 "macro-step" used by CK/aiter preshuffle.
++    if elem_bytes not in (1, 2):
++        raise ValueError(f"elem_bytes must be 1 or 2, got {elem_bytes!r}")
++    c_k_bytes = c_k * arith.constant(int(elem_bytes), index=True)
++    c_k0 = c_k_bytes / c64
+     n0 = c_n / c16
+ 
++    # Layout is expressed in ELEMENT units (not bytes). Convert KPackBytes -> KPackElems.
++    c_kpack_elems = c_kpack if elem_bytes == 1 else (c_kpack / arith.constant(int(elem_bytes), index=True))
++
+     # Strides derived from the layout shape:
+     # - KPack stride = 1
+-    # - NLane stride = KPackBytes
+-    # - KLane stride = NLane * KPackBytes = 16 * KPackBytes
+-    # - K0   stride = KLane * NLane * KPackBytes = 4 * 16 * KPackBytes
++    # - NLane stride = KPackElems
++    # - KLane stride = NLane * KPackElems = 16 * KPackElems
++    # - K0   stride = KLane * NLane * KPackElems = 4 * 16 * KPackElems
+     stride_nlane = c_kpack
++    stride_nlane = c_kpack_elems
+     stride_klane = c16 * stride_nlane
+     stride_k0 = c4 * stride_klane
+     stride_n0 = c_k0 * stride_k0
+@@ -59,7 +79,7 @@ def make_preshuffle_b_layout(flir, arith, *, c_n: ir.Value, c_k: ir.Value, kpack
+         stride_nlane,   # n1
+         arith.constant(1, index=True),  # k2
+     )
+-    layout_b = flir.make_layout((n0, c_k0, c4, c16, c_kpack), stride=stride_b)
++    layout_b = flir.make_layout((n0, c_k0, c4, c16, c_kpack_elems), stride=stride_b)
+     return PreshuffleBLayout(layout_b=layout_b, kpack_bytes=kpack_bytes)
+ 
+ 
+@@ -79,6 +99,7 @@ def load_b_pack_k32(
+     lane_div_16: ir.Value,
+     elem_type: ir.Type,
+     kpack_bytes: int = 16,
++    elem_bytes: int = 1,
+     unpack_int4: bool = False,
+ ) -> ir.Value:
+     """Load one B pack for one MFMA(x32) micro-step.
+@@ -95,23 +116,28 @@ def load_b_pack_k32(
+     if unpack_int4 and kpack_bytes != 8:
+         raise ValueError("unpack_int4 requires kpack_bytes=8 (packed int4 layout)")
+ 
++    if elem_bytes not in (1, 2):
++        raise ValueError(f"elem_bytes must be 1 or 2, got {elem_bytes!r}")
++
+     c64 = arith.constant(64, index=True)
+-    k0_base = base_k / c64
++    base_k_bytes = base_k * arith.constant(int(elem_bytes), index=True)
++    k0_base = base_k_bytes / c64
+     k0 = k0_base + arith.constant(ki_step // 2, index=True)
+     k1 = lane_div_16
+     half_bytes = kpack_bytes // 2
+     k2_base = arith.constant((ki_step % 2) * half_bytes, index=True)
+ 
+-    # Always compute the *pack base* byte index (k2=0). This avoids an extra
++    # Always compute the *pack base* index (k2=0). Layout is in ELEMENT units.
+     # add/sub on the address path and keeps the load address stable across the
+     # two half-steps.
+     coord_pack = flir.make_coord(n_blk, k0, k1, n_intra, arith.constant(0, index=True))
+-    idx_pack_bytes = flir.crd2idx(coord_pack, layout_b)
++    idx_pack = flir.crd2idx(coord_pack, layout_b)
+ 
+     if unpack_int4:
+         # Load 4 bytes -> i32 -> unpack to i64 (8 i8 bytes).
+         atom = flir.make_copy_atom(elem_type, vector_size=4)
+-        idx_bytes = idx_pack_bytes + k2_base
++        # packed int4 is byte-addressed (elem_bytes==1)
++        idx_bytes = idx_pack + k2_base
+         b_view = flir.TensorView(
+             arg_b,
+             (4,),
+@@ -160,12 +186,13 @@ def load_b_pack_k32(
+     # This keeps the original semantics (return the same 8B i64 used by MFMA for
+     # this `ki_step`), but makes the intended 16B buffer-load (dwordx4) explicit
+     # in the IR instead of relying on backend vectorization.
+-    atom = flir.make_copy_atom(elem_type, vector_size=16)
++    vec_elems = kpack_bytes // int(elem_bytes)
++    atom = flir.make_copy_atom(elem_type, vector_size=vec_elems)
+     b_view = flir.TensorView(
+         arg_b,
+-        (16,),
++        (vec_elems,),
+         strides=(1,),
+-        base_indices=(idx_pack_bytes,),
++        base_indices=(idx_pack,),
+         element_type=elem_type,
+     )
+     b16 = flir.copy(
+@@ -178,7 +205,8 @@ def load_b_pack_k32(
+         alignment=8,
+         return_vector=True,
+         src_buffer_resource=b_rsrc,
+-        src_buffer_offset_in_bytes=True,
++        # Only 1B element types can safely treat the base index as bytes.
++        src_buffer_offset_in_bytes=(elem_bytes == 1),
+     )
+     # Extract the needed 8B half as an i64 while keeping the other half dead.
+     #
+@@ -247,14 +275,17 @@ def buffer_copy_gmem16_dwordx4(
+     idx_i32: ir.Value,
+     atom_g2r16,
+     rsrc,
++    vec_elems: int = 16,
+ ):
+     """Copy 16 bytes from global memory into regs via buffer-load dwordx4 lowering.
+ 
+     `idx_i32` is a dword element offset (not bytes), so `src_buffer_offset_in_bytes=False`.
+     """
++    if int(vec_elems) <= 0:
++        raise ValueError(f"vec_elems must be > 0, got {vec_elems!r}")
+     view = flir.TensorView(
+         arg,
+-        (16,),
++        (int(vec_elems),),
+         strides=(1,),
+         base_indices=(idx_i32,),
+         element_type=elem_type,
+@@ -286,17 +317,22 @@ def lds_store_16b_xor16(
+     k_blocks16: ir.Value,
+     lds_base: ir.Value,
+     vec_part_i32x4: ir.Value,
++    elem_bytes: int = 1,
+ ):
+     """Store one 16B chunk into LDS with CK-style XOR16 swizzle on the K dimension."""
++    if elem_bytes not in (1, 2):
++        raise ValueError(f"elem_bytes must be 1 or 2, got {elem_bytes!r}")
+     col_local_bytes = col_local_i32 * tx_c4
+-    col_swz = flir.swizzle_xor16(row_local, col_local_bytes, k_blocks16)
++    col_swz_bytes = flir.swizzle_xor16(row_local, col_local_bytes, k_blocks16)
++    col_swz = col_swz_bytes if elem_bytes == 1 else (col_swz_bytes / arith.constant(2, index=True))
+     coord_store = flir.make_coord(row_local, col_swz)
+     idx0 = flir.crd2idx(coord_store, layout_lds)
+     idx0 = idx0 + lds_base
+     v16 = vector.bitcast(vec16_ty, vec_part_i32x4)
++    extent_elems = 16 if elem_bytes == 1 else 8
+     s_view = flir.TensorView(
+         lds_memref,
+-        (16,),
++        (extent_elems,),
+         strides=(1,),
+         base_indices=(idx0,),
+         element_type=elem_type,
+@@ -320,17 +356,22 @@ def lds_store_8b_xor16(
+     k_blocks16: ir.Value,
+     lds_base: ir.Value,
+     vec_part_i32x2: ir.Value,
++    elem_bytes: int = 1,
+ ):
+     """Store one 8B chunk into LDS with CK-style XOR16 swizzle on the K dimension."""
++    if elem_bytes not in (1, 2):
++        raise ValueError(f"elem_bytes must be 1 or 2, got {elem_bytes!r}")
+     col_local_bytes = col_local_i32 * tx_c4
+-    col_swz = flir.swizzle_xor16(row_local, col_local_bytes, k_blocks16)
++    col_swz_bytes = flir.swizzle_xor16(row_local, col_local_bytes, k_blocks16)
++    col_swz = col_swz_bytes if elem_bytes == 1 else (col_swz_bytes / arith.constant(2, index=True))
+     coord_store = flir.make_coord(row_local, col_swz)
+     idx0 = flir.crd2idx(coord_store, layout_lds)
+     idx0 = idx0 + lds_base
+     v8 = vector.bitcast(vec8_ty, vec_part_i32x2)
++    extent_elems = 8 if elem_bytes == 1 else 4
+     s_view = flir.TensorView(
+         lds_memref,
+-        (8,),
++        (extent_elems,),
+         strides=(1,),
+         base_indices=(idx0,),
+         element_type=elem_type,
+@@ -354,17 +395,22 @@ def lds_store_4b_xor16(
+     k_blocks16: ir.Value,
+     lds_base: ir.Value,
+     vec_part_i32x1: ir.Value,
++    elem_bytes: int = 1,
+ ):
+     """Store one 4B chunk into LDS with CK-style XOR16 swizzle on the K dimension."""
++    if elem_bytes not in (1, 2):
++        raise ValueError(f"elem_bytes must be 1 or 2, got {elem_bytes!r}")
+     col_local_bytes = col_local_i32 * tx_c4
+-    col_swz = flir.swizzle_xor16(row_local, col_local_bytes, k_blocks16)
++    col_swz_bytes = flir.swizzle_xor16(row_local, col_local_bytes, k_blocks16)
++    col_swz = col_swz_bytes if elem_bytes == 1 else (col_swz_bytes / arith.constant(2, index=True))
+     coord_store = flir.make_coord(row_local, col_swz)
+     idx0 = flir.crd2idx(coord_store, layout_lds)
+     idx0 = idx0 + lds_base
+     v4 = vector.bitcast(vec4_ty, vec_part_i32x1)
++    extent_elems = 4 if elem_bytes == 1 else 2
+     s_view = flir.TensorView(
+         lds_memref,
+-        (4,),
++        (extent_elems,),
+         strides=(1,),
+         base_indices=(idx0,),
+         element_type=elem_type,
+diff --git a/kernels/moe_gemm_2stage.py b/kernels/moe_gemm_2stage.py
+index 55bcb6f6a..bc404292b 100644
+--- a/kernels/moe_gemm_2stage.py
++++ b/kernels/moe_gemm_2stage.py
+@@ -1,4 +1,4 @@
+-"""MoE GEMM stage1/stage2 kernel implementations (FLIR MFMA FP8).
++"""MoE GEMM stage1/stage2 kernel implementations (FLIR MFMA FP8/FP16).
+ 
+ This module intentionally contains the **kernel builder code** for:
+ - `moe_gemm1` (stage1)
+@@ -56,6 +56,7 @@ def compile_moe_gemm1(
+ 
+     in_dtype:
+       - "fp8": X/W are fp8
++      - "fp16": X/W are fp16 (caller uses tile_k halved vs fp8 to match MFMA K halving)
+       - "int8": X/W are int8
+       - "int4": W4A8 path: X is int8, W is packed int4 (2 values per byte) unpacked to int8 in-kernel
+     """
+@@ -63,11 +64,17 @@ def compile_moe_gemm1(
+     allocator = SmemAllocator(None, arch=gpu_arch)
+     _state = {}
+ 
+-    if in_dtype not in ("fp8", "int8", "int4"):
+-        raise ValueError(f"in_dtype must be 'fp8', 'int8', or 'int4', got {in_dtype!r}")
+-    # K64 micro-step uses 2x K32 MFMA (and 16B A/B packs); require tile_k divisible by 64.
+-    if (int(tile_k) % 64) != 0:
+-        raise ValueError(f"tile_k must be divisible by 64 (K64 unroll), got tile_k={tile_k}")
++    if in_dtype not in ("fp8", "fp16", "int8", "int4"):
++        raise ValueError(f"in_dtype must be one of ('fp8','fp16','int8','int4'), got {in_dtype!r}")
++    is_f16 = in_dtype == "fp16"
++    elem_bytes = 2 if is_f16 else 1
++    tile_k_bytes = int(tile_k) * int(elem_bytes)
++    # K64-byte micro-step: always 64 bytes per `ku`. For fp16, this is 32 elements (2xK16 MFMA).
++    if (tile_k_bytes % 64) != 0:
++        raise ValueError(
++            f"tile_k_bytes must be divisible by 64, got tile_k_bytes={tile_k_bytes} "
++            f"(tile_k={tile_k}, elem_bytes={elem_bytes})"
++        )
+     is_int4 = in_dtype == "int4"
+     # INT4 here means W4A8: X is int8, W is packed int4 and unpacked to int8 in-kernel.
+     is_int8 = (in_dtype == "int8") or is_int4
+@@ -91,9 +98,13 @@ def compile_moe_gemm1(
+     size_expert_ids = int(size_expert_ids)
+ 
+     total_threads = 256
+-    elems_x_per_tile = tile_m * tile_k
+-    elems_per_thread_x = elems_x_per_tile // total_threads
+-    bytes_per_thread_x = elems_per_thread_x  # 1B elems (fp8 or int8)
++    bytes_x_per_tile = int(tile_m) * int(tile_k) * int(elem_bytes)
++    if bytes_x_per_tile % total_threads != 0:
++        raise ValueError(
++            "tile_m*tile_k*elem_bytes must be divisible by "
++            f"{total_threads}: tile_m={tile_m}, tile_k={tile_k}, elem_bytes={elem_bytes}"
++        )
++    bytes_per_thread_x = bytes_x_per_tile // total_threads
+     # Keep MoE stage1 X gmem->LDS pipeline consistent with the optimized GEMM kernel:
+     # split into <=16B pieces and use `flir.copy(load-only)` for buffer_load_dwordx4.
+     # (Compute the split lens inside the kernel so the code matches GEMM structure.)
+@@ -123,18 +134,20 @@ def init_gpu_module(self):
+             # - ping-pong X tiles (2 * tile_m * lds_stride bytes; fp8/int8)
+             # - epilogue CShuffle tile (tile_m * tile_n f16 -> 2 * tile_m * tile_n bytes)
+             _use_cshuffle_epilog = bool(use_cshuffle_epilog)
+-            lds_x_bytes = 2 * tile_m * lds_stride  # 1B elems
++            lds_x_bytes = 2 * int(tile_m) * int(lds_stride) * int(elem_bytes)
+             lds_out_bytes = 2 * tile_m * tile_n if _use_cshuffle_epilog else 0
+             lds_total_bytes = max(lds_x_bytes, lds_out_bytes)
+-            _state["lds_x_decl"] = allocator.allocate_array(I.i8 if is_int8 else I.f8, lds_total_bytes)
++            lds_total_elems = lds_total_bytes if elem_bytes == 1 else (lds_total_bytes // 2)
++            x_lds_elem = I.f16 if is_f16 else (I.i8 if is_int8 else I.f8)
++            _state["lds_x_decl"] = allocator.allocate_array(x_lds_elem, lds_total_elems)
+             allocator.finalize()
+ 
+         @flir.kernel
+         def moe_gemm1(
+             self: flir.T.i64,
+             arg_out: lambda: T.memref(size_out, T.f16()),
+-            arg_x: lambda: T.memref(size_x, I.i8 if is_int8 else I.f8),
+-            arg_w: lambda: T.memref(size_w, I.i8 if is_int8 else I.f8),
++            arg_x: lambda: T.memref(size_x, I.f16 if is_f16 else (I.i8 if is_int8 else I.f8)),
++            arg_w: lambda: T.memref(size_w, I.f16 if is_f16 else (I.i8 if is_int8 else I.f8)),
+             arg_scale_x: lambda: T.memref(tokens, T.f32()),
+             arg_scale_w: lambda: T.memref(experts * (2 * inter_dim), T.f32()),
+             arg_sorted_token_ids: lambda: T.memref(size_sorted, T.i32()),
+@@ -144,18 +157,22 @@ def moe_gemm1(
+             inter_in: lambda: T.index(),
+             k_in: lambda: T.index(),
+         ):
+-            x_elem = I.i8 if is_int8 else I.f8
++            x_elem = I.f16 if is_f16 else (I.i8 if is_int8 else I.f8)
+             # For int4, weights are stored as packed bytes (i8) and unpacked to i8 packs.
+-            w_elem = I.i8 if is_int8 else I.f8
++            w_elem = I.f16 if is_f16 else (I.i8 if is_int8 else I.f8)
+             f16 = I.f16
+             f32 = I.f32
+             i32 = I.i32
+             i64 = I.i64
+             vec4_f32 = I.vec(4, f32)
+             vec4_i32 = I.vec(4, i32)
++            vec4_f16 = I.vec(4, f16)
+             vec1_f16 = I.vec(1, f16)
+-            vec8_x = I.vec(8, x_elem)
+-            vec16_x = I.vec(16, x_elem)
++            vec16_elems = 16 if elem_bytes == 1 else 8
++            vec8_elems = 8 if elem_bytes == 1 else 4
++            vec4_elems = 4 if elem_bytes == 1 else 2
++            vec8_x = I.vec(vec8_elems, x_elem)
++            vec16_x = I.vec(vec16_elems, x_elem)
+             vec1_i64 = I.vec(1, i64)
+             vec2_i64 = I.vec(2, i64)
+ 
+@@ -186,10 +203,11 @@ def silu(x):
+             c_n_total = arith.constant(experts * (2 * inter_dim), index=True)
+             kpack_bytes = 8 if is_int4 else 16
+             b_layout = make_preshuffle_b_layout(
+-                flir, arith, c_n=c_n_total, c_k=k_in, kpack_bytes=kpack_bytes
++                flir, arith, c_n=c_n_total, c_k=k_in, kpack_bytes=kpack_bytes, elem_bytes=elem_bytes
+             )
+             layout_b = b_layout.layout_b
+-            c_k0 = k_in / arith.index(64)
++            # Only used by fp8/int8 path (16B gmem -> regs). Kept for backwards compat.
++            atom_w_g2r16 = flir.make_copy_atom(w_elem, vector_size=16)
+ 
+             shape_lds = flir.make_shape(tile_m, tile_k)
+             stride_lds = flir.make_stride(lds_stride, 1)
+@@ -201,13 +219,13 @@ def silu(x):
+ 
+             # Common constants/atoms (hoisted): keep IR small like GEMM.
+             # CK-style XOR16 swizzle parameter (constant, power-of-two in our configs).
+-            k_blocks16 = arith.constant(tile_k // 16, index=True)
++            k_blocks16 = arith.constant(tile_k_bytes // 16, index=True)
+             atom_x_s16 = flir.make_copy_atom(x_elem, vector_size=16)
+             atom_x_s8 = flir.make_copy_atom(x_elem, vector_size=8)
+             atom_x_s4 = flir.make_copy_atom(x_elem, vector_size=4)
+-            atom_x_g2r16 = flir.make_copy_atom(x_elem, vector_size=16)
+-            atom_x_g2r8 = flir.make_copy_atom(x_elem, vector_size=8)
+-            atom_x_g2r4 = flir.make_copy_atom(x_elem, vector_size=4)
++            atom_x_g2r16 = flir.make_copy_atom(x_elem, vector_size=vec16_elems)
++            atom_x_g2r8 = flir.make_copy_atom(x_elem, vector_size=vec8_elems)
++            atom_x_g2r4 = flir.make_copy_atom(x_elem, vector_size=vec4_elems)
+             layout_tx_wave_lane = flir.make_layout((4, 64), stride=(64, 1))
+             layout_lane16 = flir.make_layout((4, 16), stride=(16, 1))
+ 
+@@ -228,8 +246,9 @@ def silu(x):
+             x_rsrc = buffer_ops.create_buffer_resource(arg_x, max_size=False)
+             w_rsrc = buffer_ops.create_buffer_resource(arg_w, max_size=False)
+             out_rsrc = buffer_ops.create_buffer_resource(arg_out, max_size=False)
+-            sx_rsrc = buffer_ops.create_buffer_resource(arg_scale_x, max_size=False)
+-            sw_rsrc = buffer_ops.create_buffer_resource(arg_scale_w, max_size=False)
++            # fp16 path ignores scales completely (implicit scale=1.0).
++            sx_rsrc = None if is_f16 else buffer_ops.create_buffer_resource(arg_scale_x, max_size=False)
++            sw_rsrc = None if is_f16 else buffer_ops.create_buffer_resource(arg_scale_w, max_size=False)
+             sorted_rsrc = buffer_ops.create_buffer_resource(arg_sorted_token_ids, max_size=False)
+             expert_rsrc = buffer_ops.create_buffer_resource(arg_expert_ids, max_size=False)
+             sorted_w_rsrc = buffer_ops.create_buffer_resource(arg_sorted_weights, max_size=False)
+@@ -246,22 +265,32 @@ def silu(x):
+             # Prefer 16B buffer-load (dwordx4). If the per-thread byte count isn't divisible by
+             # 16, fall back to 8B (dwordx2) or 4B (dword) loads. This broadens supported tilings
+             # (e.g. tile_m=16, tile_k=192 -> 12B/thread) at some performance cost.
+-            if bytes_per_thread_x % 16 == 0:
++            if is_f16:
++                # fp16 path keeps the same fixed 16B gmem->reg schedule.
++                if bytes_per_thread_x % 16 != 0:
++                    raise ValueError(
++                        f"[fp16] bytes_per_thread_x ({bytes_per_thread_x}) must be divisible by 16"
++                    )
+                 x_load_bytes = 16
+-            elif bytes_per_thread_x % 8 == 0:
+-                x_load_bytes = 8
+-            elif bytes_per_thread_x % 4 == 0:
+-                x_load_bytes = 4
+             else:
+-                raise ValueError(
+-                    f"bytes_per_thread_x ({bytes_per_thread_x}) must be divisible by 4 to use the dword-indexed load mapping."
+-                )
++                if bytes_per_thread_x % 16 == 0:
++                    x_load_bytes = 16
++                elif bytes_per_thread_x % 8 == 0:
++                    x_load_bytes = 8
++                elif bytes_per_thread_x % 4 == 0:
++                    x_load_bytes = 4
++                else:
++                    raise ValueError(
++                        f"bytes_per_thread_x ({bytes_per_thread_x}) must be divisible by 4 to use the dword-indexed load mapping."
++                    )
+             num_x_loads = bytes_per_thread_x // x_load_bytes
+             chunk_i32 = x_load_bytes // 4  # dwords per chunk (1/2/4)
+ 
+-            c_k_div4 = k_in / arith.index(4)
++            # Work in dword units along K: K_dwords = (K_bytes)/4.
++            c_k_div4 = (k_in * arith.constant(int(elem_bytes), index=True)) / arith.index(4)
+             layout_x_div4 = flir.make_layout((tokens_in, c_k_div4), stride=(c_k_div4, 1))
+-            layout_x_tile_div4 = flir.make_layout((tile_m, tile_k // 4), stride=(tile_k // 4, 1))
++            tile_k_dwords = (int(tile_k) * int(elem_bytes)) // 4
++            layout_x_tile_div4 = flir.make_layout((tile_m, tile_k_dwords), stride=(tile_k_dwords, 1))
+             c_chunk_i32 = arith.constant(chunk_i32, index=True)
+             tx_i32_base = tx * c_chunk_i32
+             mask24 = arith.i32(0xFFFFFF)
+@@ -306,13 +335,15 @@ def load_x(idx_i32):
+                 For 16B, keep the fast dwordx4 path. For 8B/4B, use byte offsets.
+                 """
+                 if x_load_bytes == 16:
++                    idx_elem = idx_i32 if elem_bytes == 1 else (idx_i32 * arith.index(2))
+                     return buffer_copy_gmem16_dwordx4(
+                         flir,
+                         arg=arg_x,
+                         elem_type=x_elem,
+-                        idx_i32=idx_i32,
++                        idx_i32=idx_elem,
+                         atom_g2r16=atom_x_g2r16,
+                         rsrc=x_rsrc,
++                        vec_elems=vec16_elems,
+                     )
+                 idx_bytes = idx_i32 * arith.index(4)
+                 atom = atom_x_g2r8 if x_load_bytes == 8 else atom_x_g2r4
+@@ -335,7 +366,7 @@ def load_x(idx_i32):
+ 
+             def load_x_tile(base_k):
+                 """Prefetch the per-thread X tile portion (gmem -> regs) for a given K base (in elements)."""
+-                base_k_div4 = base_k / arith.index(4)
++                base_k_div4 = (base_k * arith.constant(int(elem_bytes), index=True)) / arith.index(4)
+                 parts = []
+                 for i in range_constexpr(num_x_loads):
+                     idx_i32 = x_row_base_div4[i] + base_k_div4 + x_col_local_i32[i]
+@@ -356,9 +387,9 @@ def load_x_tile(base_k):
+             lane_div_16 = flir.get(coord_l16, 0)
+             lane_mod_16 = flir.get(coord_l16, 1)
+ 
+-            # Match GEMM naming/pattern: row in LDS is lane_mod_16, and col base is lane_div_16*16.
++            # Match GEMM naming/pattern: row in LDS is lane_mod_16, and col base is lane_div_16*16B (KPackBytes=16).
+             row_a_lds = lane_mod_16
+-            col_offset_base = flir.crd2idx(flir.make_coord(lane_div_16, 0), layout_lane16)
++            col_offset_base = lane_div_16 * arith.constant(16, index=True)
+ 
+             # Dynamic N tiling within block (same as existing kernels)
+             by_n = by * arith.constant(tile_n, index=True)
+@@ -401,7 +432,7 @@ def load_x_tile(base_k):
+                 valid_col_list.append(arith.ult(col_g, inter_idx))
+ 
+             m_repeat = tile_m // 16
+-            k_unroll = tile_k // 64  # K64 micro-step (2x K32 MFMA)
++            k_unroll = tile_k_bytes // 64  # K64-byte micro-step
+ 
+             # --- B Load Logic (K64) - shared layout with preshuffle GEMM ---
+             def load_b_pack(base_k, ki_step, ni, blk_list, intra_list):
+@@ -420,6 +451,7 @@ def load_b_pack(base_k, ki_step, ni, blk_list, intra_list):
+                     lane_div_16=lane_div_16,  # 0..3
+                     elem_type=w_elem,
+                     kpack_bytes=kpack_bytes,
++                    elem_bytes=elem_bytes,
+                     unpack_int4=is_int4,
+                 )
+ 
+@@ -430,7 +462,6 @@ def load_b_tile(base_k, blk_list, intra_list):
+                   (packs_half0[ni], packs_half1[ni])  for the K64 micro-step.
+                 """
+                 b_tile = []
+-                atom_w_g2r16 = flir.make_copy_atom(w_elem, vector_size=16)
+                 for ku in range_constexpr(k_unroll):
+                     packs0 = []
+                     packs1 = []
+@@ -441,6 +472,12 @@ def load_b_tile(base_k, blk_list, intra_list):
+                             ki1 = (ku * 2) + 1
+                             b0 = load_b_pack(base_k, ki0, ni, blk_list, intra_list)
+                             b1 = load_b_pack(base_k, ki1, ni, blk_list, intra_list)
++                        elif is_f16:
++                            # fp16: reuse K32 loader twice (2x8B packs -> 2x MFMA16).
++                            ki0 = (ku * 2) + 0
++                            ki1 = (ku * 2) + 1
++                            b0 = load_b_pack(base_k, ki0, ni, blk_list, intra_list)
++                            b1 = load_b_pack(base_k, ki1, ni, blk_list, intra_list)
+                         else:
+                             # FP8/INT8: load 16 bytes (one full KPack) and split into 2x i64 halves.
+                             k0_base = base_k / arith.index(64)
+@@ -498,6 +535,7 @@ def store_x_tile_to_lds(vec_x_in_parts, lds_base):
+                             k_blocks16=k_blocks16,
+                             lds_base=lds_base,
+                             vec_part_i32x4=vec_x_in_parts[i],
++                            elem_bytes=elem_bytes,
+                         )
+                     elif x_load_bytes == 8:
+                         lds_store_8b_xor16(
+@@ -515,6 +553,7 @@ def store_x_tile_to_lds(vec_x_in_parts, lds_base):
+                             k_blocks16=k_blocks16,
+                             lds_base=lds_base,
+                             vec_part_i32x2=vec_x_in_parts[i],
++                            elem_bytes=elem_bytes,
+                         )
+                     else:
+                         lds_store_4b_xor16(
+@@ -532,11 +571,14 @@ def store_x_tile_to_lds(vec_x_in_parts, lds_base):
+                             k_blocks16=k_blocks16,
+                             lds_base=lds_base,
+                             vec_part_i32x1=vec_x_in_parts[i],
++                            elem_bytes=elem_bytes,
+                         )
+ 
+             # --- A LDS load helper for K64 (load 16B once, extract 2x i64 halves) ---
+             def lds_load_packs_k64(curr_row_a_lds, col_base, lds_base):
+-                col_base_swz = flir.swizzle_xor16(curr_row_a_lds, col_base, k_blocks16)
++                # Swizzle in bytes, then convert to element offset for memref indexing.
++                col_base_swz_bytes = flir.swizzle_xor16(curr_row_a_lds, col_base, k_blocks16)
++                col_base_swz = col_base_swz_bytes if elem_bytes == 1 else (col_base_swz_bytes / arith.index(2))
+                 coord_a16 = flir.make_coord(curr_row_a_lds, col_base_swz)
+                 idx_a16 = flir.crd2idx(coord_a16, layout_lds)
+                 idx_a16 = idx_a16 + lds_base
+@@ -559,12 +601,16 @@ def compute_tile(
+                 gate_list = list(acc_gate_in)
+                 up_list = list(acc_up_in)
+                 mfma_res_ty = vec4_i32 if is_int8 else vec4_f32
+-                mfma_fn = mfma_i32_k32 if is_int8 else rocdl.mfma_f32_16x16x32_fp8_fp8
++                mfma_fn = (
++                    mfma_i32_k32
++                    if is_int8
++                    else (rocdl.mfma_f32_16x16x16f16 if is_f16 else rocdl.mfma_f32_16x16x32_fp8_fp8)
++                )
+ 
+                 # Optional: prefetch epilogue scales while we are about to run the last MFMA tile,
+                 # matching the preshuffle GEMM pattern of overlapping scale loads with MFMA.
+                 epilogue_pf = None
+-                if prefetch_epilogue:
++                if prefetch_epilogue and (not is_f16):
+                     expert_off_pf = expert_off_idx
+                     sw_gate_pf = []
+                     sw_up_pf = []
+@@ -573,21 +619,24 @@ def compute_tile(
+                         valid_col = valid_col_list[ni]
+                         row_gate_idx = expert_off_pf + col_g
+                         row_up_idx = row_gate_idx + inter_idx
+-                        sw_gate_pf.append(
+-                            buffer_ops.buffer_load(sw_rsrc, row_gate_idx, vec_width=1, dtype=f32)
+-                        )
+-                        sw_up_pf.append(
+-                            buffer_ops.buffer_load(sw_rsrc, row_up_idx, vec_width=1, dtype=f32)
+-                        )
++                        sw_gate_pf.append(buffer_ops.buffer_load(sw_rsrc, row_gate_idx, vec_width=1, dtype=f32))
++                        sw_up_pf.append(buffer_ops.buffer_load(sw_rsrc, row_up_idx, vec_width=1, dtype=f32))
+                     epilogue_pf = (sw_gate_pf, sw_up_pf)
+ 
++                def _i64_to_v4f16(x_i64):
++                    v1 = vector.from_elements(vec1_i64, [x_i64])
++                    return vector.bitcast(vec4_f16, v1)
++
+                 def mfma_k64(acc_in, a0, a1, b0, b1):
+-                    acc_mid = mfma_fn(
+-                        mfma_res_ty, [a0, b0, acc_in, 0, 0, 0]
+-                    )
+-                    return mfma_fn(
+-                        mfma_res_ty, [a1, b1, acc_mid, 0, 0, 0]
+-                    )
++                    if is_f16:
++                        a0v = _i64_to_v4f16(a0)
++                        a1v = _i64_to_v4f16(a1)
++                        b0v = _i64_to_v4f16(b0)
++                        b1v = _i64_to_v4f16(b1)
++                        acc_mid = mfma_fn(mfma_res_ty, [a0v, b0v, acc_in, 0, 0, 0])
++                        return mfma_fn(mfma_res_ty, [a1v, b1v, acc_mid, 0, 0, 0])
++                    acc_mid = mfma_fn(mfma_res_ty, [a0, b0, acc_in, 0, 0, 0])
++                    return mfma_fn(mfma_res_ty, [a1, b1, acc_mid, 0, 0, 0])
+ 
+                 for ku in range_constexpr(k_unroll):
+                     b_gate_packs0, b_gate_packs1 = b_gate_tile_in[ku]
+@@ -769,7 +818,11 @@ def hot_loop_scheduler():
+             inter_i32_v = arith.i32(inter_dim)
+             mask24_i32 = arith.i32(0xFFFFFF)
+ 
+-            if epilogue_pf is not None:
++            if is_f16:
++                # fp16: no scale fetch, no scale multiply in epilogue.
++                sw_gate_vals = None
++                sw_up_vals = None
++            elif epilogue_pf is not None:
+                 sw_gate_vals, sw_up_vals = epilogue_pf
+             else:
+                 sw_gate_vals = []
+@@ -778,12 +831,8 @@ def hot_loop_scheduler():
+                     col_g = col_g_list[ni]
+                     row_gate_idx = expert_off + col_g
+                     row_up_idx = row_gate_idx + inter_idx
+-                    sw_gate_vals.append(
+-                        buffer_ops.buffer_load(sw_rsrc, row_gate_idx, vec_width=1, dtype=f32)
+-                    )
+-                    sw_up_vals.append(
+-                        buffer_ops.buffer_load(sw_rsrc, row_up_idx, vec_width=1, dtype=f32)
+-                    )
++                    sw_gate_vals.append(buffer_ops.buffer_load(sw_rsrc, row_gate_idx, vec_width=1, dtype=f32))
++                    sw_up_vals.append(buffer_ops.buffer_load(sw_rsrc, row_up_idx, vec_width=1, dtype=f32))
+ 
+             # Epilogue hoists to keep IR + Python build time small:
+             col_i32_list = []
+@@ -817,7 +866,7 @@ def write_row_to_lds(
+                     t2 = fused2 & mask24_i32
+                     # No explicit mask: rely on buffer descriptor OOB to zero-fill when t2 is the
+                     # sentinel (t2 == tokens) or otherwise out-of-range.
+-                    sx = buffer_ops.buffer_load(sx_rsrc, t2, vec_width=1, dtype=f32)
++                    sx = None if is_f16 else buffer_ops.buffer_load(sx_rsrc, t2, vec_width=1, dtype=f32)
+ 
+                     # Sorted weight aligned with `row` (matches aiter moe_sorting output).
+                     if doweight_stage1:
+@@ -825,8 +874,8 @@ def write_row_to_lds(
+ 
+                     for ni in range_constexpr(num_acc_n):
+                         col_local = col_base_local + (ni * 16)
+-                        sw_gate = sw_gate_vals[ni]
+-                        sw_up = sw_up_vals[ni]
++                        sw_gate = sw_gate_vals[ni] if (not is_f16) else None
++                        sw_up = sw_up_vals[ni] if (not is_f16) else None
+ 
+                         acc_idx = mi * num_acc_n + ni
+                         vg = vector.extract(
+@@ -839,8 +888,9 @@ def write_row_to_lds(
+                         if is_int8:
+                             vg = arith.sitofp(f32, vg)
+                             vu = arith.sitofp(f32, vu)
+-                        vg = vg * sx * sw_gate
+-                        vu = vu * sx * sw_up
++                        if not is_f16:
++                            vg = vg * sx * sw_gate
++                            vu = vu * sx * sw_up
+ 
+                         y = silu(vg) * vu
+                         if doweight_stage1:
+@@ -894,7 +944,7 @@ def _stage1_store_row(*, mi: int, ii: int, row_in_tile, row):
+                 s2 = fused2 >> 24
+                 # No explicit mask: rely on buffer descriptor OOB to zero-fill when t2 is the
+                 # sentinel (t2 == tokens) or otherwise out-of-range.
+-                sx = buffer_ops.buffer_load(sx_rsrc, t2, vec_width=1, dtype=f32)
++                sx = None if is_f16 else buffer_ops.buffer_load(sx_rsrc, t2, vec_width=1, dtype=f32)
+ 
+                 # out linear index base = ((t*topk + s)*inter_dim) (invariant across ni)
+                 idx0 = (t2 * topk_i32_v + s2) * inter_i32_local
+@@ -905,8 +955,8 @@ def _stage1_store_row(*, mi: int, ii: int, row_in_tile, row):
+ 
+                 for ni in range_constexpr(num_acc_n):
+                     col_i32 = col_i32_list[ni]
+-                    sw_gate = sw_gate_vals[ni]
+-                    sw_up = sw_up_vals[ni]
++                    sw_gate = sw_gate_vals[ni] if (not is_f16) else None
++                    sw_up = sw_up_vals[ni] if (not is_f16) else None
+ 
+                     acc_idx = mi * num_acc_n + ni
+                     vg = vector.extract(
+@@ -919,8 +969,9 @@ def _stage1_store_row(*, mi: int, ii: int, row_in_tile, row):
+                     if is_int8:
+                         vg = arith.sitofp(f32, vg)
+                         vu = arith.sitofp(f32, vu)
+-                    vg = vg * sx * sw_gate
+-                    vu = vu * sx * sw_up
++                    if not is_f16:
++                        vg = vg * sx * sw_gate
++                        vu = vu * sx * sw_up
+ 
+                     y = silu(vg) * vu
+                     if doweight_stage1:
+@@ -944,8 +995,8 @@ def _stage1_store_row(*, mi: int, ii: int, row_in_tile, row):
+         def __call__(
+             self: flir.T.i64,
+             arg_out: lambda: T.memref(size_out, T.f16()),
+-            arg_x: lambda: T.memref(size_x, I.i8 if is_int8 else I.f8),
+-            arg_w: lambda: T.memref(size_w, I.i8 if is_int8 else I.f8),
++            arg_x: lambda: T.memref(size_x, I.f16 if is_f16 else (I.i8 if is_int8 else I.f8)),
++            arg_w: lambda: T.memref(size_w, I.f16 if is_f16 else (I.i8 if is_int8 else I.f8)),
+             arg_scale_x: lambda: T.memref(tokens, T.f32()),
+             arg_scale_w: lambda: T.memref(experts * (2 * inter_dim), T.f32()),
+             arg_sorted_token_ids: lambda: T.memref(size_sorted, T.i32()),
+@@ -1002,6 +1053,7 @@ def compile_moe_gemm2(
+ 
+     in_dtype:
+       - "fp8": A2/W are fp8
++      - "fp16": A2/W are fp16 (caller uses tile_k halved vs fp8 to match MFMA K halving)
+       - "int8": A2/W are int8
+       - "int4": W4A8 path: A2 is int8, W is packed int4 unpacked to int8 in-kernel
+ 
+@@ -1014,8 +1066,16 @@ def compile_moe_gemm2(
+     allocator = SmemAllocator(None, arch=gpu_arch)
+     _state = {}
+ 
+-    if in_dtype not in ("fp8", "int8", "int4"):
+-        raise ValueError(f"in_dtype must be 'fp8', 'int8', or 'int4', got {in_dtype!r}")
++    if in_dtype not in ("fp8", "fp16", "int8", "int4"):
++        raise ValueError(f"in_dtype must be one of ('fp8','fp16','int8','int4'), got {in_dtype!r}")
++    is_f16 = in_dtype == "fp16"
++    elem_bytes = 2 if is_f16 else 1
++    tile_k_bytes = int(tile_k) * int(elem_bytes)
++    if (tile_k_bytes % 64) != 0:
++        raise ValueError(
++            f"tile_k_bytes must be divisible by 64, got tile_k_bytes={tile_k_bytes} "
++            f"(tile_k={tile_k}, elem_bytes={elem_bytes})"
++        )
+     is_int4 = in_dtype == "int4"
+     # INT4 here means W4A8: A2 is int8, W is packed int4 and unpacked to int8 in-kernel.
+     is_int8 = (in_dtype == "int8") or is_int4
+@@ -1039,9 +1099,13 @@ def compile_moe_gemm2(
+     size_expert_ids = int(size_expert_ids)
+ 
+     total_threads = 256
+-    elems_x_per_tile = tile_m * tile_k
+-    elems_per_thread_x = elems_x_per_tile // total_threads
+-    bytes_per_thread_x = elems_per_thread_x  # 1B elems (fp8 or int8)
++    bytes_x_per_tile = int(tile_m) * int(tile_k) * int(elem_bytes)
++    if bytes_x_per_tile % total_threads != 0:
++        raise ValueError(
++            "tile_m*tile_k*elem_bytes must be divisible by "
++            f"{total_threads}: tile_m={tile_m}, tile_k={tile_k}, elem_bytes={elem_bytes}"
++        )
++    bytes_per_thread_x = bytes_x_per_tile // total_threads
+ 
+     _ck_lds128 = os.environ.get("FLIR_CK_LDS128", "1") in ("1", "true", "True", "YES", "yes")
+     pad_k = 0 if _ck_lds128 else 8
+@@ -1084,18 +1148,20 @@ def init_gpu_module(self):
+             # - epilogue CShuffle tile (tile_m * tile_n f16 -> 2 * tile_m * tile_n bytes)
+             #
+             # This reduces LDS usage from sum(...) to max(...).
+-            lds_x_bytes = 2 * tile_m * lds_stride  # 1B elems
++            lds_x_bytes = 2 * int(tile_m) * int(lds_stride) * int(elem_bytes)
+             lds_out_bytes = 2 * tile_m * tile_n if _use_cshuffle_epilog else 0  # f16 bytes
+             lds_total_bytes = max(lds_x_bytes, lds_out_bytes)
+-            _state["lds_x_decl"] = allocator.allocate_array(I.i8 if is_int8 else I.f8, lds_total_bytes)
++            lds_total_elems = lds_total_bytes if elem_bytes == 1 else (lds_total_bytes // 2)
++            x_lds_elem = I.f16 if is_f16 else (I.i8 if is_int8 else I.f8)
++            _state["lds_x_decl"] = allocator.allocate_array(x_lds_elem, lds_total_elems)
+             allocator.finalize()
+ 
+         @flir.kernel
+         def moe_gemm2(
+             self: flir.T.i64,
+             arg_out: lambda: T.memref(size_out, out_elem()),
+-            arg_x: lambda: T.memref(size_x, I.i8 if is_int8 else I.f8),
+-            arg_w: lambda: T.memref(size_w, I.i8 if is_int8 else I.f8),
++            arg_x: lambda: T.memref(size_x, I.f16 if is_f16 else (I.i8 if is_int8 else I.f8)),
++            arg_w: lambda: T.memref(size_w, I.f16 if is_f16 else (I.i8 if is_int8 else I.f8)),
+             arg_scale_x: lambda: T.memref(tokens * topk, T.f32()),
+             arg_scale_w: lambda: T.memref(experts * model_dim, T.f32()),
+             arg_sorted_token_ids: lambda: T.memref(size_sorted, T.i32()),
+@@ -1105,19 +1171,23 @@ def moe_gemm2(
+             n_in: lambda: T.index(),
+             k_in: lambda: T.index(),
+         ):
+-            x_elem = I.i8 if is_int8 else I.f8
++            x_elem = I.f16 if is_f16 else (I.i8 if is_int8 else I.f8)
+             # For int4, weights are stored as packed bytes (i8) and unpacked to i8 packs.
+-            w_elem = I.i8 if is_int8 else I.f8
++            w_elem = I.f16 if is_f16 else (I.i8 if is_int8 else I.f8)
+             f16 = I.f16
+             f32 = I.f32
+             i32 = I.i32
+             i64 = I.i64
+             vec4_f32 = I.vec(4, f32)
+             vec4_i32 = I.vec(4, i32)
++            vec4_f16 = I.vec(4, f16)
+             vec1_f16 = I.vec(1, f16)
+             vec2_f16 = I.vec(2, f16)
+-            vec8_x = I.vec(8, x_elem)
+-            vec16_x = I.vec(16, x_elem)
++            vec16_elems = 16 if elem_bytes == 1 else 8
++            vec8_elems = 8 if elem_bytes == 1 else 4
++            vec4_elems = 4 if elem_bytes == 1 else 2
++            vec8_x = I.vec(vec8_elems, x_elem)
++            vec16_x = I.vec(vec16_elems, x_elem)
+             vec1_i64 = I.vec(1, i64)
+             vec2_i64 = I.vec(2, i64)
+ 
+@@ -1136,10 +1206,11 @@ def moe_gemm2(
+             c_n_total = arith.constant(experts * model_dim, index=True)
+             kpack_bytes = 8 if is_int4 else 16
+             b_layout = make_preshuffle_b_layout(
+-                flir, arith, c_n=c_n_total, c_k=k_in, kpack_bytes=kpack_bytes
++                flir, arith, c_n=c_n_total, c_k=k_in, kpack_bytes=kpack_bytes, elem_bytes=elem_bytes
+             )
+             layout_b = b_layout.layout_b
+-            c_k0 = k_in / arith.index(64)
++            # Only used by fp8/int8 path (16B gmem -> regs). Kept for backwards compat.
++            atom_w_g2r16 = flir.make_copy_atom(w_elem, vector_size=16)
+ 
+             shape_lds = flir.make_shape(tile_m, tile_k)
+             stride_lds = flir.make_stride(lds_stride, 1)
+@@ -1150,13 +1221,13 @@ def moe_gemm2(
+             by = gpu.block_id("y")  # tile along model_dim
+ 
+             # CK-style XOR16 swizzle parameter (constant, power-of-two in our configs).
+-            k_blocks16 = arith.constant(tile_k // 16, index=True)
++            k_blocks16 = arith.constant(tile_k_bytes // 16, index=True)
+             atom_x_s16 = flir.make_copy_atom(x_elem, vector_size=16)
+             atom_x_s8 = flir.make_copy_atom(x_elem, vector_size=8)
+             atom_x_s4 = flir.make_copy_atom(x_elem, vector_size=4)
+-            atom_x_g2r16 = flir.make_copy_atom(x_elem, vector_size=16)
+-            atom_x_g2r8 = flir.make_copy_atom(x_elem, vector_size=8)
+-            atom_x_g2r4 = flir.make_copy_atom(x_elem, vector_size=4)
++            atom_x_g2r16 = flir.make_copy_atom(x_elem, vector_size=vec16_elems)
++            atom_x_g2r8 = flir.make_copy_atom(x_elem, vector_size=vec8_elems)
++            atom_x_g2r4 = flir.make_copy_atom(x_elem, vector_size=vec4_elems)
+             layout_tx_wave_lane = flir.make_layout((4, 64), stride=(64, 1))
+             layout_lane16 = flir.make_layout((4, 16), stride=(16, 1))
+             layout_lin_rowcol = flir.make_layout((tile_m, tile_k), stride=(tile_k, 1))
+@@ -1175,8 +1246,9 @@ def moe_gemm2(
+             x_rsrc = buffer_ops.create_buffer_resource(arg_x, max_size=False)
+             w_rsrc = buffer_ops.create_buffer_resource(arg_w, max_size=False)
+             out_rsrc = buffer_ops.create_buffer_resource(arg_out, max_size=False)
+-            sx_rsrc = buffer_ops.create_buffer_resource(arg_scale_x, max_size=False)
+-            sw_rsrc = buffer_ops.create_buffer_resource(arg_scale_w, max_size=False)
++            # fp16 path ignores scales completely (implicit scale=1.0).
++            sx_rsrc = None if is_f16 else buffer_ops.create_buffer_resource(arg_scale_x, max_size=False)
++            sw_rsrc = None if is_f16 else buffer_ops.create_buffer_resource(arg_scale_w, max_size=False)
+             sorted_rsrc = buffer_ops.create_buffer_resource(arg_sorted_token_ids, max_size=False)
+             expert_rsrc = buffer_ops.create_buffer_resource(arg_expert_ids, max_size=False)
+             sorted_w_rsrc = buffer_ops.create_buffer_resource(arg_sorted_weights, max_size=False)
+@@ -1192,23 +1264,31 @@ def moe_gemm2(
+             # ---- X gmem->reg prefetch (match preshuffle GEMM mapping) ----
+             # Prefer 16B buffer-load (dwordx4). If the per-thread byte count isn't divisible by
+             # 16, fall back to 8B (dwordx2) or 4B (dword) loads.
+-            if bytes_per_thread_x % 16 == 0:
++            if is_f16:
++                if bytes_per_thread_x % 16 != 0:
++                    raise ValueError(
++                        f"[fp16] bytes_per_thread_x ({bytes_per_thread_x}) must be divisible by 16"
++                    )
+                 x_load_bytes = 16
+-            elif bytes_per_thread_x % 8 == 0:
+-                x_load_bytes = 8
+-            elif bytes_per_thread_x % 4 == 0:
+-                x_load_bytes = 4
+             else:
+-                raise ValueError(
+-                    f"bytes_per_thread_x ({bytes_per_thread_x}) must be divisible by 4 to use the dword-indexed load mapping."
+-                )
++                if bytes_per_thread_x % 16 == 0:
++                    x_load_bytes = 16
++                elif bytes_per_thread_x % 8 == 0:
++                    x_load_bytes = 8
++                elif bytes_per_thread_x % 4 == 0:
++                    x_load_bytes = 4
++                else:
++                    raise ValueError(
++                        f"bytes_per_thread_x ({bytes_per_thread_x}) must be divisible by 4 to use the dword-indexed load mapping."
++                    )
+             num_x_loads = bytes_per_thread_x // x_load_bytes
+             chunk_i32 = x_load_bytes // 4  # dwords per chunk (1/2/4)
+             vec4_i32 = I.vec(4, i32)
+ 
+-            c_k_div4 = k_in / arith.index(4)
++            c_k_div4 = (k_in * arith.constant(int(elem_bytes), index=True)) / arith.index(4)
+             layout_x_div4 = flir.make_layout((m_in, c_k_div4), stride=(c_k_div4, 1))
+-            layout_x_tile_div4 = flir.make_layout((tile_m, tile_k // 4), stride=(tile_k // 4, 1))
++            tile_k_dwords = (int(tile_k) * int(elem_bytes)) // 4
++            layout_x_tile_div4 = flir.make_layout((tile_m, tile_k_dwords), stride=(tile_k_dwords, 1))
+             c_chunk_i32 = arith.constant(chunk_i32, index=True)
+             tx_i32_base = tx * c_chunk_i32
+ 
+@@ -1233,13 +1313,15 @@ def x_tile_chunk_coord_i32(i: int):
+ 
+             def load_x(idx_i32):
+                 if x_load_bytes == 16:
++                    idx_elem = idx_i32 if elem_bytes == 1 else (idx_i32 * arith.index(2))
+                     return buffer_copy_gmem16_dwordx4(
+                         flir,
+                         arg=arg_x,
+                         elem_type=x_elem,
+-                        idx_i32=idx_i32,
++                        idx_i32=idx_elem,
+                         atom_g2r16=atom_x_g2r16,
+                         rsrc=x_rsrc,
++                        vec_elems=vec16_elems,
+                     )
+                 idx_bytes = idx_i32 * arith.index(4)
+                 atom = atom_x_g2r8 if x_load_bytes == 8 else atom_x_g2r4
+@@ -1285,7 +1367,7 @@ def load_x(idx_i32):
+                 x_row_base_div4.append(row_ts_idx * c_k_div4)
+ 
+             def load_x_tile(base_k):
+-                base_k_div4 = base_k / arith.index(4)
++                base_k_div4 = (base_k * arith.constant(int(elem_bytes), index=True)) / arith.index(4)
+                 parts = []
+                 for i in range_constexpr(num_x_loads):
+                     idx_i32 = x_row_base_div4[i] + base_k_div4 + x_col_local_i32[i]
+@@ -1307,7 +1389,7 @@ def load_x_tile(base_k):
+             lane_mod_16 = flir.get(coord_l16, 1)
+ 
+             row_a_lds = lane_mod_16
+-            col_offset_base = flir.crd2idx(flir.make_coord(lane_div_16, 0), layout_lane16)
++            col_offset_base = lane_div_16 * arith.constant(16, index=True)
+ 
+             # Dynamic N tiling within block.
+             by_n = by * arith.constant(tile_n, index=True)
+@@ -1335,7 +1417,7 @@ def load_x_tile(base_k):
+                 n_intra_list.append(flir.get(coord_w, 1))
+ 
+             m_repeat = tile_m // 16
+-            k_unroll = tile_k // 64  # K64 micro-step (2x K32 MFMA)
++            k_unroll = tile_k_bytes // 64
+ 
+             # --- B Load Logic (K64) ---
+             def load_b_pack(base_k, ki_step, ni):
+@@ -1354,6 +1436,7 @@ def load_b_pack(base_k, ki_step, ni):
+                     lane_div_16=lane_div_16,  # 0..3
+                     elem_type=w_elem,
+                     kpack_bytes=kpack_bytes,
++                    elem_bytes=elem_bytes,
+                     unpack_int4=is_int4,
+                 )
+ 
+@@ -1364,7 +1447,6 @@ def load_b_tile(base_k):
+                   (packs_half0[ni], packs_half1[ni])  for the K64 micro-step.
+                 """
+                 b_tile = []
+-                atom_w_g2r16 = flir.make_copy_atom(w_elem, vector_size=16)
+                 for ku in range_constexpr(k_unroll):
+                     packs0 = []
+                     packs1 = []
+@@ -1374,6 +1456,11 @@ def load_b_tile(base_k):
+                             ki1 = (ku * 2) + 1
+                             b0 = load_b_pack(base_k, ki0, ni)
+                             b1 = load_b_pack(base_k, ki1, ni)
++                        elif is_f16:
++                            ki0 = (ku * 2) + 0
++                            ki1 = (ku * 2) + 1
++                            b0 = load_b_pack(base_k, ki0, ni)
++                            b1 = load_b_pack(base_k, ki1, ni)
+                         else:
+                             k0_base = base_k / arith.index(64)
+                             k0 = k0_base + arith.constant(ku, index=True)
+@@ -1425,6 +1512,7 @@ def store_x_tile_to_lds(vec_x_in_parts, lds_base):
+                             k_blocks16=k_blocks16,
+                             lds_base=lds_base,
+                             vec_part_i32x4=vec_x_in_parts[i],
++                            elem_bytes=elem_bytes,
+                         )
+                     elif x_load_bytes == 8:
+                         lds_store_8b_xor16(
+@@ -1442,6 +1530,7 @@ def store_x_tile_to_lds(vec_x_in_parts, lds_base):
+                             k_blocks16=k_blocks16,
+                             lds_base=lds_base,
+                             vec_part_i32x2=vec_x_in_parts[i],
++                            elem_bytes=elem_bytes,
+                         )
+                     else:
+                         lds_store_4b_xor16(
+@@ -1459,11 +1548,13 @@ def store_x_tile_to_lds(vec_x_in_parts, lds_base):
+                             k_blocks16=k_blocks16,
+                             lds_base=lds_base,
+                             vec_part_i32x1=vec_x_in_parts[i],
++                            elem_bytes=elem_bytes,
+                         )
+ 
+             # --- A LDS load helper for K64 (load 16B once, extract 2x i64 halves) ---
+             def lds_load_packs_k64(curr_row_a_lds, col_base, lds_base):
+-                col_base_swz = flir.swizzle_xor16(curr_row_a_lds, col_base, k_blocks16)
++                col_base_swz_bytes = flir.swizzle_xor16(curr_row_a_lds, col_base, k_blocks16)
++                col_base_swz = col_base_swz_bytes if elem_bytes == 1 else (col_base_swz_bytes / arith.index(2))
+                 coord_a16 = flir.make_coord(curr_row_a_lds, col_base_swz)
+                 idx_a16 = flir.crd2idx(coord_a16, layout_lds)
+                 idx_a16 = idx_a16 + lds_base
+@@ -1476,10 +1567,14 @@ def lds_load_packs_k64(curr_row_a_lds, col_base, lds_base):
+             def compute_tile(acc_in, b_tile_in, lds_base, *, prefetch_epilogue: bool = False, a0_prefetch=None):
+                 acc_list = list(acc_in)
+                 mfma_res_ty = vec4_i32 if is_int8 else vec4_f32
+-                mfma_fn = mfma_i32_k32 if is_int8 else rocdl.mfma_f32_16x16x32_fp8_fp8
++                mfma_fn = (
++                    mfma_i32_k32
++                    if is_int8
++                    else (rocdl.mfma_f32_16x16x16f16 if is_f16 else rocdl.mfma_f32_16x16x32_fp8_fp8)
++                )
+ 
+                 epilogue_pf = None
+-                if prefetch_epilogue:
++                if prefetch_epilogue and (not is_f16):
+                     expert_off_pf = expert_off_idx
+                     sw_pf = []
+                     for ni in range_constexpr(num_acc_n):
+@@ -1508,6 +1603,13 @@ def compute_tile(acc_in, b_tile_in, lds_base, *, prefetch_epilogue: bool = False
+                     epilogue_pf = (sw_pf, tw_pf)
+ 
+                 def mfma_k64(acc0, a0, a1, b0, b1):
++                    if is_f16:
++                        a0v = vector.bitcast(vec4_f16, vector.from_elements(vec1_i64, [a0]))
++                        a1v = vector.bitcast(vec4_f16, vector.from_elements(vec1_i64, [a1]))
++                        b0v = vector.bitcast(vec4_f16, vector.from_elements(vec1_i64, [b0]))
++                        b1v = vector.bitcast(vec4_f16, vector.from_elements(vec1_i64, [b1]))
++                        acc1 = mfma_fn(mfma_res_ty, [a0v, b0v, acc0, 0, 0, 0])
++                        return mfma_fn(mfma_res_ty, [a1v, b1v, acc1, 0, 0, 0])
+                     acc1 = mfma_fn(mfma_res_ty, [a0, b0, acc0, 0, 0, 0])
+                     return mfma_fn(mfma_res_ty, [a1, b1, acc1, 0, 0, 0])
+ 
+@@ -1733,7 +1835,10 @@ def atomic_add_f16x2(val_f16x2, byte_off_i32):
+                 sw_pf, tw_pf = epilogue_pf
+ 
+             # Weight scales for the N tile (col_g depends on lane/wave/by but not on (t,s)).
+-            if sw_pf is not None:
++            if is_f16:
++                # fp16: no scale fetch, no scale multiply in epilogue.
++                sw_vals = None
++            elif sw_pf is not None:
+                 sw_vals = sw_pf
+             else:
+                 sw_vals = []
+@@ -1768,7 +1873,7 @@ def write_row_to_lds(
+ 
+                     # a2_scale index = t*topk + s (i32). Hardware OOB handles sentinel padding.
+                     ts2 = t2 * topk_i32_v + s2
+-                    sx = buffer_ops.buffer_load(sx_rsrc, ts2, vec_width=1, dtype=f32)
++                    sx = None if is_f16 else buffer_ops.buffer_load(sx_rsrc, ts2, vec_width=1, dtype=f32)
+ 
+                     if doweight_stage2:
+                         tw_idx = (mi * 4) + ii
+@@ -1781,12 +1886,13 @@ def write_row_to_lds(
+ 
+                     for ni in range_constexpr(num_acc_n):
+                         col_local = col_base_local + (ni * 16)
+-                        sw = sw_vals[ni]
++                        sw = sw_vals[ni] if (not is_f16) else None
+                         acc_idx = mi * num_acc_n + ni
+                         v = vector.extract(acc[acc_idx], static_position=[ii], dynamic_position=[])
+                         if is_int8:
+                             v = arith.sitofp(f32, v)
+-                        v = v * sx * sw
++                        if not is_f16:
++                            v = v * sx * sw
+                         if doweight_stage2:
+                             v = v * tw
+                         v16 = arith.trunc_f(T.f16(), v)
+@@ -1851,7 +1957,7 @@ def _stage2_row_atomic(*, mi: int, ii: int, row_in_tile, row):
+ 
+                     # a2_scale index = t*topk + s (i32). Hardware OOB handles sentinel padding.
+                     ts2 = t2 * topk_i32_v + s2
+-                    sx = buffer_ops.buffer_load(sx_rsrc, ts2, vec_width=1, dtype=f32)
++                    sx = None if is_f16 else buffer_ops.buffer_load(sx_rsrc, ts2, vec_width=1, dtype=f32)
+ 
+                     # out element base = t*model_dim (i32)
+                     idx0 = t2 * model_i32
+@@ -1865,12 +1971,13 @@ def _stage2_row_atomic(*, mi: int, ii: int, row_in_tile, row):
+ 
+                     for ni in range_constexpr(num_acc_n):
+                         col_g = col_g_list[ni]  # index
+-                        sw = sw_vals[ni]
++                        sw = sw_vals[ni] if (not is_f16) else None
+                         acc_idx = mi * num_acc_n + ni
+                         v = vector.extract(acc[acc_idx], static_position=[ii], dynamic_position=[])
+                         if is_int8:
+                             v = arith.sitofp(f32, v)
+-                        v = v * sx * sw
++                        if not is_f16:
++                            v = v * sx * sw
+                         if doweight_stage2:
+                             v = v * tw
+ 
+@@ -1892,8 +1999,8 @@ def _stage2_row_atomic(*, mi: int, ii: int, row_in_tile, row):
+         def __call__(
+             self: flir.T.i64,
+             arg_out: lambda: T.memref(size_out, out_elem()),
+-            arg_x: lambda: T.memref(size_x, I.i8 if is_int8 else I.f8),
+-            arg_w: lambda: T.memref(size_w, I.i8 if is_int8 else I.f8),
++            arg_x: lambda: T.memref(size_x, I.f16 if is_f16 else (I.i8 if is_int8 else I.f8)),
++            arg_w: lambda: T.memref(size_w, I.f16 if is_f16 else (I.i8 if is_int8 else I.f8)),
+             arg_scale_x: lambda: T.memref(tokens * topk, T.f32()),
+             arg_scale_w: lambda: T.memref(experts * model_dim, T.f32()),
+             arg_sorted_token_ids: lambda: T.memref(size_sorted, T.i32()),
+diff --git a/kernels/preshuffle_gemm.py b/kernels/preshuffle_gemm.py
+index e1fc077dc..ea4cd4bbf 100644
+--- a/kernels/preshuffle_gemm.py
++++ b/kernels/preshuffle_gemm.py
+@@ -61,14 +61,30 @@ def compile_preshuffle_gemm_a8(
+           - 2: ping-pong LDS for A (2 LDS buffers), tuned schedule (original).
+           - 1: single LDS buffer for A .
+     """
+-    if in_dtype not in ("fp8", "int8", "int4"):
+-        raise ValueError(f"in_dtype must be 'fp8', 'int8', or 'int4', got {in_dtype!r}")
++    if in_dtype not in ("fp8", "int8", "int4", "fp16", "bf16"):
++        raise ValueError(
++            "in_dtype must be one of ('fp8','int8','int4','fp16','bf16'), "
++            f"got {in_dtype!r}"
++        )
+     is_int4 = in_dtype == "int4"
+     is_int8 = (in_dtype == "int8") or is_int4
+-
+-    # K64 micro-step wrapper uses 2x K32 MFMA. Require tile_k divisible by 64.
+-    if (int(tile_k) % 64) != 0:
+-        raise ValueError(f"tile_k must be divisible by 64 (for K64 unroll), got tile_k={tile_k}")
++    is_f16 = in_dtype == "fp16"
++    is_bf16 = in_dtype == "bf16"
++    is_f16_or_bf16 = is_f16 or is_bf16
++    elem_bytes = 1 if (in_dtype in ("fp8", "int8", "int4")) else 2
++
++    # Pipeline is byte-addressed along K (16B loads, XOR16 swizzle in bytes).
++    # For fp16/bf16 (2B/elem), user passes tile_k halved so tile_k_bytes stays constant.
++    tile_k_bytes = int(tile_k) * int(elem_bytes)
++
++    # K64-byte micro-step wrapper uses 2x "half-pack" MFMA.
++    # - fp8/i8: mfma K32, wrapper covers 64B (=64 elems)
++    # - fp16/bf16: mfma K16, wrapper covers 64B (=32 elems)  -> effective K halves
++    if (tile_k_bytes % 64) != 0:
++        raise ValueError(
++            f"tile_k_bytes must be divisible by 64, got tile_k_bytes={tile_k_bytes} "
++            f"(tile_k={tile_k}, elem_bytes={elem_bytes})"
++        )
+ 
+     # INT8 must use a K32 MFMA so the micro-step matches the FP8 path (strict alignment).
+     mfma_i32_k32 = None
+@@ -95,13 +111,13 @@ def compile_preshuffle_gemm_a8(
+ 
+     # Vector width calc (assume full tiles / no tail guards).
+     total_threads = 256
+-    elems_a_per_tile = tile_m * tile_k
+-    if elems_a_per_tile % total_threads != 0:
++    bytes_a_per_tile = int(tile_m) * int(tile_k) * int(elem_bytes)
++    if bytes_a_per_tile % total_threads != 0:
+         raise ValueError(
+-            f"tile_m*tile_k must be divisible by {total_threads}: tile_m={tile_m}, tile_k={tile_k}"
++            "tile_m*tile_k*elem_bytes must be divisible by "
++            f"{total_threads}: tile_m={tile_m}, tile_k={tile_k}, elem_bytes={elem_bytes}"
+         )
+-    elems_per_thread_a = elems_a_per_tile // total_threads
+-    bytes_per_thread_a = elems_per_thread_a  # 1B elems
++    bytes_per_thread_a = bytes_a_per_tile // total_threads
+ 
+     # Assume A loads are always 16B-aligned and use fixed dwordx4 (16B) buffer loads.
+     a_load_bytes = 16
+@@ -110,15 +126,34 @@ def compile_preshuffle_gemm_a8(
+             f"bytes_per_thread_a ({bytes_per_thread_a}) must be divisible by {a_load_bytes}"
+         )
+ 
+-    # CK-style LDS128: stride == tile_k, XOR16 swizzle.
+-    lds_stride = tile_k
++    # CK-style LDS128: stride is in BYTES along K (for XOR16 swizzle).
++    lds_stride_bytes = tile_k_bytes
+ 
+     def _elem_type():
++        if is_f16:
++            return T.f16
++        if is_bf16:
++            return T.bf16
+         return T.i8 if is_int8 else T.f8
+ 
+     def _vec16_type():
++        if is_f16:
++            return T.f16x8  # 16B
++        if is_bf16:
++            return T.bf16x8  # 16B
+         return T.i8x16 if is_int8 else T.f8x16
+ 
++    def _mfma_pack_ty():
++        # ROCDL MFMA intrinsics expect specific operand vector types:
++        # - fp8/int8 paths use i64 packs (8 bytes)
++        # - fp16 uses v4f16 (8 bytes)
++        # - bf16 uses v4i16 (8 bytes) for *_bf16_1k variants
++        if is_f16:
++            return T.f16x4
++        if is_bf16:
++            return T.i16x4
++        return T.i64
++
+     # GEMM epilogue toggle: optional LDS CShuffle + vectorized stores.
+     # Default: off (current measured cases show no benefit).
+     epilog_tag = "cshuffle" if use_cshuffle_epilog else "direct"
+@@ -137,10 +172,13 @@ def init_gpu_module(self):
+             #
+             # When CShuffle is enabled, we reuse the same LDS allocation by aliasing it as fp16
+             # in the epilogue (the A LDS is dead after the mainloop).
+-            lds_a_bytes = int(lds_stage) * int(tile_m) * int(lds_stride)  # 1B elems
++            lds_a_bytes = int(lds_stage) * int(tile_m) * int(lds_stride_bytes)
+             lds_out_bytes = 2 * int(tile_m) * int(tile_n) if use_cshuffle_epilog else 0
+             lds_total_bytes = max(lds_a_bytes, lds_out_bytes)
+-            _state["lds_a_decl"] = allocator.allocate_array(_elem_type(), lds_total_bytes)
++            # Keep LDS allocation sized in bytes: element_size * num_elems.
++            # Allocate element type == _elem_type() and scale element count accordingly.
++            lds_total_elems = lds_total_bytes if elem_bytes == 1 else (lds_total_bytes // 2)
++            _state["lds_a_decl"] = allocator.allocate_array(_elem_type(), lds_total_elems)
+             allocator.finalize()
+ 
+         @flir.kernel
+@@ -167,22 +205,28 @@ def kernel_gemm(
+             # Layouts
+             layout_c = flir.make_layout((c_m, c_n), stride=(c_n, 1))
+ 
+-            # A is 1B/elem but we use dwordx4 (16B) buffer loads, so build a /4 layout.
+-            c_k_div4 = c_k / 4
+-            layout_a_div4 = flir.make_layout((c_m, c_k_div4), stride=(c_k_div4, 1))
++            # A uses dword indexing (buffer-load dwordx4). Convert element index -> dword index:
++            #   dword_index = (elem_index * elem_bytes) / 4
++            if (int(elem_bytes) == 2):
++                c_k_div4bytes = (c_k * 2) / 4
++            else:
++                c_k_div4bytes = c_k / 4
++            layout_a_div4 = flir.make_layout((c_m, c_k_div4bytes), stride=(c_k_div4bytes, 1))
+ 
+             # B preshuffle layout (shared with MoE kernels).
+             kpack_bytes = 8 if is_int4 else 16
+             layout_b = make_preshuffle_b_layout(
+-                flir, arith, c_n=c_n, c_k=c_k, kpack_bytes=kpack_bytes
++                flir, arith, c_n=c_n, c_k=c_k, kpack_bytes=kpack_bytes, elem_bytes=elem_bytes
+             ).layout_b
+ 
++            # LDS layout is element-indexed, but XOR16 swizzle is byte-based.
++            # Represent LDS as (tile_m, tile_k) in elements and scale swizzle math by elem_bytes.
+             shape_lds = flir.make_shape(tile_m, tile_k)
+-            stride_lds = flir.make_stride(lds_stride, 1)
++            stride_lds = flir.make_stride(tile_k, 1)
+             layout_lds = flir.make_layout(shape_lds, stride_lds)
+ 
+             # CK-style XOR16 swizzle parameter (const).
+-            k_blocks16 = arith.index(tile_k // 16)
++            k_blocks16 = arith.index(tile_k_bytes // 16)
+ 
+             tx = gpu.thread_id("x")
+             bx = gpu.block_id("x")
+@@ -200,10 +244,10 @@ def kernel_gemm(
+             # Note: We assume N is aligned (no N-tail support in this kernel).
+             a_rsrc = buffer_ops.create_buffer_resource(arg_a, max_size=False)
+             c_rsrc = buffer_ops.create_buffer_resource(arg_c, max_size=False)
+-            scale_a_rsrc = buffer_ops.create_buffer_resource(arg_scale_a, max_size=False)
++            scale_a_rsrc = None if is_f16_or_bf16 else buffer_ops.create_buffer_resource(arg_scale_a, max_size=False)
+ 
+             b_rsrc = buffer_ops.create_buffer_resource(arg_b, max_size=True)
+-            scale_b_rsrc = buffer_ops.create_buffer_resource(arg_scale_b, max_size=True)
++            scale_b_rsrc = None if is_f16_or_bf16 else buffer_ops.create_buffer_resource(arg_scale_b, max_size=True)
+ 
+             bx_m = bx * tile_m
+             by_n = by * tile_n
+@@ -221,11 +265,26 @@ def kernel_gemm(
+             lane_mod_16 = flir.get(coord_lane16, 1)
+ 
+             row_a_lds = lane_mod_16
+-            # lane_div_16 * 16 via FLIR crd2idx((lane_div_16,0), layout=(4,16):stride=(16,1))
+-            col_offset_base = flir.crd2idx(flir.make_coord(lane_div_16, 0), layout_lane16)
++            # Per-`k1` (KLane) base offset along K inside a 64B K0 block.
++            #
++            # CK preshuffle uses KPackBytes=16 across dtypes, but KPackElems differs:
++            # - fp8/int8: 16 elems (1B)
++            # - fp16/bf16: 8 elems (2B)
++            #
++            # We express `col_offset_base` in *elements*.
++            kpack_elems = 16 if elem_bytes == 1 else 8
++            col_offset_base = lane_div_16 * arith.constant(int(kpack_elems), index=True)
++            # `col_offset_base` is in element units (multiples of 16). We do LDS swizzle/math
++            # in bytes, so scale by element size for fp16/bf16.
++            col_offset_base_bytes = (
++                col_offset_base
++                if elem_bytes == 1
++                else (col_offset_base * arith.constant(int(elem_bytes), index=True))
++            )
+ 
+             m_repeat = tile_m // 16
+-            k_unroll = tile_k // 64  # K64 micro-step (2x K32 MFMA)
++            # K stepping is byte-addressed: one "micro-tile step" is 64 bytes.
++            k_unroll = tile_k_bytes // 64
+ 
+             # --- Dynamic tiling along N (4 waves) ---
+             num_waves = 4
+@@ -248,7 +307,7 @@ def kernel_gemm(
+                 n_blk_list.append(flir.get(coord_n, 0))
+                 n_intra_list.append(flir.get(coord_n, 1))
+ 
+-            # --- B load logic (K64 micro-step), return i64 packs (two halves) ---
++            # --- B load logic ---
+             # Shared loader supports:
+             # - FP8/INT8: explicit 16B load (one full KPack) + extract 8B for this micro-step
+             # - INT4 (W4A8): 4B load + 7-op unpack to 8B (no v_perm)
+@@ -269,10 +328,11 @@ def load_b_pack(base_k, ki_step, ni):
+                     lane_div_16=lane_div_16,
+                     elem_type=_elem_type(),
+                     kpack_bytes=kpack_bytes,
++                    elem_bytes=elem_bytes,
+                     unpack_int4=is_int4,
+                 )
+ 
+-            # For FP8/INT8 we can load one 16B pack and extract both 8B halves (K64).
++            # For FP8/INT8 we can load one 16B pack and extract both 8B halves (K64 bytes).
+             # For INT4 (packed), reuse the existing K32 loader twice (2x4B loads + unpack).
+             atom_b_g2r16 = flir.make_copy_atom(_elem_type(), vector_size=16)
+             c64_b = 64
+@@ -284,32 +344,49 @@ def load_b_packs_k64(base_k, ku: int, ni: int):
+                     ki1 = (ku * 2) + 1
+                     return load_b_pack(base_k, ki0, ni), load_b_pack(base_k, ki1, ni)
+ 
+-                # FP8/INT8: load 16 bytes (one full KPack) and return both i64 halves.
+-                k0_base = base_k / c64_b
++                # FP8/INT8/FP16/BF16: load 16 bytes (one full KPack).
++                base_k_bytes = base_k * arith.constant(int(elem_bytes), index=True)
++                k0_base = base_k_bytes / c64_b
+                 k0 = k0_base + ku
+                 k1 = lane_div_16
+                 coord_pack = flir.make_coord(n_blk_list[ni], k0, k1, n_intra_list[ni], c0_idx)
+-                idx_pack_bytes = flir.crd2idx(coord_pack, layout_b)
++                idx_pack = flir.crd2idx(coord_pack, layout_b)
++                vec_elems = 16 if elem_bytes == 1 else 8
+                 b_view = flir.TensorView(
+                     arg_b,
+-                    (16,),
++                    (vec_elems,),
+                     strides=(1,),
+-                    base_indices=(idx_pack_bytes,),
++                    base_indices=(idx_pack,),
+                     element_type=_elem_type(),
+                 )
+                 b16 = flir.copy(
+-                    atom_b_g2r16,
++                    flir.make_copy_atom(_elem_type(), vector_size=vec_elems),
+                     b_view,
+                     None,
+                     alignment=8,
+                     return_vector=True,
+-                    src_buffer_resource=b_rsrc,
+-                    src_buffer_offset_in_bytes=True,
++                    src_buffer_resource=(b_rsrc if elem_bytes == 1 else None),
++                    src_buffer_offset_in_bytes=(elem_bytes == 1),
+                 )
++                # Split 16B pack into two 8B halves.
+                 b_i64x2 = vector.bitcast(T.i64x2, b16)
+-                b0 = vector.extract(b_i64x2, static_position=[0], dynamic_position=[])
+-                b1 = vector.extract(b_i64x2, static_position=[1], dynamic_position=[])
+-                return b0, b1
++                b0_i64 = vector.extract(b_i64x2, static_position=[0], dynamic_position=[])
++                b1_i64 = vector.extract(b_i64x2, static_position=[1], dynamic_position=[])
++
++                if not is_f16_or_bf16:
++                    return b0_i64, b1_i64
++
++                # For fp16/bf16 MFMA 16x16x16, operands are 8B packs:
++                # - fp16: v4f16
++                # - bf16: v4i16 (bit pattern) for *_bf16_1k
++                vec1_i64_ty = ir.VectorType.get([1], ir.IntegerType.get_signless(64))
++                b0_v1 = vector.from_elements(vec1_i64_ty, [b0_i64])
++                b1_v1 = vector.from_elements(vec1_i64_ty, [b1_i64])
++                if is_f16:
++                    return vector.bitcast(T.f16x4, b0_v1), vector.bitcast(T.f16x4, b1_v1)
++                return vector.bitcast(T.i16x4, b0_v1), vector.bitcast(T.i16x4, b1_v1)
++
++                # int8 path should not reach here (handled by the outer is_int8 branch).
+ 
+             def load_b_tile(base_k):
+                 # b_tile[ku] = (packs_half0[ni], packs_half1[ni])
+@@ -324,35 +401,54 @@ def load_b_tile(base_k):
+                     b_tile.append((packs0, packs1))
+                 return b_tile
+ 
+-            # --- A LDS load helper for K64 (load 16B once, extract 2x i64 halves) ---
+-            def lds_load_packs_k64(curr_row_a_lds, col_base, lds_base):
+-                col_base_swz = flir.swizzle_xor16(curr_row_a_lds, col_base, k_blocks16)
++            def lds_load_16b(curr_row_a_lds, col_base, lds_base):
++                # Swizzle in bytes, then convert to element offset for memref indexing.
++                col_base_swz_bytes = flir.swizzle_xor16(curr_row_a_lds, col_base, k_blocks16)
++                col_base_swz = col_base_swz_bytes if elem_bytes == 1 else (col_base_swz_bytes / 2)
+                 coord_a16 = flir.make_coord(curr_row_a_lds, col_base_swz)
+                 idx_a16 = flir.crd2idx(coord_a16, layout_lds)
+                 idx_a16 = idx_a16 + lds_base
+-                loaded_a16 = vector.load_op(_vec16_type(), lds_a, [idx_a16])
++                return vector.load_op(_vec16_type(), lds_a, [idx_a16])
++
++            # --- A LDS load helper for K64-bytes (load 16B once, extract 2x i64 halves) ---
++            def lds_load_packs_k64(curr_row_a_lds, col_base, lds_base):
++                loaded_a16 = lds_load_16b(curr_row_a_lds, col_base, lds_base)
+                 a_i64x2 = vector.bitcast(T.i64x2, loaded_a16)
+-                a0 = vector.extract(a_i64x2, static_position=[0], dynamic_position=[])
+-                a1 = vector.extract(a_i64x2, static_position=[1], dynamic_position=[])
+-                return a0, a1
++                a0_i64 = vector.extract(a_i64x2, static_position=[0], dynamic_position=[])
++                a1_i64 = vector.extract(a_i64x2, static_position=[1], dynamic_position=[])
++
++                if not is_f16_or_bf16:
++                    return a0_i64, a1_i64
++
++                vec1_i64_ty = ir.VectorType.get([1], ir.IntegerType.get_signless(64))
++                a0_v1 = vector.from_elements(vec1_i64_ty, [a0_i64])
++                a1_v1 = vector.from_elements(vec1_i64_ty, [a1_i64])
++                if is_f16:
++                    return vector.bitcast(T.f16x4, a0_v1), vector.bitcast(T.f16x4, a1_v1)
++                return vector.bitcast(T.i16x4, a0_v1), vector.bitcast(T.i16x4, a1_v1)
+ 
+             # --- A load/store (16B chunks), XOR16 swizzle ---
+             num_a_loads = bytes_per_thread_a // a_load_bytes
+-            layout_a_tile_div4 = flir.make_layout(
+-                (tile_m, tile_k // 4), stride=(tile_k // 4, 1)
+-            )
++            # A tile mapping in dwords along K:
++            #   tile_k_dwords = (tile_k * elem_bytes) / 4
++            if elem_bytes == 2:
++                tile_k_dwords = (tile_k * 2) // 4
++            else:
++                tile_k_dwords = tile_k // 4
++            layout_a_tile_div4 = flir.make_layout((tile_m, tile_k_dwords), stride=(tile_k_dwords, 1))
+             c4 = arith.constant(4, index=True)
+             tx_i32_base = tx * c4
+-            atom_a_g2r16 = flir.make_copy_atom(_elem_type(), vector_size=16)
++            atom_a_g2r16 = flir.make_copy_atom(_elem_type(), vector_size=(16 if elem_bytes == 1 else 8))
+ 
+-            def load_a_16(idx_i32):
++            def load_a_16(idx_elem):
+                 return buffer_copy_gmem16_dwordx4(
+                     flir,
+                     arg=arg_a,
+                     elem_type=_elem_type(),
+-                    idx_i32=idx_i32,
++                    idx_i32=idx_elem,
+                     atom_g2r16=atom_a_g2r16,
+                     rsrc=a_rsrc,
++                    vec_elems=(16 if elem_bytes == 1 else 8),
+                 )
+ 
+             def a_tile_chunk_coord_i32(i: int):
+@@ -372,7 +468,15 @@ def load_a_tile(base_k_div4):
+                     row_a_global = bx_m + row_a_local
+                     coord_a_g = flir.make_coord(row_a_global, base_k_div4 + col_a_local_i32)
+                     idx_i32 = flir.crd2idx(coord_a_g, layout_a_div4)
+-                    a_16B = load_a_16(idx_i32)
++                    # `idx_i32` is a dword offset. For 2B element types (fp16/bf16),
++                    # convert to element offset so the generic `vector.load` path reads
++                    # the right address (FLIR only specializes buffer_load_dwordx4 for 1B types).
++                    idx_elem = (
++                        idx_i32
++                        if elem_bytes == 1
++                        else (idx_i32 * arith.constant(2, index=True))
++                    )
++                    a_16B = load_a_16(idx_elem)
+                     parts.append(vector.bitcast(T.i32x4, a_16B))
+                 return parts
+ 
+@@ -394,18 +498,20 @@ def store_a_tile_to_lds(vec_a_parts, lds_base):
+                         k_blocks16=k_blocks16,
+                         lds_base=lds_base,
+                         vec_part_i32x4=vec_a_parts[i],
++                        elem_bytes=elem_bytes,
+                     )
+ 
+             def prefetch_ab_tile(base_k):
+-                base_k_div4 = base_k / 4
++                base_k_bytes = base_k * arith.constant(int(elem_bytes), index=True)
++                base_k_div4 = base_k_bytes / 4
+                 a_regs = load_a_tile(base_k_div4)
+                 b_regs = load_b_tile(base_k)
+                 return a_regs, b_regs
+ 
+             def compute_tile(accs_in, b_tile_in, lds_base, *, is_last_tile=False, a0_prefetch=None):
+                 scales_pf = {}
+-                if is_last_tile:
+-                    # Prefetch scales (same as original kernel).
++                if is_last_tile and (not is_f16_or_bf16):
++                    # Prefetch scales (fp8/int8/int4 only).
+                     s_b_vals = []
+                     for ni in range_constexpr(num_acc_n):
+                         offset = ni * 16
+@@ -435,7 +541,12 @@ def compute_tile(accs_in, b_tile_in, lds_base, *, is_last_tile=False, a0_prefetc
+                 # - Only valid for fp8 path (not int8/int4) and gfx95+
+                 # - Requires tile_k divisible by 128
+                 # - mfma.scale takes 9 operands: 3 vectors + 6 i32 flags/scales.
+-                use_mfma_scale_128 = (str(gpu_arch).startswith("gfx95") and (not is_int8) and (not is_int4))
++                use_mfma_scale_128 = (
++                    str(gpu_arch).startswith("gfx95")
++                    and (not is_int8)
++                    and (not is_int4)
++                    and (not is_f16_or_bf16)
++                )
+                 if use_mfma_scale_128:
+                     if (int(tile_k) % 128) != 0:
+                         raise ValueError(
+@@ -457,8 +568,8 @@ def pack_i64x4_to_i32x8(x0, x1, x2, x3):
+                         b0_packs0, b0_packs1 = b_tile_in[ku0]
+                         b1_packs0, b1_packs1 = b_tile_in[ku1]
+ 
+-                        col_base0 = col_offset_base + (ku0 * 64)
+-                        col_base1 = col_offset_base + (ku1 * 64)
++                        col_base0 = col_offset_base_bytes + (ku0 * 64)
++                        col_base1 = col_offset_base_bytes + (ku1 * 64)
+ 
+                         for mi in range_constexpr(m_repeat):
+                             mi_val = arith.constant(mi * 16, index=True)
+@@ -499,23 +610,31 @@ def pack_i64x4_to_i32x8(x0, x1, x2, x3):
+                     return current_accs_list, scales_pf
+ 
+                 mfma_res_ty = T.i32x4 if is_int8 else T.f32x4
+-                mfma_fn = mfma_i32_k32 if is_int8 else rocdl.mfma_f32_16x16x32_fp8_fp8
+ 
+-                # MFMA K64 wrapper: two K32 MFMA back-to-back.
+-                def mfma_k64(acc_in, a0, a1, b0, b1):
+-                    acc_mid = mfma_fn(
+-                        mfma_res_ty,
+-                        [a0, b0, acc_in, 0, 0, 0],
+-                    )
+-                    return mfma_fn(
+-                        mfma_res_ty,
+-                        [a1, b1, acc_mid, 0, 0, 0],
+-                    )
++                if is_int8:
++                    mfma_fn = mfma_i32_k32
++                elif is_f16:
++                    # gfx942 fp16 MFMA: 16x16x16 f16 (operands are v4f16, 8B packs)
++                    mfma_fn = rocdl.mfma_f32_16x16x16f16
++                elif is_bf16:
++                    # bf16 MFMA K16 variant uses i16 bit-pattern packs (v4i16)
++                    mfma_fn = rocdl.mfma_f32_16x16x16bf16_1k
++                else:
++                    mfma_fn = rocdl.mfma_f32_16x16x32_fp8_fp8
++
++                def mfma_step(acc_in, a, b):
++                    return mfma_fn(mfma_res_ty, [a, b, acc_in, 0, 0, 0])
++
++                # "K64-byte wrapper": two back-to-back MFMA/WMMA ops using the two 8B halves.
++                def mfma_k64_bytes(acc_in, a0, a1, b0, b1):
++                    acc_mid = mfma_step(acc_in, a0, b0)
++                    return mfma_step(acc_mid, a1, b1)
+ 
+                 for ku in range_constexpr(k_unroll):
+                     b_packs0, b_packs1 = b_tile_in[ku]
++                    # Byte-addressed K stepping (64B per ku).
+                     ki64 = ku * 64
+-                    col_base = col_offset_base + ki64
++                    col_base = col_offset_base_bytes + ki64
+                     for mi in range_constexpr(m_repeat):
+                         mi_val = arith.constant(mi * 16, index=True)
+                         curr_row_a_lds = row_a_lds + mi_val
+@@ -525,7 +644,7 @@ def mfma_k64(acc_in, a0, a1, b0, b1):
+                             a0, a1 = lds_load_packs_k64(curr_row_a_lds, col_base, lds_base)
+                         for ni in range_constexpr(num_acc_n):
+                             acc_idx = mi * num_acc_n + ni
+-                            current_accs_list[acc_idx] = mfma_k64(
++                            current_accs_list[acc_idx] = mfma_k64_bytes(
+                                 current_accs_list[acc_idx],
+                                 a0,
+                                 a1,
+@@ -541,8 +660,13 @@ def mfma_k64(acc_in, a0, a1, b0, b1):
+             vec1_i32 = ir.VectorType.get([1], ir.IntegerType.get_signless(32))
+ 
+             def store_output(final_accs, scales):
+-                s_b_vals = scales["s_b_vals"]
+-                s_a_vecs = scales["s_a_vecs"]
++                # fp16/bf16: no scale fetch, no scale multiply in epilogue.
++                if is_f16_or_bf16:
++                    s_b_vals = None
++                    s_a_vecs = None
++                else:
++                    s_b_vals = scales["s_b_vals"]
++                    s_a_vecs = scales["s_a_vecs"]
+ 
+                 if use_cshuffle_epilog:
+                     if lds_out is None:
+@@ -581,8 +705,9 @@ def write_row_to_lds(
+                         nbr_lane = arith.xori(lane_id_i32, c1_i32)
+                         nbr_lane_bytes = arith.shli(nbr_lane, c2_i32)  # lane_id * 4 (bytes)
+ 
+-                        s_a_vec4 = s_a_vecs[mi]
+-                        s_a = vector.extract(s_a_vec4, static_position=[ii], dynamic_position=[])
++                        if not is_f16_or_bf16:
++                            s_a_vec4 = s_a_vecs[mi]
++                            s_a = vector.extract(s_a_vec4, static_position=[ii], dynamic_position=[])
+                         for ni in range_constexpr(num_acc_n):
+                             col_local = col_base_local + (ni * 16)
+                             acc_idx = mi * num_acc_n + ni
+@@ -590,7 +715,10 @@ def write_row_to_lds(
+                             val = vector.extract(acc, static_position=[ii], dynamic_position=[])
+                             if is_int8:
+                                 val = arith.sitofp(T.f32, val)
+-                            val_s = (val * s_a) * s_b_vals[ni]
++                            if is_f16_or_bf16:
++                                val_s = val
++                            else:
++                                val_s = (val * s_a) * s_b_vals[ni]
+                             v16 = arith.trunc_f(T.f16, val_s)
+ 
+                             # v16 (f16) -> bits in i32 low16
+@@ -694,8 +822,9 @@ def store_pair(*, row_local, row, row_ctx, col_pair0, col_g0, frag):
+                     return
+ 
+                 def body_row(*, mi: int, ii: int, row_in_tile, row):
+-                    s_a_vec4 = s_a_vecs[mi]
+-                    s_a = vector.extract(s_a_vec4, static_position=[ii], dynamic_position=[])
++                    if not is_f16_or_bf16:
++                        s_a_vec4 = s_a_vecs[mi]
++                        s_a = vector.extract(s_a_vec4, static_position=[ii], dynamic_position=[])
+                     col_base = by_n + n_tile_base + lane_mod_16
+                     idx_base = flir.crd2idx(flir.make_coord(row, col_base), layout_c)
+                     for ni in range_constexpr(num_acc_n):
+@@ -704,7 +833,10 @@ def body_row(*, mi: int, ii: int, row_in_tile, row):
+                         val = vector.extract(acc, static_position=[ii], dynamic_position=[])
+                         if is_int8:
+                             val = arith.sitofp(T.f32, val)
+-                        val_s = (val * s_a) * s_b_vals[ni]
++                        if is_f16_or_bf16:
++                            val_s = val
++                        else:
++                            val_s = (val * s_a) * s_b_vals[ni]
+                         val_f16 = arith.trunc_f(T.f16, val_s)
+                         idx_out = idx_base + arith.constant(ni * 16, index=True)
+                         buffer_ops.buffer_store(val_f16, c_rsrc, idx_out)
+@@ -769,7 +901,9 @@ def hot_loop_scheduler():
+                 rocdl.sched_barrier(0)
+ 
+             # ---------------- Pipeline ----------------
+-            lds_tile_elems = arith.constant(tile_m * lds_stride, index=True)
++            # LDS base offsets are in *elements* of `_elem_type()`.
++            # We keep LDS laid out as (tile_m, tile_k) in element units.
++            lds_tile_elems = arith.constant(tile_m * tile_k, index=True)
+             lds_base0 = arith.constant(0, index=True)
+             lds_base1 = lds_tile_elems
+ 
+@@ -781,7 +915,7 @@ def hot_loop_scheduler():
+ 
+                 def prefetch_a0_pack(lds_base):
+                     # (mi=0, ku=0): prefetch both K32 halves (K64) for the first A-pack.
+-                    return lds_load_packs_k64(row_a_lds, col_offset_base, lds_base)
++                    return lds_load_packs_k64(row_a_lds, col_offset_base_bytes, lds_base)
+ 
+                 # Prologue: tile-0
+                 k0 = arith.constant(0, index=True)
+@@ -939,10 +1073,6 @@ def __call__(
+         ):
+             c1 = arith.constant(1, index=True)
+             bdx = arith.constant(256, index=True)
+-            # Dynamic launch sizes: avoid baking M/N into the host stub.
+-            # We support M-tail by launching ceil(M/tile_m) tiles in X and relying on hardware
+-            # OOB checking (see max_size=False resources in the kernel). We keep N aligned for perf:
+-            # grid.y uses exact division (no N-tail support).
+             tm = arith.constant(tile_m, index=True)
+             tn = arith.constant(tile_n, index=True)
+             one = arith.constant(1, index=True)
+diff --git a/tests/kernels/test_moe_gemm.py b/tests/kernels/test_moe_gemm.py
+index 7e2370e54..89d0cc4a2 100644
+--- a/tests/kernels/test_moe_gemm.py
++++ b/tests/kernels/test_moe_gemm.py
+@@ -425,8 +425,8 @@ def run_moe_stage1(
+     num_valid_ids = routing.num_valid_ids
+     sorted_size = routing.sorted_size
+ 
+-    if in_dtype not in ("fp8", "int8", "int4"):
+-        raise ValueError(f"in_dtype must be 'fp8', 'int8', or 'int4', got {in_dtype!r}")
++    if in_dtype not in ("fp8", "fp16", "int8", "int4"):
++        raise ValueError(f"in_dtype must be one of ('fp8','fp16','int8','int4'), got {in_dtype!r}")
+     is_int4 = in_dtype == "int4"
+     is_int8 = in_dtype in ("int8", "int4")
+ 
+@@ -436,6 +436,12 @@ def run_moe_stage1(
+         w1_q, scale_w1 = pertoken_quant(w1_fp32, quant_dtype=DTYPE_FP8)  # [E,2*inter,K], [E,2*inter,1]
+     # w2 is not used by our kernel, but required by CK stage1 API
+         w2_q, _scale_w2_unused = pertoken_quant(w2_fp32, quant_dtype=DTYPE_FP8)
++    elif in_dtype == "fp16":
++        x_q = x_fp32.to(torch.float16)
++        w1_q = w1_fp32.to(torch.float16)
++        w2_q = w2_fp32.to(torch.float16)
++        scale_x = None
++        scale_w1 = None
+     elif in_dtype == "int8":
+         x_q, scale_x = pertoken_quant(x_fp32, quant_dtype=torch.int8)
+         w1_q, scale_w1 = pertoken_quant(w1_fp32, quant_dtype=torch.int8)
+@@ -453,14 +459,8 @@ def run_moe_stage1(
+     # Flatten W1 for our flir kernel (treat expert dim as part of N).
+     w1_shuffled_flat = w1_shuffled.view(experts * (2 * inter_dim), model_dim)
+     w1_q_flat = w1_q.view(experts * (2 * inter_dim), model_dim)
+-    scale_w1_flat = scale_w1.view(experts * (2 * inter_dim), 1)
++    scale_w1_flat = None if scale_w1 is None else scale_w1.view(experts * (2 * inter_dim), 1)
+ 
+-    # Pad storage for forced global dwordx4 loads (same trick as existing GEMM tests)
+-    PAD_ELEMS = 256
+-    x_flat = x_q.contiguous().view(-1)
+-    x_storage = torch.empty(x_flat.numel() + PAD_ELEMS, device=device, dtype=x_q.dtype)
+-    x_storage[: x_flat.numel()] = x_flat
+-    x_q = x_storage[: x_flat.numel()].view(tokens, model_dim)
+ 
+     # Weight storage:
+     # - fp8/int8: preshuffled bytes (1B/elem)
+@@ -468,16 +468,14 @@ def run_moe_stage1(
+     w_flat = (
+         _pack_shuffled_int8_to_packed_int4_no_perm(w1_shuffled_flat) if is_int4 else w1_shuffled_flat
+     ).contiguous().view(-1)
+-    w_storage = torch.empty(w_flat.numel() + PAD_ELEMS, device=device, dtype=w_flat.dtype)
+-    w_storage[: w_flat.numel()] = w_flat
+-    w_kernel = w_storage[: w_flat.numel()]
++    w_kernel = w_flat
+     w_kernel = (
+         w_kernel.view(experts * (2 * inter_dim), model_dim) if (not is_int4) else w_kernel
+     )
+ 
+     # Flatten scales to 1D memrefs
+-    scale_x_1d = scale_x.view(-1).contiguous()  # [tokens]
+-    scale_w1_1d = scale_w1_flat.view(-1).contiguous()  # [rows]
++    scale_x_1d = None if scale_x is None else scale_x.view(-1).contiguous()  # [tokens]
++    scale_w1_1d = None if scale_w1_flat is None else scale_w1_flat.view(-1).contiguous()  # [rows]
+     sorted_weights_1d = sorted_weights.contiguous().view(-1)  # [sorted_size]
+ 
+     # Output: [tokens, topk, inter_dim] fp16
+@@ -500,6 +498,13 @@ def run_moe_stage1(
+     )
+ 
+     def launch(o, x, w, sx, sw, st, eids, sw_sorted):
++        if in_dtype == "fp16":
++            # Keep kernel ABI consistent: pass empty scale tensors (kernel ignores them).
++            # Use 0-element tensors as "null" scale placeholders.
++            if sx is None:
++                sx = torch.empty((0,), device=o.device, dtype=torch.float32)
++            if sw is None:
++                sw = torch.empty((0,), device=o.device, dtype=torch.float32)
+         exe(o, x, w, sx, sw, st, eids, sw_sorted, tokens, inter_dim, model_dim)
+ 
+     _, us = run_perftest(
+@@ -538,9 +543,10 @@ def launch(o, x, w, sx, sw, st, eids, sw_sorted):
+     tflops = flops / (us / 1e6) / 1e12
+ 
+     # Rough bytes-moved accounting (same spirit as GEMM tests: count each tensor once).
++    elem_bytes = 2 if in_dtype == "fp16" else 1
+     bytes_moved = 0
+-    bytes_moved += tokens * model_dim * 1  # x fp8
+-    bytes_moved += (experts * (2 * inter_dim) * model_dim) // (2 if is_int4 else 1)  # w (packed for int4)
++    bytes_moved += tokens * model_dim * elem_bytes  # x
++    bytes_moved += (experts * (2 * inter_dim) * model_dim * elem_bytes) // (2 if is_int4 else 1)  # w (packed for int4)
+     # Output rows are logically tokens*topk, but kernel may touch padded rows due to routing blocks.
+     bytes_moved += int(sorted_size) * inter_dim * 2  # out fp16 (upper bound for writes)
+     bytes_moved += tokens * 4  # scale_x f32 (1D)
+@@ -738,8 +744,8 @@ def run_moe_stage2(
+     num_valid_ids = routing.num_valid_ids
+     sorted_size = routing.sorted_size
+ 
+-    if in_dtype not in ("fp8", "int8", "int4"):
+-        raise ValueError(f"in_dtype must be 'fp8', 'int8', or 'int4', got {in_dtype!r}")
++    if in_dtype not in ("fp8", "fp16", "int8", "int4"):
++        raise ValueError(f"in_dtype must be one of ('fp8','fp16','int8','int4'), got {in_dtype!r}")
+     is_int4 = in_dtype == "int4"
+     is_int8 = in_dtype in ("int8", "int4")
+ 
+@@ -748,6 +754,13 @@ def run_moe_stage2(
+         x_q, scale_x = pertoken_quant(x_fp32, quant_dtype=DTYPE_FP8)
+         w1_q, scale_w1 = pertoken_quant(w1_fp32, quant_dtype=DTYPE_FP8)
+         w2_q, scale_w2 = pertoken_quant(w2_fp32, quant_dtype=DTYPE_FP8)
++    elif in_dtype == "fp16":
++        x_q = x_fp32.to(torch.float16)
++        w1_q = w1_fp32.to(torch.float16)
++        w2_q = w2_fp32.to(torch.float16)
++        scale_x = None
++        scale_w1 = None
++        scale_w2 = None
+     elif in_dtype == "int8":
+         x_q, scale_x = pertoken_quant(x_fp32, quant_dtype=torch.int8)
+         w1_q, scale_w1 = pertoken_quant(w1_fp32, quant_dtype=torch.int8)
+@@ -767,7 +780,7 @@ def run_moe_stage2(
+         a2_scale = a2_scale_in
+     else:
+         w1_q_flat = w1_q.view(experts * (2 * inter_dim), model_dim)
+-        scale_w1_flat = scale_w1.view(experts * (2 * inter_dim), 1)
++        scale_w1_flat = None if scale_w1 is None else scale_w1.view(experts * (2 * inter_dim), 1)
+         out1_ref = torch_moe_gemm1(
+             x_q,
+             w1_q_flat,
+@@ -780,35 +793,30 @@ def run_moe_stage2(
+         )  # [tokens, topk, inter] fp32
+         if in_dtype == "fp8":
+             a2_q, a2_scale = pertoken_quant(out1_ref, quant_dtype=DTYPE_FP8)
++        elif in_dtype == "fp16":
++            a2_q = out1_ref.to(torch.float16)
++            a2_scale = None
+         else:
+             a2_q, a2_scale = pertoken_quant(out1_ref, quant_dtype=torch.int8)
+ 
+     # Flatten weights/scales for the kernel.
+     w2_shuffled_flat = w2_shuffled.view(experts * model_dim, inter_dim)
+-    scale_w2_flat = scale_w2.view(experts * model_dim, 1)
++    scale_w2_flat = None if scale_w2 is None else scale_w2.view(experts * model_dim, 1)
+ 
+     # For W4A8, pack preshuffled int8 weights into packed int4 bytes.
+     w2_kernel = w2_shuffled_flat
+     if is_int4:
+         w2_kernel = _pack_shuffled_int8_to_packed_int4_no_perm(w2_shuffled_flat)
+ 
+-    # Pad storage for forced global dwordx4 loads (same trick as existing GEMM tests).
+-    PAD_ELEMS = 256
+-    a2_flat = a2_q.contiguous().view(-1)
+-    a2_storage = torch.empty(a2_flat.numel() + PAD_ELEMS, device=device, dtype=a2_q.dtype)
+-    a2_storage[: a2_flat.numel()] = a2_flat
+-    a2_q = a2_storage[: a2_flat.numel()].view(tokens, topk, inter_dim)
+ 
+     w2_flat = w2_kernel.contiguous().view(-1)
+-    w2_storage = torch.empty(w2_flat.numel() + PAD_ELEMS, device=device, dtype=w2_flat.dtype)
+-    w2_storage[: w2_flat.numel()] = w2_flat
+-    w2_kernel = w2_storage[: w2_flat.numel()]
++    w2_kernel = w2_flat
+     if not is_int4:
+         w2_kernel = w2_kernel.view(experts * model_dim, inter_dim)
+ 
+     # Flatten scales to 1D memrefs.
+-    a2_scale_1d = a2_scale.view(-1).contiguous()  # [tokens*topk]
+-    w2_scale_1d = scale_w2_flat.view(-1).contiguous()  # [experts*model_dim]
++    a2_scale_1d = None if a2_scale is None else a2_scale.view(-1).contiguous()  # [tokens*topk]
++    w2_scale_1d = None if scale_w2_flat is None else scale_w2_flat.view(-1).contiguous()  # [experts*model_dim]
+     sorted_weights_1d = sorted_weights.contiguous().view(-1)  # [sorted_size]
+ 
+     # Output dtype is selected at compile-time via `compile_moe_gemm2(out_dtype=...)`.
+@@ -841,6 +849,11 @@ def run_moe_stage2(
+     )
+ 
+     def launch(o, x, w, sx, sw, st, eids, sw_sorted):
++        if in_dtype == "fp16":
++            if sx is None:
++                sx = torch.empty((0,), device=o.device, dtype=torch.float32)
++            if sw is None:
++                sw = torch.empty((0,), device=o.device, dtype=torch.float32)
+         exe(o, x, w, sx, sw, st, eids, sw_sorted, tokens, model_dim, inter_dim)
+ 
+     # NOTE: stage2 uses atomic-add into `out`, so we cannot reuse the same output buffer
+@@ -891,9 +904,10 @@ def launch(o, x, w, sx, sw, st, eids, sw_sorted):
+     flops = 2 * tokens * topk * model_dim * inter_dim
+     tflops = flops / (us / 1e6) / 1e12
+ 
++    elem_bytes = 2 if in_dtype == "fp16" else 1
+     bytes_moved = 0
+-    bytes_moved += int(sorted_size) * inter_dim * 1  # a2 fp8 (upper bound: padded rows)
+-    bytes_moved += (experts * model_dim * inter_dim) // (2 if is_int4 else 1)  # w2 (packed for int4)
++    bytes_moved += int(sorted_size) * inter_dim * elem_bytes  # a2 (upper bound: padded rows)
++    bytes_moved += (experts * model_dim * inter_dim * elem_bytes) // (2 if is_int4 else 1)  # w2 (packed for int4)
+     bytes_moved += tokens * model_dim * (2 if out_torch_dtype == torch.float16 else 4)  # out
+     bytes_moved += int(sorted_size) * 4  # a2_scale f32 (1D, padded upper bound)
+     bytes_moved += experts * model_dim * 4  # w2_scale f32 (1D)
+@@ -995,9 +1009,10 @@ def launch_ck(o, a2_, w1_, w2_, sorted_ids_, sorted_eids_, num_valid_, w2_scale_
+ 
+ 
+ @pytest.mark.parametrize(
+-    "tokens, model_dim, inter_dim, experts, topk, tile_m, tile_n1, tile_k1, tile_n2, tile_k2, doweight_stage1",
++    "tokens, model_dim, inter_dim, experts, topk, tile_m, tile_n1, tile_k1, tile_n2, tile_k2, doweight_stage1, in_dtype",
+     [
+-        (256, 4096, 2048, 17, 9, 64, 128, 128, 256, 128, False),
++        (256, 4096, 2048, 17, 9, 64, 128, 128, 256, 128, False, "fp8"),
++        (256, 4096, 2048, 17, 9, 64, 128, 128, 256, 128, False, "fp16"),
+     ],
+ )
+ def test_moe_gemm_2stage(
+@@ -1079,6 +1094,10 @@ def test_moe_gemm_2stage(
+     out1_fp32 = out1_fp16.to(torch.float32)
+     if in_dtype == "fp8":
+         a2_q, a2_scale = pertoken_quant(out1_fp32, quant_dtype=DTYPE_FP8)
++    elif in_dtype == "fp16":
++        # fp16 path: stage2 consumes fp16 directly (no quant).
++        a2_q = out1_fp16
++        a2_scale = torch.ones((*out1_fp16.shape[:-1], 1), device=device, dtype=torch.float32)
+     else:
+         a2_q, a2_scale = pertoken_quant(out1_fp32, quant_dtype=torch.int8)
+ 
+@@ -1142,8 +1161,8 @@ def _str2tuple_dim(v: str) -> Tuple[int, int]:
+         "--in_dtype",
+         type=str,
+         default="fp8",
+-        choices=["fp8", "int8", "int4", "all"],
+-        help="Kernel input dtype: fp8 / int8 / int4 / all (default: all). "
++        choices=["fp8", "fp16", "int8", "int4", "all"],
++        help="Kernel input dtype: fp8 / fp16 / int8 / int4 / all (default: all). "
+         "int4 means W4A8: A int8, W packed int4.",
+     )
+     parser.add_argument("-d", "--dtype", type=str, default="fp32", choices=["fp32", "fp16", "bf16"], help="Input init dtype (currently data is quantized to FP8 per-token; init dtype mainly affects RNG range).")
+diff --git a/tests/kernels/test_preshuffle_gemm.py b/tests/kernels/test_preshuffle_gemm.py
+index bd517eb03..6ed230482 100644
+--- a/tests/kernels/test_preshuffle_gemm.py
++++ b/tests/kernels/test_preshuffle_gemm.py
+@@ -67,23 +67,21 @@ def run_torch(x, weight, x_scale, w_scale, bias=None, dtype=torch.bfloat16):
+ 
+     Dequantize 8-bit inputs (FP8/INT8) and compute FP32 matmul.
+     """
+-    x = x.to(torch.float32) * x_scale
+-    weight = weight.to(torch.float32) * w_scale
++    x = x.to(torch.float32) if x_scale is None else (x.to(torch.float32) * x_scale)
++    weight = weight.to(torch.float32) if w_scale is None else (weight.to(torch.float32) * w_scale)
+     out = F.linear(x, weight)
+     if bias is not None:
+         out = out.to(bias.dtype) + bias
+     return out.to(dtype)
+ 
+ 
+-@pytest.mark.parametrize("in_dtype", ["fp8", "int8"])
++@pytest.mark.parametrize("in_dtype", ["fp8", "int8", "bf16"])
+ @pytest.mark.parametrize(
+     "M, N, K, tile_m, tile_n, tile_k", 
+     [
+         (16, 5120, 8192, 16, 64, 512), 
+         (5120, 5120, 8320, 64, 256, 128), 
+         (9728, 8192, 8320, 128, 128, 128),
+-        # Tail case: M is not a multiple of tile_m (N stays aligned). Kernel should handle via
+-        # OOB-checked A/scaleA/C buffer ops (max_size=False) + ceil_div grid sizing on M.
+         (5133, 5120, 8320, 64, 256, 128),
+     ]
+ )
+@@ -129,7 +127,15 @@ def test_mfma_a8_flir_preshuffle(
+     size_c = M * N
+     size_a = M * K
+     # B is packed int4 for W4A8: 2 values per byte.
+-    size_b = (N * K) // 2 if in_dtype == "int4" else (N * K)
++    if in_dtype == "int4":
++        size_b = (N * K) // 2
++        elem_bytes = 1
++    elif in_dtype in ("fp16", "bf16"):
++        size_b = (N * K) * 2
++        elem_bytes = 2
++    else:
++        size_b = (N * K)
++        elem_bytes = 1
+ 
+     device = torch.device("cuda")
+ 
+@@ -141,29 +147,29 @@ def test_mfma_a8_flir_preshuffle(
+     # INT4 here means W4A8: A is INT8, B is packed INT4 and unpacked to INT8 in-kernel.
+     is_int8 = (in_dtype == "int8") or is_int4
+ 
+-    quant_dtype = torch.int8 if is_int8 else DTYPE_FP8
+-    a_q, scale_a = pertoken_quant(a_fp32, quant_dtype=quant_dtype)  # (M, K)
+-    if is_int4:
+-        # Signed int4 range is [-8, 7]. Use dtypeMax=7 for symmetric per-row scaling.
+-        b_q, scale_b = pertoken_quant(b_fp32_t, quant_dtype=torch.int8, dtypeMax=7)  # (N, K)
++    if in_dtype in ("fp16", "bf16"):
++        torch_dtype = torch.float16 if in_dtype == "fp16" else torch.bfloat16
++        a_q = a_fp32.to(torch_dtype)
++        b_q = b_fp32_t.to(torch_dtype)
++        # Scale is semantically optional for fp16/bf16 (no dequant). Let callers pass None;
++        # we will materialize an internal "all-ones" scale only when launching the kernel.
++        scale_a = None
++        scale_b = None
+     else:
+-        b_q, scale_b = pertoken_quant(b_fp32_t, quant_dtype=quant_dtype)  # (N, K)
+-
+-    # When using fixed-width global loads (16B chunks), some threads can over-read.
+-    # Pad the underlying storage so the over-read stays in-bounds.
+-    PAD_ELEMS = 64  # bytes for 8-bit; generous guard for safety
+-    a_flat = a_q.contiguous().view(-1)
+-    a_storage = torch.empty(a_flat.numel() + PAD_ELEMS, device=device, dtype=a_q.dtype)
+-    a_storage[: a_flat.numel()] = a_flat
+-    a_q = a_storage[: a_flat.numel()].view(M, K)
+-
+-    b_flat = b_q.contiguous().view(-1)
+-    b_storage = torch.empty(b_flat.numel() + PAD_ELEMS, device=device, dtype=b_q.dtype)
+-    b_storage[: b_flat.numel()] = b_flat
+-    b_q = b_storage[: b_flat.numel()].view(N, K)
++        quant_dtype = torch.int8 if is_int8 else DTYPE_FP8
++        a_q, scale_a = pertoken_quant(a_fp32, quant_dtype=quant_dtype)  # (M, K)
++        if is_int4:
++            # Signed int4 range is [-8, 7]. Use dtypeMax=7 for symmetric per-row scaling.
++            b_q, scale_b = pertoken_quant(b_fp32_t, quant_dtype=torch.int8, dtypeMax=7)  # (N, K)
++        else:
++            b_q, scale_b = pertoken_quant(b_fp32_t, quant_dtype=quant_dtype)  # (N, K)
++
++    # Keep tensors contiguous for predictable buffer descriptor shapes.
++    a_q = a_q.contiguous()
++    b_q = b_q.contiguous()
+ 
+     # Preshuffle B to CK/aiter layout.
+-    b_shuffled = shuffle_weight(b_q)
++    b_shuffled = shuffle_weight(b_q, layout=(16, 16))
+ 
+     def _pack_shuffled_int8_to_packed_int4_no_perm(x_shuf_i8: torch.Tensor) -> torch.Tensor:
+         """
+@@ -195,6 +201,11 @@ def _pack_shuffled_int8_to_packed_int4_no_perm(x_shuf_i8: torch.Tensor) -> torch
+     c_out_raw = torch.zeros((M, N), dtype=torch.float16, device=device)
+ 
+     def launch_kernel(c, a, b, sa, sb):
++        # Keep kernel ABI consistent: for fp16/bf16, pass empty scale tensors (kernel ignores them).
++        if sa is None:
++            sa = torch.empty((0,), device=c.device, dtype=torch.float32)
++        if sb is None:
++            sb = torch.empty((0,), device=c.device, dtype=torch.float32)
+         exe(c, a, b, sa, sb, M, N, K)
+ 
+     # `run_perftest` requires num_iters > 1.
+@@ -215,13 +226,13 @@ def launch_kernel(c, a, b, sa, sb):
+ 
+     assert verify_output(c_out_scaled, c_ref, rtol=0.1, atol=0.1)
+ 
+-    bytes_moved = size_a + size_b + size_c * 2 + (M + N) * 4
++    bytes_moved = (size_a * elem_bytes) + size_b + size_c * 2 + (M + N) * 4
+     flops = 2 * M * N * K
+     tflops = flops / (us / 1e6) / 1e12
+     tbps = bytes_moved / 1e12 / (us / 1e6)
+     print(f"Throughput: {us:.1f} us, {tflops:.2f} TFLOPS, BW: {tbps:.3f} TB/s")
+ 
+-    if HAS_AITER and bool(run_aiter_bench) and (not is_int4):
++    if HAS_AITER and bool(run_aiter_bench) and (not is_int4) and (in_dtype in ("fp8", "int8")):
+         print("-" * 40)
+         print("Running Aiter Benchmark...")
+         try:
+@@ -257,7 +268,11 @@ def launch_aiter(a, b, sa, sb):
+     parser = argparse.ArgumentParser(
+         description="Preshuffle GEMM benchmark"
+     )
+-    parser.add_argument("--in_dtype", type=str, default="fp8", choices=["fp8", "int8", "int4"], 
++    parser.add_argument(
++        "--in_dtype",
++        type=str,
++        default="fp8",
++        choices=["fp8", "int8", "int4", "fp16", "bf16"],
+                         help="Input dtype")
+     parser.add_argument("-M", type=int, default=16, help="M dimension")
+     parser.add_argument("-N", type=int, default=10240, help="N dimension")
+diff --git a/tests/kernels/test_ref.py b/tests/kernels/test_ref.py
+index 23f694e6f..6a1f6cc80 100644
+--- a/tests/kernels/test_ref.py
++++ b/tests/kernels/test_ref.py
+@@ -4,8 +4,8 @@
+ def torch_moe_gemm1(
+     x_fp8: torch.Tensor,
+     w1_fp8_flat: torch.Tensor,
+-    scale_x: torch.Tensor,
+-    scale_w1_flat: torch.Tensor,
++    scale_x: torch.Tensor | None,
++    scale_w1_flat: torch.Tensor | None,
+     topk_ids: torch.Tensor,
+     topk_weights: torch.Tensor,
+     inter_dim: int,
+@@ -16,8 +16,12 @@ def torch_moe_gemm1(
+     topk = topk_ids.shape[1]
+     experts = int(topk_ids.max().item()) + 1
+ 
+-    x = x_fp8.to(torch.float32) * scale_x  # [tokens, model_dim] (scale_x [tokens,1])
+-    w1 = w1_fp8_flat.to(torch.float32) * scale_w1_flat  # [experts*2*inter_dim, model_dim] (scale [rows,1])
++    x = x_fp8.to(torch.float32) if scale_x is None else (x_fp8.to(torch.float32) * scale_x)
++    w1 = (
++        w1_fp8_flat.to(torch.float32)
++        if scale_w1_flat is None
++        else (w1_fp8_flat.to(torch.float32) * scale_w1_flat)
++    )
+     w1 = w1.view(experts, 2 * inter_dim, model_dim)
+ 
+     out = torch.zeros((tokens, topk, inter_dim), device="cuda", dtype=torch.float32)
+@@ -42,8 +46,8 @@ def torch_moe_gemm1(
+ def torch_moe_gemm2(
+     a2_fp8: torch.Tensor,
+     w2_fp8: torch.Tensor,
+-    scale_a2: torch.Tensor,
+-    scale_w2: torch.Tensor,
++    scale_a2: torch.Tensor | None,
++    scale_w2: torch.Tensor | None,
+     topk_ids: torch.Tensor,
+     topk_weights: torch.Tensor,
+     model_dim: int,
+@@ -62,8 +66,8 @@ def torch_moe_gemm2(
+     experts = int(topk_ids.max().item()) + 1
+ 
+     # Dequantize inputs.
+-    a2 = a2_fp8.to(torch.float32) * scale_a2  # scale_a2: [tokens, topk, 1]
+-    w2 = w2_fp8.to(torch.float32) * scale_w2  # scale_w2: [experts, model_dim, 1]
++    a2 = a2_fp8.to(torch.float32) if scale_a2 is None else (a2_fp8.to(torch.float32) * scale_a2)
++    w2 = w2_fp8.to(torch.float32) if scale_w2 is None else (w2_fp8.to(torch.float32) * scale_w2)
+     w2 = w2.view(experts, model_dim, inter_dim)
+ 
+     out = torch.zeros((tokens, model_dim), device="cuda", dtype=torch.float32)

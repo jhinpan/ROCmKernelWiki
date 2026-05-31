@@ -16,7 +16,8 @@ tags:
 - buffer-oob-guard
 - gcn-asm
 confidence: source-reported
-reproducibility: snippet
+reproducibility: runnable
+artifact_dir: examples/vector-add-asm
 kernel_types:
 - vector-add
 - elementwise
@@ -259,6 +260,34 @@ Tuning levers:
   gfx942, 160 kB/CU on gfx950), capping waves/CU.
 - **Persistent grid size** — launch ~`#CUs × waves/CU` workgroups so each wave
   does many tiles; this removes the [tail effect](../patterns/tail-effect.md).
+
+## Runnable example
+
+A runnable companion lives in [`examples/vector-add-asm/`](../../examples/vector-add-asm/).
+It has two parts:
+
+1. **`vadd_hip.cpp`** — the portable HIP grid-stride vector add (the "what you'd
+   usually ship" kernel above). It **builds and runs on gfx1201** (RDNA4) and
+   self-checks against a CPU reference.
+2. **`vadd_asm_gfx942.cpp`** — a GCN inline-assembly vector add
+   (`global_load_dword` / `global_store_dword` gated by `s_waitcnt vmcnt(0)`)
+   that is **cross-compiled for gfx942** to illustrate the VMEM/wait-counter asm
+   path. It is not executed on this RDNA4 box.
+
+```bash
+cd examples/vector-add-asm && ./build.sh
+# Part 1 (runs on gfx1201):
+#   vadd HIP (portable, gfx1201): N=16777216  block=256 grid=4096
+#     time = 0.350 ms/iter   effective BW = 574.8 GB/s (12 B/elem)
+#     max abs err = 0
+#     PASS
+# Part 2 (cross-compile-only):
+#   OK: vadd_asm_gfx942.o produced (not executed on gfx1201)
+```
+
+The hand-written `buffer_*` double-buffered kernel in this page targets CDNA and
+is cross-compile-verified; the asm path is demonstrated runnably via the gfx942
+inline-asm object plus the portable HIP kernel that actually executes here.
 
 ## See also
 

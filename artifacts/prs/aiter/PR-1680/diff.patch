@@ -1,0 +1,1283 @@
+diff --git a/aiter/jit/core.py b/aiter/jit/core.py
+index a938c0e287..6deefb4803 100644
+--- a/aiter/jit/core.py
++++ b/aiter/jit/core.py
+@@ -211,7 +211,9 @@ def update_config_files(self, file_path: str, merge_name: str):
+         if os.path.exists(untuned_path):
+             untunedf = pd.read_csv(untuned_path)
+             keys = untunedf.columns.to_list()
+-            keys.append("cu_num")
++            # Add "cu_num" if not already present
++            if "cu_num" not in keys:
++                keys.append("cu_num")
+             merge_df = (
+                 merge_df.sort_values("us")
+                 .drop_duplicates(subset=keys, keep="first")
+diff --git a/aiter/utility/base_tuner.py b/aiter/utility/base_tuner.py
+index fac4ed0b98..c6a7f9d043 100644
+--- a/aiter/utility/base_tuner.py
++++ b/aiter/utility/base_tuner.py
+@@ -8,7 +8,6 @@
+ 
+ from abc import abstractmethod
+ from aiter import logger
+-import traceback
+ from operator import itemgetter
+ import time
+ from aiter import dtypes
+@@ -24,6 +23,9 @@ class TunerCommon:
+         "errRatio": 0.05,
+         "batch": 100,
+         "profile_file": "",  # for all results
++        "timeout": None,  # 100s timeout for per test
++        "warmup": 5,  # 5 warmup iters for profiling
++        "iters": 101,  # 101 run iters for profiling
+     }
+     dtype2bpe_dict = {
+         dtypes.fp16: 2,
+@@ -42,7 +44,10 @@ class TunerCommon:
+         torch.float8_e4m3fnuz: 1,
+         torch.float8_e4m3fn: 1,
+     }
+-    INVALID_TIME = -1
++    INVALID_TIME = -1  # op not support or error
++
++    INF_TIME = float("inf")  # op time is too large
++    INVLAID_ERR_RATIO = 1.0  # err ratio is too large
+ 
+     def __init__(self, name, key, resultList, description=None):
+         self.parser = argparse.ArgumentParser(description=description)
+@@ -60,6 +65,8 @@ def __init__(self, name, key, resultList, description=None):
+         self.remain_untuned = pd.DataFrame(columns=self.keys)
+         self.sort_keys = key
+         self.start_time = 0
++        self.num_warmup = 10
++        self.num_iters = 101
+ 
+     def get_arg_defaults(self):
+         """get default arguments"""
+@@ -68,6 +75,10 @@ def get_arg_defaults(self):
+     def get_bpe(self, dtype):
+         return self.dtype2bpe_dict[dtype]
+ 
++    def set_run_iters(self, input, indtype):
++        """set warm iters and run iter for profiling"""
++        """suggest warm iters * time1_per_iter > 100us"""
++
+     def _setup_common_arguments(self):
+         """set common arguments"""
+         defaults = self.get_arg_defaults()
+@@ -134,6 +145,24 @@ def _setup_common_arguments(self):
+             required=False,
+             help="output: all tuning results stored in this file",
+         )
++        self.parser.add_argument(
++            "--warmup",
++            type=int,
++            default=defaults["warmup"],
++            help="warmup iters for profiling",
++        )
++        self.parser.add_argument(
++            "--iters",
++            type=int,
++            default=defaults["iters"],
++            help="run iters for profiling",
++        )
++        self.parser.add_argument(
++            "--timeout",
++            type=int,
++            default=defaults["timeout"],
++            help="timeout for task group",
++        )
+ 
+     def parse_args(self):
+         return self.parser.parse_args()
+@@ -210,7 +239,7 @@ def get_untuned_gemm_list(self, untuned_gemm_file):
+     def get_out_file(self, tuned_file):
+         """if there are multiple tuned file, then write tuning result to the first file"""
+         path_list = tuned_file.split(os.pathsep) if tuned_file else []
+-        assert path_list, f"output tuned file is empty"
++        assert path_list, "output tuned file is empty"
+         return path_list[0]
+ 
+     def get_tuned_gemm_list(self, tuned_gemm_file, columns=[]):
+@@ -318,7 +347,6 @@ def post_process(self, rets, args, topk=-1, fast_mode=False):
+ 
+         if fast_mode or topk == -1:
+             return rets
+-        best_time = -1
+         tol_err_ratio = args.errRatio
+         from collections import defaultdict
+ 
+@@ -337,7 +365,7 @@ def post_process(self, rets, args, topk=-1, fast_mode=False):
+                 for info_ex, us, max_err_ratio in sorted_time
+                 if max_err_ratio <= tol_err_ratio
+                 and us != self.INVALID_TIME
+-                and us != float("inf")
++                and us != self.INF_TIME
+             ]
+             if len(filtered_time) == 0:
+                 logger.error(
+@@ -502,7 +530,7 @@ def calculate(self, results, bpes=(2, 2, 2)):
+         ### gemm flops,bw
+         info, time, err_ratio = results
+         if time == -1:
+-            return -1, -1
++            return 0, 0
+         cu_num, m, n, k, *rest = info[0]
+         flop = m * n * k * 2
+         tflops = round(flop / (time * 1000000), 2)
+@@ -520,7 +548,7 @@ def result_to_df(self, results):
+             keys, kernelId, splitK, kernelName = info
+             kernelName = (
+                 "None"
+-                if time == self.INVALID_TIME
++                if time == self.INVALID_TIME or time == self.INF_TIME
+                 else self.getKernelName(kernelId) if kernelName == "" else kernelName
+             )
+             tflops, bw = self.calculate(el)
+@@ -552,14 +580,28 @@ def result_to_csv(self, resultdf, file, concat=False):
+         """post process of tuning results"""
+         old_df = self.get_tuned_gemm_list(file)
+         self.failed = pd.concat(
+-            [self.failed, resultdf[resultdf["us"] == self.INVALID_TIME]],
++            [
++                self.failed,
++                resultdf[
++                    (resultdf["us"] == self.INVALID_TIME)
++                    | (resultdf["us"] == self.INF_TIME)
++                ],
++            ],
+             ignore_index=True,
+         )
+         self.success = pd.concat(
+-            [self.success, resultdf[resultdf["us"] != self.INVALID_TIME]],
++            [
++                self.success,
++                resultdf[
++                    (resultdf["us"] != self.INVALID_TIME)
++                    & (resultdf["us"] != self.INF_TIME)
++                ],
++            ],
+             ignore_index=True,
+         )
+-        update_tunedf = resultdf[resultdf["us"] != self.INVALID_TIME]  # self.success
++        update_tunedf = resultdf[
++            (resultdf["us"] != self.INVALID_TIME) & (resultdf["us"] != self.INF_TIME)
++        ]  # self.success
+         if not concat:
+             resultdf = self.update_tunedf(old_df, update_tunedf)
+         else:
+@@ -590,3 +632,11 @@ def update_tflops_bw(self, file):
+             resultdf.loc[i, "bw"] = bw
+             resultdf.loc[i, "errRatio"] = 0
+         resultdf.to_csv(file, index=False, na_rep="Null")
++
++    def set_run_iters(self, input, inputdtype):
++        cu_num, m, n, k, *rest = input
++        flops = m * n * k * 2
++        if flops < 256 * 5120 * 256 * 2:
++            self.num_warmup = 50
++        elif flops <= 1024 * 5120 * 256 * 2:
++            self.num_warmup = 30
+diff --git a/aiter/utility/mp_tuner.py b/aiter/utility/mp_tuner.py
+index 722eba260d..b99f9e4ffa 100644
+--- a/aiter/utility/mp_tuner.py
++++ b/aiter/utility/mp_tuner.py
+@@ -3,14 +3,14 @@
+ import torch
+ import multiprocessing as mp
+ import time
++from multiprocessing import TimeoutError as MPTimeoutError
+ from aiter.test_common import checkAllclose
+ from aiter import dtypes
+-
+-# import traceback
++from aiter import logger
+ 
+ 
+ def worker(
+-    gpuIDMap,
++    gpu_id,
+     info,
+     func,
+     args,
+@@ -24,22 +24,22 @@ def worker(
+     from aiter.test_common import run_perftest
+ 
+     pid = mp.current_process().pid
+-    # pid = mp.current_process().pid
+-    # gpuID = gpuIDMap[pid]
+-    gpuID = torch.cuda.current_device()
+-    device = torch.device(f"cuda:{gpuID}")
+-    torch.cuda.set_device(device)
+-    args = [el.to(device) if isinstance(el, torch.Tensor) else el for el in args]
+-    torch.cuda.synchronize()
++    device = torch.device(f"cuda:{gpu_id}")
+     max_err_ratio = 0.0
+     try:
++        torch.cuda.set_device(device)
++        args = [el.to(device) if isinstance(el, torch.Tensor) else el for el in args]
++        torch.cuda.synchronize()
+         res = None
+         us = float("inf")
+         try:
+             res, us = run_perftest(func, *args, **kwargs)
+             us = round(us, 4)
++
+         except RuntimeError as e:
+             print(f"run gpu func error: info:{info}\t {e}")
++            us = -1  # not support or error
++            max_err_ratio = 1.0
+         max_retries = 3
+         retry_count = 0
+ 
+@@ -80,22 +80,37 @@ def worker(
+                         msg=f"info:{info} res[{i}] ",
+                     )
+                     max_err_ratio = max(max_err_ratio, err_ratio)
+-
+-    except Exception as e:
+-        print(f"Error in process:{pid} info:{info}: {e}")
+-        # if res is None and ref is not None:
+-        #    print("The output is None, can't match with reference")
++    except RuntimeError as e:
++        if "CUDA" in str(e) or "HIP" in str(e) or "out of memory" in str(e).lower():
++            print(f"GPU Runtime Error in process:{pid} info:{info}: {e}")
++            # Try to recover GPU state
++            try:
++                torch.cuda.empty_cache()
++                torch.cuda.synchronize()
++            except Exception as e:
++                print(f"Error in process:{pid} info:{info}: {e}")
++                pass
++        else:
++            print(f"Runtime Error in process:{pid} info:{info}: {e}")
++        us = -1  # float("inf")
++        max_err_ratio = 1.0
++    except TimeoutError as e:
++        print(f"Timeout in process:{pid} info:{info}: {e}")
+         us = float("inf")
+         max_err_ratio = 1.0
+-    return info, us, round(max_err_ratio, 4)
++    except Exception as e:
++        print(f"Unexpected Error in process:{pid} info:{info}: {e}")
++        # import traceback
+ 
++        # traceback.print_exc()
++        us = -1  # float("inf")
++        max_err_ratio = 1.0
+ 
+-def get_pid():
+-    time.sleep(3)
+-    return mp.current_process().pid
++    return info, us, round(max_err_ratio, 4)
+ 
+ 
+-def work_group(gpuIDMap, fast_mode, err_ratio, in_data, tasks):
++def work_group(GPUIDMap, fast_mode, err_ratio, in_data, tasks, printLog=False):
++    """Work group that processes a batch of related tasks."""
+     group_task = [tasks] if not isinstance(tasks, list) else tasks
+     kernels_num, (input_data) = in_data
+     (
+@@ -113,7 +128,7 @@ def work_group(gpuIDMap, fast_mode, err_ratio, in_data, tasks):
+     ) = group_task[0]
+ 
+     pid = mp.current_process().pid
+-    gpuID = gpuIDMap[pid]
++    gpuID = GPUIDMap[pid]
+     device = torch.device(f"cuda:{gpuID}")
+     torch.cuda.set_device(device)
+     data = (
+@@ -133,48 +148,113 @@ def work_group(gpuIDMap, fast_mode, err_ratio, in_data, tasks):
+         ref = ref_func(*updated_ref_args, **ref_kwargs)
+         torch.cuda.synchronize()
+ 
+-    rets = []
+-    shape_grouped = isinstance(tasks, list)
+-    solutions = 1 if not shape_grouped else kernels_num
+-    for i in range(solutions):
+-        (
+-            info,
+-            gen_data,
+-            gen_args,
+-            func,
+-            args,
+-            kwargs,
+-            ref_func,
+-            ref_args,
+-            ref_kwargs,
+-            ref_noused,
+-            *rest,
+-        ) = group_task[i]
+-        # either gen_data func or inpur data
+-
+-        new_args = (
+-            (tuple(data[i] for i in args[0]) + tuple(args[1:]))
+-            if gen_data is not None
+-            else args
+-        )
++    try:
++        # Retrieve GPU ID from the map
++        pid = mp.current_process().pid
++        # if pid not in GPUIDMap:
++        #    # Fallback: Use round-robin GPU assignment based on PID
++        #    gpu_num = torch.cuda.device_count()
++        #    gpu_id = pid % gpu_num
++        #    warning_msg = (
++        #        f"[Warning] Process {pid} not found in GPUIDMap. "
++        #        f"Available PIDs: {list(GPUIDMap.keys())}. "
++        #        f"Using fallback GPU assignment: GPU {gpu_id}"
++        #    )
++        #    print(warning_msg)
++        #    # Still raise KeyError to trigger pool restart in parent process
++        #    raise KeyError(
++        #        f"Process {pid} not found in GPUIDMap. Available PIDs: {list(GPUIDMap.keys())}"
++        #    )
++        gpu_id = GPUIDMap[pid]
+ 
+-        ref = ref if ref_noused is None else ref_noused
+-        work_args = (
+-            info,
+-            func,
+-            new_args,
+-            kwargs,
+-            ref,
+-            *rest,
+-        )
+-        ret = worker(gpuIDMap, *work_args, tol_err_ratio=err_ratio)
+-        rets.append(ret)
+-    return rets
++        rets = []
++        shape_grouped = isinstance(tasks, list)
++        solutions = 1 if not shape_grouped else kernels_num
++        for i in range(solutions):
++            (
++                info,
++                gen_data,
++                gen_args,
++                func,
++                args,
++                kwargs,
++                ref_func,
++                ref_args,
++                ref_kwargs,
++                ref_noused,
++                *rest,
++            ) = group_task[i]
++            # either gen_data func or inpur data
++
++            new_args = (
++                (tuple(data[i] for i in args[0]) + tuple(args[1:]))
++                if gen_data is not None
++                else args
++            )
++
++            ref = ref if ref_noused is None else ref_noused
++            work_args = (
++                gpu_id,
++                info,
++                func,
++                new_args,
++                kwargs,
++                ref,
++                *rest,
++            )
++
++            # Run worker with explicit GPU ID
++            ret = worker(*work_args, tol_err_ratio=err_ratio)
++            rets.append(ret)
++        return rets
++
++    except Exception as e:
++        print(f"Critical error in work_group: {e}")
++        # import traceback
++
++        # traceback.print_exc()
++        # Return dummy failed results for all tasks in the group
++        if isinstance(tasks, list):
++            return [
++                (task[0] if task else "unknown", float("inf"), 1.0) for task in tasks
++            ]
++        else:
++            return [(tasks[0] if tasks else "unknown", float("inf"), 1.0)]
++
++
++def get_pid():
++    time.sleep(3)
++    return mp.current_process().pid
+ 
+ 
+ def mp_tuner(
+-    tasks, in_datas, mp_num=0, fast_mode=False, shape_grouped=False, err_ratio=0.05
++    tasks,
++    in_datas,
++    mp_num=0,
++    fast_mode=False,
++    shape_grouped=False,
++    err_ratio=0.05,
++    timeout=None,
++    verbose=False,  # print verbose log
+ ):
++    """Multi-process tuner with GPU fault isolation.
++
++    Each task runs in an isolated process (maxtasksperchild=1) to ensure that
++    GPU memory faults or hangs in one task don't affect others. The process pool
++    automatically spawns new workers after each task completes or crashes.
++
++    Args:
++        tasks: List of tuning tasks
++        in_datas: Input data for tasks
++        mp_num: Number of parallel processes (0 = use all GPUs)
++        fast_mode: Skip result comparison if True
++        shape_grouped: Group tasks by shape
++        err_ratio: Error tolerance ratio
++        timeout: Timeout in seconds for each task group (None = no timeout)
++
++    Returns:
++        List of (info, latency, error_ratio) tuples
++    """
+     gpu_num = torch.cuda.device_count()
+     mp.set_start_method("spawn", force=True)
+     mp_num = gpu_num if mp_num < 1 or mp_num > gpu_num else mp_num
+@@ -182,23 +262,54 @@ def mp_tuner(
+     start_idx = 0
+     if not tasks:
+         return []
+-    if mp_num == 1 & fast_mode == 0:
++    if mp_num == 1 and fast_mode == 0:
+         shape_grouped = True
+-    pool = mp.Pool(processes=parallel_num)
+-
+-    pids = [pool.apply_async(get_pid) for i in range(start_idx, mp_num)]
+     # time.sleep(2)
+     task_group = []
+     # dispatch per shape to one pid
+     if shape_grouped:
+-        start = 0
+-        for kernel_nums, _ in in_datas:
+-            end = start + kernel_nums - 1
+-            task_group.append(tasks[start : end + 1])
+-            start = end + 1
++        # Group tasks by info_keys (info[0])
++        from collections import OrderedDict
++
++        info_key_groups = OrderedDict()
++
++        for task in tasks:
++            # Extract info_keys from task (task[0] is info, task[0][0] is info_keys)
++            info_keys = task[0][0] if task and len(task) > 0 else None
++
++            if info_keys not in info_key_groups:
++                info_key_groups[info_keys] = []
++            info_key_groups[info_keys].append(task)
++
++        # Convert to list of groups
++        task_group = list(info_key_groups.values())
++        print(
++            f"[Task Grouping] Grouped {len(tasks)} tasks into {len(task_group)} groups by info_keys"
++        )
++
++        # Update in_datas to reflect the actual group sizes
++        # Each group gets one entry with (group_size, original_data)
++        new_in_datas = []
++        for group_idx, group in enumerate(task_group):
++            group_size = len(group)
++            # Use the first task's data configuration, or keep original if within bounds
++            if group_idx < len(in_datas):
++                original_data = (
++                    in_datas[group_idx][1] if len(in_datas[group_idx]) > 1 else None
++                )
++            else:
++                original_data = (
++                    in_datas[0][1] if in_datas and len(in_datas[0]) > 1 else None
++                )
++            new_in_datas.append((group_size, original_data))
++
++        in_datas = new_in_datas
++        print(
++            f"[in_datas] Updated to {len(in_datas)} entries with group sizes: {[size for size, _ in in_datas]}"
++        )
+     else:
+         task_group = tasks
+-    gpu_map = {el.get(): i + start_idx for i, el in enumerate(pids)}
++
+     # to get index of input data for task_group
+     import numpy as np
+ 
+@@ -208,28 +319,229 @@ def mp_tuner(
+         ref_data_index = np.searchsorted(
+             cumulative, np.arange(len(task_group)), side="right"
+         )
++    else:
++        # For shape_grouped, each group directly maps to its in_data entry
++        ref_data_index = list(range(len(task_group)))
+ 
+-    rets = [
+-        pool.apply_async(
+-            work_group,
+-            args=(
+-                gpu_map,
+-                fast_mode,
+-                err_ratio,
+-                in_datas[ref_data_index[k]],
+-                task_group[k],
+-            ),
+-        )
+-        for k in range(len(task_group))
+-    ]
++    print(f"Distributing {len(task_group)} task groups across {mp_num} GPUs")
++
++    # Helper function to submit tasks to pool
++    def submit_tasks(pool, gpu_map, task_indices):
++        """Submit tasks to the pool and return async results as a dict"""
++        return {
++            k: pool.apply_async(
++                work_group,
++                args=(
++                    gpu_map,
++                    fast_mode,
++                    err_ratio,
++                    in_datas[ref_data_index[k]],
++                    task_group[k],
++                    verbose,
++                ),
++            )
++            for k in task_indices
++        }
++
++    # Create initial pool and submit all tasks
++    pool = mp.Pool(processes=parallel_num)
++    pids = [pool.apply_async(get_pid) for i in range(start_idx, mp_num)]
++    gpu_map = {el.get(): i + start_idx for i, el in enumerate(pids)}
++    rets_dict = submit_tasks(pool, gpu_map, range(len(task_group)))
++    # Convert to list for compatibility with existing code
++    rets = [rets_dict[k] for k in range(len(task_group))]
+     pool.close()
+-    pool.join()
+ 
+-    import itertools
++    result_dict = {}  # Store results by task index
++    failed_tasks = []
++    remaining_tasks = list(enumerate(rets))
+ 
+-    if shape_grouped:
+-        result = list(itertools.chain.from_iterable(el.get() for el in rets))
+-    else:
+-        result = [el.get()[0] for el in rets]
++    # Track start time for each task
++    task_start_times = {k: time.time() for k, _ in remaining_tasks}
++    check_interval = 10  # Check every 10 seconds for responsive polling
++
++    timeout_msg = (
++        f"timeout={timeout}s each" if timeout is not None else "no timeout limit"
++    )
++    print(f"Waiting for {len(remaining_tasks)} tasks to complete ({timeout_msg})...")
++
++    def add_dummy_result(k, results_list):
++        """Helper function to add dummy failed result"""
++        if shape_grouped:
++            task_info = (
++                task_group[k] if isinstance(task_group[k], list) else [task_group[k]]
++            )
++            for task in task_info:
++                info = task[0] if len(task) > 0 else f"task_{k}"
++                results_list.append((info, float("inf"), 1.0))
++        else:
++            task = task_group[k]
++            info = task[0] if len(task) > 0 else f"task_{k}"
++            results_list.append((info, float("inf"), 1.0))
++
++    # Process tasks as they complete
++    pool_restart_needed = False
++    logged_error_types = (
++        set()
++    )  # Track error types that already logged to avoid duplicates
++
++    while remaining_tasks:
++        completed_this_round = []
++        dummy_failed_tasks = []
++        timeout_count_this_round = 0  # Track timeouts in this round
++
++        for k, async_result in remaining_tasks:
++            try:
++                # Calculate appropriate timeout based on task's remaining time
++                if timeout is not None:
++                    elapsed = time.time() - task_start_times[k]
++                    remaining_time = timeout - elapsed
++                    # Use the smaller of check_interval and remaining_time, but at least 1 second
++                    actual_timeout = max(1, min(check_interval, remaining_time))
++                else:
++                    # No timeout set, use default check_interval
++                    actual_timeout = check_interval
++
++                # Non-blocking check with dynamic timeout
++                task_result = async_result.get(timeout=actual_timeout)
++
++                # Task completed successfully
++                result_dict[k] = task_result
++                completed_this_round.append((k, async_result))
++                elapsed = time.time() - task_start_times[k]
++                if verbose:
++                    print(
++                        f"[Done] Task {k}/{len(rets)-1} completed in {elapsed:.1f}s ({len(result_dict)}/{len(rets)} done)"
++                    )
++
++            except MPTimeoutError:
++                # Check if this specific task has exceeded its timeout (only if timeout is set)
++                if timeout is not None:
++                    elapsed = time.time() - task_start_times[k]
++
++                    if elapsed > timeout:
++                        timeout_count_this_round += 1
++
++                        error_msg = f"[!] Task {k} timed out after {elapsed:.1f}s (limit: {timeout}s) - likely GPU hang or infinite loop"
++                        print(error_msg)
++                        failed_tasks.append((k, "timeout"))
++
++                        # Add dummy result
++                        dummy_results = []
++                        add_dummy_result(k, dummy_results)
++                        result_dict[k] = (
++                            dummy_results if shape_grouped else [dummy_results[0]]
++                        )
++                        completed_this_round.append((k, async_result))
++
++                        # Trigger pool restart for timeout (similar to crash)
++                        pool_restart_needed = True
++
++                        # If mp_num tasks timed out, all GPUs are likely stuck - restart immediately
++                        if timeout_count_this_round >= mp_num:
++                            print(
++                                f"\n[!] {timeout_count_this_round} tasks timed out (all {mp_num} GPUs likely stuck)"
++                            )
++                            print("[!] Triggering immediate pool restart...\n")
++                            break
++
++            except Exception as e:
++                # Check if it's a process crash (segfault, memory fault, etc.)
++                error_type = type(e).__name__
++
++                # Special handling for KeyError (PID mapping issue)
++                is_mapping_error = error_type == "KeyError"
++
++                if is_mapping_error:
++                    error_msg = f"[Mapping Error] Task {k} - Process PID not in GPU map (triggering pool restart): {error_type} - {e}"
++                    dummy_failed_tasks.append((k, "mapping error"))
++                    # pool_restart_needed = True
++                else:
++                    error_msg = f"[Failed] Task {k} failed with {error_type}: {e}"
++                    # pool_restart_needed = True
++
++                # Only log error once per error type
++                if error_type not in logged_error_types:
++                    logger.error(error_msg)
++                    logged_error_types.add(error_type)
++
++        #
++        # Remove completed tasks from remaining list
++        for item in completed_this_round:
++            remaining_tasks.remove(item)
++
++        # If pool restart needed due to crash, restart pool and resubmit remaining tasks
++        if pool_restart_needed and remaining_tasks:
++            if verbose:
++                print(f"\n{'='*60}")
++                print("? Pool restart needed due to crash. Restarting pool...")
++                print(f"Remaining tasks: {len(remaining_tasks)}")
++                print(f"{'='*60}\n")
++
++            # Terminate old pool
++            try:
++                pool.terminate()
++                pool.join()
++            except Exception as e:
++                print(f"Warning: Error during pool termination: {e}")
++            # Create new pool
++            pool = mp.Pool(processes=parallel_num)
++
++            # Recreate gpu_map for new processes (new PIDs)
++            pids = [pool.apply_async(get_pid) for i in range(start_idx, mp_num)]
++            gpu_map = {el.get(): i + start_idx for i, el in enumerate(pids)}
++
++            # Resubmit remaining tasks
++            remaining_task_indices = [k for k, _ in remaining_tasks]
++            new_rets_dict = submit_tasks(pool, gpu_map, remaining_task_indices)
++            pool.close()
++
++            # Update remaining_tasks with new async results
++            remaining_tasks = [(k, new_rets_dict[k]) for k in remaining_task_indices]
++            # Reset start times for resubmitted tasks
++            for k in remaining_task_indices:
++                task_start_times[k] = time.time()
++
++            # Reset pool restart flag
++            pool_restart_needed = False
++            print(
++                f"Pool restarted. Continuing with {len(remaining_tasks)} remaining tasks...\n"
++            )
++
++        # Small sleep to avoid busy waiting
++        if remaining_tasks:
++            time.sleep(1)
++
++    # Reconstruct results in original task order
++    result = []
++    for k in range(len(rets)):
++        task_result = result_dict[k]
++        if shape_grouped:
++            result.extend(task_result)
++        else:
++            result.append(task_result[0])
++
++    # Clean up the pool
++    try:
++        pool.terminate()
++        pool.join()
++    except Exception as e:
++        print(f"Warning: Error during pool cleanup: {e}")
++
++    # Print summary
++    if failed_tasks:
++        timeout_count = sum(1 for _, reason in failed_tasks if reason == "timeout")
++        crash_count = len(failed_tasks) - timeout_count
++        summary = (
++            f"\n{'='*60}\n"
++            f"Tuning Summary:\n"
++            f"  Total tasks: {len(rets)}\n"
++            f"  Successful: {len(rets) - len(failed_tasks)}\n"
++            f"  Failed: {len(failed_tasks)}\n"
++            f"    - Timeouts (GPU hang): {timeout_count}\n"
++            f"    - Crashes (memory fault): {crash_count}\n"
++            f"{'='*60}"
++        )
++        logger.warning(summary)
+ 
+     return result
+diff --git a/csrc/ck_batched_gemm_a8w8/batched_gemm_a8w8_tune.py b/csrc/ck_batched_gemm_a8w8/batched_gemm_a8w8_tune.py
+index 1a70e0772b..c5eaefdcdd 100644
+--- a/csrc/ck_batched_gemm_a8w8/batched_gemm_a8w8_tune.py
++++ b/csrc/ck_batched_gemm_a8w8/batched_gemm_a8w8_tune.py
+@@ -58,7 +58,7 @@ def generate_data(b, m, n, k, device="cuda"):
+ 
+ class BatchedGemma8W8Tuner(GemmCommonTuner):
+     ARG_DEFAULTS = {
+-        "verbose": False,
++        **GemmCommonTuner.ARG_DEFAULTS,
+         "tune_file": f"{AITER_CONFIG_A8W8_BATCHED_GEMM}",
+         "untune_file": "aiter/configs/a8w8_untuned_batched_gemm.csv",
+         "errRatio": 0.05,
+@@ -147,7 +147,10 @@ def tune(
+                                 i,
+                                 splitK,
+                             ),  # [0, 1, 2, 3, 4] is index of paramters for kernel_instance_test in generate_data
+-                            {},
++                            {
++                                "num_warmup": args.warmup,
++                                "num_iters": args.iters,
++                            },
+                             run_torch,
+                             ([0, 1, 2, 3],),
+                             {},
+@@ -162,7 +165,16 @@ def tune(
+         ret = []
+         if task:
+             shape_grouped = False
+-            ret = mp_tuner(task, tasks_data, mp_num, False, shape_grouped, errRatio)
++            ret = mp_tuner(
++                task,
++                tasks_data,
++                mp_num,
++                False,
++                shape_grouped,
++                errRatio,
++                timeout=args.timeout,
++                verbose=args.verbose,
++            )
+ 
+         return ret
+ 
+diff --git a/csrc/ck_batched_gemm_bf16/batched_gemm_bf16_tune.py b/csrc/ck_batched_gemm_bf16/batched_gemm_bf16_tune.py
+index dfd8aa65b9..217a9fb2a9 100644
+--- a/csrc/ck_batched_gemm_bf16/batched_gemm_bf16_tune.py
++++ b/csrc/ck_batched_gemm_bf16/batched_gemm_bf16_tune.py
+@@ -40,7 +40,7 @@ def generate_data(b, m, n, k, device="cuda"):
+ 
+ class BatchedGemmBf16Tuner(GemmCommonTuner):
+     ARG_DEFAULTS = {
+-        "verbose": False,
++        **GemmCommonTuner.ARG_DEFAULTS,
+         "tune_file": f"{AITER_CONFIG_BF16_BATCHED_GEMM}",
+         "untune_file": "aiter/configs/bf16_untuned_batched_gemm.csv",
+         "errRatio": 0.05,
+@@ -126,7 +126,10 @@ def tune(
+                                 i,
+                                 splitK,
+                             ),  # [0, 1, 2] is index of paramters for run_batched_gemm in generate_data
+-                            {},
++                            {
++                                "num_warmup": args.warmup,
++                                "num_iters": args.iters,
++                            },
+                             run_torch,
+                             ([0, 1],),
+                             {},
+@@ -141,7 +144,16 @@ def tune(
+ 
+         ret = []
+         if task:
+-            ret = mp_tuner(task, tasks_data, mp_num, False, shape_grouped, errRatio)
++            ret = mp_tuner(
++                task,
++                tasks_data,
++                mp_num,
++                False,
++                shape_grouped,
++                errRatio,
++                timeout=args.timeout,
++                verbose=args.verbose,
++            )
+ 
+         return ret
+ 
+diff --git a/csrc/ck_gemm_a4w4_blockscale/gemm_a4w4_blockscale_tune.py b/csrc/ck_gemm_a4w4_blockscale/gemm_a4w4_blockscale_tune.py
+index 4ca15dfe02..9d4aed1c4a 100755
+--- a/csrc/ck_gemm_a4w4_blockscale/gemm_a4w4_blockscale_tune.py
++++ b/csrc/ck_gemm_a4w4_blockscale/gemm_a4w4_blockscale_tune.py
+@@ -296,7 +296,16 @@ def tune(
+ 
+         ret = []
+         if task:
+-            ret = mp_tuner(task, tasks_in_data, mp_num, False, shape_grouped, errRatio)
++            ret = mp_tuner(
++                task,
++                tasks_in_data,
++                mp_num,
++                False,
++                shape_grouped,
++                errRatio,
++                timeout=args.timeout,
++                verbose=args.verbose,
++            )
+         return ret
+ 
+ 
+diff --git a/csrc/ck_gemm_a8w8/gemm_a8w8_tune.py b/csrc/ck_gemm_a8w8/gemm_a8w8_tune.py
+index f15c287b24..67841dce1b 100644
+--- a/csrc/ck_gemm_a8w8/gemm_a8w8_tune.py
++++ b/csrc/ck_gemm_a8w8/gemm_a8w8_tune.py
+@@ -80,7 +80,7 @@ def run_gemm_a8w8(x, weight, x_scale, w_scale, out, kernelId, splitK):
+ 
+ class GemmA8W8Tuner(GemmCommonTuner):
+     ARG_DEFAULTS = {
+-        "verbose": False,
++        **GemmCommonTuner.ARG_DEFAULTS,
+         "tune_file": f"{AITER_CONFIG_GEMM_A8W8}",
+         "untune_file": "aiter/configs/a8w8_untuned_gemm.csv",
+         "errRatio": 0.05,
+@@ -148,7 +148,10 @@ def tune(
+                             (M, N, K, seed),
+                             run_gemm_a8w8,
+                             (gemm_a8w8_data_idx, i, splitK),
+-                            {},
++                            {
++                                "num_warmup": args.warmup,
++                                "num_iters": args.iters,
++                            },
+                             gemm_a8w8_ref,
+                             (ref_data_idx,),
+                             {},
+@@ -163,7 +166,16 @@ def tune(
+ 
+         ret = []
+         if task:
+-            ret = mp_tuner(task, tasks_data, mp_num, False, shape_grouped, errRatio)
++            ret = mp_tuner(
++                task,
++                tasks_data,
++                mp_num,
++                False,
++                shape_grouped,
++                errRatio,
++                timeout=args.timeout,
++                verbose=args.verbose,
++            )
+         return ret
+ 
+ 
+diff --git a/csrc/ck_gemm_a8w8_blockscale/gemm_a8w8_blockscale_tune.py b/csrc/ck_gemm_a8w8_blockscale/gemm_a8w8_blockscale_tune.py
+index d05034803d..ebccfe1a4a 100755
+--- a/csrc/ck_gemm_a8w8_blockscale/gemm_a8w8_blockscale_tune.py
++++ b/csrc/ck_gemm_a8w8_blockscale/gemm_a8w8_blockscale_tune.py
+@@ -73,7 +73,7 @@ def generate_data(m, n, k, seed, device="cuda"):
+ 
+ class GemmA8W8BlockScaleTuner(GemmCommonTuner):
+     ARG_DEFAULTS = {
+-        "verbose": False,
++        **GemmCommonTuner.ARG_DEFAULTS,
+         "tune_file": f"{AITER_CONFIG_GEMM_A8W8_BLOCKSCALE}",
+         "untune_file": "aiter/configs/a8w8_blockscale_untuned_gemm.csv",
+         "errRatio": 0.05,
+@@ -144,7 +144,10 @@ def tune(
+                                 i,
+                                 splitK,
+                             ),
+-                            {},
++                            {
++                                "num_warmup": args.warmup,
++                                "num_iters": args.iters,
++                            },
+                             run_torch,
+                             (ref_data_idx, None, dtypes.bf16),
+                             {},
+@@ -158,7 +161,16 @@ def tune(
+                 tasks_data.append((total_kernel_nums, ()))
+         ret = []
+         if task:
+-            ret = mp_tuner(task, tasks_data, mp_num, False, shape_grouped, errRatio)
++            ret = mp_tuner(
++                task,
++                tasks_data,
++                mp_num,
++                False,
++                shape_grouped,
++                errRatio,
++                timeout=args.timeout,
++                verbose=args.verbose,
++            )
+         return ret
+ 
+ 
+diff --git a/csrc/ck_gemm_a8w8_blockscale_bpreshuffle/gemm_a8w8_blockscale_bpreshuffle_tune.py b/csrc/ck_gemm_a8w8_blockscale_bpreshuffle/gemm_a8w8_blockscale_bpreshuffle_tune.py
+index 045077250f..77a6c95b8c 100755
+--- a/csrc/ck_gemm_a8w8_blockscale_bpreshuffle/gemm_a8w8_blockscale_bpreshuffle_tune.py
++++ b/csrc/ck_gemm_a8w8_blockscale_bpreshuffle/gemm_a8w8_blockscale_bpreshuffle_tune.py
+@@ -128,7 +128,10 @@ def get_ck_tasks(self, info_keys, useSplitK, seed):
+                             i,
+                             splitK,
+                         ),
+-                        {},
++                        {
++                            "num_warmup": args.warmup,
++                            "num_iters": args.iters,
++                        },
+                         Gemma8W8BlockScaleBPreShuffleTuner.run_torch,
+                         (ref_data_idx, None, dtypes.bf16),
+                         {},
+@@ -163,7 +166,15 @@ def tune(self, untunedf, tunedf, args):
+             tasks_data.append((total_kernel_nums, ()))
+         ret = []
+         if task:
+-            ret = mp_tuner(task, tasks_data, mp_num, False, shape_grouped)
++            ret = mp_tuner(
++                task,
++                tasks_data,
++                mp_num,
++                False,
++                shape_grouped,
++                timeout=args.timeout,
++                verbose=args.verbose,
++            )
+         return ret
+ 
+ 
+diff --git a/csrc/ck_gemm_a8w8_bpreshuffle/gemm_a8w8_bpreshuffle_tune.py b/csrc/ck_gemm_a8w8_bpreshuffle/gemm_a8w8_bpreshuffle_tune.py
+index 7c3f04ec41..9c39e788ad 100755
+--- a/csrc/ck_gemm_a8w8_bpreshuffle/gemm_a8w8_bpreshuffle_tune.py
++++ b/csrc/ck_gemm_a8w8_bpreshuffle/gemm_a8w8_bpreshuffle_tune.py
+@@ -276,7 +276,10 @@ def get_cktile_gemm_a8w8_bpreshuffle_tune_task(
+                             i,
+                             splitK,
+                         ),
+-                        {},
++                        {
++                            "num_warmup": args.warmup,
++                            "num_iters": args.iters,
++                        },
+                         run_torch,
+                         (
+                             ref_data_idx,
+@@ -333,7 +336,10 @@ def get_ck_gemm_a8w8_bpreshuffle_tune_task(
+                             i,
+                             splitK,
+                         ),
+-                        {},
++                        {
++                            "num_warmup": args.warmup,
++                            "num_iters": args.iters,
++                        },
+                         run_torch,
+                         (
+                             ref_data_idx,
+@@ -395,7 +401,16 @@ def tune(
+             tasks_data.append((total_kernel_nums, ()))
+         ret = []
+         if task:
+-            ret = mp_tuner(task, tasks_data, mp_num, False, shape_grouped, errRatio)
++            ret = mp_tuner(
++                task,
++                tasks_data,
++                mp_num,
++                False,
++                shape_grouped,
++                errRatio,
++                timeout=args.timeout,
++                verbose=args.verbose,
++            )
+ 
+         return ret
+ 
+@@ -456,6 +471,7 @@ def result_to_df(self, results):
+     tuner = GemmA8W8BpreShuffleTuner(
+         "GemmA8W8BpreShuffleTuner",
+         key=key,
++        resultList=resultList,
+         description="gen API for gemm a8w8 bpreshuffle kernel",
+     )
+ 
+diff --git a/gradlib/README.md b/gradlib/README.md
+index 360da9f1b6..e17a27cf2f 100644
+--- a/gradlib/README.md
++++ b/gradlib/README.md
+@@ -40,4 +40,71 @@ By gradlib, we can confirm the parameter of GEMMs with best performance in the s
+    ` 
+     python3 gradlib/gradlib/gemm_tuner.py --tuned_file aiter/configs/bf16_tuned_gemm.csv  --input_file aiter/configs/bf16_untuned_gemm.csv
+    `
++   more features:
++      #### `-o2, --profile_file`
++      - **Type**: String
++      - **Default**: `""` (empty string)
++      - **Required**: No
++      - **Description**: Optional output file to store **all** tuning results (not just the best ones). Useful for profiling and analyzing all kernel candidates.
++      
++      **Example**:
++      ```bash
++      --profile_file /path/to/all_results.csv
++      ```  
++      #### `--mp`
++      - **Type**: Integer
++      - **Default**: `torch.cuda.device_count()` (number of available GPUs)
++      - **Description**: Number of parallel processes to use for tuning across multiple GPUs. Each process runs on a separate GPU.
++      
++      **Examples**:
++      ```bash
++      --mp 1           # Single GPU tuning
++      ```
++      ### Tuning Configuration
++      
++      #### `--errRatio`
++      - **Type**: Float
++      - **Default**: `0.05` (5%)
++      - **Description**: Tolerable error ratio threshold. Only kernels with error ratios below this threshold will be considered valid candidates.
++      
++      **Example**:
++      ```bash
++      --errRatio 0.01  # Stricter tolerance (1% error)
++      --errRatio 0.10  # More lenient tolerance (10% error)
++      ```
++      
++      #### `--sort`
++      - **Type**: Flag (boolean)
++      - **Default**: `False`
++      - **Description**: Sort the output file according to the key columns (e.g., `cu_num`, `N`, `M`, `K` for GEMM). Useful for maintaining consistent ordering in result files.
++      
++      **Example**:
++      ```bash
++      --sort          # Sort results by keys
++      ```
++      
++      #### `--all`
++      - **Type**: Flag (boolean)
++      - **Default**: `False`
++      - **Description**: Retune all shapes based on file relationship:
++        - If `tune_file` == `untune_file`: Retune all shapes in the tune file
++        - If `tune_file` != `untune_file`: Retune shapes that exist in untuned file
++      
++      **Example**:
++      ```bash
++      --all           # Retune all shapes
++      ```
++      
++      ### Debugging and Verbose Output
++      
++      #### `-v, --verbose`
++      - **Type**: Flag (boolean)
++      - **Default**: `False`
++      - **Description**: Enable verbose output with detailed logging information, including skipped shapes, tuning progress, and detailed error messages.
++      
++      **Example**:
++      ```bash
++      --verbose       # Enable verbose mode
++      -v              # Short form
++      ```
+ 3. then run your test as normal~
+diff --git a/gradlib/gradlib/GemmTuner.py b/gradlib/gradlib/GemmTuner.py
+index 2243ab6887..d057fe4e14 100644
+--- a/gradlib/gradlib/GemmTuner.py
++++ b/gradlib/gradlib/GemmTuner.py
+@@ -178,6 +178,8 @@ def __init__(
+         profile_file="",
+         num_warmup=10,
+         libtype=["all"],
++        timeout=None,
++        verbose=False,
+         # splitK=None,
+     ):
+         torch.cuda.empty_cache()
+@@ -212,6 +214,8 @@ def __init__(
+         # self.outbpe = self.ref.element_size()
+         self.asm_map = {}
+         self.has_bias = bias
++        self.timeout = timeout
++        self.verbose = verbose
+         self.num_warmup = num_warmup
+         self.libtype = libtype
+ 
+@@ -405,7 +409,9 @@ def run_asm_triton_sols(self):
+                 (),
+             )
+         ]
+-        ret = mp_tuner(tasks, in_data, self.mp, False)
++        ret = mp_tuner(
++            tasks, in_data, self.mp, False, timeout=self.timeout, verbose=self.verbose
++        )
+         return ret
+ 
+     def triton_gemm_all_sols(self):
+@@ -527,7 +533,14 @@ def hipb_time_all_sols(self, fast_mode=0, top_sols=0):
+                 (),
+             )
+         ]
+-        ret = mp_tuner(task, in_data, self.mp, fast_mode == 1)
++        ret = mp_tuner(
++            task,
++            in_data,
++            self.mp,
++            fast_mode == 1,
++            timeout=self.timeout,
++            verbose=self.verbose,
++        )
+         if fast_mode == 1:
+             self.hipb_gtimedf = self.save_topn_result(ret, fast_mode, "hipblaslt")
+             return []
+@@ -768,6 +781,7 @@ def pre_process(self, args):
+                         )
+             self.tunedf = self.get_tuned_gemm_list(self.get_out_file(args.tune_file))
+             self.untunedf["cu_num"] = self.get_cu_num()
++            self.untunedf = self.untunedf[self.keys]
+             untunedf_cols = self.untunedf.columns
+             if len(self.tunedf) != 0:
+                 mask = self.untunedf.apply(tuple, axis=1).isin(
+@@ -775,8 +789,9 @@ def pre_process(self, args):
+                 )
+                 if args.verbose:
+                     logger.info("skiped tuned shapes:")
++                    print(self.untunedf[mask])
+                 self.untunedf = self.untunedf[~mask]
+-            self.untunedf.drop_duplicates().reset_index(drop=True)
++            self.untunedf = self.untunedf.drop_duplicates().reset_index(drop=True)
+             print("untunedf is ", self.untunedf)
+ 
+     def add_gemm(
+@@ -849,6 +864,8 @@ def tune(self, untunedf, tunedf, args):
+                 profile_file=args.profile_file,
+                 num_warmup=self.num_warmup,
+                 libtype=args.libtype,
++                timeout=args.timeout,
++                verbose=args.verbose,
+             )
+ 
+             ret.extend(gemmobj.run_solutions())
+diff --git a/hsa/gfx942/fmoe_2stages/tune.py b/hsa/gfx942/fmoe_2stages/tune.py
+index 711f29f301..f2a4014d8f 100644
+--- a/hsa/gfx942/fmoe_2stages/tune.py
++++ b/hsa/gfx942/fmoe_2stages/tune.py
+@@ -44,6 +44,7 @@
+ class FmoeTuner(TunerCommon):
+ 
+     ARG_DEFAULTS = {
++        **TunerCommon.ARG_DEFAULTS,
+         "verbose": False,
+         "tune_file": f"{AITER_CONFIG_FMOE}",
+         "untune_file": "aiter/configs/untuned_fmoe.csv",
+@@ -1222,8 +1223,8 @@ def calculate(self, results, bpes=(1, 1, 2)):
+             use_g1u1,
+             doweight_stage1,
+         ) = key
+-        if us == self.INVALID_TIME:
+-            return -1, -1
++        if us == self.INVALID_TIME or us == self.INF_TIME:
++            return 0, 0
+         flop = 0
+         data_bytes = 0
+         stage = ""
+@@ -1403,6 +1404,7 @@ def gen_1stage_asm_task(self, key):
+                         True,
+                     )
+                 )
++
+         return task_1stage
+ 
+     def gen_2stages_asm1_task(self, key, blockMs):
+@@ -1662,13 +1664,13 @@ def tune(
+     ):
+         mp_num = args.mp
+         blockMs = [16, 32, 64, 128]
+-        args = self.keys
+-        print(untunedf[args])
++        keys = self.keys
++        print(untunedf[keys])
+         tasks = []
+         tasks_ck = []
+         task_1stage = []
+         in_data = []
+-        for line in untunedf[args].values:
++        for line in untunedf[keys].values:
+             (
+                 cu_num,
+                 token,
+@@ -1727,7 +1729,13 @@ def tune(
+         if len(tasks) + len(tasks_ck) + len(task_1stage) > 0:
+             ### shape_grouped should be False as multiple stages
+             rets = mp_tuner(
+-                tasks + tasks_ck + task_1stage, in_data, mp_num, True, False
++                tasks + tasks_ck + task_1stage,
++                in_data,
++                mp_num,
++                True,
++                False,
++                timeout=args.timeout,
++                verbose=args.verbose,
+             )
+         if not rets:
+             print("no shape to tune or no solution found")
+@@ -1819,7 +1827,9 @@ def post_process(self, results, args, topk=-1, fast_mode=False):
+ 
+             ## remove invalid candidate
+             profileDF = profileDF[
+-                (profileDF["err"] < args.errRatio) & (profileDF["us"] != float("-inf"))
++                (profileDF["err"] < args.errRatio)
++                & (profileDF["us"] != float("-inf"))
++                & (profileDF["us"] != -1)
+             ]
+             profileDF = profileDF.sort_values("us").drop_duplicates(
+                 ["stage", "block_m"], keep="first"
+diff --git a/hsa/gfx950/fmoe_2stages/tune.py b/hsa/gfx950/fmoe_2stages/tune.py
+index 560dbebc2e..aa5b417007 100644
+--- a/hsa/gfx950/fmoe_2stages/tune.py
++++ b/hsa/gfx950/fmoe_2stages/tune.py
+@@ -139,7 +139,13 @@ def tune(
+         if len(tasks) + len(tasks_ck) + len(task_1stage) > 0:
+             ### shape_grouped should be False as multiple stages
+             rets = mp_tuner(
+-                tasks + tasks_ck + task_1stage, in_data, mp_num, True, False
++                tasks + tasks_ck + task_1stage,
++                in_data,
++                mp_num,
++                True,
++                False,
++                timeout=args.timeout,
++                verbose=args.verbose,
+             )
+         if not rets:
+             print("no shape to tune or no solution found")

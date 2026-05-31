@@ -1,0 +1,2003 @@
+diff --git a/example/ck_tile/01_fmha/README.md b/example/ck_tile/01_fmha/README.md
+index 869a635bf8a..5a428e4d419 100644
+--- a/example/ck_tile/01_fmha/README.md
++++ b/example/ck_tile/01_fmha/README.md
+@@ -37,10 +37,16 @@ args:
+         -s_k    seqlen_k, 0 means equal to s (default:0)
+           -d    head dim for q, k (default:128)
+         -d_v    head dim for v, 0 means equal to d (default:0)
+-      -scale    scale factor. 0 means equal to 1/sqrt(hdim) (default:0)
+-  -descale_q    scale factor for fp8 quantization (default:1)
+-  -descale_k    scale factor for fp8 quantization (default:1)
+-  -descale_v    scale factor for fp8 quantization (default:1)
++    -scale_s    scale factor of S. 0 means equal to 1/sqrt(hdim). (default:0)
++                 note when squant=1, this value will be modified by range_q/k
++    -range_q    per-tensor quantization range of q. used if squant=1. (default:2)
++    -range_k    per-tensor quantization range of k. used if squant=1. (default:2)
++    -range_v    per-tensor quantization range of v. used if squant=1. (default:2)
++    -range_p    per-tensor quantization range of p [e^(s-m)]. used if squant=1. (default:1)
++    -range_o    per-tensor quantization range of o (p*v). used if squant=1. (default:2)
++     -squant    if using static quantization fusion or not. 0: original flow(not prefered) (default:0)
++                 1: apply scale_p and scale_o with respect to P and O. calculate scale_s, scale_p,
++                 scale_o according to range_q, range_k, range_v, range_p, range_o
+       -iperm    permute input (default:1)
+                  if true, will be b*h*s*d, else b*s*h*d
+       -operm    permute output (default:1)
+@@ -50,15 +56,14 @@ args:
+                  't', top-left causal mask, 'b', bottom-r causal mask
+                  't:l,r', top-left sliding window attn(swa) with FA style left right size
+                  'b:l,r', bottom-r sliding window attn(swa) with FA style left right size
+-                 'xt:window_size', xformer style masking from top-left, window_size negative is causal, possitive is swa
+-                 'xb:window_size', xformer style masking from bottom-r, window_size negative is causal, possitive is swa
++                 'xt:window_size', xformer style masking from top-left, window_size negative is causal, positive is swa
++                 'xb:window_size', xformer style masking from bottom-r, window_size negative is causal, positive is swa
+                  'g:y,x', generic attention mask coordinate with y/x size (only debug purpose for now)
+ 
+     -vlayout    r for row-major(seqlen*hdim), c for col-major(hdim*seqlen) (default:r)
+         -lse    0 not store lse, 1 store lse (default:0)
+       -kname    if set to 1 will print kernel name (default:0)
+-       -init    init method. 0:random int, 1:random float, 2:trig float (default:1)
+-       -seed    random seed used for initializing input tensors. 0 for non-deterministic seed (default:11939)
++       -init    init method. 0:random int, 1:random float, 2:trig float, 3:quantization (default:1)
+ ```
+ Example: `./bin/tile_example_fmha_fwd -b=1 -h=16 -s=16384 -d=128` will run a fmha case with batch=1, nhead=16, sequence length=16384, hdim=128, fp16 case.
+ 
+@@ -107,5 +112,6 @@ Note FA use bottom-right by default to express swa case, here we require you exp
+ TBD
+ 
+ ## FP8 experimental support
+-As described in [this blog](https://blog.hippoml.com/8bit-hippoattention-up-to-3x-faster-compared-to-flashattentionv2-8f9def90b482), we have an experimental support for fp8 fmha kernels, you can evaluate the performance by setting the arg `-prec=fp8` to the `tile_example_fmha_fwd`, on a gfx940/941/942 machine and ROCm 6.0+. Currently if you not explicitly setting `-v=0`(which will disable CPU verification), it will printout an error as much as `0.05`. We are still WIP to tune the kernel performance as well as the precision, so stay tuned for the updated performance(pipeline)
+-Currently we only support `-vlayout=c` for fp8, which is `hdim*seqlen` for V matrix. row major for V matrix support will come later.
++As described in [this blog](https://blog.hippoml.com/8bit-hippoattention-up-to-3x-faster-compared-to-flashattentionv2-8f9def90b482), we have an experimental support for fp8 fmha kernels, you can evaluate the performance by setting the arg `-prec=fp8` to the `tile_example_fmha_fwd`, on a gfx940/941/942 machine and ROCm 6.0+.
++
++Currently we only support `-vlayout=c`( `hdim*seqlen` for V matrix) and `-squant=1`(static quantization) with `hdim=128` for fp8 now. Full feature support will come later.
+diff --git a/example/ck_tile/01_fmha/fmha_fwd.cpp b/example/ck_tile/01_fmha/fmha_fwd.cpp
+index 944041c2557..8ca4ff93377 100644
+--- a/example/ck_tile/01_fmha/fmha_fwd.cpp
++++ b/example/ck_tile/01_fmha/fmha_fwd.cpp
+@@ -51,10 +51,21 @@ auto create_args(int argc, char* argv[])
+         .insert("s_k", "0", "seqlen_k, 0 means equal to s")
+         .insert("d", "128", "head dim for q, k")
+         .insert("d_v", "0", "head dim for v, 0 means equal to d")
+-        .insert("scale", "0", "scale factor. 0 means equal to 1/sqrt(hdim)")
+-        .insert("descale_q", "1", "scale factor for fp8 quantization")
+-        .insert("descale_k", "1", "scale factor for fp8 quantization")
+-        .insert("descale_v", "1", "scale factor for fp8 quantization")
++        .insert("scale_s",
++                "0",
++                "scale factor of S. 0 means equal to 1/sqrt(hdim).\n"
++                "note when squant=1, this value will be modified by range_q/k")
++        .insert("range_q", "16", "per-tensor quantization range of q. used if squant=1.")
++        .insert("range_k", "16", "per-tensor quantization range of k. used if squant=1.")
++        .insert("range_v", "16", "per-tensor quantization range of v. used if squant=1.")
++        .insert("range_p", "1", "per-tensor quantization range of p [e^(s-m)]. used if squant=1.")
++        .insert("range_o", "16", "per-tensor quantization range of o (p*v). used if squant=1.")
++        .insert(
++            "squant",
++            "0",
++            "if using static quantization fusion or not. 0: original flow(not prefered)\n"
++            "1: apply scale_p and scale_o with respect to P and O. calculate scale_s, scale_p,\n"
++            "scale_o according to range_q, range_k, range_v, range_p, range_o")
+         .insert("iperm",
+                 "1",
+                 "permute input\n"
+@@ -69,15 +80,16 @@ auto create_args(int argc, char* argv[])
+                 "'t:l,r', top-left sliding window attn(swa) with FA style left right size\n"
+                 "'b:l,r', bottom-r sliding window attn(swa) with FA style left right size\n"
+                 "'xt:window_size', xformer style masking from top-left, window_size negative is "
+-                "causal, possitive is swa\n"
++                "causal, positive is swa\n"
+                 "'xb:window_size', xformer style masking from bottom-r, window_size negative is "
+-                "causal, possitive is swa\n"
++                "causal, positive is swa\n"
+                 "'g:y,x', generic attention mask coordinate with y/x size (only debug purpose for "
+-                "now)\n")
++                "now)")
+         .insert("vlayout", "r", "r for row-major(seqlen*hdim), c for col-major(hdim*seqlen)")
+         .insert("lse", "0", "0 not store lse, 1 store lse")
+         .insert("kname", "0", "if set to 1 will print kernel name")
+-        .insert("init", "1", "init method. 0:random int, 1:random float, 2:trig float")
++        .insert(
++            "init", "1", "init method. 0:random int, 1:random float, 2:trig float, 3:quantization")
+         .insert("seed",
+                 "11939",
+                 "random seed used for initializing input tensors. 0 for "
+@@ -115,6 +127,23 @@ auto get_elimit<ck_tile::bf16_t>(int init_method)
+     }
+ }
+ 
++template <>
++auto get_elimit<ck_tile::fp8_t>(int init_method)
++{
++    if(init_method == 0)
++    {
++        unsigned max_rounding_point_distance = 0;
++        double atol                          = 2e-3;
++        return ck_tile::make_tuple(max_rounding_point_distance, atol);
++    }
++    else
++    {
++        unsigned max_rounding_point_distance = 1;
++        double atol                          = 0.0625;
++        return ck_tile::make_tuple(max_rounding_point_distance, atol);
++    }
++}
++
+ template <typename DataType>
+ bool run(const ck_tile::ArgParser& arg_parser)
+ {
+@@ -145,13 +174,38 @@ bool run(const ck_tile::ArgParser& arg_parser)
+     bool i_perm = arg_parser.get_bool("iperm"); // if true, will be batch * nhead * seqlen * hdim
+     bool o_perm = arg_parser.get_bool("operm"); // if false, will be batch * seqlen * nhead * hdim
+ 
+-    float scale = arg_parser.get_float("scale");
+-    if(scale == .0f)
+-        scale = 1.0 / ck_tile::sqrt(static_cast<float>(hdim_q)); // TODO: q ? v ?
++    float scale_s = arg_parser.get_float("scale_s");
++    if(scale_s == .0f)
++        scale_s = 1.0 / ck_tile::sqrt(static_cast<float>(hdim_q)); // TODO: q ? v ?
++
++    bool squant = arg_parser.get_bool("squant");
++    if constexpr(!std::is_same_v<DataType, ck_tile::fp8_t>)
++    {
++        if(squant)
++        {
++            std::cerr << "static quantization only support fp8 for now" << std::endl;
++            return false;
++        }
++    }
++
++    float range_q = arg_parser.get_float("range_q");
++    float range_k = arg_parser.get_float("range_k");
++    float range_v = arg_parser.get_float("range_v");
++    float range_p = arg_parser.get_float("range_p");
++    float range_o = arg_parser.get_float("range_o");
++
++    float dtype_max = ck_tile::type_convert<float>(ck_tile::numeric<DataType>::max());
+ 
+-    float descale_q = arg_parser.get_float("descale_q");
+-    float descale_k = arg_parser.get_float("descale_k");
+-    float descale_v = arg_parser.get_float("descale_v");
++    float scale_p = 1.f;
++    float scale_o = 1.f;
++
++    if(squant)
++    {
++        scale_s = scale_s * (range_q / dtype_max) * (range_k / dtype_max);
++        scale_p = dtype_max / range_p;
++        // scale_p = [max(fp8_t)/range_o] * [range_p/max(fp8_t)] * [range_v/max(fp8_t)]
++        scale_o = range_p * range_v / range_o / dtype_max;
++    }
+ 
+     std::string vlayout = arg_parser.get_str("vlayout");
+     bool use_bias       = arg_parser.get_bool("bias");
+@@ -276,6 +330,17 @@ bool run(const ck_tile::ArgParser& arg_parser)
+         ck_tile::FillTrigValue<VDataType>{}(v_host);
+         ck_tile::FillTrigValue<BiasDataType>{}(bias_host);
+     }
++    else if(init_method == 3) // suitable for fp8 quantization
++    {
++        ck_tile::FillUniformDistribution<QDataType>{-dtype_max, dtype_max, seed}(q_host);
++        ck_tile::FillUniformDistribution<KDataType>{-dtype_max, dtype_max, seed}(k_host);
++        ck_tile::FillUniformDistribution<VDataType>{-dtype_max, dtype_max, seed}(v_host);
++
++        // bias_fp8 = qscale_bias * bias_fp32
++        float qscale_bias = (dtype_max / range_q) * (dtype_max / range_k);
++        // Assume bias is in [-1.f, 1.f] in original fp32
++        ck_tile::FillUniformDistribution<BiasDataType>{-qscale_bias, qscale_bias, seed}(bias_host);
++    }
+ 
+     ck_tile::DeviceMem q_buf(q_host.get_element_space_size_in_bytes());
+     ck_tile::DeviceMem k_buf(k_host.get_element_space_size_in_bytes());
+@@ -307,8 +372,9 @@ bool run(const ck_tile::ArgParser& arg_parser)
+ 
+     std::cout << "[" << prec << "|" << mode << "|" << io_layout(i_perm, o_perm) << "] b:" << batch
+               << ", h:" << nhead << "/" << nhead_k << ", s:" << seqlen_q << "/" << seqlen_k
+-              << ", d:" << hdim_q << "/" << hdim_v << ", scale:" << scale << ", bias:" << use_bias
+-              << ", lse:" << lse << ", mask:" << mask << ", v:" << vlayout << std::flush;
++              << ", d:" << hdim_q << "/" << hdim_v << ", scale_s:" << scale_s
++              << ", bias:" << use_bias << ", lse:" << lse << ", squant:" << squant
++              << ", mask:" << mask << ", v:" << vlayout << std::flush;
+ 
+     auto fmha_traits = fmha_fwd_traits{hdim_q,
+                                        hdim_v,
+@@ -317,8 +383,25 @@ bool run(const ck_tile::ArgParser& arg_parser)
+                                        is_v_rowmajor,
+                                        mask.type,
+                                        use_bias,
+-                                       lse};
+-    auto fmha_args   = [&]() {
++                                       lse,
++                                       squant};
++
++    auto p_compute_element_func = [&]() {
++        if constexpr(std::is_same_v<DataType, ck_tile::fp8_t>)
++            return ck_tile::scales{scale_p};
++        else
++            return ck_tile::identity{};
++    }();
++
++    auto oacc_element_func = [&]() {
++        if constexpr(std::is_same_v<DataType, ck_tile::fp8_t>)
++            return ck_tile::composes(ck_tile::saturates<ck_tile::fp8_t>{},
++                                     ck_tile::scales{scale_o});
++        else
++            return ck_tile::identity{};
++    }();
++
++    auto fmha_args = [&]() {
+         assert(nhead % nhead_k == 0);
+         /// NOTE: we broadcast bias from [1, 1, seqlen_q, seqlen_k] to [batch, nhead, seqlen_q,
+         ///       seqlen_k] in this example, hence both the 'batch_stride_bias' &
+@@ -372,7 +455,9 @@ bool run(const ck_tile::ArgParser& arg_parser)
+                              hdim_v,
+                              nhead,
+                              nhead_k,
+-                             scale,
++                             scale_s,
++                             scale_p,
++                             scale_o,
+                              stride_q,
+                              stride_k,
+                              stride_v,
+@@ -392,9 +477,7 @@ bool run(const ck_tile::ArgParser& arg_parser)
+                              batch_stride_o,
+                              mask.left,
+                              mask.right,
+-                             static_cast<ck_tile::index_t>(mask.type),
+-                             descale_q * descale_k,
+-                             descale_v};
++                             static_cast<ck_tile::index_t>(mask.type)};
+     }();
+ 
+     float ave_time = fmha_fwd(fmha_traits, fmha_args, stream_config);
+@@ -479,7 +562,7 @@ bool run(const ck_tile::ArgParser& arg_parser)
+             s_host_ref,
+             ck_tile::identity{},
+             ck_tile::identity{},
+-            [&](SaccDataType x) { return scale * x; });
++            ck_tile::scales(scale_s));
+ 
+         if(use_bias)
+         {
+@@ -538,16 +621,21 @@ bool run(const ck_tile::ArgParser& arg_parser)
+         if(lse)
+         {
+             ck_tile::reference_batched_softmax<SMPLComputeDataType, SMPLComputeDataType, PDataType>(
+-                s_host_ref, p_host_ref, lse_host_ref);
++                s_host_ref, p_host_ref, p_compute_element_func, lse_host_ref);
+         }
+         else
+         {
+             ck_tile::reference_batched_softmax<SMPLComputeDataType, SMPLComputeDataType, PDataType>(
+-                s_host_ref, p_host_ref);
++                s_host_ref, p_host_ref, p_compute_element_func);
+         }
+ 
+         ck_tile::reference_batched_gemm<PDataType, VDataType, OaccDataType, ODataType>(
+-            p_host_ref, v_host_ref, o_host_ref);
++            p_host_ref,
++            v_host_ref,
++            o_host_ref,
++            ck_tile::identity{},
++            ck_tile::identity{},
++            oacc_element_func);
+ 
+         ck_tile::HostTensor<ODataType> o_host_result({nhead, real_seqlen_q, hdim_v});
+         // clang-format off
+diff --git a/example/ck_tile/01_fmha/fmha_fwd.hpp b/example/ck_tile/01_fmha/fmha_fwd.hpp
+index 8ff13cfe13e..9a82ab6b794 100644
+--- a/example/ck_tile/01_fmha/fmha_fwd.hpp
++++ b/example/ck_tile/01_fmha/fmha_fwd.hpp
+@@ -49,7 +49,7 @@ struct FmhaFwdTypeConfig<ck_tile::fp8_t>
+     using QDataType           = ck_tile::fp8_t;
+     using KDataType           = ck_tile::fp8_t;
+     using VDataType           = ck_tile::fp8_t;
+-    using BiasDataType        = float; // TODO: fix me
++    using BiasDataType        = float;
+     using LSEDataType         = float; // data type for lse(logsumexp L_j = max_j + log(l_j))
+     using SaccDataType        = float; // data type for first gemm accumulation
+     using SMPLComputeDataType = float; // data type for reduction, softmax
+@@ -100,7 +100,9 @@ struct fmha_fwd_args
+     ck_tile::index_t hdim_v;
+     ck_tile::index_t nhead_q;
+     ck_tile::index_t nhead_k;
+-    float scale;
++    float scale_s;
++    float scale_p;
++    float scale_o;
+     ck_tile::index_t stride_q;
+     ck_tile::index_t stride_k;
+     ck_tile::index_t stride_v;
+@@ -121,8 +123,6 @@ struct fmha_fwd_args
+     ck_tile::index_t window_size_left;
+     ck_tile::index_t window_size_right;
+     ck_tile::index_t mask_type;
+-    float descale_qk;
+-    float descale_sv;
+ };
+ 
+ template <typename FmhaKernel>
+@@ -145,7 +145,9 @@ auto fmha_fwd_create_kargs_and_grids(fmha_fwd_args args)
+                                          args.hdim_q,
+                                          args.hdim_v,
+                                          args.nhead_q / args.nhead_k,
+-                                         args.scale,
++                                         args.scale_s,
++                                         args.scale_p,
++                                         args.scale_o,
+                                          args.stride_q,
+                                          args.stride_k,
+                                          args.stride_v,
+@@ -159,9 +161,7 @@ auto fmha_fwd_create_kargs_and_grids(fmha_fwd_args args)
+                                          args.nhead_stride_o,
+                                          args.window_size_left,
+                                          args.window_size_right,
+-                                         args.mask_type,
+-                                         args.descale_qk,
+-                                         args.descale_sv);
++                                         args.mask_type);
+         }
+         else
+         { // create batch mode kernel arguments
+@@ -176,7 +176,9 @@ auto fmha_fwd_create_kargs_and_grids(fmha_fwd_args args)
+                                          args.hdim_q,
+                                          args.hdim_v,
+                                          args.nhead_q / args.nhead_k,
+-                                         args.scale,
++                                         args.scale_s,
++                                         args.scale_p,
++                                         args.scale_o,
+                                          args.stride_q,
+                                          args.stride_k,
+                                          args.stride_v,
+@@ -196,9 +198,7 @@ auto fmha_fwd_create_kargs_and_grids(fmha_fwd_args args)
+                                          args.batch_stride_o,
+                                          args.window_size_left,
+                                          args.window_size_right,
+-                                         args.mask_type,
+-                                         args.descale_qk,
+-                                         args.descale_sv);
++                                         args.mask_type);
+         }
+     }();
+ 
+@@ -221,6 +221,7 @@ template <ck_tile::index_t HDim_,
+           typename FmhaMask_,
+           bool kHasBias_,
+           bool kStoreLse_,
++          bool kDoFp8StaticQuant_,
+           bool kPadS_,
+           bool kPadSK_,
+           bool kPadD_,
+@@ -241,6 +242,7 @@ struct fmha_fwd_traits_
+     using FmhaMask                                   = ck_tile::remove_cvref_t<FmhaMask_>;
+     static constexpr bool kHasBias                   = kHasBias_;
+     static constexpr bool kStoreLse                  = kStoreLse_;
++    static constexpr bool kDoFp8StaticQuant          = kDoFp8StaticQuant_;
+     static constexpr bool kPadS                      = kPadS_;
+     static constexpr bool kPadSK                     = kPadSK_;
+     static constexpr bool kPadD                      = kPadD_;
+@@ -261,6 +263,7 @@ struct fmha_fwd_traits
+     mask_enum mask_type;
+     bool has_bias;
+     bool has_lse;
++    bool do_fp8_static_quant;
+     // TODO: padding check is inside this api
+ };
+ float fmha_fwd(fmha_fwd_traits, fmha_fwd_args, const ck_tile::stream_config&);
+diff --git a/example/ck_tile/01_fmha/generate.py b/example/ck_tile/01_fmha/generate.py
+index b06279fa9a1..56d699e5fef 100644
+--- a/example/ck_tile/01_fmha/generate.py
++++ b/example/ck_tile/01_fmha/generate.py
+@@ -52,13 +52,11 @@
+ 
+ PIPELINE_MAP = {
+     "qr" : "ck_tile::BlockFmhaPipelineQRKSVS",
+-    "qr_fp8" : "ck_tile::BlockFmhaPipelineQRKSVSFp8",
+     "qr_async" : "ck_tile::BlockFmhaPipelineQRKSVSAsync",
+ }
+ 
+ PIPELINE_ENUM_MAP = {
+     "qr" : "ck_tile::BlockFmhaPipelineEnum::QRKSVS",
+-    "qr_fp8" : "ck_tile::BlockFmhaPipelineEnum::QRKSVS_FP8",
+     "qr_async" : "ck_tile::BlockFmhaPipelineEnum::QRKSVS_ASYNC",
+ }
+ 
+@@ -96,6 +94,7 @@
+                                                     {F_dvpad},
+                                                     {F_bias},
+                                                     {F_lse},
++                                                    {F_squant},
+                                                     {F_occupancy}>;
+ using fmha_mask_{F_idx} = {F_mask};
+ 
+@@ -123,13 +122,13 @@
+                                            typename FmhaFwdTypeConfig<{F_dtype}>::ODataType,
+                                            {F_spad}, {F_dvpad}>>;
+ 
+-using fmha_kernel_{F_idx} = 
++using fmha_kernel_{F_idx} =
+     ck_tile::FmhaFwdKernel<ck_tile::FmhaFwdTilePartitioner<fmha_shape_{F_idx}>,
+                   fmha_pipeline_{F_idx},
+                   fmha_epilogue_{F_idx}>;
+ 
+ using trait_{F_idx} = fmha_fwd_traits_<{F_hdim}, {F_dtype}, {F_mode},{F_bm0}, {F_bn0}, {F_bk0}, {F_bn1}, {F_bk1}, {F_bk0blen}, {F_vlayout},
+-                        {F_pipeline_enum}, fmha_mask_{F_idx}, {F_bias}, {F_lse}, {F_spad}, {F_skpad}, {F_dpad}, {F_dvpad}>;
++                        {F_pipeline_enum}, fmha_mask_{F_idx}, {F_bias}, {F_lse}, {F_squant}, {F_spad}, {F_skpad}, {F_dpad}, {F_dvpad}>;
+ 
+ #include <iostream>
+ 
+@@ -174,9 +173,9 @@
+     "s_mask" : "t.mask_type != mask_enum::no_mask",
+ }
+ 
+-FMHA_FWD_API_INNER_DISPATCH="""            {F_if}((t.is_group_mode == {F_mode}) && (t.is_v_rowmajor == {F_vlayout}) && ({F_mask_check}) && (t.has_bias == {F_bias}) && (t.has_lse == {F_lse}) &&
++FMHA_FWD_API_INNER_DISPATCH="""            {F_if}((t.is_group_mode == {F_mode}) && (t.is_v_rowmajor == {F_vlayout}) && ({F_mask_check}) && (t.has_bias == {F_bias}) && (t.has_lse == {F_lse}) && (t.do_fp8_static_quant == {F_squant}) &&
+                         ({F_scheck}) && ({F_skcheck}) && ({F_dcheck}) && ({F_dvcheck})) {{
+-                using trait_ = fmha_fwd_traits_<{F_hdim}, {F_dtype}, {F_mode}, {F_bm0}, {F_bn0}, {F_bk0}, {F_bn1}, {F_bk1}, {F_bk0blen}, {F_vlayout}, {F_pipeline_enum}, {F_mask}, {F_bias}, {F_lse}, {F_spad}, {F_skpad}, {F_dpad}, {F_dvpad}>;
++                using trait_ = fmha_fwd_traits_<{F_hdim}, {F_dtype}, {F_mode}, {F_bm0}, {F_bn0}, {F_bk0}, {F_bn1}, {F_bk1}, {F_bk0blen}, {F_vlayout}, {F_pipeline_enum}, {F_mask}, {F_bias}, {F_lse}, {F_squant}, {F_spad}, {F_skpad}, {F_dpad}, {F_dvpad}>;
+                 return fmha_fwd_<trait_>(s, a);
+             }}
+ """
+@@ -211,11 +210,12 @@ class FmhaFwdApiTrait:
+     bk0       : int  # tile size along qk gemm unroll
+     bn1       : int  # tile size along v head_dim
+     bk1       : int  # tile size along kv gemm unroll
+-    bk0blen   : int 
++    bk0blen   : int
+     vlayout   : str
+     mask      : str
+     bias      : str  # true/false
+     lse       : str  #
++    squant    : str  #
+     spad      : str
+     skpad     : str
+     dpad      : str
+@@ -224,7 +224,7 @@ class FmhaFwdApiTrait:
+     @property
+     def name(self) -> str:
+         return f'{self.hdim}-{self.dtype}-{self.mode}-{self.bm0}-{self.bn0}-{self.bk0}-{self.bn0}-{self.bk1}-{self.bk0blen}-'+\
+-                    f'{self.vlayout}-{self.mask}-{self.bias}-{self.lse}-{self.spad}-{self.skpad}-{self.dpad}-{self.dvpad}'
++                    f'{self.vlayout}-{self.mask}-{self.bias}-{self.lse}-{self.squant}-{self.spad}-{self.skpad}-{self.dpad}-{self.dvpad}'
+ 
+     @property
+     def scheck(self) -> str:
+@@ -232,7 +232,7 @@ def scheck(self) -> str:
+         if self.pipeline_tag == 'qr_async':
+             if self.spad == 't' : return 'true' # always support
+             else :                return 'true'
+-        elif self.pipeline_tag in ['qr', 'qr_fp8']:
++        elif self.pipeline_tag in ['qr']:
+             if self.spad == 't' : return f'true /*a.seqlen_q % {self.bm0} != 0*/'  # TODO: order of get_pipelines() matters! (ugly)
+             else :                return f'a.seqlen_q % {self.bm0} == 0'
+         else: assert False
+@@ -254,7 +254,7 @@ def dcheck(self) -> str:
+             vec = int((32 * 4) / DTYPE_BITS[self.dtype])
+             if self.dpad == 't': return f'a.hdim_q % {vec} == 0'
+             else :               assert False
+-        elif self.pipeline_tag in ['qr', 'qr_fp8']:
++        elif self.pipeline_tag in ['qr']:
+             if self.dpad == 't': return f'true /*a.hdim_q % {self.bk0blen} != 0*/' # TODO: order of get_pipelines() matters! (ugly)
+             else :               return f'a.hdim_q % {self.bk0blen} == 0'
+         else:   assert False
+@@ -265,7 +265,7 @@ def dvcheck(self) -> str:
+             vec = int((32 * 4) / DTYPE_BITS[self.dtype])
+             if self.dvpad == 't': return f'a.hdim_v % {vec} == 0'
+             else :                assert False
+-        elif self.pipeline_tag in ['qr', 'qr_fp8']:
++        elif self.pipeline_tag in ['qr']:
+             if self.dvpad == 't': return f'true /*a.hdim_v % {self.bk0blen} != 0*/' # TODO: order of get_pipelines() matters! (ugly)
+             else :                return f'a.hdim_v % {self.bk0blen} == 0'
+         else:   assert False
+@@ -281,6 +281,7 @@ class FmhaFwdPipeline:
+     F_dvpad     : str  #
+     F_bias      : str  # true/false
+     F_lse       : str  #
++    F_squant    : str  #
+     F_mask      : str  # value from MASK_MAP
+ 
+     @property
+@@ -302,6 +303,7 @@ def pad_name() -> str:
+         else:
+             if self.F_mask != 'no' : n += f'_m{self.F_mask[0]}'
+         if self.F_lse == 't' : n += '_lse'
++        if self.F_squant == 't' : n += '_squant'
+         return n
+ 
+ class FmhaFwdApiPool:
+@@ -331,7 +333,7 @@ def api(self) -> str:
+                     inners = inners + FMHA_FWD_API_INNER_DISPATCH.format(F_if=if_k, F_mode=MODE_MAP[trait.mode], F_vlayout=LAYOUT_MAP[trait.vlayout],
+                                    F_pipeline_enum=PIPELINE_ENUM_MAP[trait.pipeline_tag], F_mask=get_mask_map(self.mask_impl)[trait.mask],
+                                    F_mask_check=get_mask_check_map(self.mask_impl)[trait.mask], F_bias=BOOL_MAP[trait.bias], F_lse=BOOL_MAP[trait.lse],
+-                                   F_scheck=trait.scheck, F_skcheck=trait.skcheck, F_dcheck=trait.dcheck, F_dvcheck=trait.dvcheck,
++                                   F_squant=BOOL_MAP[trait.squant], F_scheck=trait.scheck, F_skcheck=trait.skcheck, F_dcheck=trait.dcheck, F_dvcheck=trait.dvcheck,
+                                    F_spad=BOOL_MAP[trait.spad], F_skpad=BOOL_MAP[trait.skpad], F_dpad=BOOL_MAP[trait.dpad], F_dvpad=BOOL_MAP[trait.dvpad],
+                                    F_bm0=trait.bm0, F_bn0=trait.bn0, F_bk0=trait.bk0, F_bn1=trait.bn1, F_bk1=trait.bk1, F_bk0blen=trait.bk0blen,
+                                    F_hdim=hdim, F_dtype=DTYPE_MAP[dtype])
+@@ -364,46 +366,48 @@ def name(self) -> str:
+ 
+ @dataclass
+ class FmhaFwdKernel:
+-    direction   : str
+-    F_idx       : int  # this is not a tunable, but a counter to differentiate symbol    
+-    F_hdim      : int  # hdim
+-    F_dtype     : str  # data type
+-    F_mode      : str  # value from MODE_MAP
+-    F_tile      : FmhaFwdTileSize
+-    F_pipeline  : FmhaFwdPipeline
+-    mask_impl   : str
++    direction       : str
++    F_idx           : int  # this is not a tunable, but a counter to differentiate symbol
++    F_hdim          : int  # hdim
++    F_dtype         : str  # data type
++    F_mode          : str  # value from MODE_MAP
++    F_tile          : FmhaFwdTileSize
++    F_pipeline      : FmhaFwdPipeline
++    mask_impl       : str
+ 
+     @property
+     def template(self) -> str:
++        kernel_body = str()
+         return FMHA_FWD_KERNEL_HEADER + \
+             FMHA_FWD_KERNEL_BODY.format(
+-                F_idx       = self.F_idx,
+-                F_hdim      = self.F_hdim,
+-                F_dtype     = DTYPE_MAP[self.F_dtype],
+-                F_bm0       = self.F_tile.F_bm0,
+-                F_bn0       = self.F_tile.F_bn0,
+-                F_bk0       = self.F_tile.F_bk0,
+-                F_bn1       = self.F_tile.F_bn1,
+-                F_bk1       = self.F_tile.F_bk1,
+-                F_bk0blen   = self.F_tile.F_bk0blen,
+-                F_rm        = self.F_tile.F_rm,
+-                F_rn        = self.F_tile.F_rn,
+-                F_rk        = self.F_tile.F_rk,
+-                F_wm        = self.F_tile.F_wm,
+-                F_wn        = self.F_tile.F_wn,
+-                F_wk        = self.F_tile.F_wk,
+-                F_vlayout   = LAYOUT_MAP[self.F_pipeline.F_vlayout],
+-                F_spad      = BOOL_MAP[self.F_pipeline.F_spad],
+-                F_skpad     = BOOL_MAP[self.F_pipeline.F_skpad],
+-                F_dpad      = BOOL_MAP[self.F_pipeline.F_dpad],
+-                F_dvpad     = BOOL_MAP[self.F_pipeline.F_dvpad],
+-                F_bias      = BOOL_MAP[self.F_pipeline.F_bias],
+-                F_lse       = BOOL_MAP[self.F_pipeline.F_lse],
+-                F_occupancy = self.F_tile.F_occupancy,
++                F_idx           = self.F_idx,
++                F_hdim          = self.F_hdim,
++                F_dtype         = DTYPE_MAP[self.F_dtype],
++                F_bm0           = self.F_tile.F_bm0,
++                F_bn0           = self.F_tile.F_bn0,
++                F_bk0           = self.F_tile.F_bk0,
++                F_bn1           = self.F_tile.F_bn1,
++                F_bk1           = self.F_tile.F_bk1,
++                F_bk0blen       = self.F_tile.F_bk0blen,
++                F_rm            = self.F_tile.F_rm,
++                F_rn            = self.F_tile.F_rn,
++                F_rk            = self.F_tile.F_rk,
++                F_wm            = self.F_tile.F_wm,
++                F_wn            = self.F_tile.F_wn,
++                F_wk            = self.F_tile.F_wk,
++                F_vlayout       = LAYOUT_MAP[self.F_pipeline.F_vlayout],
++                F_spad          = BOOL_MAP[self.F_pipeline.F_spad],
++                F_skpad         = BOOL_MAP[self.F_pipeline.F_skpad],
++                F_dpad          = BOOL_MAP[self.F_pipeline.F_dpad],
++                F_dvpad         = BOOL_MAP[self.F_pipeline.F_dvpad],
++                F_bias          = BOOL_MAP[self.F_pipeline.F_bias],
++                F_lse           = BOOL_MAP[self.F_pipeline.F_lse],
++                F_squant        = BOOL_MAP[self.F_pipeline.F_squant],
++                F_occupancy     = self.F_tile.F_occupancy,
+                 F_pipeline_enum = PIPELINE_ENUM_MAP[self.F_pipeline.tag],
+-                F_mask      = get_mask_map(self.mask_impl)[self.F_pipeline.F_mask],
+-                F_mode      = MODE_MAP[self.F_mode],
+-                F_pipeline  = PIPELINE_MAP[self.F_pipeline.tag])
++                F_mask          = get_mask_map(self.mask_impl)[self.F_pipeline.F_mask],
++                F_mode          = MODE_MAP[self.F_mode],
++                F_pipeline      = PIPELINE_MAP[self.F_pipeline.tag])
+ 
+     @property
+     def name(self) -> str:
+@@ -431,6 +435,7 @@ def api_trait(self) -> FmhaFwdApiTrait:
+                 mask=self.F_pipeline.F_mask,
+                 bias=self.F_pipeline.F_bias,
+                 lse=self.F_pipeline.F_lse,
++                squant=self.F_pipeline.F_squant,
+                 spad=self.F_pipeline.F_spad,
+                 skpad=self.F_pipeline.F_skpad,
+                 dpad=self.F_pipeline.F_dpad,
+@@ -464,28 +469,29 @@ def get_pipelines(dtype, hdim) -> List[FmhaFwdPipeline]:
+         # TODO: the order of List matters! the later in this list will be also be checked later
+         # TODO: currently for qr pipeline, let 't' padding to appear later!!
+         # TODO: how to design this more generic?
++        squant = 't' if dtype == 'fp8' else 'f'
+         pipelines = []
+         if dtype in ['fp16', 'bf16']:
+             for mask, bias, lse in itertools.product(get_mask_map(mask_impl).keys(), ["t", "f"], ["t", "f"]):
+                 if hdim == 256:
+                 # if True:
+-                    pipelines.append(FmhaFwdPipeline('qr', 'row', 'f', 'f', 'f', 'f', bias, lse, mask))
+-                    pipelines.append(FmhaFwdPipeline('qr', 'col', 'f', 'f', 'f', 'f', bias, lse, mask))
++                    pipelines.append(FmhaFwdPipeline('qr', 'row', 'f', 'f', 'f', 'f', bias, lse, squant, mask))
++                    pipelines.append(FmhaFwdPipeline('qr', 'col', 'f', 'f', 'f', 'f', bias, lse, squant, mask))
+ 
+-                    pipelines.append(FmhaFwdPipeline('qr', 'row', 't', 't', 't', 't', bias, lse, mask))
+-                    pipelines.append(FmhaFwdPipeline('qr', 'col', 't', 't', 't', 't', bias, lse, mask))
++                    pipelines.append(FmhaFwdPipeline('qr', 'row', 't', 't', 't', 't', bias, lse, squant, mask))
++                    pipelines.append(FmhaFwdPipeline('qr', 'col', 't', 't', 't', 't', bias, lse, squant, mask))
+                 else:
+-                    pipelines.append(FmhaFwdPipeline('qr_async', 'row', 't', 'f', 't', 't', bias, lse, mask))
+-                    pipelines.append(FmhaFwdPipeline('qr_async', 'row', 't', 't', 't', 't', bias, lse, mask))
+-                    pipelines.append(FmhaFwdPipeline('qr_async', 'col', 't', 'f', 't', 't', bias, lse, mask))
+-                    pipelines.append(FmhaFwdPipeline('qr_async', 'col', 't', 't', 't', 't', bias, lse, mask))
++                    pipelines.append(FmhaFwdPipeline('qr_async', 'row', 't', 'f', 't', 't', bias, lse, squant, mask))
++                    pipelines.append(FmhaFwdPipeline('qr_async', 'row', 't', 't', 't', 't', bias, lse, squant, mask))
++                    pipelines.append(FmhaFwdPipeline('qr_async', 'col', 't', 'f', 't', 't', bias, lse, squant, mask))
++                    pipelines.append(FmhaFwdPipeline('qr_async', 'col', 't', 't', 't', 't', bias, lse, squant, mask))
+                     if receipt == 1:
+-                        pipelines.append(FmhaFwdPipeline('qr', 'row', 't', 't', 't', 't', bias, lse, mask)) # TODO: cover arbitraty hdim
+-                        pipelines.append(FmhaFwdPipeline('qr', 'col', 't', 'f', 't', 't', bias, lse, mask)) # TODO: cover arbitraty hdim
++                        pipelines.append(FmhaFwdPipeline('qr', 'row', 't', 't', 't', 't', bias, lse, squant, mask)) # TODO: cover arbitraty hdim
++                        pipelines.append(FmhaFwdPipeline('qr', 'col', 't', 'f', 't', 't', bias, lse, squant, mask)) # TODO: cover arbitraty hdim
+         elif dtype in ['fp8', 'bf8']:
+             # no need lse kernels
+             for mask, bias in itertools.product(get_mask_map(mask_impl).keys(), ["t", "f"]):
+-                pipelines.append(FmhaFwdPipeline('qr_fp8', 'col', 'f', 'f', 'f', 'f', bias, 'f', mask))
++                pipelines.append(FmhaFwdPipeline('qr', 'col', 'f', 'f', 'f', 'f', bias, 'f', squant, mask))
+         else:
+             assert False
+         return pipelines
+@@ -506,7 +512,14 @@ def get_pipelines(dtype, hdim) -> List[FmhaFwdPipeline]:
+                     if pipeline.F_spad != 't' or pipeline.F_skpad != 't':
+                         # in group mode, spad/skpad must be true, since we can't predict if seqlen of current batch need pad or not
+                         continue
+-                k = FmhaFwdKernel(direction=direction, F_idx=0, F_hdim=hdim, F_dtype=dtype, F_mode=mode, F_tile=tile, F_pipeline=pipeline, mask_impl=mask_impl)
++                k = FmhaFwdKernel(direction=direction,
++                                  F_idx=0,
++                                  F_hdim=hdim,
++                                  F_dtype=dtype,
++                                  F_mode=mode,
++                                  F_tile=tile,
++                                  F_pipeline=pipeline,
++                                  mask_impl=mask_impl)
+                 if kernel_filter != None:
+                     if not fnmatch.fnmatch(k.name, kernel_filter):
+                         continue
+diff --git a/example/ck_tile/01_fmha/script/benchmark.sh b/example/ck_tile/01_fmha/script/benchmark.sh
+old mode 100644
+new mode 100755
+index d8c3407b814..859cff9f606
+--- a/example/ck_tile/01_fmha/script/benchmark.sh
++++ b/example/ck_tile/01_fmha/script/benchmark.sh
+@@ -9,13 +9,24 @@ for perm in 0 1 ; do
+ for hdim in 64 128 256 ; do
+ 
+ nhead=$((2048 / $hdim))     # follow fav2 setup
+-$EXE -prec=$prec -b=32 -h=$nhead -d=$hdim -s=512   -iperm=$perm -operm=$perm -v=$VALID ; sleep 3
+-$EXE -prec=$prec -b=16 -h=$nhead -d=$hdim -s=1024  -iperm=$perm -operm=$perm -v=$VALID ; sleep 3
+-$EXE -prec=$prec -b=8  -h=$nhead -d=$hdim -s=2048  -iperm=$perm -operm=$perm -v=$VALID ; sleep 3
+-$EXE -prec=$prec -b=4  -h=$nhead -d=$hdim -s=4096  -iperm=$perm -operm=$perm -v=$VALID ; sleep 3
+-$EXE -prec=$prec -b=2  -h=$nhead -d=$hdim -s=8192  -iperm=$perm -operm=$perm -v=$VALID ; sleep 3
+-$EXE -prec=$prec -b=1  -h=$nhead -d=$hdim -s=16384 -iperm=$perm -operm=$perm -v=$VALID ; sleep 3
++$EXE -prec=$prec -b=32 -h=$nhead -d=$hdim -s=512   -iperm=$perm -operm=$perm -kname=1 -v=$VALID ; sleep 3
++$EXE -prec=$prec -b=16 -h=$nhead -d=$hdim -s=1024  -iperm=$perm -operm=$perm -kname=1 -v=$VALID ; sleep 3
++$EXE -prec=$prec -b=8  -h=$nhead -d=$hdim -s=2048  -iperm=$perm -operm=$perm -kname=1 -v=$VALID ; sleep 3
++$EXE -prec=$prec -b=4  -h=$nhead -d=$hdim -s=4096  -iperm=$perm -operm=$perm -kname=1 -v=$VALID ; sleep 3
++$EXE -prec=$prec -b=2  -h=$nhead -d=$hdim -s=8192  -iperm=$perm -operm=$perm -kname=1 -v=$VALID ; sleep 3
++$EXE -prec=$prec -b=1  -h=$nhead -d=$hdim -s=16384 -iperm=$perm -operm=$perm -kname=1 -v=$VALID ; sleep 3
+ 
+ done
+ done
+ done
++
++for perm in 0 1 ; do
++
++$EXE -prec=fp8 -squant=1 -b=32 -h=16 -d=128 -s=512   -iperm=$perm -operm=$perm -vlayout=c -range_q=240 -range_k=240 -range_v=240 -range_p=240 -range_o=240 -kname=1 -v=$VALID ; sleep 3
++$EXE -prec=fp8 -squant=1 -b=16 -h=16 -d=128 -s=1024  -iperm=$perm -operm=$perm -vlayout=c -range_q=240 -range_k=240 -range_v=240 -range_p=240 -range_o=240 -kname=1 -v=$VALID ; sleep 3
++$EXE -prec=fp8 -squant=1 -b=8  -h=16 -d=128 -s=2048  -iperm=$perm -operm=$perm -vlayout=c -range_q=240 -range_k=240 -range_v=240 -range_p=240 -range_o=240 -kname=1 -v=$VALID ; sleep 3
++$EXE -prec=fp8 -squant=1 -b=4  -h=16 -d=128 -s=4096  -iperm=$perm -operm=$perm -vlayout=c -range_q=240 -range_k=240 -range_v=240 -range_p=240 -range_o=240 -kname=1 -v=$VALID ; sleep 3
++$EXE -prec=fp8 -squant=1 -b=2  -h=16 -d=128 -s=8192  -iperm=$perm -operm=$perm -vlayout=c -range_q=240 -range_k=240 -range_v=240 -range_p=240 -range_o=240 -kname=1 -v=$VALID ; sleep 3
++$EXE -prec=fp8 -squant=1 -b=1  -h=16 -d=128 -s=16384 -iperm=$perm -operm=$perm -vlayout=c -range_q=240 -range_k=240 -range_v=240 -range_p=240 -range_o=240 -kname=1 -v=$VALID ; sleep 3
++
++done
+\ No newline at end of file
+diff --git a/example/ck_tile/01_fmha/script/smoke_test.sh b/example/ck_tile/01_fmha/script/smoke_test.sh
+old mode 100644
+new mode 100755
+index 5a90b319a56..4dd5c2ae12d
+--- a/example/ck_tile/01_fmha/script/smoke_test.sh
++++ b/example/ck_tile/01_fmha/script/smoke_test.sh
+@@ -35,3 +35,11 @@ done
+ done
+ done
+ done
++
++for perm in 0 1 ; do
++for bias in 0 1 ; do
++for b in 1 2 ; do
++$EXE -prec=fp8 -init=3 -b=$b -h=1 -d=128 -s=128 -bias=$bias -iperm=$perm -operm=$perm -vlayout=c -squant=1 -kname=$KNAME $COMMON_ARGS
++done
++done
++done
+diff --git a/include/ck_tile/core.hpp b/include/ck_tile/core.hpp
+index 2767ee05b20..bb19c9154bf 100644
+--- a/include/ck_tile/core.hpp
++++ b/include/ck_tile/core.hpp
+@@ -55,3 +55,4 @@
+ #include "ck_tile/core/utility/to_sequence.hpp"
+ #include "ck_tile/core/utility/transpose_vectors.hpp"
+ #include "ck_tile/core/utility/type_traits.hpp"
++#include "ck_tile/core/utility/unary_element_function.hpp"
+diff --git a/include/ck_tile/core/config.hpp b/include/ck_tile/core/config.hpp
+index 7b7dc880fef..d915df6e4c7 100644
+--- a/include/ck_tile/core/config.hpp
++++ b/include/ck_tile/core/config.hpp
+@@ -36,7 +36,7 @@
+ #define CK_TILE_FLOAT_TO_FP8_STOCHASTIC 1
+ 
+ #ifndef CK_TILE_FLOAT_TO_FP8_DEFAULT
+-#define CK_TILE_FLOAT_TO_FP8_DEFAULT CK_TILE_FLOAT_TO_FP8_STOCHASTIC
++#define CK_TILE_FLOAT_TO_FP8_DEFAULT CK_TILE_FLOAT_TO_FP8_STANDARD
+ #endif
+ 
+ // in the old rocm period, we have to use tuple array implementation to implement this
+diff --git a/include/ck_tile/core/numeric/math.hpp b/include/ck_tile/core/numeric/math.hpp
+index 0c67a640afb..72ec607b42e 100644
+--- a/include/ck_tile/core/numeric/math.hpp
++++ b/include/ck_tile/core/numeric/math.hpp
+@@ -13,33 +13,110 @@
+ 
+ namespace ck_tile {
+ 
+-template <typename T, T s>
++template <typename Scale, Scale lhs>
++struct scales_c
++{
++    template <typename Right>
++    CK_TILE_HOST_DEVICE constexpr auto operator()(const Right& rhs) const -> decltype(lhs * rhs)
++    {
++        return lhs * rhs;
++    }
++};
++
++template <typename Scale>
+ struct scales
+ {
+-    CK_TILE_HOST_DEVICE constexpr T operator()(T a) const { return s * a; }
++    static_assert(std::is_copy_constructible_v<Scale>);
++
++    CK_TILE_HOST_DEVICE constexpr explicit scales(Scale lhs) : lhs_(lhs) {}
++
++    template <typename Right>
++    CK_TILE_HOST_DEVICE constexpr auto operator()(const Right& rhs) const
++        -> decltype(std::declval<const Scale&>() * rhs)
++    {
++        return lhs_ * rhs;
++    }
++
++    private:
++    Scale lhs_;
+ };
+ 
+-template <typename T>
++/// FIXME: create macro to replace '__host__ __device__' and nothing more
++template <typename Scale>
++__host__ __device__ scales(Scale)->scales<Scale>;
++
++template <typename Left = void, typename Right = Left>
+ struct plus
+ {
+-    CK_TILE_HOST_DEVICE constexpr T operator()(T a, T b) const { return a + b; }
++    CK_TILE_HOST_DEVICE constexpr auto operator()(const Left& lhs, const Right& rhs) const
++        -> decltype(lhs + rhs)
++    {
++        return lhs + rhs;
++    }
+ };
+ 
+-template <typename T>
++template <>
++struct plus<void, void>
++{
++    template <typename Left, typename Right>
++    CK_TILE_HOST_DEVICE constexpr auto operator()(const Left& lhs, const Right& rhs) const
++        -> decltype(lhs + rhs)
++    {
++        return lhs + rhs;
++    }
++};
++
++/// FIXME: create macro to replace '__host__ __device__' and nothing more
++__host__ __device__ plus()->plus<void, void>;
++
++template <typename Left = void, typename Right = Left>
+ struct minus
+ {
+-    CK_TILE_HOST_DEVICE constexpr T operator()(T a, T b) const { return a - b; }
++    CK_TILE_HOST_DEVICE constexpr auto operator()(const Left& lhs, const Right& rhs) const
++        -> decltype(lhs - rhs)
++    {
++        return lhs - rhs;
++    }
+ };
+ 
++template <>
++struct minus<void, void>
++{
++    template <typename Left, typename Right>
++    CK_TILE_HOST_DEVICE constexpr auto operator()(const Left& lhs, const Right& rhs) const
++        -> decltype(lhs - rhs)
++    {
++        return lhs - rhs;
++    }
++};
++
++/// FIXME: create macro to replace '__host__ __device__' and nothing more
++__host__ __device__ minus()->minus<void, void>;
++
++template <typename Left = void, typename Right = Left>
+ struct multiplies
+ {
+-    template <typename A, typename B>
+-    CK_TILE_HOST_DEVICE constexpr auto operator()(const A& a, const B& b) const
++    CK_TILE_HOST_DEVICE constexpr auto operator()(const Left& lhs, const Right& rhs) const
++        -> decltype(lhs * rhs)
+     {
+-        return a * b;
++        return lhs * rhs;
+     }
+ };
+ 
++template <>
++struct multiplies<void, void>
++{
++    template <typename Left, typename Right>
++    CK_TILE_HOST_DEVICE constexpr auto operator()(const Left& lhs, const Right& rhs) const
++        -> decltype(lhs * rhs)
++    {
++        return lhs * rhs;
++    }
++};
++
++/// FIXME: create macro to replace '__host__ __device__' and nothing more
++__host__ __device__ multiplies()->multiplies<void, void>;
++
+ template <typename T>
+ struct maximize
+ {
+@@ -247,16 +324,112 @@ CK_TILE_HOST_DEVICE constexpr auto lcm(X x, Ys... ys)
+     return lcm(x, lcm(ys...));
+ }
+ 
+-template <typename T>
++template <typename Left = void, typename Right = Left>
+ struct equal
+ {
+-    CK_TILE_HOST_DEVICE constexpr bool operator()(T x, T y) const { return x == y; }
++    CK_TILE_HOST_DEVICE constexpr auto operator()(const Left& lhs, const Right& rhs) const
++        -> decltype(lhs == rhs)
++    {
++        return lhs == rhs;
++    }
+ };
+ 
+-template <typename T>
++template <>
++struct equal<void, void>
++{
++    template <typename Left, typename Right>
++    CK_TILE_HOST_DEVICE constexpr auto operator()(const Left& lhs, const Right& rhs) const
++        -> decltype(lhs == rhs)
++    {
++        return lhs == rhs;
++    }
++};
++
++/// FIXME: create macro to replace '__host__ __device__' and nothing more
++__host__ __device__ equal()->equal<void, void>;
++
++template <>
++struct equal<float, float>
++{
++    CK_TILE_HOST_DEVICE constexpr bool operator()(float lhs, float rhs) const
++    {
++        return bit_cast<uint32_t>(lhs) == bit_cast<uint32_t>(rhs);
++    }
++};
++
++template <>
++struct equal<double, double>
++{
++    CK_TILE_HOST_DEVICE constexpr bool operator()(double lhs, double rhs) const
++    {
++        return bit_cast<uint64_t>(lhs) == bit_cast<uint64_t>(rhs);
++    }
++};
++
++template <typename Left = void, typename Right = Left>
+ struct less
+ {
+-    CK_TILE_HOST_DEVICE constexpr bool operator()(T x, T y) const { return x < y; }
++    CK_TILE_HOST_DEVICE constexpr auto operator()(const Left& lhs, const Right& rhs) const
++        -> decltype(lhs < rhs)
++    {
++        return lhs < rhs;
++    }
++};
++
++template <>
++struct less<void, void>
++{
++    template <typename Left, typename Right>
++    CK_TILE_HOST_DEVICE constexpr auto operator()(const Left& lhs, const Right& rhs) const
++        -> decltype(lhs < rhs)
++    {
++        return lhs < rhs;
++    }
++};
++
++/// FIXME: create macro to replace '__host__ __device__' and nothing more
++__host__ __device__ less()->less<void, void>;
++
++template <typename Left = void, typename Right = Left>
++struct less_equal
++{
++    CK_TILE_HOST_DEVICE constexpr auto operator()(const Left& lhs, const Right& rhs) const
++        -> decltype(lhs <= rhs)
++    {
++        return lhs <= rhs;
++    }
++};
++
++template <>
++struct less_equal<void, void>
++{
++    template <typename Left, typename Right>
++    CK_TILE_HOST_DEVICE constexpr auto operator()(const Left& lhs, const Right& rhs) const
++        -> decltype(lhs <= rhs)
++    {
++        return lhs <= rhs;
++    }
++};
++
++/// FIXME: create macro to replace '__host__ __device__' and nothing more
++__host__ __device__ less_equal()->less_equal<void, void>;
++
++template <>
++struct less_equal<float, float>
++{
++    CK_TILE_HOST_DEVICE constexpr bool operator()(float lhs, float rhs) const
++    {
++        return lhs < rhs || bit_cast<uint32_t>(lhs) == bit_cast<uint32_t>(rhs);
++    }
++};
++
++template <>
++struct less_equal<double, double>
++{
++    CK_TILE_HOST_DEVICE constexpr bool operator()(double lhs, double rhs) const
++    {
++        return lhs < rhs || bit_cast<uint64_t>(lhs) == bit_cast<uint64_t>(rhs);
++    }
+ };
+ 
+ CK_TILE_HOST_DEVICE constexpr int32_t next_power_of_two(int32_t x)
+diff --git a/include/ck_tile/core/utility/unary_element_function.hpp b/include/ck_tile/core/utility/unary_element_function.hpp
+new file mode 100644
+index 00000000000..e24c0dc85c2
+--- /dev/null
++++ b/include/ck_tile/core/utility/unary_element_function.hpp
+@@ -0,0 +1,67 @@
++// SPDX-License-Identifier: MIT
++// Copyright (c) 2018-2023, Advanced Micro Devices, Inc. All rights reserved.
++
++#pragma once
++
++#include "ck_tile/core.hpp"
++
++namespace ck_tile {
++
++template <typename F, typename... Fs>
++struct composes : private composes<F>
++{
++    template <typename FirstArg, typename... RestArgs>
++    CK_TILE_HOST_DEVICE constexpr explicit composes(FirstArg&& firstArg, RestArgs&&... restArgs)
++        : composes<F>(std::forward<FirstArg>(firstArg)), inner_(std::forward<RestArgs>(restArgs)...)
++    {
++    }
++
++    template <typename Arg>
++    CK_TILE_HOST_DEVICE constexpr auto operator()(Arg&& arg) const
++    {
++        return static_cast<const composes<F>&>(*this)(inner_(std::forward<Arg>(arg)));
++    }
++
++    private:
++    composes<Fs...> inner_;
++};
++
++template <typename F>
++struct composes<F>
++{
++    static_assert(!std::is_reference_v<F>);
++
++    template <typename Arg, typename = std::enable_if_t<std::is_constructible_v<F, Arg>>>
++    CK_TILE_HOST_DEVICE constexpr explicit composes(Arg&& arg) : f_(std::forward<Arg>(arg))
++    {
++    }
++
++    template <typename Arg,
++              typename = std::enable_if_t<std::is_invocable_v<std::add_const_t<F>&, Arg>>>
++    CK_TILE_HOST_DEVICE constexpr auto operator()(Arg&& arg) const
++    {
++        return f_(std::forward<Arg>(arg));
++    }
++
++    private:
++    F f_;
++};
++
++/// FIXME: create macro to replace '__host__ __device__' and nothing more
++template <typename... Ts>
++__host__ __device__ composes(Ts&&...)->composes<remove_cvref_t<Ts>...>;
++
++template <typename To>
++struct saturates
++{
++    template <typename From>
++    CK_TILE_HOST_DEVICE constexpr auto operator()(const From& from) const
++        -> std::enable_if_t<std::is_arithmetic_v<From>, From>
++    {
++        return clamp(from,
++                     type_convert<From>(numeric<To>::lowest()),
++                     type_convert<From>(numeric<To>::max()));
++    }
++};
++
++} // namespace ck_tile
+diff --git a/include/ck_tile/host/check_err.hpp b/include/ck_tile/host/check_err.hpp
+index f2d5be1628a..1ef9b24138f 100644
+--- a/include/ck_tile/host/check_err.hpp
++++ b/include/ck_tile/host/check_err.hpp
+@@ -272,10 +272,10 @@ std::enable_if_t<(std::is_same_v<ranges::range_value_t<Range>, ranges::range_val
+                  bool>
+     CK_TILE_HOST check_err(const Range& out,
+                            const RefRange& ref,
+-                           const std::string& msg  = "Error: Incorrect results!",
+-                           double rtol             = 1e-3,
+-                           double atol             = 1e-3,
+-                           bool allow_infinity_ref = false)
++                           const std::string& msg               = "Error: Incorrect results!",
++                           unsigned max_rounding_point_distance = 1,
++                           double atol                          = 1e-1,
++                           bool allow_infinity_ref              = false)
+ {
+     if(out.size() != ref.size())
+     {
+@@ -291,23 +291,42 @@ std::enable_if_t<(std::is_same_v<ranges::range_value_t<Range>, ranges::range_val
+         return either_not_finite && !(allow_infinity_ref && both_infinite_and_same);
+     };
+ 
++    static const auto get_rounding_point_distance = [](fp8_t o, fp8_t r) -> unsigned {
++        static const auto get_sign_bit = [](fp8_t v) -> bool {
++            return 0x80 & bit_cast<uint8_t>(v);
++        };
++
++        if(get_sign_bit(o) ^ get_sign_bit(r))
++        {
++            return std::numeric_limits<unsigned>::max();
++        }
++        else
++        {
++            return std::abs(bit_cast<int8_t>(o) - bit_cast<int8_t>(r));
++        }
++    };
++
+     bool res{true};
+     int err_count  = 0;
+     double err     = 0;
+     double max_err = std::numeric_limits<float>::min();
+     for(std::size_t i = 0; i < ref.size(); ++i)
+     {
+-        const double o = type_convert<float>(*std::next(std::begin(out), i));
+-        const double r = type_convert<float>(*std::next(std::begin(ref), i));
+-        err            = std::abs(o - r);
+-        if(err > atol + rtol * std::abs(r) || is_infinity_error(o, r))
++        const fp8_t o_fp8   = *std::next(std::begin(out), i);
++        const fp8_t r_fp8   = *std::next(std::begin(ref), i);
++        const double o_fp64 = type_convert<float>(o_fp8);
++        const double r_fp64 = type_convert<float>(r_fp8);
++        err                 = std::abs(o_fp64 - r_fp64);
++        if(!(less_equal<double>{}(err, atol) ||
++             get_rounding_point_distance(o_fp8, r_fp8) <= max_rounding_point_distance) ||
++           is_infinity_error(o_fp64, r_fp64))
+         {
+             max_err = err > max_err ? err : max_err;
+             err_count++;
+             if(err_count < 5)
+             {
+                 std::cerr << msg << std::setw(12) << std::setprecision(7) << " out[" << i
+-                          << "] != ref[" << i << "]: " << o << " != " << r << std::endl;
++                          << "] != ref[" << i << "]: " << o_fp64 << " != " << r_fp64 << std::endl;
+             }
+             res = false;
+         }
+diff --git a/include/ck_tile/host/reference/reference_batched_softmax.hpp b/include/ck_tile/host/reference/reference_batched_softmax.hpp
+index 57de0ca2435..10222cb766d 100644
+--- a/include/ck_tile/host/reference/reference_batched_softmax.hpp
++++ b/include/ck_tile/host/reference/reference_batched_softmax.hpp
+@@ -9,10 +9,14 @@
+ 
+ namespace ck_tile {
+ 
+-template <typename ADataType, typename CompDataType, typename BDataType>
++template <typename ADataType,
++          typename CompDataType,
++          typename BDataType,
++          typename CompElementOp = ck_tile::identity>
+ CK_TILE_HOST void reference_batched_softmax(
+     const HostTensor<ADataType>& a_b_m_n,
+     HostTensor<BDataType>& b_b_m_n,
++    const CompElementOp& comp_element_op                                    = {},
+     std::optional<std::reference_wrapper<HostTensor<CompDataType>>> lse_b_m = std::nullopt)
+ {
+     const int N = a_b_m_n.mDesc.get_lengths()[2];
+@@ -50,9 +54,9 @@ CK_TILE_HOST void reference_batched_softmax(
+         for(int n = 0; n < N; ++n)
+         {
+             const CompDataType v_a = ck_tile::type_convert<CompDataType>(a_b_m_n(batch, m, n));
++            const CompDataType v_b = ck_tile::exp(v_a - v_max) * inv_sum;
+ 
+-            b_b_m_n(batch, m, n) =
+-                ck_tile::type_convert<BDataType>(ck_tile::exp(v_a - v_max) * inv_sum);
++            b_b_m_n(batch, m, n) = ck_tile::type_convert<BDataType>(comp_element_op(v_b));
+         }
+         // lse
+         if(lse_b_m)
+diff --git a/include/ck_tile/ops/fmha/kernel/fmha_fwd_kernel.hpp b/include/ck_tile/ops/fmha/kernel/fmha_fwd_kernel.hpp
+index a5f7d95d420..822348eb3d6 100644
+--- a/include/ck_tile/ops/fmha/kernel/fmha_fwd_kernel.hpp
++++ b/include/ck_tile/ops/fmha/kernel/fmha_fwd_kernel.hpp
+@@ -37,15 +37,16 @@ struct FmhaFwdKernel
+ 
+     using VLayout = ck_tile::remove_cvref_t<typename FmhaPipeline::VLayout>;
+ 
+-    static constexpr bool kIsGroupMode = FmhaPipeline::kIsGroupMode;
+-    static constexpr bool kPadSeqLenQ  = FmhaPipeline::kPadSeqLenQ;
+-    static constexpr bool kPadSeqLenK  = FmhaPipeline::kPadSeqLenK;
+-    static constexpr bool kPadHeadDimQ = FmhaPipeline::kPadHeadDimQ;
+-    static constexpr bool kPadHeadDimV = FmhaPipeline::kPadHeadDimV;
+-    static constexpr bool kHasBias     = FmhaPipeline::kHasBias;
+-    static constexpr bool kStoreLSE    = FmhaPipeline::kStoreLSE;
+-    using FmhaMask                     = ck_tile::remove_cvref_t<typename FmhaPipeline::FmhaMask>;
+-    static constexpr bool kHasMask     = FmhaMask::IsMasking;
++    static constexpr bool kIsGroupMode      = FmhaPipeline::kIsGroupMode;
++    static constexpr bool kPadSeqLenQ       = FmhaPipeline::kPadSeqLenQ;
++    static constexpr bool kPadSeqLenK       = FmhaPipeline::kPadSeqLenK;
++    static constexpr bool kPadHeadDimQ      = FmhaPipeline::kPadHeadDimQ;
++    static constexpr bool kPadHeadDimV      = FmhaPipeline::kPadHeadDimV;
++    static constexpr bool kHasBias          = FmhaPipeline::kHasBias;
++    static constexpr bool kStoreLSE         = FmhaPipeline::kStoreLSE;
++    static constexpr bool kDoFp8StaticQuant = FmhaPipeline::Problem::kDoFp8StaticQuant;
++    using FmhaMask                 = ck_tile::remove_cvref_t<typename FmhaPipeline::FmhaMask>;
++    static constexpr bool kHasMask = FmhaMask::IsMasking;
+ 
+     // clang-format off
+     template <typename T> struct t2s;
+@@ -77,11 +78,11 @@ struct FmhaFwdKernel
+             "_" + (kIsGroupMode ? "group" : "batch") + "_" +
+             "b" + _TS_(bfs::kM0) + "x" + _TS_(bfs::kN0) + "x" + _TS_(bfs::kK0) + "x" +
+                     _TS_(bfs::kN1) + "x" + _TS_(bfs::kK1) + "x" + _TS_(bfs::kK0BlockLength) + "_" +
+-            "r" + _TS_(gbr::at(ck_tile::number<0>{})) + "x" + _TS_(gbr::at(ck_tile::number<1>{})) + "x" + _TS_(gbr::at(ck_tile::number<2>{})) + "_" + 
++            "r" + _TS_(gbr::at(ck_tile::number<0>{})) + "x" + _TS_(gbr::at(ck_tile::number<1>{})) + "x" + _TS_(gbr::at(ck_tile::number<2>{})) + "_" +
+             "w" + _TS_(gwt::at(ck_tile::number<0>{})) + "x" + _TS_(gwt::at(ck_tile::number<1>{})) + "x" + _TS_(gwt::at(ck_tile::number<2>{})) + "_" +
+             (kBlockPerCuInput == -1 ? "" : ("o" + _TS_(kBlockPerCu) + "_")) + _SS_(FmhaPipeline::name) + "_" +
+             "v" + (std::is_same_v<VLayout, ck_tile::tensor_layout::gemm::RowMajor> ? "r" : "c") + (pn.empty() ? "" : "_" + pn) +
+-            (kHasBias ? "_bias" : "") + (kHasMask ? "_" + _SS_(FmhaMask::name) : "") + (kStoreLSE ? "_lse" : "" );
++            (kHasBias ? "_bias" : "") + (kHasMask ? "_" + _SS_(FmhaMask::name) : "") + (kStoreLSE ? "_lse" : "" ) + (kDoFp8StaticQuant ? "_squant" : "" );
+         #undef _SS_
+         #undef _TS_
+         // clang-format on
+@@ -111,7 +112,7 @@ struct FmhaFwdKernel
+         // for MQA/GQA, nhead could be different. This parameter is nhead_q / nhead_k
+         // if this param is larger than 1, indicate MQA/GQA case
+         ck_tile::index_t nhead_ratio_qk;
+-        float scale;
++        float scale_s;
+ 
+         ck_tile::index_t stride_q;
+         ck_tile::index_t stride_k;
+@@ -143,11 +144,10 @@ struct FmhaFwdKernel
+         ck_tile::GenericAttentionMaskEnum mask_type;
+     };
+ 
+-    struct FmhaFwdFP8Kargs
++    struct FmhaFwdFp8StaticQuantKargs
+     {
+-        float descale_qk; // q*k
+-        float descale_sv; // s*v
+-        // float * o_amax_ptr;
++        float scale_p;
++        float scale_o;
+     };
+ 
+     struct FmhaFwdCommonLSEKargs
+@@ -166,7 +166,7 @@ struct FmhaFwdKernel
+           std::conditional_t<kHasBias, FmhaFwdBatchModeBiasKargs, FmhaFwdEmptyKargs<0>>,
+           std::conditional_t<kHasMask, FmhaFwdMaskKargs, FmhaFwdEmptyKargs<1>>,
+           std::conditional_t<kStoreLSE, FmhaFwdBatchModeLSEKargs, FmhaFwdEmptyKargs<2>>,
+-          std::conditional_t<kIsFp8, FmhaFwdFP8Kargs, FmhaFwdEmptyKargs<3>>
++          std::conditional_t<kDoFp8StaticQuant, FmhaFwdFp8StaticQuantKargs, FmhaFwdEmptyKargs<3>>
+     {
+         ck_tile::index_t batch_stride_q;
+         ck_tile::index_t batch_stride_k;
+@@ -179,7 +179,7 @@ struct FmhaFwdKernel
+           std::conditional_t<kHasBias, FmhaFwdCommonBiasKargs, FmhaFwdEmptyKargs<0>>,
+           std::conditional_t<kHasMask, FmhaFwdMaskKargs, FmhaFwdEmptyKargs<1>>,
+           std::conditional_t<kStoreLSE, FmhaFwdCommonLSEKargs, FmhaFwdEmptyKargs<2>>,
+-          std::conditional_t<kIsFp8, FmhaFwdFP8Kargs, FmhaFwdEmptyKargs<3>>
++          std::conditional_t<kDoFp8StaticQuant, FmhaFwdFp8StaticQuantKargs, FmhaFwdEmptyKargs<3>>
+     {
+         const int32_t* seqstart_q_ptr;
+         const int32_t* seqstart_k_ptr;
+@@ -201,7 +201,9 @@ struct FmhaFwdKernel
+               ck_tile::index_t hdim_q,
+               ck_tile::index_t hdim_v,
+               ck_tile::index_t nhead_ratio_qk,
+-              float scale,
++              float scale_s,
++              float scale_p,
++              float scale_o,
+               ck_tile::index_t stride_q,
+               ck_tile::index_t stride_k,
+               ck_tile::index_t stride_v,
+@@ -221,9 +223,7 @@ struct FmhaFwdKernel
+               ck_tile::index_t batch_stride_o,
+               ck_tile::index_t window_size_left,
+               ck_tile::index_t window_size_right,
+-              ck_tile::index_t mask_type,
+-              float descale_qk,
+-              float descale_sv)
++              ck_tile::index_t mask_type)
+     {
+         Kargs kargs{{q_ptr,
+                      k_ptr,
+@@ -235,9 +235,9 @@ struct FmhaFwdKernel
+                      hdim_v,
+                      nhead_ratio_qk,
+ #if CK_TILE_FMHA_FWD_FAST_EXP2
+-                     static_cast<float>(scale * ck_tile::log2e_v<>),
++                     static_cast<float>(scale_s * ck_tile::log2e_v<>),
+ #else
+-                     scale,
++                     scale_s,
+ #endif
+                      stride_q,
+                      stride_k,
+@@ -250,7 +250,7 @@ struct FmhaFwdKernel
+                     {},               // placeholder for bias
+                     {},               // placeholder for mask
+                     {},               // placeholder for lse
+-                    {},               // placeholder for fp8 args
++                    {},               // placeholder for fp8_static_quant args
+                     batch_stride_q,
+                     batch_stride_k,
+                     batch_stride_v,
+@@ -275,10 +275,10 @@ struct FmhaFwdKernel
+             kargs.nhead_stride_lse = nhead_stride_lse;
+             kargs.batch_stride_lse = batch_stride_lse;
+         }
+-        if constexpr(kIsFp8)
++        if constexpr(kDoFp8StaticQuant)
+         {
+-            kargs.descale_qk = descale_qk;
+-            kargs.descale_sv = descale_sv;
++            kargs.scale_p = scale_p;
++            kargs.scale_o = scale_o;
+         }
+ 
+         return kargs;
+@@ -298,7 +298,9 @@ struct FmhaFwdKernel
+               ck_tile::index_t hdim_q,
+               ck_tile::index_t hdim_v,
+               ck_tile::index_t nhead_ratio_qk,
+-              float scale,
++              float scale_s,
++              float scale_p,
++              float scale_o,
+               ck_tile::index_t stride_q,
+               ck_tile::index_t stride_k,
+               ck_tile::index_t stride_v,
+@@ -312,9 +314,7 @@ struct FmhaFwdKernel
+               ck_tile::index_t nhead_stride_o,
+               ck_tile::index_t window_size_left,
+               ck_tile::index_t window_size_right,
+-              ck_tile::index_t mask_type,
+-              float descale_qk,
+-              float descale_sv)
++              ck_tile::index_t mask_type)
+     {
+         Kargs kargs{{q_ptr,
+                      k_ptr,
+@@ -326,9 +326,9 @@ struct FmhaFwdKernel
+                      hdim_v,
+                      nhead_ratio_qk,
+ #if CK_TILE_FMHA_FWD_FAST_EXP2
+-                     static_cast<float>(scale * ck_tile::log2e_v<>),
++                     static_cast<float>(scale_s * ck_tile::log2e_v<>),
+ #else
+-                     scale,
++                     scale_s,
+ #endif
+                      stride_q,
+                      stride_k,
+@@ -341,7 +341,7 @@ struct FmhaFwdKernel
+                     {},               // placeholder for bias
+                     {},               // placeholder for mask
+                     {},               // placeholder for lse
+-                    {},               // placeholder for fp8 args
++                    {},               // placeholder for fp8_static_quant args
+                     reinterpret_cast<const int32_t*>(seqstart_q_ptr),
+                     reinterpret_cast<const int32_t*>(seqstart_k_ptr),
+                     reinterpret_cast<const int32_t*>(seqlen_k_ptr)};
+@@ -363,10 +363,10 @@ struct FmhaFwdKernel
+             kargs.lse_ptr          = lse_ptr;
+             kargs.nhead_stride_lse = nhead_stride_lse;
+         }
+-        if constexpr(kIsFp8)
++        if constexpr(kDoFp8StaticQuant)
+         {
+-            kargs.descale_qk = descale_qk;
+-            kargs.descale_sv = descale_sv;
++            kargs.scale_p = scale_p;
++            kargs.scale_o = scale_o;
+         }
+ 
+         return kargs;
+@@ -656,18 +656,25 @@ struct FmhaFwdKernel
+         }();
+ 
+         auto o_acc_tile = [&]() {
+-            if constexpr(kIsFp8)
++            if constexpr(kDoFp8StaticQuant)
+             {
+-                return FmhaPipeline{}(q_dram_window,
+-                                      k_dram_window,
+-                                      v_dram_window,
+-                                      bias_dram_window,
+-                                      lse_dram_window,
+-                                      mask,
+-                                      kargs.scale,
+-                                      kargs.descale_qk,
+-                                      kargs.descale_sv,
+-                                      smem_ptr);
++                return FmhaPipeline{}(
++                    q_dram_window,
++                    identity{}, // q_element_func
++                    k_dram_window,
++                    identity{}, // k_element_func
++                    v_dram_window,
++                    identity{}, // v_element_func
++                    bias_dram_window,
++                    identity{}, // bias_element_func
++                    lse_dram_window,
++                    identity{},                                          // lse_element_func
++                    identity{},                                          // s_acc_element_func
++                    scales{kargs.scale_p},                               // p_compute_element_func
++                    composes(saturates<fp8_t>{}, scales{kargs.scale_o}), // o_acc_element_func
++                    mask,
++                    kargs.scale_s,
++                    smem_ptr);
+             }
+             else
+             {
+@@ -677,7 +684,7 @@ struct FmhaFwdKernel
+                                       bias_dram_window,
+                                       lse_dram_window,
+                                       mask,
+-                                      kargs.scale,
++                                      kargs.scale_s,
+                                       smem_ptr);
+             }
+         }();
+diff --git a/include/ck_tile/ops/fmha/pipeline/block_fmha_pipeline_enum.hpp b/include/ck_tile/ops/fmha/pipeline/block_fmha_pipeline_enum.hpp
+index ae5a88df21d..55001740869 100644
+--- a/include/ck_tile/ops/fmha/pipeline/block_fmha_pipeline_enum.hpp
++++ b/include/ck_tile/ops/fmha/pipeline/block_fmha_pipeline_enum.hpp
+@@ -10,7 +10,6 @@ enum class BlockFmhaPipelineEnum
+ {
+     QRKSVS = 0,
+     QRKSVS_ASYNC,
+-    QRKSVS_FP8,
+     QSKSVS,
+ };
+ 
+diff --git a/include/ck_tile/ops/fmha/pipeline/block_fmha_pipeline_problem.hpp b/include/ck_tile/ops/fmha/pipeline/block_fmha_pipeline_problem.hpp
+index 90bd69956c7..0dcd366173f 100644
+--- a/include/ck_tile/ops/fmha/pipeline/block_fmha_pipeline_problem.hpp
++++ b/include/ck_tile/ops/fmha/pipeline/block_fmha_pipeline_problem.hpp
+@@ -41,13 +41,14 @@ struct BlockFmhaPipelineProblem
+     static constexpr bool kIsGroupMode  = kIsGroupMode_;
+ 
+     // attributes from traits
+-    static constexpr bool kPadSeqLenQ    = Traits::kPadSeqLenQ;
+-    static constexpr bool kPadSeqLenK    = Traits::kPadSeqLenK;
+-    static constexpr bool kPadHeadDimQ   = Traits::kPadHeadDimQ;
+-    static constexpr bool kPadHeadDimV   = Traits::kPadHeadDimV;
+-    static constexpr bool kHasBias       = Traits::kHasBias;
+-    static constexpr bool kStoreLSE      = Traits::kStoreLSE;
+-    static constexpr index_t kBlockPerCu = Traits::kBlockPerCu;
++    static constexpr bool kPadSeqLenQ       = Traits::kPadSeqLenQ;
++    static constexpr bool kPadSeqLenK       = Traits::kPadSeqLenK;
++    static constexpr bool kPadHeadDimQ      = Traits::kPadHeadDimQ;
++    static constexpr bool kPadHeadDimV      = Traits::kPadHeadDimV;
++    static constexpr bool kHasBias          = Traits::kHasBias;
++    static constexpr bool kStoreLSE         = Traits::kStoreLSE;
++    static constexpr bool kDoFp8StaticQuant = Traits::kDoFp8StaticQuant;
++    static constexpr index_t kBlockPerCu    = Traits::kBlockPerCu;
+     static constexpr bool kIsFp8 =
+         (std::is_same_v<QDataType, fp8_t> || std::is_same_v<QDataType, bf8_t>)&&(
+             std::is_same_v<KDataType, fp8_t> ||
+diff --git a/include/ck_tile/ops/fmha/pipeline/block_fmha_pipeline_qr_ks_vs.hpp b/include/ck_tile/ops/fmha/pipeline/block_fmha_pipeline_qr_ks_vs.hpp
+index 098d9d363d6..2521d84409d 100644
+--- a/include/ck_tile/ops/fmha/pipeline/block_fmha_pipeline_qr_ks_vs.hpp
++++ b/include/ck_tile/ops/fmha/pipeline/block_fmha_pipeline_qr_ks_vs.hpp
+@@ -111,7 +111,10 @@ struct BlockFmhaPipelineQRKSVS
+               typename KElementFunction,
+               typename VElementFunction,
+               typename BiasElementFunction,
+-              typename LSEElementFunction>
++              typename LSEElementFunction,
++              typename SAccElementFunction,
++              typename PComputeElementFunction,
++              typename OAccElementFunction>
+     CK_TILE_HOST_DEVICE auto
+     operator()(const QDramBlockWindowTmp& q_dram_block_window_tmp, // M0*K0 tile
+                const QElementFunction& q_element_func,
+@@ -123,8 +126,11 @@ struct BlockFmhaPipelineQRKSVS
+                const BiasElementFunction& bias_element_func,
+                LSEDramBlockWindowTmp& lse_dram_window_tmp, // M0*1 tile
+                const LSEElementFunction& lse_element_func,
++               const SAccElementFunction& s_acc_element_func,
++               const PComputeElementFunction& p_compute_element_func,
++               const OAccElementFunction& o_acc_element_func,
+                FmhaMask mask,
+-               float scale,
++               float scale_s,
+                void* smem_ptr) const
+     {
+         static_assert(
+@@ -316,16 +322,18 @@ struct BlockFmhaPipelineQRKSVS
+                        k_lds_window);
+             }
+ 
+-            // STAGE 2, scale, add bias, mask, softmax
++            // STAGE 2, scale_s, add bias, mask, softmax
+             if constexpr(kHasBias)
+             {
++                s_acc = tile_elementwise_in(s_acc_element_func, s_acc);
++                tile_elementwise_inout([&scale_s](auto& x) { x = x * scale_s; }, s_acc);
+                 tile_elementwise_inout(
+                     [&](auto& x, const auto& y) {
+ #if !CK_TILE_FMHA_FWD_FAST_EXP2
+-                        x = scale * x + type_convert<SaccDataType>(bias_element_func(y));
++                        x += type_convert<SaccDataType>(bias_element_func(y));
+ #else
+-                        x = scale * x + log2e_v<SaccDataType> *
+-                                            type_convert<SaccDataType>(bias_element_func(y));
++                        x += log2e_v<SaccDataType> *
++                             type_convert<SaccDataType>(bias_element_func(y));
+ #endif
+                     },
+                     s_acc,
+@@ -333,8 +341,9 @@ struct BlockFmhaPipelineQRKSVS
+             }
+             else
+             {
++                s_acc = tile_elementwise_in(s_acc_element_func, s_acc);
+ #if !CK_TILE_FMHA_FWD_FAST_EXP2
+-                tile_elementwise_inout([&scale](auto& x) { x = x * scale; }, s_acc);
++                tile_elementwise_inout([&scale_s](auto& x) { x = x * scale_s; }, s_acc);
+ #endif
+             }
+             move_tile_window(bias_dram_window, {0, kN0});
+@@ -390,7 +399,7 @@ struct BlockFmhaPipelineQRKSVS
+             sweep_tile_span(p_spans[number<0>{}], [&](auto idx0) {
+                 constexpr auto i_idx = make_tuple(idx0);
+ #if CK_TILE_FMHA_FWD_FAST_EXP2
+-                auto row_max = scale * get_validated_m(m[i_idx]);
++                auto row_max = scale_s * get_validated_m(m[i_idx]);
+ #endif
+                 sweep_tile_span(p_spans[number<1>{}], [&](auto idx1) {
+                     constexpr auto i_j_idx = make_tuple(idx0, idx1);
+@@ -401,7 +410,7 @@ struct BlockFmhaPipelineQRKSVS
+                     }
+                     else
+                     {
+-                        p_compute(i_j_idx) = exp2(scale * s[i_j_idx] - row_max);
++                        p_compute(i_j_idx) = exp2(scale_s * s[i_j_idx] - row_max);
+                     }
+ #else
+                     p_compute(i_j_idx)     = exp(s[i_j_idx] - get_validated_m(m[i_idx]));
+@@ -425,8 +434,8 @@ struct BlockFmhaPipelineQRKSVS
+                     }
+                     else
+                     {
+-                        auto row_max = scale * get_validated_m(m[i_idx]);
+-                        return exp2(scale * m_old[i_idx] - row_max);
++                        auto row_max = scale_s * get_validated_m(m[i_idx]);
++                        return exp2(scale_s * m_old[i_idx] - row_max);
+                     }
+                 }();
+ #else
+@@ -459,7 +468,8 @@ struct BlockFmhaPipelineQRKSVS
+             }
+             move_tile_window(v_dram_window, {0, kK1});
+ 
+-            const auto p = cast_tile<PDataType>(p_compute);
++            const auto p =
++                cast_tile<PDataType>(tile_elementwise_in(p_compute_element_func, p_compute));
+ 
+             // STAGE 3, KV gemm
+             if constexpr(k1_loops > 1)
+@@ -516,7 +526,7 @@ struct BlockFmhaPipelineQRKSVS
+                 }
+                 else
+                 {
+-                    lse(i_idx) = m_[i_idx] * scale / C_LOG2E + log(l_[i_idx]);
++                    lse(i_idx) = m_[i_idx] * scale_s / C_LOG2E + log(l_[i_idx]);
+                 }
+ #else
+                 lse(i_idx) = m_[i_idx] + log(l_[i_idx]);
+@@ -545,6 +555,8 @@ struct BlockFmhaPipelineQRKSVS
+             });
+         });
+ 
++        o_acc = tile_elementwise_in(o_acc_element_func, o_acc);
++
+         return o_acc;
+     }
+ 
+@@ -560,7 +572,7 @@ struct BlockFmhaPipelineQRKSVS
+                const BiasDramBlockWindowTmp& bias_dram_block_window_tmp, // M0*N0 tile
+                LSEDramBlockWindowTmp& lse_dram_block_window_tmp,         // M0*1 tile
+                FmhaMask mask,
+-               float scale,
++               float scale_s,
+                void* smem_ptr) const
+     {
+         return operator()(q_dram_block_window_tmp,
+@@ -573,8 +585,11 @@ struct BlockFmhaPipelineQRKSVS
+                           identity{},
+                           lse_dram_block_window_tmp,
+                           identity{},
++                          identity{},
++                          identity{},
++                          identity{},
+                           mask,
+-                          scale,
++                          scale_s,
+                           smem_ptr);
+     }
+ };
+diff --git a/include/ck_tile/ops/fmha/pipeline/block_fmha_pipeline_qr_ks_vs_async.hpp b/include/ck_tile/ops/fmha/pipeline/block_fmha_pipeline_qr_ks_vs_async.hpp
+index 80a1dbd7562..b54b18e1111 100644
+--- a/include/ck_tile/ops/fmha/pipeline/block_fmha_pipeline_qr_ks_vs_async.hpp
++++ b/include/ck_tile/ops/fmha/pipeline/block_fmha_pipeline_qr_ks_vs_async.hpp
+@@ -122,7 +122,10 @@ struct BlockFmhaPipelineQRKSVSAsync
+               typename KElementFunction,
+               typename VElementFunction,
+               typename BiasElementFunction,
+-              typename LSEElementFunction>
++              typename LSEElementFunction,
++              typename SAccElementFunction,
++              typename PComputeElementFunction,
++              typename OAccElementFunction>
+     CK_TILE_HOST_DEVICE auto
+     operator()(const QDramBlockWindowTmp& q_dram_block_window_tmp, // M0*K0 tile
+                const QElementFunction& q_element_func,
+@@ -134,8 +137,11 @@ struct BlockFmhaPipelineQRKSVSAsync
+                const BiasElementFunction& bias_element_func,
+                LSEDramBlockWindowTmp& lse_dram_window_tmp, // M0*1 tile
+                const LSEElementFunction& lse_element_func,
++               const SAccElementFunction& s_acc_element_func,
++               const PComputeElementFunction& p_compute_element_func,
++               const OAccElementFunction& o_acc_element_func,
+                FmhaMask mask,
+-               float scale,
++               float scale_s,
+                void* smem_ptr) const
+     {
+         static_assert(
+@@ -361,16 +367,18 @@ struct BlockFmhaPipelineQRKSVSAsync
+             }
+             __builtin_amdgcn_sched_barrier(1);
+ 
+-            // STAGE 2, scale, add bias, mask, softmax
++            // STAGE 2, scale_s, add bias, mask, softmax
+             if constexpr(kHasBias)
+             {
++                s_acc = tile_elementwise_in(s_acc_element_func, s_acc);
++                tile_elementwise_inout([&scale_s](auto& x) { x = x * scale_s; }, s_acc);
+                 tile_elementwise_inout(
+                     [&](auto& x, const auto& y) {
+ #if !CK_TILE_FMHA_FWD_FAST_EXP2
+-                        x = scale * x + type_convert<SaccDataType>(bias_element_func(y));
++                        x += type_convert<SaccDataType>(bias_element_func(y));
+ #else
+-                        x = scale * x + log2e_v<SaccDataType> *
+-                                            type_convert<SaccDataType>(bias_element_func(y));
++                        x += log2e_v<SaccDataType> *
++                             type_convert<SaccDataType>(bias_element_func(y));
+ #endif
+                     },
+                     s_acc,
+@@ -378,8 +386,9 @@ struct BlockFmhaPipelineQRKSVSAsync
+             }
+             else
+             {
++                s_acc = tile_elementwise_in(s_acc_element_func, s_acc);
+ #if !CK_TILE_FMHA_FWD_FAST_EXP2
+-                tile_elementwise_inout([&scale](auto& x) { x = x * scale; }, s_acc);
++                tile_elementwise_inout([&scale_s](auto& x) { x = x * scale_s; }, s_acc);
+ #endif
+             }
+             move_tile_window(bias_dram_window, {0, kN0});
+@@ -472,7 +481,7 @@ struct BlockFmhaPipelineQRKSVSAsync
+             sweep_tile_span(p_spans[number<0>{}], [&](auto idx0) {
+                 constexpr auto i_idx = make_tuple(idx0);
+ #if CK_TILE_FMHA_FWD_FAST_EXP2
+-                auto row_max = scale * get_validated_m(m[i_idx]);
++                auto row_max = scale_s * get_validated_m(m[i_idx]);
+ #endif
+                 sweep_tile_span(p_spans[number<1>{}], [&](auto idx1) {
+                     constexpr auto i_j_idx = make_tuple(idx0, idx1);
+@@ -483,7 +492,7 @@ struct BlockFmhaPipelineQRKSVSAsync
+                     }
+                     else
+                     {
+-                        p_compute(i_j_idx) = exp2(scale * s[i_j_idx] - row_max);
++                        p_compute(i_j_idx) = exp2(scale_s * s[i_j_idx] - row_max);
+                     }
+ #else
+                     p_compute(i_j_idx)     = exp(s[i_j_idx] - get_validated_m(m[i_idx]));
+@@ -507,8 +516,8 @@ struct BlockFmhaPipelineQRKSVSAsync
+                     }
+                     else
+                     {
+-                        auto row_max = scale * get_validated_m(m[i_idx]);
+-                        return exp2(scale * m_old[i_idx] - row_max);
++                        auto row_max = scale_s * get_validated_m(m[i_idx]);
++                        return exp2(scale_s * m_old[i_idx] - row_max);
+                     }
+                 }();
+ #else
+@@ -524,7 +533,8 @@ struct BlockFmhaPipelineQRKSVSAsync
+                 });
+             });
+ 
+-            const auto p = cast_tile<PDataType>(p_compute);
++            const auto p =
++                cast_tile<PDataType>(tile_elementwise_in(p_compute_element_func, p_compute));
+ 
+             // STAGE 3, KV gemm
+             if constexpr(k1_loops > 1)
+@@ -614,7 +624,7 @@ struct BlockFmhaPipelineQRKSVSAsync
+                 }
+                 else
+                 {
+-                    lse(i_idx) = m_[i_idx] * scale * R_LOG2E + log(l_[i_idx]);
++                    lse(i_idx) = m_[i_idx] * scale_s * R_LOG2E + log(l_[i_idx]);
+                 }
+ #else
+                 lse(i_idx) = m_[i_idx] + log(l_[i_idx]);
+@@ -643,6 +653,8 @@ struct BlockFmhaPipelineQRKSVSAsync
+             });
+         });
+ 
++        o_acc = tile_elementwise_in(o_acc_element_func, o_acc);
++
+         return o_acc;
+     }
+ 
+@@ -658,7 +670,7 @@ struct BlockFmhaPipelineQRKSVSAsync
+                const BiasDramBlockWindowTmp& bias_dram_block_window_tmp, // M0*N0 tile
+                LSEDramBlockWindowTmp& lse_dram_block_window_tmp,         // M0*1 tile
+                FmhaMask mask,
+-               float scale,
++               float scale_s,
+                void* smem_ptr) const
+     {
+         return operator()(q_dram_block_window_tmp,
+@@ -671,8 +683,11 @@ struct BlockFmhaPipelineQRKSVSAsync
+                           identity{},
+                           lse_dram_block_window_tmp,
+                           identity{},
++                          identity{},
++                          identity{},
++                          identity{},
+                           mask,
+-                          scale,
++                          scale_s,
+                           smem_ptr);
+     }
+ };
+diff --git a/include/ck_tile/ops/fmha/pipeline/block_fmha_pipeline_qr_ks_vs_fp8.hpp b/include/ck_tile/ops/fmha/pipeline/block_fmha_pipeline_qr_ks_vs_fp8.hpp
+index 5476282e048..34ff50347be 100644
+--- a/include/ck_tile/ops/fmha/pipeline/block_fmha_pipeline_qr_ks_vs_fp8.hpp
++++ b/include/ck_tile/ops/fmha/pipeline/block_fmha_pipeline_qr_ks_vs_fp8.hpp
+@@ -11,7 +11,7 @@ namespace ck_tile {
+ 
+ // This pipeline is qkv all located in LDS
+ template <typename Problem_, typename Policy_ = BlockFmhaPipelineQRKSVSDefaultPolicy>
+-struct BlockFmhaPipelineQRKSVSFp8
++struct [[deprecated]] BlockFmhaPipelineQRKSVSFp8
+ {
+     using Problem             = remove_cvref_t<Problem_>;
+     using Policy              = remove_cvref_t<Policy_>;
+@@ -114,7 +114,7 @@ struct BlockFmhaPipelineQRKSVSFp8
+                const BiasDramBlockWindowTmp& bias_dram_block_window_tmp, // M0*N0 tile
+                LSEDramBlockWindowTmp& /*lse_dram_window_tmp*/,           // not supported
+                FmhaMask mask,
+-               float scale,
++               float scale_s,
+                float descale_qk,
+                float descale_sv,
+                void* smem_ptr) const
+@@ -231,7 +231,7 @@ struct BlockFmhaPipelineQRKSVSFp8
+         static_assert(2 <= k0_loops);
+         static_assert(1 <= k1_loops);
+ 
+-        scale = scale * descale_qk;
++        scale_s = scale_s * descale_qk;
+         do
+         {
+             // STAGE 1, QK gemm
+@@ -300,15 +300,15 @@ struct BlockFmhaPipelineQRKSVSFp8
+                        k_lds_window);
+             }
+ 
+-            // STAGE 2, scale, add bias, mask, softmax
++            // STAGE 2, scale_s, add bias, mask, softmax
+             if constexpr(kHasBias)
+             {
+                 tile_elementwise_inout(
+                     [&](auto& x, const auto& y) {
+ #if !CK_TILE_FMHA_FWD_FAST_EXP2
+-                        x = scale * x + type_convert<SaccDataType>((y));
++                        x = scale_s * x + type_convert<SaccDataType>((y));
+ #else
+-                        x = scale * x + log2e_v<SaccDataType> * type_convert<SaccDataType>((y));
++                        x = scale_s * x + log2e_v<SaccDataType> * type_convert<SaccDataType>((y));
+ #endif
+                     },
+                     s_acc,
+@@ -317,7 +317,7 @@ struct BlockFmhaPipelineQRKSVSFp8
+             else
+             {
+ #if !CK_TILE_FMHA_FWD_FAST_EXP2
+-                tile_elementwise_inout([&scale](auto& x) { x = x * scale; }, s_acc);
++                tile_elementwise_inout([&scale_s](auto& x) { x = x * scale_s; }, s_acc);
+ #endif
+             }
+             move_tile_window(bias_dram_window, {0, kN0});
+@@ -373,7 +373,7 @@ struct BlockFmhaPipelineQRKSVSFp8
+             sweep_tile_span(p_spans[number<0>{}], [&](auto idx0) {
+                 constexpr auto i_idx = make_tuple(idx0);
+ #if CK_TILE_FMHA_FWD_FAST_EXP2
+-                auto row_max = scale * get_validated_m(m[i_idx]);
++                auto row_max = scale_s * get_validated_m(m[i_idx]);
+ #endif
+                 sweep_tile_span(p_spans[number<1>{}], [&](auto idx1) {
+                     constexpr auto i_j_idx = make_tuple(idx0, idx1);
+@@ -384,7 +384,7 @@ struct BlockFmhaPipelineQRKSVSFp8
+                     }
+                     else
+                     {
+-                        p_compute(i_j_idx) = exp2(scale * s[i_j_idx] - row_max);
++                        p_compute(i_j_idx) = exp2(scale_s * s[i_j_idx] - row_max);
+                     }
+ #else
+                     p_compute(i_j_idx)     = exp(s[i_j_idx] - get_validated_m(m[i_idx]));
+@@ -408,8 +408,8 @@ struct BlockFmhaPipelineQRKSVSFp8
+                     }
+                     else
+                     {
+-                        auto row_max = scale * get_validated_m(m[i_idx]);
+-                        return exp2(scale * m_old[i_idx] - row_max);
++                        auto row_max = scale_s * get_validated_m(m[i_idx]);
++                        return exp2(scale_s * m_old[i_idx] - row_max);
+                     }
+                 }();
+ #else
+diff --git a/include/ck_tile/ops/fmha/pipeline/block_fmha_pipeline_qs_ks_vs.hpp b/include/ck_tile/ops/fmha/pipeline/block_fmha_pipeline_qs_ks_vs.hpp
+index e04f6660d1a..985b678e70d 100644
+--- a/include/ck_tile/ops/fmha/pipeline/block_fmha_pipeline_qs_ks_vs.hpp
++++ b/include/ck_tile/ops/fmha/pipeline/block_fmha_pipeline_qs_ks_vs.hpp
+@@ -97,7 +97,10 @@ struct BlockFmhaPipelineQSKSVS
+               typename KElementFunction,
+               typename VElementFunction,
+               typename BiasElementFunction,
+-              typename LSEElementFunction>
++              typename LSEElementFunction,
++              typename SAccElementFunction,
++              typename PComputeElementFunction,
++              typename OAccElementFunction>
+     CK_TILE_HOST_DEVICE auto
+     operator()(const QDramBlockWindowTmp& q_dram_block_window_tmp, // M0*K0 tile
+                const QElementFunction& q_element_func,
+@@ -109,8 +112,11 @@ struct BlockFmhaPipelineQSKSVS
+                const BiasElementFunction& bias_element_func,
+                LSEDramBlockWindowTmp& lse_dram_window_tmp, // M0*1 tile
+                const LSEElementFunction& lse_element_func,
++               const SAccElementFunction& s_acc_element_func,
++               const PComputeElementFunction& p_compute_element_func,
++               const OAccElementFunction& o_acc_element_func,
+                FmhaMask mask,
+-               float scale,
++               float scale_s,
+                void* smem_ptr) const
+     {
+         static_assert(
+@@ -307,16 +313,18 @@ struct BlockFmhaPipelineQSKSVS
+                 gemm_0(s_acc, q_lds_window, k_lds_window);
+             }
+ 
+-            // STAGE 2, scale, add bias, mask, softmax
++            // STAGE 2, scale_s, add bias, mask, softmax
+             if constexpr(kHasBias)
+             {
++                s_acc = tile_elementwise_in(s_acc_element_func, s_acc);
++                tile_elementwise_inout([&scale_s](auto& x) { x = x * scale_s; }, s_acc);
+                 tile_elementwise_inout(
+                     [&](auto& x, const auto& y) {
+ #if !CK_TILE_FMHA_FWD_FAST_EXP2
+-                        x = scale * x + type_convert<SaccDataType>(bias_element_func(y));
++                        x += type_convert<SaccDataType>(bias_element_func(y));
+ #else
+-                        x = scale * x + log2e_v<SaccDataType> *
+-                                            type_convert<SaccDataType>(bias_element_func(y));
++                        x += log2e_v<SaccDataType> *
++                             type_convert<SaccDataType>(bias_element_func(y));
+ #endif
+                     },
+                     s_acc,
+@@ -324,8 +332,9 @@ struct BlockFmhaPipelineQSKSVS
+             }
+             else
+             {
++                s_acc = tile_elementwise_in(s_acc_element_func, s_acc);
+ #if !CK_TILE_FMHA_FWD_FAST_EXP2
+-                tile_elementwise_inout([&scale](auto& x) { x = x * scale; }, s_acc);
++                tile_elementwise_inout([&scale_s](auto& x) { x = x * scale_s; }, s_acc);
+ #endif
+             }
+             move_tile_window(bias_dram_window, {0, kN0});
+@@ -381,7 +390,7 @@ struct BlockFmhaPipelineQSKSVS
+             sweep_tile_span(p_spans[number<0>{}], [&](auto idx0) {
+                 constexpr auto i_idx = make_tuple(idx0);
+ #if CK_TILE_FMHA_FWD_FAST_EXP2
+-                auto row_max = scale * get_validated_m(m[i_idx]);
++                auto row_max = scale_s * get_validated_m(m[i_idx]);
+ #endif
+                 sweep_tile_span(p_spans[number<1>{}], [&](auto idx1) {
+                     constexpr auto i_j_idx = make_tuple(idx0, idx1);
+@@ -392,7 +401,7 @@ struct BlockFmhaPipelineQSKSVS
+                     }
+                     else
+                     {
+-                        p_compute(i_j_idx) = exp2(scale * s[i_j_idx] - row_max);
++                        p_compute(i_j_idx) = exp2(scale_s * s[i_j_idx] - row_max);
+                     }
+ #else
+                     p_compute(i_j_idx)     = exp(s[i_j_idx] - get_validated_m(m[i_idx]));
+@@ -416,8 +425,8 @@ struct BlockFmhaPipelineQSKSVS
+                     }
+                     else
+                     {
+-                        auto row_max = scale * get_validated_m(m[i_idx]);
+-                        return exp2(scale * m_old[i_idx] - row_max);
++                        auto row_max = scale_s * get_validated_m(m[i_idx]);
++                        return exp2(scale_s * m_old[i_idx] - row_max);
+                     }
+                 }();
+ #else
+@@ -450,7 +459,8 @@ struct BlockFmhaPipelineQSKSVS
+             }
+             move_tile_window(v_dram_window, {0, kK1});
+ 
+-            const auto p = cast_tile<PDataType>(p_compute);
++            const auto p =
++                cast_tile<PDataType>(tile_elementwise_in(p_compute_element_func, p_compute));
+ 
+             // STAGE 3, KV gemm
+             if constexpr(k1_loops > 1)
+@@ -507,7 +517,7 @@ struct BlockFmhaPipelineQSKSVS
+                 }
+                 else
+                 {
+-                    lse(i_idx) = m_[i_idx] * scale / C_LOG2E + log(l_[i_idx]);
++                    lse(i_idx) = m_[i_idx] * scale_s / C_LOG2E + log(l_[i_idx]);
+                 }
+ #else
+                 lse(i_idx) = m_[i_idx] + log(l_[i_idx]);
+@@ -536,6 +546,8 @@ struct BlockFmhaPipelineQSKSVS
+             });
+         });
+ 
++        o_acc = tile_elementwise_in(o_acc_element_func, o_acc);
++
+         return o_acc;
+     }
+ 
+@@ -551,7 +563,7 @@ struct BlockFmhaPipelineQSKSVS
+                const BiasDramBlockWindowTmp& bias_dram_block_window_tmp, // M0*N0 tile
+                LSEDramBlockWindowTmp& lse_dram_block_window_tmp,         // M0*1 tile
+                FmhaMask mask,
+-               float scale,
++               float scale_s,
+                void* smem_ptr) const
+     {
+         return operator()(q_dram_block_window_tmp,
+@@ -564,8 +576,11 @@ struct BlockFmhaPipelineQSKSVS
+                           identity{},
+                           lse_dram_block_window_tmp,
+                           identity{},
++                          identity{},
++                          identity{},
++                          identity{},
+                           mask,
+-                          scale,
++                          scale_s,
+                           smem_ptr);
+     }
+ };
+diff --git a/include/ck_tile/ops/fmha/pipeline/tile_fmha_traits.hpp b/include/ck_tile/ops/fmha/pipeline/tile_fmha_traits.hpp
+index 1b14d0cae0a..137f4ddd819 100644
+--- a/include/ck_tile/ops/fmha/pipeline/tile_fmha_traits.hpp
++++ b/include/ck_tile/ops/fmha/pipeline/tile_fmha_traits.hpp
+@@ -13,16 +13,18 @@ template <bool kPadSeqLenQ_ /* padding for seqlen_q */,
+           bool kPadHeadDimV_ /* paddding for hdim_v */,
+           bool kHasBias_,
+           bool kStoreLSE_,
++          bool kDoFp8StaticQuant_,
+           index_t kBlockPerCu_ = -1 /* overwrite occupancy if not -1 */>
+ struct TileFmhaTraits
+ {
+-    static constexpr bool kPadSeqLenQ    = kPadSeqLenQ_;
+-    static constexpr bool kPadSeqLenK    = kPadSeqLenK_;
+-    static constexpr bool kPadHeadDimQ   = kPadHeadDimQ_;
+-    static constexpr bool kPadHeadDimV   = kPadHeadDimV_;
+-    static constexpr bool kHasBias       = kHasBias_;
+-    static constexpr bool kStoreLSE      = kStoreLSE_;
+-    static constexpr index_t kBlockPerCu = kBlockPerCu_;
++    static constexpr bool kPadSeqLenQ       = kPadSeqLenQ_;
++    static constexpr bool kPadSeqLenK       = kPadSeqLenK_;
++    static constexpr bool kPadHeadDimQ      = kPadHeadDimQ_;
++    static constexpr bool kPadHeadDimV      = kPadHeadDimV_;
++    static constexpr bool kHasBias          = kHasBias_;
++    static constexpr bool kStoreLSE         = kStoreLSE_;
++    static constexpr bool kDoFp8StaticQuant = kDoFp8StaticQuant_;
++    static constexpr index_t kBlockPerCu    = kBlockPerCu_;
+ };
+ 
+ } // namespace ck_tile
+diff --git a/include/ck_tile/ops/gemm/warp/warp_gemm_attribute_mfma.hpp b/include/ck_tile/ops/gemm/warp/warp_gemm_attribute_mfma.hpp
+index 2c1335c61b9..71c59bbd175 100644
+--- a/include/ck_tile/ops/gemm/warp/warp_gemm_attribute_mfma.hpp
++++ b/include/ck_tile/ops/gemm/warp/warp_gemm_attribute_mfma.hpp
+@@ -406,11 +406,12 @@ struct WarpGemmAtrributeMfmaIterateKAndTransposedCDistribution_SwizzleB
+         sequence<2, 2>,
+         sequence<0, 2>>;
+ #else
++    // TODO: more test not only 32x32
+     using BWarpDstrEncoding = tile_distribution_encoding<
+         sequence<>,
+-        tuple<sequence<Impl::kAMLane / (SFactor * Impl::kCMLane * Impl::kCM1PerLane),
+-                       SFactor,
++        tuple<sequence<Impl::kAMLane / (Impl::kCMLane * SFactor * Impl::kCM1PerLane),
+                        Impl::kCMLane,
++                       SFactor,
+                        Impl::kCM1PerLane>,
+               sequence<Impl::kABKLane, Impl::kABKPerLane * kKIter>>,
+         tuple<sequence<2, 1, 1, 1, 1>>,

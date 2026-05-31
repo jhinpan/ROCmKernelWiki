@@ -1,0 +1,1210 @@
+diff --git a/3rdparty/composable_kernel b/3rdparty/composable_kernel
+index 8aff45a8af..e1c5172fdb 160000
+--- a/3rdparty/composable_kernel
++++ b/3rdparty/composable_kernel
+@@ -1 +1 @@
+-Subproject commit 8aff45a8af0c868d8c3513dab3335e3b1d3e111f
++Subproject commit e1c5172fdb7eb4072943696f6a33937234843e3b
+diff --git a/aiter/fused_moe.py b/aiter/fused_moe.py
+index 5097f1ec16..e1151a1624 100644
+--- a/aiter/fused_moe.py
++++ b/aiter/fused_moe.py
+@@ -28,6 +28,7 @@ def moe_sorting(
+     moebuf_dtype,
+     block_size=BLOCK_SIZE_M,
+     expert_mask=None,
++    num_local_tokens=None,
+ ):
+     device = topk_ids.device
+     M, topk = topk_ids.shape
+@@ -54,6 +55,7 @@ def moe_sorting(
+         num_experts,
+         block_size,
+         expert_mask,
++        num_local_tokens,
+     )
+     return sorted_ids, sorted_weights, sorted_expert_ids, num_valid_ids, moe_buf
+ 
+@@ -74,17 +76,19 @@ def fused_moe(
+     w2,  # [expert(local_expert:EP), dim, inter_dim]
+     topk_weight,
+     topk_ids,
+-    expert_mask=None,  # EP
++    expert_mask: Optional[torch.tensor] = None,  # EP
+     activation=ActivationType.Silu,
+     quant_type=QuantType.No,
+     doweight_stage1=False,
+     # following for quant
+-    w1_scale=None,  # [expert(local_expert:EP), inter_dim, 1]
+-    w2_scale=None,  # [expert(local_expert:EP), model_dim, 1]
+-    a1_scale=None,  # [expert(local_expert:EP), 1, model_dim]
+-    a2_scale=None,  # [expert(local_expert:EP), 1, inter_dim]
++    w1_scale: Optional[torch.tensor] = None,  # [expert(local_expert:EP), inter_dim, 1]
++    w2_scale: Optional[torch.tensor] = None,  # [expert(local_expert:EP), model_dim, 1]
++    a1_scale: Optional[torch.tensor] = None,  # [expert(local_expert:EP), 1, model_dim]
++    a2_scale: Optional[torch.tensor] = None,  # [expert(local_expert:EP), 1, inter_dim]
+     # following for tuning
+     block_size_M=None,
++    num_local_tokens: Optional[torch.tensor] = None,
++    dtype=None,
+ ):
+     """user API"""
+     M, topk = topk_ids.shape
+@@ -99,7 +103,11 @@ def fused_moe(
+     global_E = E
+     if expert_mask is not None:
+         global_E = expert_mask.numel()
+-    dtype = hidden_states.dtype
++    dtype = hidden_states.dtype if dtype is None else dtype
++    assert dtype in [
++        dtypes.fp16,
++        dtypes.bf16,
++    ], f"Fused_moe unsupported out dtype: {dtype}"
+     q_dtype_w = w1.dtype
+     q_dtype_a = w1.dtype if w1.dtype != torch.uint32 else dtypes.fp8
+     q_dtype_a = dtypes.fp4x2 if quant_type == QuantType.per_1x32 else q_dtype_a
+@@ -124,7 +132,14 @@ def fused_moe(
+     block_size_M = 32 if run_1stage else block_size_M
+ 
+     sorted_ids, sorted_weights, sorted_expert_ids, num_valid_ids, moe_buf = moe_sorting(
+-        topk_ids, topk_weight, global_E, model_dim, dtype, block_size_M, expert_mask
++        topk_ids,
++        topk_weight,
++        global_E,
++        model_dim,
++        dtype,
++        block_size_M,
++        expert_mask,
++        num_local_tokens,
+     )
+ 
+     if run_1stage:
+@@ -218,7 +233,15 @@ def fused_moe_1stage(
+             QuantType.per_1x128 if quant_type == QuantType.per_128x128 else quant_type
+         )
+         quant_func = get_quant(quant_type)
+-        a1, a1_scale = quant_func(hidden_states, scale=a1_scale, quant_dtype=q_dtype_a)
++        if hidden_states.dtype != q_dtype_a:
++            a1, a1_scale = quant_func(
++                hidden_states, scale=a1_scale, quant_dtype=q_dtype_a
++            )
++        else:
++            assert (
++                a1_scale is not None or quant_type == QuantType.No
++            ), "a1_scale must be provided for quantized input for fused_moe"
++            a1 = hidden_states
+ 
+         token_num = hidden_states.shape[0]
+         E, model_dim, inter_dim = get_inter_dim(w1.shape, w2.shape)
+@@ -456,7 +479,7 @@ def fused_moe_2stages(
+ 
+     token_num, _ = hidden_states.shape
+     E, model_dim, inter_dim = get_inter_dim(w1.shape, w2.shape)
+-    dtype = hidden_states.dtype
++    dtype = moe_out.dtype
+     device = hidden_states.device
+ 
+     stage1, stage2, block_m, ksplit = get_2stage_cfgs(
+@@ -474,7 +497,13 @@ def fused_moe_2stages(
+         doweight_stage1,
+     )
+ 
+-    a1, a1_scale = quant_func(hidden_states, scale=a1_scale, quant_dtype=q_dtype_a)
++    if hidden_states.dtype != q_dtype_a:
++        a1, a1_scale = quant_func(hidden_states, scale=a1_scale, quant_dtype=q_dtype_a)
++    else:
++        assert (
++            a1_scale is not None or quant_type == QuantType.No
++        ), "a1_scale must be provided for quantized input for fused_moe"
++        a1 = hidden_states
+     if quant_type != QuantType.per_128x128:
+         a2 = torch.empty(
+             (token_num, topk, inter_dim),
+@@ -505,8 +534,6 @@ def fused_moe_2stages(
+     )
+ 
+     if quant_type != QuantType.per_128x128:
+-        if quant_type == QuantType.per_Token:
+-            a2 = a2.view(token_num, -1)
+         a2, a2_scale = quant_func(a2, scale=a2_scale, quant_dtype=q_dtype_a)
+         a2 = a2.view(token_num, topk, inter_dim)
+     else:
+diff --git a/aiter/jit/optCompilerConfig.json b/aiter/jit/optCompilerConfig.json
+index 20d2c67b09..7e5032d478 100644
+--- a/aiter/jit/optCompilerConfig.json
++++ b/aiter/jit/optCompilerConfig.json
+@@ -292,21 +292,6 @@
+         "verbose": "False",
+         "blob_gen_cmd": "f'{get_asm_dir()}/fmoe_2stages/codegen.py --output_dir {{}}'"
+     },
+-    "module_moe": {
+-        "srcs": [
+-            "f'{AITER_CSRC_DIR}/pybind/moe_ck_pybind.cu'",
+-            "f'{CK_DIR}/example/ck_tile/15_fused_moe/instances'",
+-            "f'{AITER_CSRC_DIR}/py_itfs_ck/moe_kernels.cu'"
+-        ],
+-        "flags_extra_cc": [],
+-        "flags_extra_hip": [],
+-        "extra_ldflags": "None",
+-        "extra_include": [
+-            "f'{CK_DIR}/example/ck_tile/15_fused_moe'"
+-        ],
+-        "verbose": "False",
+-        "blob_gen_cmd": "''"
+-    },
+     "module_moe_ck2stages": {
+         "srcs": [
+             "f'{AITER_CSRC_DIR}/pybind/moe_ck_2stages_pybind.cu'",
+diff --git a/aiter/ops/communication.py b/aiter/ops/communication.py
+index 0c1cf2bc4a..329ae05a72 100644
+--- a/aiter/ops/communication.py
++++ b/aiter/ops/communication.py
+@@ -1,5 +1,5 @@
+ # SPDX-License-Identifier: MIT
+-# Copyright (c) 2024, Advanced Micro Devices, Inc. All rights reserved.
++# Copyright (C) 2024-2025, Advanced Micro Devices, Inc. All rights reserved.
+ 
+ import torch
+ from torch import Tensor
+@@ -25,6 +25,7 @@ def init_dist_env(world_size, rankID):
+         world_size=world_size,
+         rank=rankID,
+         distributed_init_method=get_distributed_init_method(get_ip(), get_open_port()),
++        backend="cpu:gloo,cuda:nccl",
+     )
+     ensure_model_parallel_initialized(world_size, 1)
+ 
+diff --git a/aiter/ops/moe_op.py b/aiter/ops/moe_op.py
+index 584764fab8..0e4c46562b 100755
+--- a/aiter/ops/moe_op.py
++++ b/aiter/ops/moe_op.py
+@@ -187,22 +187,6 @@ def moe_stage1_g1u1(
+ ) -> None: ...
+ 
+ 
+-@compile_ops("module_moe")
+-def ck_moe(
+-    hidden_states: Tensor,
+-    w1: Tensor,
+-    w2: Tensor,
+-    topk_weight: Tensor,
+-    topk_ids: Tensor,
+-    fc1_scale: Optional[Tensor] = None,
+-    fc2_scale: Optional[Tensor] = None,
+-    fc1_smooth_scale: Optional[Tensor] = None,
+-    fc2_smooth_scale: Optional[Tensor] = None,
+-    block_m: Optional[int] = 32,
+-    expert_mask: Optional[Tensor] = None,
+-): ...
+-
+-
+ @compile_ops("module_moe_ck2stages")
+ def ck_moe_stage1(
+     hidden_states: Tensor,
+diff --git a/aiter/ops/moe_sorting.py b/aiter/ops/moe_sorting.py
+index d4726a38b3..e33ba50c35 100644
+--- a/aiter/ops/moe_sorting.py
++++ b/aiter/ops/moe_sorting.py
+@@ -20,4 +20,5 @@ def moe_sorting_fwd(
+     num_experts: int,
+     unit_size: int,
+     local_expert_mask: Optional[torch.Tensor] = None,
++    num_local_tokens: Optional[torch.Tensor] = None,
+ ): ...
+diff --git a/aiter/ops/quant.py b/aiter/ops/quant.py
+index 4b69bbddd8..c7f63a7b49 100644
+--- a/aiter/ops/quant.py
++++ b/aiter/ops/quant.py
+@@ -255,7 +255,7 @@ def per_token_quant_triton(x, scale=None, quant_dtype=dtypes.i8):
+     y = torch.empty(shape, dtype=quant_dtype, device=device)
+     if scale is None:
+         scale = torch.empty((*shape[:-1], 1), dtype=dtypes.fp32, device=device)
+-        triton.quant.dynamic_per_token_quant_fp8_i8(y, x, scale)
++        triton.quant.dynamic_per_token_quant_fp8_i8(y, x.view(-1, x.shape[-1]), scale)
+     else:
+         raise ValueError("unsupported: static per token quant")
+ 
+diff --git a/csrc/cpp_itfs/moe/test_asm_moe.py b/csrc/cpp_itfs/moe/test_asm_moe.py
+index fcbfaa7dd0..04f409a6c2 100644
+--- a/csrc/cpp_itfs/moe/test_asm_moe.py
++++ b/csrc/cpp_itfs/moe/test_asm_moe.py
+@@ -6,7 +6,6 @@
+ from aiter.fused_moe_bf16_asm import torch_moe
+ from csrc.cpp_itfs.moe.asm_moe import asm_moe
+ from aiter.fused_moe_gelu import fused_experts
+-from aiter import ck_moe
+ from aiter import ActivationType
+ 
+ BLOCK_SIZE_M = 32
+@@ -87,32 +86,6 @@ def asm_moe_test(
+     )
+ 
+ 
+-@perftest()
+-def ck_moe_test(
+-    hidden_states,
+-    w1,
+-    w2,
+-    topk_weight,
+-    topk_ids,
+-    # following for int8 quant
+-    fc1_scale=None,  # [expert, inter_dim, 1]
+-    fc2_scale=None,  # [expert, model_dim, 1]
+-    fc1_smooth_scale=None,  # [expert, 1, model_dim]
+-    fc2_smooth_scale=None,  # [expert, 1, inter_dim]
+-):
+-    return ck_moe(
+-        hidden_states,
+-        w1,
+-        w2,
+-        topk_weight,
+-        topk_ids,
+-        fc1_scale,
+-        fc2_scale,
+-        fc1_smooth_scale,
+-        fc2_smooth_scale,
+-    )
+-
+-
+ @perftest()
+ def vllm_moe(hidden_states, w1, w2, topk_weight, topk_ids):
+     return fused_experts(hidden_states, w1, w2, topk_weight, topk_ids, inplace=False)
+@@ -216,14 +189,8 @@ def vllm_moe(hidden_states, w1, w2, topk_weight, topk_ids):
+ #         else:
+ #             out_b, avg_b = asm_moe_test(input, w1b, w2b, topk_weights, topk_ids)
+ 
+-#         # test ck moe
+-#         out_ck, avg_ck = ck_moe_test(
+-#             input, w1b, w2b, topk_weights, topk_ids, None, None, None, None
+-#         )
+-
+-#         msg = f"[perf] {token=}, quant={quantstr}, {model_dim=}, {inter_dim=}, {E=}, {topk=}, dtype: {dtype}, torch_avg: {avg_c:<8.2f} us, asm_avg: {avg_b:.2f} us, ck_avg: {avg_ck:.2f} us, uplift: {avg_c/avg_b-1:.1%}"
++#         msg = f"[perf] {token=}, quant={quantstr}, {model_dim=}, {inter_dim=}, {E=}, {topk=}, dtype: {dtype}, torch_avg: {avg_c:<8.2f} us, asm_avg: {avg_b:.2f} us, uplift: {avg_c/avg_b-1:.1%}"
+ #         checkAllclose(ref2, out_b, rtol=0.01, atol=100, msg=msg)
+-#         checkAllclose(ref2, out_ck, rtol=0.01, atol=100, msg="ck check")
+ #     else:
+ #         dtypeMax = 7 if use_int4 else None
+ #         w1, fc1_scale = pertoken_quant(
+@@ -342,11 +309,6 @@ def vllm_moe(hidden_states, w1, w2, topk_weight, topk_ids):
+ #             msg = f"[perf] a8w8 asm: {avg_b:.2f} vs a16w8 asm: {avg_b2:.2f} ......"
+ #             checkAllclose(ref2, out_b2, atol=100, msg=msg)
+ 
+-#         # # test ck moe, not support now
+-#         # out_ck, avg_ck = ck_moe_test(input, w1b, w2b, topk_weights, topk_ids,
+-#         #                              fc1_scale, fc2_scale,
+-#         #                              fc1_smooth_scale, fc2_smooth_scale)
+-
+ #         msg = f"[perf] {use_g1u1=} {token=}, quant={quantstr}, {model_dim=}, {inter_dim=}, {E=}, {shared_E=}, {topk=}, dtype: {dtype}, torch_avg: {avg_c:<8.2f} us, asm_avg: {avg_b:.2f} us ...... uplift: {avg_c/avg_b-1:.1%}"
+ #         checkAllclose(ref2, out_b, rtol=0.01, atol=100, msg=msg)
+ #         # checkAllclose(ref2, avg_ck, rtol=0.01, atol=100)
+diff --git a/csrc/include/moe_ck.h b/csrc/include/moe_ck.h
+index edc5c2e553..25b298f29c 100644
+--- a/csrc/include/moe_ck.h
++++ b/csrc/include/moe_ck.h
+@@ -4,42 +4,30 @@
+ 
+ #include <torch/extension.h>
+ 
+-torch::Tensor ck_moe(torch::Tensor &hidden_states,          // [m, k], input token
+-                     torch::Tensor &w1,                     // [e, n, k]/[e, 2*n, k], pre-shuffle([e, nr, kr, w])
+-                     torch::Tensor &w2,                     // [e, n, k], pre-shuffle([e, nr, kr, w])
+-                     torch::Tensor &topk_weights,           // [tokens, topk]
+-                     torch::Tensor &topk_ids,               // [tokens, topk]
+-                     std::optional<torch::Tensor> w1_scale, // [e, 1, n], gate(up) scale
+-                     std::optional<torch::Tensor> w2_scale, // [e, 1, k], down scale
+-                     std::optional<torch::Tensor> a1_scale, // [m, 1], token scale
+-                     std::optional<torch::Tensor> a2_scale, // [e, 1, n], smooth-quant-scale for 2nd gemm input
+-                     std::optional<int> block_m = 32,
+-                     std::optional<torch::Tensor> expert_mask = std::nullopt);
+-
+-void ck_moe_stage1(torch::Tensor &hidden_states,     // [m, k], input token
+-                   torch::Tensor &w1,                // [e, n, k]/[e, 2*n, k], pre-shuffle([e, nr, kr, w])
+-                   torch::Tensor &w2,                // [e, n, k], pre-shuffle([e, nr, kr, w])
+-                   torch::Tensor &sorted_token_ids,  // [max_num_tokens_padded]
+-                   torch::Tensor &sorted_expert_ids, // [max_num_m_blocks]
+-                   torch::Tensor &num_valid_ids,     // [1]
+-                   torch::Tensor &out,               // [max_num_tokens_padded, inter_dim]
++void ck_moe_stage1(torch::Tensor& hidden_states, // [m, k], input token
++                   torch::Tensor& w1, // [e, n, k]/[e, 2*n, k], pre-shuffle([e, nr, kr, w])
++                   torch::Tensor& w2, // [e, n, k], pre-shuffle([e, nr, kr, w])
++                   torch::Tensor& sorted_token_ids,  // [max_num_tokens_padded]
++                   torch::Tensor& sorted_expert_ids, // [max_num_m_blocks]
++                   torch::Tensor& num_valid_ids,     // [1]
++                   torch::Tensor& out,               // [max_num_tokens_padded, inter_dim]
+                    int topk,
+-                   std::string &kernelName,
++                   std::string& kernelName,
+                    std::optional<torch::Tensor> w1_scale, // [e, 1, n], gate(up) scale
+                    std::optional<torch::Tensor> a1_scale, // [m, 1], token scale
+                    std::optional<int> block_m,
+                    std::optional<torch::Tensor> sorted_weights);
+ 
+-void ck_moe_stage2(torch::Tensor &inter_states,      // [m, k], input token
+-                   torch::Tensor &w1,                // [e, n, k]/[e, 2*n, k], pre-shuffle([e, nr, kr, w])
+-                   torch::Tensor &w2,                // [e, n, k], pre-shuffle([e, nr, kr, w])
+-                   torch::Tensor &sorted_token_ids,  // [max_num_tokens_padded]
+-                   torch::Tensor &sorted_expert_ids, // [max_num_m_blocks]
+-                   torch::Tensor &num_valid_ids,     // [1]
+-                   torch::Tensor &out,               // [max_num_tokens_padded, inter_dim]
++void ck_moe_stage2(torch::Tensor& inter_states, // [m, k], input token
++                   torch::Tensor& w1, // [e, n, k]/[e, 2*n, k], pre-shuffle([e, nr, kr, w])
++                   torch::Tensor& w2, // [e, n, k], pre-shuffle([e, nr, kr, w])
++                   torch::Tensor& sorted_token_ids,  // [max_num_tokens_padded]
++                   torch::Tensor& sorted_expert_ids, // [max_num_m_blocks]
++                   torch::Tensor& num_valid_ids,     // [1]
++                   torch::Tensor& out,               // [max_num_tokens_padded, inter_dim]
+                    int topk,
+-                   std::string &kernelName,
++                   std::string& kernelName,
+                    std::optional<torch::Tensor> w2_scale, // [e, 1, n], gate(up) scale
+                    std::optional<torch::Tensor> a2_scale, // [m, 1], token scale
+                    std::optional<int> block_m,
+-                   std::optional<torch::Tensor> sorted_weights);    // [max_num_tokens_padded]);
++                   std::optional<torch::Tensor> sorted_weights); // [max_num_tokens_padded]);
+diff --git a/csrc/include/moe_sorting.h b/csrc/include/moe_sorting.h
+index fd4ae4e330..18114ea59e 100644
+--- a/csrc/include/moe_sorting.h
++++ b/csrc/include/moe_sorting.h
+@@ -12,4 +12,5 @@ void moe_sorting_fwd(torch::Tensor &topk_ids,              // [m, topk]
+                      torch::Tensor &moe_buf,               // [max_num_tokens_padded]
+                      int num_experts,
+                      int unit_size,
+-                     std::optional<torch::Tensor> local_expert_mask = std::nullopt);
+\ No newline at end of file
++                     std::optional<torch::Tensor> local_expert_mask = std::nullopt,
++                     std::optional<torch::Tensor> num_local_tokens = std::nullopt);
+\ No newline at end of file
+diff --git a/csrc/include/rocm_ops.hpp b/csrc/include/rocm_ops.hpp
+index 47017c8ba9..b340bf2d0a 100644
+--- a/csrc/include/rocm_ops.hpp
++++ b/csrc/include/rocm_ops.hpp
+@@ -627,21 +627,6 @@
+           py::arg("alibi_slopes") = std::nullopt, \
+           py::arg("gen")          = std::nullopt);
+ 
+-#define MOE_CK_PYBIND                            \
+-    m.def("ck_moe",                              \
+-          &ck_moe,                               \
+-          py::arg("hidden_states"),              \
+-          py::arg("w1"),                         \
+-          py::arg("w2"),                         \
+-          py::arg("topk_weights"),               \
+-          py::arg("topk_ids"),                   \
+-          py::arg("w1_scale")    = std::nullopt, \
+-          py::arg("w2_scale")    = std::nullopt, \
+-          py::arg("a1_scale")    = std::nullopt, \
+-          py::arg("a2_scale")    = std::nullopt, \
+-          py::arg("block_m")     = 32,           \
+-          py::arg("expert_mask") = std::nullopt);
+-
+ #define MOE_OP_PYBIND                                                                         \
+     m.def("topk_softmax", &aiter::topk_softmax, "Apply topk softmax to the gating outputs."); \
+     m.def("grouped_topk",                                                                     \
+@@ -759,19 +744,20 @@
+           py::arg("sorted_weights") = std::nullopt);                                          \
+     m.def("moe_sum", &aiter::moe_sum, "moe_sum(Tensor! input, Tensor output) -> ()");
+ 
+-#define MOE_SORTING_PYBIND              \
+-    m.def("moe_sorting_fwd",            \
+-          &moe_sorting_fwd,             \
+-          py::arg("topk_ids"),          \
+-          py::arg("topk_weights"),      \
+-          py::arg("sorted_token_ids"),  \
+-          py::arg("sorted_weights"),    \
+-          py::arg("sorted_expert_ids"), \
+-          py::arg("num_valid_ids"),     \
+-          py::arg("moe_buf"),           \
+-          py::arg("num_experts"),       \
+-          py::arg("unit_size"),         \
+-          py::arg("local_expert_mask") = std::nullopt);
++#define MOE_SORTING_PYBIND                             \
++    m.def("moe_sorting_fwd",                           \
++          &moe_sorting_fwd,                            \
++          py::arg("topk_ids"),                         \
++          py::arg("topk_weights"),                     \
++          py::arg("sorted_token_ids"),                 \
++          py::arg("sorted_weights"),                   \
++          py::arg("sorted_expert_ids"),                \
++          py::arg("num_valid_ids"),                    \
++          py::arg("moe_buf"),                          \
++          py::arg("num_experts"),                      \
++          py::arg("unit_size"),                        \
++          py::arg("local_expert_mask") = std::nullopt, \
++          py::arg("num_local_tokens")  = std::nullopt);
+ 
+ #define NORM_PYBIND                                               \
+     m.def("layernorm2d_fwd",                                      \
+diff --git a/csrc/py_itfs_ck/moe_kernels.cu b/csrc/py_itfs_ck/moe_kernels.cu
+deleted file mode 100644
+index 9b0b85ae0d..0000000000
+--- a/csrc/py_itfs_ck/moe_kernels.cu
++++ /dev/null
+@@ -1,127 +0,0 @@
+-// SPDX-License-Identifier: MIT
+-// Copyright (C) 2024-2025, Advanced Micro Devices, Inc. All rights reserved.
+-#include <torch/all.h>
+-#include <ATen/cuda/CUDAContext.h>
+-#include <c10/cuda/CUDAGuard.h>
+-#include "py_itfs_common.h"
+-
+-#include "fused_moe.hpp"
+-
+-torch::Tensor ck_moe(torch::Tensor &hidden_states,          // [m, k], input token
+-                     torch::Tensor &w1,                     // [e, n, k]/[e, 2*n, k], pre-shuffle([e, nr, kr, w])
+-                     torch::Tensor &w2,                     // [e, n, k], pre-shuffle([e, nr, kr, w])
+-                     torch::Tensor &topk_weights,           // [tokens, topk]
+-                     torch::Tensor &topk_ids,               // [tokens, topk]
+-                     std::optional<torch::Tensor> w1_scale, // [e, 1, n], gate(up) scale
+-                     std::optional<torch::Tensor> w2_scale, // [e, 1, k], down scale
+-                     std::optional<torch::Tensor> a1_scale, // [m, 1], token scale
+-                     std::optional<torch::Tensor> a2_scale, // [e, 1, n], smooth-quant-scale for 2nd gemm input
+-                     std::optional<int> block_m = 32,
+-                     std::optional<torch::Tensor> expert_mask = std::nullopt)
+-{
+-    const at::cuda::OptionalCUDAGuard device_guard(device_of(hidden_states));
+-    auto device = hidden_states.device();
+-    int topk_ids_numel = topk_ids.numel();
+-    int experts = w1.size(0);
+-    int topk = topk_ids.size(1);
+-    int tokens = topk_ids.size(0);
+-    int hidden_size = w1.size(2);
+-    int shared_intermediate_size_0 = w1.size(1);
+-    int shared_intermediate_size = w2.size(-1);
+-    int block_size = block_m.value();
+-
+-    int max_num_tokens_padded = topk_ids_numel + experts * block_size - topk;
+-    int max_num_m_blocks = (max_num_tokens_padded + block_size - 1) / block_size;
+-
+-    auto sorted_ids = torch::empty({max_num_tokens_padded}, torch::TensorOptions().dtype(torch::kInt32).device(device));
+-    auto sorted_weights = torch::empty({max_num_tokens_padded}, torch::TensorOptions().dtype(torch::kFloat32).device(device));
+-    auto sorted_expert_ids = torch::empty({max_num_m_blocks}, torch::TensorOptions().dtype(torch::kInt32).device(device));
+-    auto num_valid_ids = torch::empty({1}, torch::TensorOptions().dtype(torch::kInt32).device(device));
+-    auto out = torch::empty({tokens, hidden_size}, torch::TensorOptions().dtype(hidden_states.dtype()).device(device));
+-
+-    auto prec_i = torchDTypeToStr(hidden_states.dtype());
+-    auto prec_w = torchDTypeToStr(w1.dtype());
+-    auto prec_o = torchDTypeToStr(out.dtype());
+-    auto prec_kw = torchDTypeToStr(topk_weights.dtype());
+-
+-    int gate_only = 1;
+-    int activation = 0;
+-    int fused_quant = 0;
+-    if (shared_intermediate_size_0 == 2 * shared_intermediate_size)
+-    {
+-        gate_only = 0;
+-        activation = 1;
+-    }
+-
+-    if (!w1_scale.has_value())
+-    {
+-        fused_quant = 0;
+-    }
+-    else if (a1_scale.has_value() && a2_scale.has_value())
+-    {
+-        fused_quant = 1;
+-    }
+-    else
+-    {
+-        fused_quant = 2;
+-    }
+-
+-    int stride = hidden_size;
+-    std::string prec_st = !a1_scale ? "fp32" : torchDTypeToStr(a1_scale->dtype());
+-    std::string prec_sw = !w1_scale ? "fp32" : torchDTypeToStr(w1_scale->dtype());
+-    std::string prec_sq = !a2_scale ? "fp32" : torchDTypeToStr(a2_scale->dtype());
+-
+-    int workspace_size = ck_tile::moe_sorting_get_workspace_size(tokens, experts, topk);
+-    void *ws_ptr = nullptr;
+-    if (workspace_size > 0)
+-    {
+-        auto ws = torch::zeros({workspace_size}, torch::TensorOptions().dtype(topk_ids.dtype()).device(device_of(topk_ids)));
+-        ws_ptr = ws.data_ptr();
+-    }
+-
+-    fused_moe_traits traits{
+-        prec_i,
+-        prec_w,
+-        prec_o,
+-        prec_st,
+-        prec_sw,
+-        prec_sq,
+-        prec_kw,
+-        block_size,
+-        activation,
+-        gate_only,
+-        fused_quant,
+-        expert_mask.has_value(),
+-    };
+-
+-    fused_moe_args args{hidden_states.data_ptr(),
+-                        a1_scale.has_value() ? a1_scale.value().data_ptr() : nullptr,
+-                        w1.data_ptr(),
+-                        w2.data_ptr(),
+-                        w1_scale.has_value() ? w1_scale.value().data_ptr() : nullptr,
+-                        w2_scale.has_value() ? w2_scale.value().data_ptr() : nullptr,
+-                        a2_scale.has_value() ? a2_scale.value().data_ptr() : nullptr,
+-                        expert_mask.has_value() ? expert_mask.value().data_ptr() : nullptr,
+-                        out.data_ptr(),
+-                        ws_ptr,
+-
+-                        topk_ids.data_ptr(),
+-                        topk_weights.data_ptr(),
+-                        sorted_ids.data_ptr(),
+-                        sorted_weights.data_ptr(),
+-                        sorted_expert_ids.data_ptr(),
+-                        num_valid_ids.data_ptr(),
+-
+-                        block_size,
+-                        hidden_size,
+-                        shared_intermediate_size,
+-                        tokens,
+-                        experts,
+-                        topk,
+-                        stride};
+-
+-    const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+-
+-    fused_moe(traits, args, {stream});
+-    return out;
+-}
+diff --git a/csrc/py_itfs_ck/moe_sorting_kernels.cu b/csrc/py_itfs_ck/moe_sorting_kernels.cu
+index 08af694052..017aac4bb2 100644
+--- a/csrc/py_itfs_ck/moe_sorting_kernels.cu
++++ b/csrc/py_itfs_ck/moe_sorting_kernels.cu
+@@ -16,7 +16,8 @@ void moe_sorting_fwd(torch::Tensor &topk_ids,          // [m, topk]
+                      torch::Tensor &moe_buf,           // [max_num_tokens_padded]
+                      int num_experts,
+                      int unit_size,
+-                     std::optional<torch::Tensor> local_expert_mask = std::nullopt)
++                     std::optional<torch::Tensor> local_expert_mask = std::nullopt,
++                     std::optional<torch::Tensor> num_local_tokens = std::nullopt)
+ {
+     // Ensure that the incoming top‑k weights tensor is FP32
+     TORCH_CHECK(topk_weights.scalar_type() == at::ScalarType::Float,
+@@ -46,6 +47,7 @@ void moe_sorting_fwd(torch::Tensor &topk_ids,          // [m, topk]
+                 {topk_ids.data_ptr(),     // p_topk_ids
+                  topk_weights.data_ptr(), // p_weights
+                  local_expert_mask.has_value() ? local_expert_mask.value().data_ptr() : nullptr,
++                 num_local_tokens.has_value() ? num_local_tokens.value().data_ptr() : nullptr,
+                  sorted_token_ids.data_ptr(),  // p_sorted_token_ids
+                  sorted_weights.data_ptr(),    // p_sorted_weights
+                  sorted_expert_ids.data_ptr(), // p_sorted_expert_ids
+diff --git a/csrc/rocm_ops.cpp b/csrc/rocm_ops.cpp
+index ed0396dc93..d35c029e45 100644
+--- a/csrc/rocm_ops.cpp
++++ b/csrc/rocm_ops.cpp
+@@ -63,7 +63,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
+     CUSTOM_PYBIND;
+     SMOOTHQUANT_PYBIND;
+     BATCHED_GEMM_A8W8_PYBIND;
+-    MOE_CK_PYBIND;
+     // BATCHED_GEMM_A8W8_TUNE_PYBIND;
+     GEMM_A8W8_ASM_PYBIND;
+     GEMM_A4W4_ASM_PYBIND;
+diff --git a/op_tests/test_communication.py b/op_tests/multigpu_tests/test_communication.py
+similarity index 99%
+rename from op_tests/test_communication.py
+rename to op_tests/multigpu_tests/test_communication.py
+index f3a5afb8b0..a3c19c0edf 100644
+--- a/op_tests/test_communication.py
++++ b/op_tests/multigpu_tests/test_communication.py
+@@ -1,5 +1,5 @@
+ # SPDX-License-Identifier: MIT
+-# Copyright (c) 2024, Advanced Micro Devices, Inc. All rights reserved.
++# Copyright (C) 2024-2025, Advanced Micro Devices, Inc. All rights reserved.
+ 
+ import torch
+ import torch.distributed as dist
+diff --git a/op_tests/test_custom_allreduce.py b/op_tests/multigpu_tests/test_custom_allreduce.py
+similarity index 98%
+rename from op_tests/test_custom_allreduce.py
+rename to op_tests/multigpu_tests/test_custom_allreduce.py
+index bc6b0809cc..30bd6396f3 100644
+--- a/op_tests/test_custom_allreduce.py
++++ b/op_tests/multigpu_tests/test_custom_allreduce.py
+@@ -1,5 +1,5 @@
+ # SPDX-License-Identifier: MIT
+-# Copyright (c) 2024, Advanced Micro Devices, Inc. All rights reserved.
++# Copyright (C) 2024-2025, Advanced Micro Devices, Inc. All rights reserved.
+ 
+ import os
+ 
+diff --git a/op_tests/test_custom_allreduce_fp8.py b/op_tests/multigpu_tests/test_custom_allreduce_fp8.py
+similarity index 100%
+rename from op_tests/test_custom_allreduce_fp8.py
+rename to op_tests/multigpu_tests/test_custom_allreduce_fp8.py
+diff --git a/op_tests/multigpu_tests/test_dispatch_combine.py b/op_tests/multigpu_tests/test_dispatch_combine.py
+new file mode 100644
+index 0000000000..a8fd901516
+--- /dev/null
++++ b/op_tests/multigpu_tests/test_dispatch_combine.py
+@@ -0,0 +1,350 @@
++# SPDX-License-Identifier: MIT
++# Copyright (C) 2024-2025, Advanced Micro Devices, Inc. All rights reserved.
++
++import os
++import torch
++import argparse
++import aiter
++from aiter import dtypes
++from aiter.fused_moe import fused_topk, fused_moe
++from aiter.ops.shuffle import shuffle_weight
++import mori
++import multiprocessing as mp
++from aiter import get_hip_quant
++from aiter.test_common import (
++    checkAllclose,
++)
++
++
++def run_ref(
++    world_size,
++    E,
++    tokens,
++    topk_weights,
++    topk_ids,
++    w1_ep,
++    w2_ep,
++    w1_scale_ep,
++    w2_scale_ep,
++    quant_type,
++):
++    ref = torch.zeros(tokens.shape, dtype=tokens.dtype, device=tokens.device)
++    # out_list = []
++    for i in range(world_size):
++        mask = (topk_ids >= i * E // world_size) & (
++            topk_ids < (i + 1) * E // world_size
++        )
++        if not mask.any():
++            continue
++        topk_ids_ep = topk_ids[mask.any(1)]
++        topk_weights_ep = topk_weights[mask.any(1)]
++        tokens_ep = tokens[mask.any(1)]
++        expert_mask = torch.zeros((E,), dtype=dtypes.i32, device=w1_ep[i].device)
++        expert_mask[E // world_size * i : E // world_size * (i + 1)] = 1
++        num_local_tokens = torch.tensor(
++            [tokens_ep.shape[0]], dtype=dtypes.i32, device=tokens_ep.device
++        )
++        quant_func = get_hip_quant(
++            quant_type
++            if quant_type != aiter.QuantType.per_128x128
++            else aiter.QuantType.per_1x128
++        )
++        tokens_ep_qt, scale = quant_func(tokens_ep, quant_dtype=dtypes.fp8)
++        out = fused_moe(
++            tokens_ep_qt,
++            w1_ep[i],
++            w2_ep[i],
++            topk_weights_ep,
++            topk_ids_ep,
++            expert_mask,
++            num_local_tokens=num_local_tokens,
++            w1_scale=w1_scale_ep[i],
++            w2_scale=w2_scale_ep[i],
++            quant_type=quant_type,
++            a1_scale=scale,
++            dtype=dtypes.bf16,
++        )
++        # out_list.append(out)
++        # return out_list
++        ref[mask.any(1)] += out
++        # ref[mask.any(1)] += out.to(dtypes.fp32)
++    return ref.to(tokens)
++
++
++def run_mori(
++    rankID,
++    world_size,
++    E,
++    tokens,
++    topk_weights,
++    topk_ids,
++    w1,
++    w2,
++    w1_scale,
++    w2_scale,
++    quant_type,
++):
++    token_num = tokens.shape[0]
++    hdim = tokens.shape[-1]
++    topk = topk_weights.shape[-1]
++    dtype = tokens.dtype
++    device = torch.device(f"cuda:{rankID}")
++    torch.cuda.set_device(device)
++    aiter.init_dist_env(world_size, rankID)
++    tokens = tokens.to(device)
++    topk_weights = topk_weights.to(device)
++    topk_ids = topk_ids.to(device)
++    w1 = w1.to(device)
++    w2 = w2.to(device)
++    w1_scale = w1_scale.to(device) if w1_scale is not None else None
++    w2_scale = w2_scale.to(device) if w2_scale is not None else None
++    quant_func = get_hip_quant(
++        quant_type
++        if quant_type != aiter.QuantType.per_128x128
++        else aiter.QuantType.per_1x128
++    )
++    tokens_qt, scale = quant_func(tokens, quant_dtype=dtypes.fp8)
++
++    # print(f"before init mori {scale.shape=} {tokens_qt.dtype=}")
++    # init dist
++    world_group = torch.distributed.group.WORLD
++    assert world_group is not None
++    torch._C._distributed_c10d._register_process_group("default", world_group)
++    mori.shmem.shmem_torch_process_group_init("default")
++    mori_config = mori.ops.EpDispatchCombineConfig(
++        data_type=tokens_qt.dtype,
++        rank=rankID,
++        world_size=world_size,
++        hidden_dim=hdim,
++        scale_dim=scale.shape[-1] if scale is not None else 0,
++        scale_type_size=scale.dtype.itemsize if scale is not None else 0,
++        max_token_type_size=dtype.itemsize,
++        max_num_inp_token_per_rank=128,
++        num_experts_per_rank=E // world_size,
++        num_experts_per_token=topk,
++    )
++    mori_op = mori.ops.EpDispatchCombineOp(mori_config)
++
++    (
++        dispatch_output,
++        dispatch_weights,
++        dispatch_scale,
++        dispatch_ids,
++        dispatch_recv_token_num,
++    ) = mori_op.dispatch(tokens_qt, topk_weights, scale, topk_ids)
++    # torch.cuda.synchronize()
++    # src_token_pos = mori_op.get_dispatch_src_token_pos().cpu()
++    # src_token_num = src_token_pos.shape[0]
++    # src_token_order = torch.sort(src_token_pos)[1].cpu()
++    # print(
++    #     f"{rankID=} {src_token_pos=} {src_token_order=}"
++    # )
++    # dispatch_ids = dispatch_ids[: src_token_num].to(dtypes.i32)[src_token_order]
++    # dispatch_output = dispatch_output[: src_token_num][src_token_order]
++    # dispatch_weights = dispatch_weights[: src_token_num][src_token_order]
++    # dispatch_scale = dispatch_scale[: src_token_num][src_token_order]
++
++    expert_mask = torch.zeros((E,), dtype=dtypes.i32, device=device)
++    expert_mask[E // world_size * rankID : E // world_size * (rankID + 1)] = 1
++    out = fused_moe(
++        dispatch_output,
++        w1,
++        w2,
++        dispatch_weights,
++        dispatch_ids,
++        expert_mask,
++        num_local_tokens=dispatch_recv_token_num,
++        w1_scale=w1_scale,
++        w2_scale=w2_scale,
++        a1_scale=dispatch_scale,
++        quant_type=quant_type,
++        dtype=dtype,
++    )
++
++    # aiter.destroy_dist_env()
++    # return out[:src_token_num].cpu()
++
++    combine_output = mori_op.combine(out, topk_weights, topk_ids)
++    # print(f"{rankID=} {combine_output.shape=} {combine_output.dtype=} {out.dtype=}")
++    aiter.destroy_dist_env()
++    return combine_output[:token_num].cpu()
++
++
++def weight_per_128x128_quant(weight, quant_dtype):
++    E, dim1, dim2 = weight.shape
++    weight_blocks = weight.view(
++        E, dim1 // 128, 128, dim2 // 128, 128
++    )  # [E, num_blocks_dim1, 128, num_blocks_dim2, 128]
++    weight_blocks = weight_blocks.permute(
++        0, 1, 3, 2, 4
++    ).contiguous()  # [E, num_blocks_dim1, num_blocks_dim2, 128, 128]
++    weight_blocks = weight_blocks.view(E, -1, 128 * 128)  # [E, num_blocks, 128*128]
++    weight_qt, weight_scale = aiter.pertoken_quant(
++        weight_blocks, quant_dtype=quant_dtype
++    )
++    weight_qt = weight_qt.view(
++        E, dim1 // 128, dim2 // 128, 128, 128
++    )  # [E, num_blocks_dim1, num_blocks_dim2, 128, 128]
++    weight_qt = weight_qt.permute(
++        0, 1, 3, 2, 4
++    ).contiguous()  # [E, num_blocks_dim1, 128, num_blocks_dim2, 128]
++    weight_qt = weight_qt.view(E, dim1, dim2)  # [E, dim1, dim2]
++    weight_scale = weight_scale.view(
++        E, dim1 // 128, dim2 // 128
++    )  # [E, num_blocks_dim1, num_blocks_dim2]
++    return weight_qt, weight_scale
++
++
++def test_dispatch_combine(
++    world_size, shape, dtype, E, topk, quant_type=aiter.QuantType.No
++):
++    os.environ["MASTER_ADDR"] = "127.0.0.1"
++    os.environ["MASTER_PORT"] = "49373"
++    mp.set_start_method("spawn", force=True)
++    pool = mp.Pool(processes=world_size)
++
++    quant_func = (
++        aiter.get_torch_quant(quant_type)
++        if quant_type != aiter.QuantType.per_128x128
++        else weight_per_128x128_quant
++    )
++
++    tokenNum, hdim, idim = shape
++    tokens = torch.randn((tokenNum, hdim), dtype=dtype, device="cuda")
++    score = torch.randn((tokenNum, E), device="cuda", dtype=dtype)
++    topk_weights, topk_ids = fused_topk(tokens, score, topk, True)
++
++    w1 = torch.randn((E, 2 * idim, hdim), dtype=dtype, device="cuda")
++    w2 = torch.randn((E, hdim, idim), dtype=dtype, device="cuda")
++    if quant_type == aiter.QuantType.per_128x128:
++        weight_per_128x128_quant(w1, quant_dtype=dtypes.fp8)
++
++    w1_qt, w1_scale = quant_func(w1, quant_dtype=dtypes.fp8)
++    w2_qt, w2_scale = quant_func(w2, quant_dtype=dtypes.fp8)
++    w1_qt = shuffle_weight(w1_qt)
++    w2_qt = shuffle_weight(w2_qt)
++
++    tokens_dp = tokens.chunk(world_size)
++    topk_weights_dp = topk_weights.chunk(world_size)
++    topk_ids_dp = topk_ids.chunk(world_size)
++    w1_ep = w1_qt.chunk(world_size)
++    w2_ep = w2_qt.chunk(world_size)
++    w1_scale_ep = (
++        w1_scale.chunk(world_size) if w1_scale is not None else [None] * world_size
++    )
++    w2_scale_ep = (
++        w2_scale.chunk(world_size) if w2_scale is not None else [None] * world_size
++    )
++    ref_noep = fused_moe(
++        tokens,
++        w1_qt,
++        w2_qt,
++        topk_weights,
++        topk_ids,
++        w1_scale=w1_scale,
++        w2_scale=w2_scale,
++        quant_type=quant_type,
++    )
++    ref = run_ref(
++        world_size,
++        E,
++        tokens,
++        topk_weights,
++        topk_ids,
++        w1_ep,
++        w2_ep,
++        w1_scale_ep,
++        w2_scale_ep,
++        quant_type,
++    )
++    checkAllclose(ref, ref_noep.to(ref), msg="EP ref vs no EP ref")
++    ref_dp = ref.chunk(world_size)
++
++    rets = []
++    for i in range(world_size):
++        rets.append(
++            pool.apply_async(
++                run_mori,
++                args=(
++                    i,
++                    world_size,
++                    E,
++                    tokens_dp[i],
++                    topk_weights_dp[i],
++                    topk_ids_dp[i],
++                    w1_ep[i],
++                    w2_ep[i],
++                    w1_scale_ep[i],
++                    w2_scale_ep[i],
++                    quant_type,
++                ),
++            )
++        )
++    pool.close()
++    pool.join()
++    rets = [el.get() for el in rets]
++
++    ret_out = torch.cat(rets, dim=0)
++    checkAllclose(ref, ret_out.to(ref), msg="total tokens:")
++
++    for i in range(world_size):
++        checkAllclose(ref_dp[i], rets[i].to(ref_dp[i]), msg=f"rank:{i}")
++
++
++l_dtype = ["bf16"]
++l_shape = [(128, 6144, 1024)]
++quant_types = [
++    aiter.QuantType.No,
++    aiter.QuantType.per_Token,
++    aiter.QuantType.per_128x128,
++][-2:]
++
++parser = argparse.ArgumentParser(description="config input of test")
++parser.add_argument(
++    "-q",
++    "--quant_type",
++    type=str,
++    choices=["No", "per_Token", "per_128x128"],
++    nargs="?",
++    const=None,
++    default=None,
++    help="quantization type",
++)
++parser.add_argument(
++    "-d",
++    "--dtype",
++    type=str,
++    choices=l_dtype,
++    nargs="?",
++    const=None,
++    default=None,
++    help="data type",
++)
++parser.add_argument(
++    "-s",
++    "--shape",
++    type=dtypes.str2tuple,
++    choices=l_shape,
++    nargs="?",
++    const=None,
++    default=None,
++    help="shape",
++)
++
++
++if __name__ == "__main__":
++    mp.freeze_support()
++    args = parser.parse_args()
++    if args.dtype is None:
++        l_dtype = [dtypes.d_dtypes[key] for key in l_dtype]
++    else:
++        l_dtype = [dtypes.d_dtypes[args.dtype]]
++    if args.shape is not None:
++        l_shape = [args.shape]
++    if args.quant_type is not None:
++        quant_types = [eval(f"aiter.QuantType.{args.quant_type}")]
++
++    for quant_type in quant_types:
++        for dtype in l_dtype:
++            for shape in l_shape:
++                test_dispatch_combine(8, shape, dtype, 16, 2, quant_type)
+diff --git a/op_tests/test_moe.py b/op_tests/test_moe.py
+index c37551ed1c..2270889412 100755
+--- a/op_tests/test_moe.py
++++ b/op_tests/test_moe.py
+@@ -7,7 +7,7 @@
+ from aiter.fused_moe import torch_moe, fused_topk
+ from aiter.fused_moe_bf16_asm import asm_moe
+ from aiter.ops.shuffle import shuffle_weight
+-from aiter import pertoken_quant, ck_moe
++from aiter import pertoken_quant
+ from aiter.int4_utils import *
+ from aiter import ActivationType
+ 
+@@ -90,32 +90,6 @@ def asm_moe_test(
+     )
+ 
+ 
+-@perftest()
+-def ck_moe_test(
+-    hidden_states,
+-    w1,
+-    w2,
+-    topk_weight,
+-    topk_ids,
+-    # following for int8 quant
+-    fc1_scale=None,  # [expert, inter_dim, 1]
+-    fc2_scale=None,  # [expert, model_dim, 1]
+-    fc1_smooth_scale=None,  # [expert, 1, model_dim]
+-    fc2_smooth_scale=None,  # [expert, 1, inter_dim]
+-):
+-    return ck_moe(
+-        hidden_states,
+-        w1,
+-        w2,
+-        topk_weight,
+-        topk_ids,
+-        fc1_scale,
+-        fc2_scale,
+-        fc1_smooth_scale,
+-        fc2_smooth_scale,
+-    )
+-
+-
+ @perftest()
+ def vllm_moe(hidden_states, w1, w2, topk_weight, topk_ids):
+     return fused_experts(hidden_states, w1, w2, topk_weight, topk_ids, inplace=False)
+@@ -217,14 +191,8 @@ def test_fmoe(
+         else:
+             out_b, avg_b = asm_moe_test(input, w1b, w2b, topk_weights, topk_ids)
+ 
+-        # test ck moe
+-        out_ck, avg_ck = ck_moe_test(
+-            input, w1b, w2b, topk_weights, topk_ids, None, None, None, None
+-        )
+-
+-        msg = f"[perf] {token=}, quant={quantstr}, {model_dim=}, {inter_dim=}, {E=}, {topk=}, dtype: {dtype}, torch_avg: {avg_c:<8.2f} us, asm_avg: {avg_b:>8.2f} us, ck_avg: {avg_ck:>8.2f} us, uplift: {avg_c/avg_b-1:.1%}"
++        msg = f"[perf] {token=}, quant={quantstr}, {model_dim=}, {inter_dim=}, {E=}, {topk=}, dtype: {dtype}, torch_avg: {avg_c:<8.2f} us, asm_avg: {avg_b:>8.2f} us, uplift: {avg_c/avg_b-1:.1%}"
+         checkAllclose(ref2, out_b, rtol=0.01, atol=100, msg=msg)
+-        checkAllclose(ref2, out_ck, rtol=0.01, atol=100, msg="ck check")
+     else:
+         dtypeMax = 7 if use_int4 else None
+         w1, fc1_scale = pertoken_quant(w1, quant_dtype=quant_dtype, dtypeMax=dtypeMax)
+@@ -337,13 +305,8 @@ def calculateTensorsSize(*args):
+             msg = f"[perf] a8w8 asm: {avg_b:>8.2f} vs a16w8 asm: {avg_b2:>8.2f} ......"
+             checkAllclose(ref2, out_b2, atol=100, msg=msg)
+ 
+-        # # test ck moe, not support now
+-        # out_ck, avg_ck = ck_moe_test(input, w1b, w2b, topk_weights, topk_ids,
+-        #                              fc1_scale, fc2_scale,
+-        #                              fc1_smooth_scale, fc2_smooth_scale)
+         msg = f"[perf] {use_g1u1=} {token=}, quant={quantstr}, {model_dim=}, {inter_dim=}, {E=}, {shared_E=}, {topk=}, dtype: {dtype}, torch_avg: {avg_c:<8.2f} us, asm_avg: {avg_b:>8.2f} us ...... uplift: {avg_c/avg_b-1:.1%}"
+         checkAllclose(ref2, out_b, rtol=0.01, atol=100, msg=msg)
+-        # checkAllclose(ref2, avg_ck, rtol=0.01, atol=100)
+ 
+ 
+ print("test test_fmoe 16 bit")
+diff --git a/op_tests/test_moe_2stage.py b/op_tests/test_moe_2stage.py
+index 90aceebff5..06209e66be 100644
+--- a/op_tests/test_moe_2stage.py
++++ b/op_tests/test_moe_2stage.py
+@@ -301,8 +301,6 @@ def weight_per_128x128_quant(weight, quant_dtype):
+     #     )
+ 
+     # ######################## stage 2 start ###########
+-    if qType == aiter.QuantType.per_Token:
+-        out1_ref = out1_ref.view(token, -1)
+     if qType == aiter.QuantType.per_128x128:
+         a2_qt, a2_scale = aiter.pertoken_quant(
+             out1_ref.view(token, -1, 128), quant_dtype=AQDType
+diff --git a/op_tests/test_moe_ep.py b/op_tests/test_moe_ep.py
+index 8b19974069..ed0f859a28 100644
+--- a/op_tests/test_moe_ep.py
++++ b/op_tests/test_moe_ep.py
+@@ -17,7 +17,7 @@
+ from aiter.fused_moe_bf16_asm import asm_moe
+ from aiter.ops.shuffle import shuffle_weight
+ from aiter import ActivationType
+-from aiter import pertoken_quant, ck_moe
++from aiter import pertoken_quant
+ from aiter import dtypes
+ 
+ BLOCK_SIZE_M = 32
+@@ -83,34 +83,6 @@ def asm_moe_test(
+     )
+ 
+ 
+-@perftest()
+-def ck_moe_test(
+-    hidden_states,
+-    w1,
+-    w2,
+-    topk_weight,
+-    topk_ids,
+-    # following for int8 quant
+-    fc1_scale=None,  # [expert, inter_dim, 1]
+-    fc2_scale=None,  # [expert, model_dim, 1]
+-    fc1_smooth_scale=None,  # [expert, 1, model_dim]
+-    fc2_smooth_scale=None,  # [expert, 1, inter_dim]
+-    expert_mask=None,
+-):
+-    return ck_moe(
+-        hidden_states,
+-        w1,
+-        w2,
+-        topk_weight,
+-        topk_ids,
+-        fc1_scale,
+-        fc2_scale,
+-        fc1_smooth_scale,
+-        fc2_smooth_scale,
+-        expert_mask=expert_mask,
+-    )
+-
+-
+ quant_algo = [
+     "No",  # g1u0/ck(g1ux) support
+     "int8quant",  # g1u1 support
+@@ -361,11 +333,6 @@ def calculateTensorsSize(*args):
+             msg = f"[perf] a8w8 asm: {avg_b:>8.2f} vs a16w8 asm: {avg_b2:>8.2f} ......"
+             checkAllclose(out_b, out_b2, atol=10, msg=msg)
+ 
+-        # # test ck moe, not support now
+-        # out_ck, avg_ck = ck_moe_test(input, w1b, w2b, topk_weights, topk_ids,
+-        #                              fc1_scale, fc2_scale,
+-        #                              fc1_smooth_scale, fc2_smooth_scale)
+-
+         msg = f"[perf] {use_g1u1=} {token=}, quant={quantstr}, {model_dim=}, {inter_dim=}, {E=}, {shared_E=}, {topk=}, {ep=}, {topk=}, dtype: {dtype}, torch_avg: {avg_c:<8.2f} us, asm_avg: {avg_b:>8.2f} us ...... uplift: {avg_c/avg_b-1:.1%}"
+         checkAllclose(ref2, out_b, rtol=0.01, atol=10, msg=msg)
+         # checkAllclose(ref2, avg_ck, rtol=0.01, atol=10)
+diff --git a/op_tests/test_moe_tkw1.py b/op_tests/test_moe_tkw1.py
+index 78e3090495..c0843bd1f2 100644
+--- a/op_tests/test_moe_tkw1.py
++++ b/op_tests/test_moe_tkw1.py
+@@ -10,7 +10,7 @@
+ )
+ from aiter.fused_moe import fused_topk
+ from aiter.ops.shuffle import shuffle_weight
+-from aiter import pertoken_quant, ck_moe
++from aiter import pertoken_quant
+ from aiter.int4_utils import *
+ from aiter import ActivationType
+ 
+@@ -92,32 +92,6 @@ def asm_moe_test(
+     )
+ 
+ 
+-@perftest()
+-def ck_moe_test(
+-    hidden_states,
+-    w1,
+-    w2,
+-    topk_weight,
+-    topk_ids,
+-    # following for int8 quant
+-    fc1_scale=None,  # [expert, inter_dim, 1]
+-    fc2_scale=None,  # [expert, model_dim, 1]
+-    fc1_smooth_scale=None,  # [expert, 1, model_dim]
+-    fc2_smooth_scale=None,  # [expert, 1, inter_dim]
+-):
+-    return ck_moe(
+-        hidden_states,
+-        w1,
+-        w2,
+-        topk_weight,
+-        topk_ids,
+-        fc1_scale,
+-        fc2_scale,
+-        fc1_smooth_scale,
+-        fc2_smooth_scale,
+-    )
+-
+-
+ @perftest()
+ def vllm_moe(hidden_states, w1, w2, topk_weight, topk_ids):
+     return fused_experts(hidden_states, w1, w2, topk_weight, topk_ids, inplace=False)
+@@ -218,14 +192,8 @@ def test_fmoe(
+         else:
+             out_b, avg_b = asm_moe_test(input, w1b, w2b, topk_weights, topk_ids)
+ 
+-        # test ck moe
+-        out_ck, avg_ck = ck_moe_test(
+-            input, w1b, w2b, topk_weights, topk_ids, None, None, None, None
+-        )
+-
+-        msg = f"[perf] {token=}, quant={quantstr}, {model_dim=}, {inter_dim=}, {E=}, {topk=}, dtype: {dtype}, torch_avg: {avg_c:<8.2f} us, asm_avg: {avg_b:.2f} us, ck_avg: {avg_ck:.2f} us, uplift: {avg_c/avg_b-1:.1%}"
++        msg = f"[perf] {token=}, quant={quantstr}, {model_dim=}, {inter_dim=}, {E=}, {topk=}, dtype: {dtype}, torch_avg: {avg_c:<8.2f} us, asm_avg: {avg_b:.2f} us, uplift: {avg_c/avg_b-1:.1%}"
+         checkAllclose(ref2, out_b, rtol=0.01, atol=100, msg=msg)
+-        checkAllclose(ref2, out_ck, rtol=0.01, atol=100, msg="ck check")
+     else:
+         dtypeMax = 7 if use_int4 else None
+         w1, fc1_scale = pertoken_quant(w1, quant_dtype=quant_dtype, dtypeMax=dtypeMax)
+@@ -334,7 +302,6 @@ def calculateTensorsSize(*args):
+ 
+         msg = f"[perf] {use_g1u1=} {token=}, quant={quantstr}, {model_dim=}, {inter_dim=}, {E=}, {shared_E=}, {topk=}, dtype: {dtype}, torch_avg: {avg_c:<8.2f} us, asm_avg: {avg_b:.2f} us ...... uplift: {avg_c/avg_b-1:.1%}"
+         checkAllclose(ref2, out_b, rtol=0.01, atol=100, msg=msg)
+-        # checkAllclose(ref2, avg_ck, rtol=0.01, atol=100)
+ 
+ 
+ print("\ng1u1 fp8quant")

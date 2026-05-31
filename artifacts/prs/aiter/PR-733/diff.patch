@@ -1,0 +1,960 @@
+diff --git a/aiter/test_common.py b/aiter/test_common.py
+index 2059e4bf5c..b45023c25a 100644
+--- a/aiter/test_common.py
++++ b/aiter/test_common.py
+@@ -10,6 +10,11 @@
+ from aiter import logger
+ 
+ pd.set_option("display.max_rows", 200)
++## debug ##
++# pd.set_option("display.max_rows", None)
++# pd.set_option("display.max_columns", None)
++# pd.set_option("display.width", None)
++# pd.set_option("display.max_colwidth", None)
+ 
+ 
+ def perftest(
+@@ -20,7 +25,6 @@ def wrapper(*args, **kwargs):
+             num = num_rotate_args
+             if num < 1:
+                 gpu_id = torch.cuda.current_device()
+-
+                 iter_used_memory, inputSize, _, _ = device_memory_profiling(
+                     func, *args, **kwargs
+                 )
+@@ -33,14 +37,13 @@ def wrapper(*args, **kwargs):
+                 )
+                 cache_size = max(cache_size, 0)
+                 num = int((cache_size + inputSize - 1) // inputSize)
+-                # print(f"{iter_used_memory=}, {inputSize=}, {cache_size=}, {free_memory=}, {num=}")
+             num = min(num, num_iters)
+ 
+             rotate_args = [
+                 (copy.deepcopy(args), copy.deepcopy(kwargs)) for _ in range(num - 1)
+             ] + [(args, kwargs)]
+-
+             run_iters(num_warmup, func, *args, **kwargs)
++            torch.cuda.synchronize()
+             if int(os.environ.get("AITER_LOG_MORE", 0)):
+                 latencies = []
+                 start_event = torch.cuda.Event(enable_timing=True)
+@@ -53,7 +56,6 @@ def wrapper(*args, **kwargs):
+                     latencies.append(start_event.elapsed_time(end_event))
+                 avg = np.mean(latencies) * 1000
+                 logger.info(f"avg: {avg} us/iter from cuda.Event")
+-
+             if testGraph:
+                 graph = torch.cuda.CUDAGraph()
+                 with torch.cuda.graph(graph):
+@@ -69,20 +71,21 @@ def wrapper(*args, **kwargs):
+                 logger.info(f"avg: {avg} us/iter with hipgraph")
+             with tpf.profile(
+                 activities=[tpf.ProfilerActivity.CPU, tpf.ProfilerActivity.CUDA],
+-                profile_memory=True,
+-                with_stack=True,
++                profile_memory=False,
++                with_stack=False,
+                 with_modules=True,
+-                #  record_shapes=True,
++                # record_shapes=True,
+                 on_trace_ready=(
+-                    tpf.tensorboard_trace_handler("./aiter_logs/")
++                    tpf.tensorboard_trace_handler(f"./aiter_logs/gpu_id_{gpu_id}")
+                     if needTrace
+                     else None
+                 ),
+             ) as prof:
+                 data = run_iters_rotate(num_iters, func, rotate_args)
++                torch.cuda.synchronize()
++                torch.cuda.empty_cache()
+ 
+             avg = get_trace_perf(prof, num_iters)
+-
+             return data, avg
+ 
+         return wrapper
+@@ -158,6 +161,7 @@ def run_iters_rotate(num_iters, func, rotate_args):
+     for _ in range(num_iters):
+         args, kwargs = rotate_args[_ % num_rotate_args]
+         data = func(*args, **kwargs)
++
+     return data
+ 
+ 
+@@ -211,6 +215,41 @@ def getTensorInfo(el):
+     return callargs
+ 
+ 
++def post_process_data(df):
++    """remove abnormal data"""
++    device_df = df[df["device_type"].astype(str).str.contains("DeviceType.CUDA")]
++    # print(df)
++    if device_df.empty:
++        return []
++    kernel_dfs = [
++        d.iloc[1:].reset_index(names="original_index")
++        for _, d in device_df.groupby("name", sort=False)
++    ]
++    sum_df = pd.DataFrame(0, index=kernel_dfs[0].index, columns=kernel_dfs[0].columns)
++    for d in kernel_dfs:
++        sum_df["self_device_time_total"] += d["self_device_time_total"]
++
++    # IQR to remove abnormal data
++    k = 1.5
++    Q1 = sum_df["self_device_time_total"].quantile(0.25)
++    Q3 = sum_df["self_device_time_total"].quantile(0.75)
++    IQR = Q3 - Q1
++    lower = Q1 - k * IQR
++    upper = Q3 + k * IQR
++
++    out_range_idx = sum_df.index[
++        (sum_df["self_device_time_total"] < lower)
++        | (sum_df["self_device_time_total"] > upper)
++    ].tolist()
++
++    indexs = {d.iloc[i]["original_index"] for d in kernel_dfs for i in out_range_idx}
++    if int(os.environ.get("AITER_LOG_MORE", 0)):
++        logger.info(f"abnormal data indices: {out_range_idx}")
++        for i in indexs:
++            logger.info(f"abnormal data: {df.iloc[i]['self_device_time_total']}")
++    return list(indexs)
++
++
+ def get_trace_perf(prof, num_iters):
+     assert num_iters > 1
+     num_iters -= 1
+@@ -225,6 +264,10 @@ def get_trace_perf(prof, num_iters):
+     for el in prof.events():
+         df.append([getattr(el, x, None) for x in cols])
+     df = pd.DataFrame(df, columns=cols)
++    ###remove abnormal data
++    if num_iters > 50:
++        dropped_indexs = post_process_data(df)
++        df = df.drop(dropped_indexs)
+     df["cnt"] = 1
+     rets = []
+     for name, d in df.groupby("name", sort=False):
+@@ -240,10 +283,8 @@ def get_trace_perf(prof, num_iters):
+             else:
+                 r["host_time_sum"] = r["self_device_time_total"]
+                 r["device_time_sum"] = 0
+-
+         rets.append(r)
+     df = pd.DataFrame(rets)
+-
+     cols = [
+         "name",
+         "cnt",
+@@ -260,9 +301,15 @@ def get_trace_perf(prof, num_iters):
+         "device_time_sum",
+     ]
+     df = df[cols].sort_values(timerList, ignore_index=True)
++    actual_iters = num_iters
++    if df.empty:
++        logger.info("no valida data after post process!")
++    else:
++        actual_iters = df.at[0, "cnt"]
++
+     avg_name = "[avg us/iter]"
+     for el in timerList:
+-        df.at[avg_name, el] = df[el].sum() / num_iters
++        df.at[avg_name, el] = df[el].sum() / actual_iters
+     if int(os.environ.get("AITER_LOG_MORE", 0)):
+         pd.set_option("display.expand_frame_repr", False)
+         pd.set_option("display.max_colwidth", 90)
+diff --git a/aiter/utility/mp_tuner.py b/aiter/utility/mp_tuner.py
+index 9d81a2e043..960316664d 100644
+--- a/aiter/utility/mp_tuner.py
++++ b/aiter/utility/mp_tuner.py
+@@ -22,7 +22,9 @@ def worker(
+     from aiter.test_common import run_perftest
+ 
+     pid = mp.current_process().pid
+-    gpuID = gpuIDMap[pid]
++    # pid = mp.current_process().pid
++    # gpuID = gpuIDMap[pid]
++    gpuID = torch.cuda.current_device()
+     device = torch.device(f"cuda:{gpuID}")
+     torch.cuda.set_device(device)
+     args = [el.to(device) if isinstance(el, torch.Tensor) else el for el in args]
+@@ -34,8 +36,13 @@ def worker(
+         try:
+             res, us = run_perftest(func, *args, **kwargs)
+             us = round(us, 4)
+-        except RuntimeError:
+-            print(f" info:{info}\t No support")
++        except RuntimeError as e:
++            print(f"run gpu func error: info:{info}\t {e}")
++
++        if us == 0:
++            print("!!!! us = 0, rerun it ")
++            res, us = run_perftest(func, *args, **kwargs)
++            us = round(us, 4)
+ 
+         torch.cuda.synchronize()
+         if ref is not None:
+@@ -43,6 +50,7 @@ def worker(
+                 ref = [ref]
+             if isinstance(res, torch.Tensor):
+                 res = [res]
++
+             ref = [
+                 (
+                     el.to(device)
+@@ -127,20 +135,74 @@ def post_process(rets, fast_mode=False, tol_err_ratio=0.05):
+ def work_group(gpuIDMap, fast_mode, err_ratio, in_data, tasks):
+     group_task = [tasks] if not isinstance(tasks, list) else tasks
+     kernels_num, (input_data) = in_data
+-    info, func, args, kwargs, ref_func, ref_args, ref_kwargs, ref, *rest = group_task[0]
++    (
++        info,
++        gen_data,
++        gen_args,
++        func,
++        args,
++        kwargs,
++        ref_func,
++        ref_args,
++        ref_kwargs,
++        ref,
++        *rest,
++    ) = group_task[0]
+ 
+-    updated_ref_args = ref_args if not input_data else input_data[:-1] + ref_args
++    pid = mp.current_process().pid
++    gpuID = gpuIDMap[pid]
++    device = torch.device(f"cuda:{gpuID}")
++    torch.cuda.set_device(device)
++    data = (
++        gen_data(*gen_args, device=device)
++        if not input_data and gen_data is not None
++        else input_data
++    )
++
++    assert ref_func is not None or ref is not None or fast_mode != 0
++    # ref=None & fast_mode=1, fast tune, not compare results, do not postprocess,return all results
++    # ref=None & fast_mode=0, ref_func should be given and return best result
++    # ref!=None & fast_mode=1, return all results, do not postprocess
++    # ref!=None & fast_mode=0, return best result, postprocess
+     if ref is None and not fast_mode:
++        ref_data_idx, *rest = ([], *ref_args) if not data else ref_args
++        updated_ref_args = tuple(data[i] for i in ref_data_idx) + tuple(rest)
+         ref = ref_func(*updated_ref_args, **ref_kwargs)
++        torch.cuda.synchronize()
+ 
+     rets = []
+     shape_grouped = isinstance(tasks, list)
+     solutions = 1 if not shape_grouped else kernels_num
++
+     for i in range(solutions):
+-        info, func, args, kwargs, ref_func, ref_args, ref_kwargs, ref_noused, *rest = (
+-            group_task[i]
++        (
++            info,
++            gen_data,
++            gen_args,
++            func,
++            args,
++            kwargs,
++            ref_func,
++            ref_args,
++            ref_kwargs,
++            ref_noused,
++            *rest,
++        ) = group_task[i]
++        # either gen_data func or inpur data
++        new_args = (
++            (tuple(data[i] for i in args[0]) + tuple(args[1:]))
++            if gen_data is not None
++            else args
++        )
++        ref = ref if ref_noused is None else ref_noused
++        work_args = (
++            info,
++            func,
++            new_args,
++            kwargs,
++            ref,
++            *rest,
+         )
+-        work_args = (info, func, input_data + args, kwargs, ref, *rest)
+         ret = worker(gpuIDMap, *work_args, tol_err_ratio=err_ratio)
+         rets.append(ret)
+ 
+@@ -153,8 +215,13 @@ def mp_tuner(
+     gpu_num = torch.cuda.device_count()
+     mp.set_start_method("spawn", force=True)
+     mp_num = gpu_num if mp_num < 1 or mp_num > gpu_num else mp_num
+-    pool = mp.Pool(processes=mp_num)
+-    pids = [pool.apply_async(get_pid) for i in range(mp_num)]
++    parallel_num = mp_num
++    start_idx = 0
++    if mp_num == 1 & fast_mode == 0:
++        shape_grouped = True
++    pool = mp.Pool(processes=parallel_num)
++
++    pids = [pool.apply_async(get_pid) for i in range(start_idx, mp_num)]
+     # time.sleep(2)
+     task_group = []
+     # dispatch per shape to one pid
+@@ -168,7 +235,7 @@ def mp_tuner(
+             start = end + 1
+     else:
+         task_group = tasks
+-    gpu_map = {el.get(): i for i, el in enumerate(pids)}
++    gpu_map = {el.get(): i + start_idx for i, el in enumerate(pids)}
+     # to get index of input data for task_group
+     import numpy as np
+ 
+@@ -178,7 +245,6 @@ def mp_tuner(
+         ref_data_index = np.searchsorted(
+             cumulative, np.arange(len(task_group)), side="right"
+         )
+-        gpu_map = {el.get(): i for i, el in enumerate(pids)}
+     rets = [
+         pool.apply_async(
+             work_group,
+@@ -197,6 +263,6 @@ def mp_tuner(
+     pool.join()
+     return (
+         [el.get() for el in rets]
+-        if shape_grouped
++        if shape_grouped and not fast_mode
+         else post_process([el.get() for el in rets], fast_mode, err_ratio)
+     )
+diff --git a/csrc/ck_gemm_a4w4_blockscale/gemm_a4w4_blockscale_tune.py b/csrc/ck_gemm_a4w4_blockscale/gemm_a4w4_blockscale_tune.py
+index 14453f6c33..ceb0541d2b 100755
+--- a/csrc/ck_gemm_a4w4_blockscale/gemm_a4w4_blockscale_tune.py
++++ b/csrc/ck_gemm_a4w4_blockscale/gemm_a4w4_blockscale_tune.py
+@@ -13,7 +13,7 @@
+ from aiter.utility.mp_tuner import mp_tuner
+ from aiter.jit.core import get_asm_dir
+ 
+-torch.set_default_device("cuda")
++# torch.set_default_device("cuda")
+ torch.set_printoptions(sci_mode=False)
+ torch.random.manual_seed(0)
+ SCALE_GROUP_SIZE = 32
+@@ -89,15 +89,17 @@ def run_gemm_a4w4_blockscale_asm(
+     x_scale,
+     w_scale,
+     out,
+-    kernelName,
+     bias,
++    kernelName,
+     dtype=dtypes.bf16,
+     bpreshuffle=True,
+     splitK=None,
+ ):
+     m, k = x.shape
+     if splitK is not None and splitK > 0:
+-        out_reset = torch.zeros(out.shape[0], out.shape[1], dtype=dtype)
++        out_reset = torch.zeros(
++            out.shape[0], out.shape[1], dtype=dtype, device=torch.cuda.current_device()
++        )
+         out = out_reset
+     aiter.gemm_a4w4_asm(
+         x,
+@@ -113,16 +115,17 @@ def run_gemm_a4w4_blockscale_asm(
+     return out[:m]
+ 
+ 
+-def generate_data(m, n, k, useSplitK=False, dtype=dtypes.bf16):
++def generate_data(m, n, k, seed, device="cuda", dtype=dtypes.bf16):
++    torch.manual_seed(seed)
+     quant_func = aiter.get_triton_quant(aiter.QuantType.per_1x32)
+-    x = torch.randn((m, k), dtype=dtype)
+-    w = torch.randn((n, k), dtype=dtype)
++    x = torch.randn((m, k), dtype=dtype, device=device)  #
++    w = torch.randn((n, k), dtype=dtype, device=device)  #
+     _, x_scales = quant_func(x, shuffle=False)
+     _, w_scales = quant_func(w, shuffle=False)
+     x, x_scales_shuffle = quant_func(x, shuffle=True)
+     w, w_scales_shuffle = quant_func(w, shuffle=True)
+     w_shuffle = shuffle_weight(w)
+-    out_ck = torch.empty((m + 255) // 256 * 256, n, dtype=dtype)
++    out_ck = torch.empty((m + 255) // 256 * 256, n, dtype=dtype, device=device)
+     x_scales = x_scales.view(torch.uint8)
+     w_scales = w_scales.view(torch.uint8)
+     bias_f32 = None
+@@ -174,7 +177,12 @@ def tune_gemm_list(
+     cu_num = device_properties.multi_processor_count
+     task = []
+     tasks_in_data = []
++
+     ck_kernels_num = len(kernels_list)
++    gemm_a4w4_data_idx = [0, 4, 5, 6, 7]
++    gemm_asm_data_idx = [0, 4, 5, 6, 7, 8]
++    torch_data_idx = [0, 1, 2, 3]
++    seed = 1000
+     for i in range(len(untunedf)):
+         M = untunedf.loc[i, "M"]
+         N = untunedf.loc[i, "N"]
+@@ -186,8 +194,9 @@ def tune_gemm_list(
+             & (tunedf["K"] == K)
+             & (tunedf["cu_num"] == cu_num)
+         ].empty:
+-            input_data = generate_data(M, N, K)
+             total_kernel_nums = 0
++            seed = seed + 1
++
+             for i in range(ck_kernels_num):
+                 kernel = kernels_list[i]
+                 maxsplitK = (
+@@ -202,23 +211,21 @@ def tune_gemm_list(
+                     task.append(
+                         (
+                             info,
++                            generate_data,
++                            (M, N, K, seed),
+                             run_gemm_a4w4_blockscale,
+                             (
+-                                input_data[0],
+-                                input_data[4],
+-                                input_data[5],
+-                                input_data[6],
+-                                input_data[7],
++                                gemm_a4w4_data_idx,
+                                 i,
+                                 splitK,
+                             ),
+-                            {},
++                            {
++                                "num_warmup": 10,
++                                "num_iters": 101,
++                            },
+                             run_torch,
+                             (
+-                                input_data[0],
+-                                input_data[1],
+-                                input_data[2],
+-                                input_data[3],
++                                torch_data_idx,
+                                 dtypes.bf16,
+                             ),
+                             {},
+@@ -232,7 +239,6 @@ def tune_gemm_list(
+             asm_kernels_id = ck_kernels_num + 1
+             asm_kernel_list_csv = f"{get_asm_dir()}/f4gemm/f4gemm_bf16_per1x32Fp4.csv"
+             asm_kernels = get_asm_kernels(asm_kernel_list_csv)
+-            # asm_tiles = [(256, 256), (128, 512)]
+             asm_tiles = [key for key in asm_kernels.keys()]
+             for tile_m, tile_n in asm_tiles:
+                 maxsplitK = (
+@@ -252,26 +258,23 @@ def tune_gemm_list(
+                     task.append(
+                         (
+                             info,
++                            generate_data,
++                            (M, N, K, seed),
+                             run_gemm_a4w4_blockscale_asm,
+                             (
+-                                input_data[0],
+-                                input_data[4],
+-                                input_data[5],
+-                                input_data[6],
+-                                input_data[7],
++                                gemm_asm_data_idx,
+                                 kernel_name,
+-                                input_data[8],
+                                 dtypes.bf16,
+                                 True,
+                                 splitK,
+                             ),
+-                            {},
++                            {
++                                "num_warmup": 10,
++                                "num_iters": 101,
++                            },
+                             run_torch,
+                             (
+-                                input_data[0],
+-                                input_data[1],
+-                                input_data[2],
+-                                input_data[3],
++                                torch_data_idx,
+                                 dtypes.bf16,
+                             ),
+                             {},
+@@ -281,6 +284,7 @@ def tune_gemm_list(
+                         )
+                     )
+                     asm_kernels_id = asm_kernels_id + 1
++
+                     total_kernel_nums = total_kernel_nums + 1
+             tasks_in_data.append((total_kernel_nums, ()))
+         else:
+@@ -345,7 +349,7 @@ def tune_gemm_list(
+     parser.add_argument(
+         "--mp",
+         type=int,
+-        default=1,  # torch.cuda.device_count(),
++        default=torch.cuda.device_count(),
+         help="Tuning on multiple GPUs using multiple processes",
+     )
+ 
+@@ -378,6 +382,12 @@ def tune_gemm_list(
+     untunedf = get_untuned_gemm_list(args.untune_file)
+     tunedf = get_tuned_gemm_list(args.tune_file)
+     tunedf = tune_gemm_list(
+-        untunedf, tunedf, args.sort, args.splitK, args.mp, errRatio=args.errRatio
++        untunedf,
++        tunedf,
++        args.sort,
++        args.splitK,
++        args.mp,
++        shape_grouped=False,
++        errRatio=args.errRatio,
+     )
+     tunedf.to_csv(args.tune_file, index=False)
+diff --git a/csrc/ck_gemm_a8w8/gemm_a8w8_tune.py b/csrc/ck_gemm_a8w8/gemm_a8w8_tune.py
+index 680d2aa398..2681d8f84b 100644
+--- a/csrc/ck_gemm_a8w8/gemm_a8w8_tune.py
++++ b/csrc/ck_gemm_a8w8/gemm_a8w8_tune.py
+@@ -53,12 +53,13 @@ def get_tuned_gemm_list(tuned_gemm_file):
+     return tunedf
+ 
+ 
+-def generate_data(m, n, k):
+-    x = torch.randint(-20, 20, (m, k), dtype=dtypes.i8, device="cuda")
+-    weight = torch.randint(-20, 20, (n, k), dtype=dtypes.i8, device="cuda")
+-    x_scale = torch.rand([m, 1], dtype=dtypes.bf16, device="cuda")
+-    w_scale = torch.rand([1, n], dtype=dtypes.bf16, device="cuda")
+-    out = torch.empty(m, n, dtype=dtypes.bf16, device="cuda")
++def generate_data(m, n, k, seed, device="cuda"):
++    torch.manual_seed(seed)
++    x = torch.randint(-20, 20, (m, k), dtype=dtypes.i8, device=device)
++    weight = torch.randint(-20, 20, (n, k), dtype=dtypes.i8, device=device)
++    x_scale = torch.rand([m, 1], dtype=dtypes.bf16, device=device)
++    w_scale = torch.rand([1, n], dtype=dtypes.bf16, device=device)
++    out = torch.empty(m, n, dtype=dtypes.bf16, device=device)
+     # x.share_memory_()
+     # weight.share_memory_()
+     # x_scale.share_memory_()
+@@ -84,19 +85,21 @@ def tune_gemm_list(
+     cu_num = device_properties.multi_processor_count
+     task = []
+     tasks_data = []
++    gemm_a8w8_data_idx = [0, 1, 2, 3, 4]
++    ref_data_idx = [0, 1, 2, 3]
++    seed = 0
+     for i in range(len(untunedf)):
+         M = untunedf.loc[i, "M"]
+         N = untunedf.loc[i, "N"]
+         K = untunedf.loc[i, "K"]
+         kernels_num = len(kernels_list)
+-
++        seed = seed + 1
+         if tunedf[
+             (tunedf["M"] == M)
+             & (tunedf["N"] == N)
+             & (tunedf["K"] == K)
+             & (tunedf["cu_num"] == cu_num)
+         ].empty:
+-            input_datas = generate_data(M, N, K)
+             total_kernel_nums = 0
+             for i in range(kernels_num):
+                 kernel = kernels_list[i]
+@@ -112,11 +115,13 @@ def tune_gemm_list(
+                     task.append(
+                         (
+                             info,
++                            generate_data,
++                            (M, N, K, seed),
+                             run_gemm_a8w8,
+-                            (i, splitK),
++                            (gemm_a8w8_data_idx, i, splitK),
+                             {},
+                             gemm_a8w8_ref,
+-                            (),
++                            (ref_data_idx,),
+                             {},
+                             None,
+                             1e-2,
+@@ -125,7 +130,7 @@ def tune_gemm_list(
+                     )
+                     total_kernel_nums = total_kernel_nums + 1
+ 
+-            tasks_data.append((total_kernel_nums, input_datas))
++            tasks_data.append((total_kernel_nums, ()))
+     if task:
+         ret = mp_tuner(task, tasks_data, mp_num, False, shape_grouped)
+         for el in ret:
+diff --git a/csrc/ck_gemm_a8w8_blockscale/gemm_a8w8_blockscale_tune.py b/csrc/ck_gemm_a8w8_blockscale/gemm_a8w8_blockscale_tune.py
+index 7c82c24e8e..79a4a95359 100755
+--- a/csrc/ck_gemm_a8w8_blockscale/gemm_a8w8_blockscale_tune.py
++++ b/csrc/ck_gemm_a8w8_blockscale/gemm_a8w8_blockscale_tune.py
+@@ -88,16 +88,16 @@ def run_gemm_a8w8_blockscale(x, weight, x_scale, w_scale, out, kernel_id, splitK
+     return out
+ 
+ 
+-def generate_data(m, n, k):
+-    dim = (m, n, k)
++def generate_data(m, n, k, seed, device="cuda"):
++    torch.manual_seed(seed)
+     block_shape_n, block_shape_k = block_shape
+     scale_n = (n + block_shape_n - 1) // block_shape_n
+     scale_k = (k + block_shape_k - 1) // block_shape_k
+-    x = (torch.rand((m, k), dtype=dtypes.fp16, device="cuda") / 10).to(dtypes.fp8)
+-    weight = (torch.rand((n, k), dtype=dtypes.fp16, device="cuda") / 10).to(dtypes.fp8)
+-    x_scale = torch.rand([m, scale_k], dtype=dtypes.fp32, device="cuda")
+-    w_scale = torch.rand([scale_n, scale_k], dtype=dtypes.fp32, device="cuda")
+-    out = torch.empty(m, n, dtype=dtypes.bf16, device="cuda")
++    x = (torch.rand((m, k), dtype=dtypes.fp16, device=device) / 10).to(dtypes.fp8)
++    weight = (torch.rand((n, k), dtype=dtypes.fp16, device=device) / 10).to(dtypes.fp8)
++    x_scale = torch.rand([m, scale_k], dtype=dtypes.fp32, device=device)
++    w_scale = torch.rand([scale_n, scale_k], dtype=dtypes.fp32, device=device)
++    out = torch.empty(m, n, dtype=dtypes.bf16, device=device)
+     return (x, weight, x_scale, w_scale, out)
+ 
+ 
+@@ -109,6 +109,9 @@ def tune_gemm_list(
+     cu_num = device_properties.multi_processor_count
+     task = []
+     tasks_data = []
++    gemm_a8w8_data_idx = [0, 1, 2, 3, 4]
++    ref_data_idx = [0, 1, 2, 3]
++    seed = 0
+     for i in range(len(untunedf)):
+         M = untunedf.loc[i, "M"]
+         N = untunedf.loc[i, "N"]
+@@ -120,8 +123,7 @@ def tune_gemm_list(
+             & (tunedf["K"] == K)
+             & (tunedf["cu_num"] == cu_num)
+         ].empty:
+-            input_datas = generate_data(M, N, K)
+-
++            seed = seed + 1
+             total_kernel_nums = 0
+             for i in range(kernels_num):
+                 kernel = kernels_list[i]
+@@ -137,14 +139,17 @@ def tune_gemm_list(
+                     task.append(
+                         (
+                             info,
++                            generate_data,
++                            (M, N, K, seed),
+                             run_gemm_a8w8_blockscale,
+                             (
++                                gemm_a8w8_data_idx,
+                                 i,
+                                 splitK,
+                             ),
+                             {},
+                             run_torch,
+-                            (None, dtypes.bf16),
++                            (ref_data_idx, None, dtypes.bf16),
+                             {},
+                             None,
+                             1e-2,
+@@ -153,7 +158,7 @@ def tune_gemm_list(
+                     )
+                     total_kernel_nums = total_kernel_nums + 1
+ 
+-            tasks_data.append((total_kernel_nums, input_datas))
++            tasks_data.append((total_kernel_nums, ()))
+     if task:
+         ret = mp_tuner(task, tasks_data, mp_num, False, shape_grouped)
+         for el in ret:
+diff --git a/csrc/ck_gemm_a8w8_bpreshuffle/gemm_a8w8_bpreshuffle_tune.py b/csrc/ck_gemm_a8w8_bpreshuffle/gemm_a8w8_bpreshuffle_tune.py
+index 6e406bf9a1..2e50190419 100755
+--- a/csrc/ck_gemm_a8w8_bpreshuffle/gemm_a8w8_bpreshuffle_tune.py
++++ b/csrc/ck_gemm_a8w8_bpreshuffle/gemm_a8w8_bpreshuffle_tune.py
+@@ -69,46 +69,40 @@ def run_gemm_a8w8_bpreshuffle(x, weight, x_scale, w_scale, out, kernel_id, split
+     return out
+ 
+ 
+-def generate_data(m, n, k):
+-    x = torch.randn((m, k), dtype=dtypes.fp16, device="cuda")
+-    weight = torch.randn((n, k), dtype=dtypes.fp16, device="cuda")
++def generate_data(m, n, k, seed, device="cuda"):
++    torch.manual_seed(seed)
++    x = torch.randn((m, k), dtype=dtypes.fp16, device=device)
++    weight = torch.randn((n, k), dtype=dtypes.fp16, device=device)
+     x, x_scale = aiter.pertoken_quant(x, quant_dtype=dtypes.fp8)
+     weight, w_scale = aiter.pertoken_quant(weight, quant_dtype=dtypes.fp8)
+     weight_shuffle = shuffle_weight(weight, layout=(16, 16))
+-    out = torch.empty(m, n, dtype=dtypes.fp16, device="cuda")
++    out = torch.empty(m, n, dtype=dtypes.fp16, device=device)
+     return x, weight_shuffle, x_scale, w_scale, out, weight
+ 
+ 
+ def tune_gemm_list(
+-    untunedf,
+-    tunedf,
+-    issorted=False,
+-    useSplitK=False,
+-    mp_num=1,
+-    shape_grouped=False,
+-    forced=False,
++    untunedf, tunedf, issorted=False, useSplitK=False, mp_num=1, shape_grouped=False
+ ):
+     gpu = torch.cuda.current_device()
+     device_properties = torch.cuda.get_device_properties(gpu)
+     cu_num = device_properties.multi_processor_count
+     task = []
+     tasks_data = []  # [(kernel_nums, datas)]
++    seed = 10000
+     for i in range(len(untunedf)):
+         M = untunedf.loc[i, "M"]
+         N = untunedf.loc[i, "N"]
+         K = untunedf.loc[i, "K"]
+         kernels_num = len(kernels_list)
+-        if (
+-            tunedf[
+-                (tunedf["M"] == M)
+-                & (tunedf["N"] == N)
+-                & (tunedf["K"] == K)
+-                & (tunedf["cu_num"] == cu_num)
+-            ].empty
+-            or forced
+-        ):
+-            input_datas = generate_data(M, N, K)
+-
++        gemm_a8w8_idx = [0, 1, 2, 3, 4]
++        ref_data_idx = [0, 5, 2, 3]
++        if tunedf[
++            (tunedf["M"] == M)
++            & (tunedf["N"] == N)
++            & (tunedf["K"] == K)
++            & (tunedf["cu_num"] == cu_num)
++        ].empty:
++            seed = seed + 1
+             total_kernel_nums = 0
+             for i in range(kernels_num):
+                 kernel = kernels_list[i]
+@@ -124,23 +118,18 @@ def tune_gemm_list(
+                     task.append(
+                         (
+                             info,
++                            generate_data,
++                            (M, N, K, seed),
+                             run_gemm_a8w8_bpreshuffle,
+                             (
+-                                input_datas[0],
+-                                input_datas[1],
+-                                input_datas[2],
+-                                input_datas[3],
+-                                input_datas[4],
++                                gemm_a8w8_idx,
+                                 i,
+                                 splitK,
+                             ),
+                             {},
+                             run_torch,
+                             (
+-                                input_datas[0],
+-                                input_datas[5],
+-                                input_datas[2],
+-                                input_datas[3],
++                                ref_data_idx,
+                                 None,
+                                 dtypes.fp16,
+                             ),
+@@ -174,9 +163,7 @@ def tune_gemm_list(
+                     "kernelName": [kernelName],
+                 }
+             )
+-            tunedf = pd.concat([tunedf, temp], ignore_index=True).drop_duplicates(
+-                subset=["M", "N", "K", "cu_num"], keep="last"
+-            )
++            tunedf = pd.concat([tunedf, temp], ignore_index=True)
+ 
+         else:
+             print(f"M:{M}, N:{N}, K{K} is in tuned gemm, skip!!!")
+@@ -229,17 +216,17 @@ def tune_gemm_list(
+         required=False,
+         help="Arranged according to the M N K size",
+     )
+-    parser.add_argument(
+-        "--force",
+-        action="store_true",
+-        required=False,
+-        help="force to tune all kernels, even if they are already tuned",
+-    )
+ 
+     args = parser.parse_args()
+     untunedf = get_untuned_gemm_list(args.untune_file)
+     tunedf = get_tuned_gemm_list(args.tune_file)
+     tunedf = tune_gemm_list(
+-        untunedf, tunedf, args.sort, args.splitK, args.mp, forced=args.force
++        untunedf,
++        tunedf,
++        issorted=args.sort,
++        useSplitK=args.splitK,
++        mp_num=args.mp,
++        shape_grouped=True,
+     )
++
+     tunedf.to_csv(args.tune_file, index=False)
+diff --git a/gradlib/gradlib/GemmTuner.py b/gradlib/gradlib/GemmTuner.py
+index 6cd15ed52d..2557675319 100644
+--- a/gradlib/gradlib/GemmTuner.py
++++ b/gradlib/gradlib/GemmTuner.py
+@@ -60,6 +60,45 @@ def call_rocb_mm(inp, w, solidx):
+     return aiter.rocb_mm(inp, w, solidx)
+ 
+ 
++def generate_data(
++    m, n, k, indtype, outdtype, scaleAB, seed=0, bias=None, device="cuda:0"
++):
++    torch.manual_seed(seed)
++    inp = torch.randn((m, k), device=device).to(indtype)
++    weights = torch.randn((n, k), device=device).to(indtype)
++    # blob = torch.ones(128 * 1024 * 1024, dtype=dtypes.fp32, device=device)
++    bias = torch.randn(n, device=device).to(outdtype) if bias else None
++    scale_half = torch.tensor(0.5, dtype=dtypes.fp32, device=device)
++    scale_one = torch.tensor(1, dtype=dtypes.fp32, device=device)
++    scale = scale_half if scaleAB else scale_one
++    return (inp, weights, weights.t(), bias, scale)
++
++
++def get_gemm_ref(inp, weights, bias, scale, indtype, outdtype):
++    scaleA = scale
++    scaleB = scale
++    if indtype == dtypes.fp8:
++        try:
++            ref = torch._scaled_mm(
++                inp,
++                weights.t(),
++                bias=bias,
++                scale_a=scaleA,
++                scale_b=scaleB,
++                out_dtype=outdtype,
++            )
++        except RuntimeError:
++            ref = (
++                F.linear(inp.to(dtypes.fp32), weights.to(dtypes.fp32)) * scaleA * scaleB
++            )
++            ref = (ref.to(outdtype) + bias) if bias is not None else ref.to(outdtype)
++        if type(ref) is tuple and len(ref) == 2:
++            ref = ref[0]
++    else:
++        ref = F.linear(inp, weights, bias).to(outdtype)
++    return ref
++
++
+ rtol = 1e-5
+ atol = 1
+ 
+@@ -91,8 +130,9 @@ def __init__(
+         self.scaleAB = scaleAB
+         self.use_rocblas = indtype == outdtype and str(indtype) != "dtypes.fp8"
+         self.nb = CACHE_INVALIDATE_BUFFERS
+-        self.inp = torch.randn((self.m, self.k), device="cuda").to(self.indtype)
+-        self.weights = torch.randn((self.n, self.k), device="cuda").to(self.indtype)
++        (self.inp, self.weights, _, self.bias, scaleA) = generate_data(
++            m, n, k, indtype, outdtype, scaleAB, 0, bias
++        )
+         self.blob = torch.ones(128 * 1024 * 1024, dtype=dtypes.fp32, device="cuda")
+         self.topn = 20  # number of top solutions from each source
+         self.hipb_sols = []
+@@ -194,16 +234,18 @@ def hipb_time_all_sols(self, fast_mode=0, top_sols=0):
+             task.append(
+                 (
+                     info,
++                    generate_data,
++                    (self.m, self.n, self.k, self.indtype, self.outdtype, self.scaleAB),
+                     call_hipb_mm,
+-                    (solidx, self.outdtype),
++                    ([0, 2, 3, 4, 4], solidx, self.outdtype),
+                     {
+                         "num_warmup": warmi,
+                         "num_iters": coldi,
+                     },
+-                    None,
+-                    (),
++                    get_gemm_ref,
++                    ([0, 1, 3, 4], self.indtype, self.outdtype),
+                     {},
+-                    self.ref if fast_mode == 0 else None,
++                    None,  # self.ref if fast_mode == 0 else None,
+                     self.rtol,
+                     self.atol,
+                 )
+@@ -211,13 +253,7 @@ def hipb_time_all_sols(self, fast_mode=0, top_sols=0):
+         in_data = [
+             (
+                 len(solutions),
+-                (
+-                    self.inp,
+-                    self.weights.t(),
+-                    self.bias if self.bias is not None else None,
+-                    scaleA,
+-                    scaleB,
+-                ),
++                (),
+             )
+         ]
+         ret = mp_tuner(task, in_data, self.mp, fast_mode == 1)
+@@ -272,21 +308,26 @@ def rocb_time_all_sols(self, fast_mode=0, top_sols=0):
+             task.append(
+                 (
+                     info,
++                    generate_data,
++                    (self.m, self.n, self.k, self.indtype, self.outdtype, False),
+                     call_rocb_mm,
+-                    (solidx,),
++                    (
++                        [0, 2],
++                        solidx,
++                    ),
+                     {
+                         "num_warmup": warmi,
+                         "num_iters": coldi,
+                     },
+-                    None,
+-                    (),
++                    get_gemm_ref,
++                    ([0, 1, 3, 4], self.indtype, self.outdtype),
+                     {},
+-                    self.ref if fast_mode == 0 else None,
++                    None,  # self.ref if fast_mode == 0 else None,
+                     self.rtol,
+                     self.atol,
+                 )
+             )
+-        in_data = [(len(solutions), (self.inp, self.weights.t()))]
++        in_data = [(len(solutions), ())]
+         ret = mp_tuner(task, in_data, self.mp, fast_mode == 1)
+         for info, us, err_ratio in ret:
+             solidx = info[1]
+diff --git a/hsa/gfx942/fmoe_2stages/tune.py b/hsa/gfx942/fmoe_2stages/tune.py
+index dac77773ab..646d82bf3d 100644
+--- a/hsa/gfx942/fmoe_2stages/tune.py
++++ b/hsa/gfx942/fmoe_2stages/tune.py
+@@ -364,6 +364,8 @@ def get_kernels_dict(file):
+                     tasks.append(
+                         (
+                             ("stage1", el, blockM),  # tag
++                            None,
++                            (),
+                             asm_stage1,  # func
+                             (
+                                 a1_qt,
+@@ -420,6 +422,8 @@ def get_kernels_dict(file):
+                     tasks_ck.append(
+                         (
+                             ("stage1", kernel.name, blockM),  # tag
++                            None,
++                            (),
+                             ck_moe_stage1_fwd_out,  # func
+                             (
+                                 a1_qt,
+@@ -455,6 +459,8 @@ def get_kernels_dict(file):
+                     tasks_ck.append(
+                         (
+                             ("stage2", kernel.name, blockM),  # tag
++                            None,
++                            (),
+                             ck_moe_stage2_fwd_out,  # func
+                             (
+                                 a2_qt,
+@@ -490,6 +496,7 @@ def get_kernels_dict(file):
+         print(f"tasks is {len(tasks)}, tasks_ck is {len(tasks_ck)}")
+         in_data = [(len(tasks) + len(tasks_ck), ())]
+         rets = mp_tuner(tasks + tasks_ck, in_data, 1, True)
++        print(rets)
+ 
+         profileDF = []
+         for (stage, kernelName, block_m), us, err in rets:

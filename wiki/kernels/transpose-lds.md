@@ -14,7 +14,8 @@ tags:
 - swizzled-layout
 - vectorized-loads
 confidence: inferred
-reproducibility: snippet
+reproducibility: runnable
+artifact_dir: examples/transpose-lds
 kernel_types:
 - transpose
 - elementwise
@@ -191,6 +192,31 @@ writes fragment into partial transactions. The two numbers in the frontmatter
 are `inferred` from the bandwidth roofline and the bank-conflict model, not a
 measured benchmark on this exact code — treat them as targets and confirm with
 the [bandwidth microbenchmark](bandwidth-microbench.md) and profiler counters.
+
+## Runnable example
+
+A portable, self-checking version of the padded (Fix 1) kernel lives in
+[`examples/transpose-lds/`](../../examples/transpose-lds/). It is **pure HIP**
+(no MFMA/WMMA), so it builds and runs natively on gfx1201 (RDNA4) as well as
+gfx942/gfx950. It transposes an fp32 matrix, verifies the result is *exactly*
+equal to a CPU reference, and reports effective bandwidth.
+
+```bash
+cd examples/transpose-lds
+hipcc --offload-arch=gfx1201 -O3 transpose_lds.cpp -o transpose_lds && ./transpose_lds
+```
+
+Expected output (captured on an RX 9070 XT / gfx1201, ROCm 7.2.3):
+
+```
+Transpose 2048 x 4096 (fp32), TILE=32
+avg kernel time: 0.138 ms   effective BW: 487.2 GB/s
+max abs error: 0   mismatches: 0
+PASS
+```
+
+The reported bandwidth is real gfx1201 timing for one mid-size matrix (not a
+tuned peak); the MI300X figures in the frontmatter remain `inferred` targets.
 
 ## See also
 

@@ -125,6 +125,7 @@ When answering from this KB:
 - **20 doc/blog summaries** + **8 reference-repository studies**
 - **9 candidate ledgers** classifying every scanned PR (include/defer/exclude)
 - **6 auto-generated query indices**
+- **959 real upstream PR diffs** in `artifacts/` + **12 runnable, hipcc-compiled kernel examples** in `examples/`
 - **Validator** `scripts/validate.py` — schema, vocabulary, link-integrity (0 errors)
 
 ## Quality Guarantees

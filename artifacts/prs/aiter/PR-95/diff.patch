@@ -1,0 +1,2410 @@
+diff --git a/.gitignore b/.gitignore
+index 814af71b28..9de5526c88 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -43,4 +43,5 @@ __pycache__
+ .vscode
+ 
+ # debug folder
+-debug
+\ No newline at end of file
++debug
++aiter_logs
+diff --git a/3rdparty/composable_kernel b/3rdparty/composable_kernel
+index 1bf29478cd..c12fb0a624 160000
+--- a/3rdparty/composable_kernel
++++ b/3rdparty/composable_kernel
+@@ -1 +1 @@
+-Subproject commit 1bf29478cdada3c7f56fbedc5542b275b0c107b3
++Subproject commit c12fb0a624e4d56d4438d1241e5d05a2cbfba9e4
+diff --git a/aiter/fused_moe_bf16_asm.py b/aiter/fused_moe_bf16_asm.py
+index e7119f9e10..87d2a0222a 100644
+--- a/aiter/fused_moe_bf16_asm.py
++++ b/aiter/fused_moe_bf16_asm.py
+@@ -12,8 +12,7 @@
+ BLOCK_SIZE_M = 32
+ 
+ 
+-def moe_sorting_ck(topk_ids, topk_weights, num_experts, model_dim, moebuf_dtype, expert_mask=None):
+-    block_size = BLOCK_SIZE_M
++def moe_sorting_ck(topk_ids, topk_weights, num_experts, model_dim, moebuf_dtype, block_size=BLOCK_SIZE_M, expert_mask=None):
+     device = topk_ids.device
+     M, topk = topk_ids.shape
+     topk = topk_ids.shape[1]
+@@ -28,16 +27,16 @@ def moe_sorting_ck(topk_ids, topk_weights, num_experts, model_dim, moebuf_dtype,
+     sorted_expert_ids = torch.empty((max_num_m_blocks, ),
+                                     dtype=torch.int32,
+                                     device=device)
+-    num_tokens_post_pad = torch.empty((1),
+-                                      dtype=torch.int32,
+-                                      device=device)
++    num_valid_ids = torch.empty((1 + num_experts + 1),
++                                dtype=torch.int32,
++                                device=device)
+     moe_buf = torch.empty((M, model_dim),
+                           dtype=moebuf_dtype,
+                           device=device)
+ 
+     aiter.moe_sorting_fwd(topk_ids, topk_weights, sorted_ids, sorted_weights,  sorted_expert_ids,
+-                          num_tokens_post_pad, moe_buf, num_experts, BLOCK_SIZE_M, expert_mask)
+-    return sorted_ids, sorted_weights, sorted_expert_ids, num_tokens_post_pad, moe_buf
++                          num_valid_ids, moe_buf, num_experts, block_size, expert_mask)
++    return sorted_ids, sorted_weights, sorted_expert_ids, num_valid_ids, moe_buf
+ 
+ 
+ def asm_moe(hidden_states,
+@@ -60,18 +59,18 @@ def asm_moe(hidden_states,
+     dtype = hidden_states.dtype
+     device = topk_ids.device
+     lastdim_mul = 8 if w1.dtype in {torch.int32, torch.uint32} else 1
+-    sorted_ids, sorted_weights, sorted_expert_ids, num_tokens_post_padded, moe_buf = moe_sorting_ck(topk_ids, topk_weight, E,
+-                                                                                                    model_dim, dtype, expert_mask)
++    sorted_ids, sorted_weights, sorted_expert_ids, num_valid_ids, moe_buf = moe_sorting_ck(topk_ids, topk_weight, E,
++                                                                                           model_dim, dtype, BLOCK_SIZE_M, expert_mask)
+ 
+     if fc1_scale is None:
+         # pure bf16
+         aiter.fmoe(moe_buf, hidden_states, w1, w2, sorted_ids,
+-                   sorted_weights, sorted_expert_ids, num_tokens_post_padded, topk)
++                   sorted_weights, sorted_expert_ids, num_valid_ids, topk)
+     elif a16:
+         # a16w8 smooth quant fmoe
+         if w1.dtype == torch.float8_e4m3fnuz and inter_dim*2 == w1.shape[1]:
+             aiter.fmoe_fp8_g1u1_a16(moe_buf, hidden_states, w1, w2, sorted_ids,
+-                                    sorted_weights, sorted_expert_ids, num_tokens_post_padded,
++                                    sorted_weights, sorted_expert_ids, num_valid_ids,
+                                     topk,
+                                     fc1_scale,
+                                     fc2_scale,
+@@ -79,7 +78,7 @@ def asm_moe(hidden_states,
+                                     fc2_smooth_scale)
+         elif w1.dtype == torch.int8 and inter_dim == w1.shape[1]:
+             aiter.fmoe_int8_g1u0_a16(moe_buf, hidden_states, w1, w2, sorted_ids,
+-                                     sorted_weights, sorted_expert_ids, num_tokens_post_padded,
++                                     sorted_weights, sorted_expert_ids, num_valid_ids,
+                                      topk,
+                                      fc1_scale,
+                                      fc2_scale,
+@@ -137,10 +136,11 @@ def asm_moe(hidden_states,
+         elif w2.shape[2] * 2 * lastdim_mul == w1.shape[1]:
+             fmoe_func = aiter.fmoe_g1u1
+         else:
+-            raise ValueError(f"Invalid MoE weight: {w1.shape=} {w2.shape=} {lastdim_mul}")
++            raise ValueError(
++                f"Invalid MoE weight: {w1.shape=} {w2.shape=} {lastdim_mul}")
+ 
+         fmoe_func(moe_buf, a8, w1, w2, sorted_ids,
+-                  sorted_weights, sorted_expert_ids, num_tokens_post_padded,
++                  sorted_weights, sorted_expert_ids, num_valid_ids,
+                   topk,
+                   a8_scale,
+                   fc1_scale,
+@@ -149,6 +149,82 @@ def asm_moe(hidden_states,
+     return moe_buf
+ 
+ 
++def get_block_size(token, topk, expert):
++    token_per_expert = token * topk / expert
++    support_list = [32, 64, 128]
++    for el in support_list:
++        if token_per_expert <= el * 4:
++            return el
++    return support_list[-1]
++
++
++# Only support fp8 per tensor quant
++def ck_moe_2stages(a1,
++                   w1,  # [expert(local_expert:EP), inter_dim(*2), dim] N,K
++                   w2,  # [expert(local_expert:EP), dim, inter_dim]
++                   topk_weight, topk_ids,
++                   # following for int8 quant
++                   fc1_scale=None,  # [expert(local_expert:EP), inter_dim, 1]
++                   fc2_scale=None,  # [expert(local_expert:EP), model_dim, 1]
++                   a1_scale=None,  # [1]
++                   a2_scale=None,  # [1]
++                   block_size=None,
++                   expert_mask=None
++                   ):
++    E, model_dim, inter_dim = w2.shape
++    global_E = E
++    if expert_mask is not None:
++        global_E = expert_mask.numel()
++    M, topk = topk_ids.shape
++    dtype = a1.dtype
++    device = topk_ids.device
++    if block_size is None:
++        block_size = get_block_size(M, topk, E)
++    sorted_ids, sorted_weights, sorted_expert_ids, num_valid_ids, moe_buf = moe_sorting_ck(topk_ids, topk_weight, global_E,
++                                                                                           model_dim, dtype, block_size, expert_mask)
++
++    # print("block_size:", block_size, sorted_expert_ids)
++    if w1.dtype == torch.float8_e4m3fnuz:
++        a1, a1_scale = aiter.per_tensor_quant_fp8_hip(a1, a1_scale)
++        # a1, a1_scale = aiter.per_tensor_quant(a1, quant_dtype=w1.dtype)
++    else:
++        a1_scale = None
++
++    a2 = torch.zeros(
++        (M, topk, w1.shape[1]),
++        dtype=dtype,
++        device=device,
++    )
++
++    aiter.ck_moe_stage1(a1, w1, w2,
++                        sorted_ids, sorted_expert_ids, num_valid_ids,
++                        a2, topk,
++                        fc1_scale, a1_scale, block_size)
++
++    # g1u0
++    if w2.shape[2] == w1.shape[1]:
++        a2 = F.gelu(a2)
++    # g1u1
++    else:
++        tmp = torch.empty((M, topk, inter_dim), dtype=dtype, device=device)
++        aiter.silu_and_mul(tmp, a2)
++        a2 = tmp
++    if w2.dtype == torch.float8_e4m3fnuz:
++        a2, a2_scale = aiter.per_tensor_quant_fp8_hip(a2, a2_scale)
++        # a2, a2_scale = aiter.per_tensor_quant(a2, quant_dtype=w2.dtype)
++    else:
++        if not hasattr(ck_moe_2stages, "one_float_tensor"):
++            ck_moe_2stages.one_float_tensor = torch.tensor(
++                1.0, dtype=torch.float, device=device)
++        a2_scale = ck_moe_2stages.one_float_tensor
++
++    aiter.ck_moe_stage2(a2, w1, w2, sorted_ids,
++                        sorted_expert_ids, sorted_weights,
++                        num_valid_ids, moe_buf, topk, fc2_scale, a2_scale, block_size)
++
++    return moe_buf
++
++
+ def torch_moe(hidden_states, w1, w2, topk_weight, topk_ids,
+               # following for int8 quant
+               fc1_scale=None,  # [expert(local_expert:EP), inter_dim, 1]
+@@ -190,7 +266,7 @@ def torch_moe(hidden_states, w1, w2, topk_weight, topk_ids,
+         w2D = w2.shape[-1]
+         w1 = (w1.view(-1, D)*fc1_scale.view(-1, 1)).view(expert, -1, D)
+         w2 = (w2.view(-1, w2D)*fc2_scale.view(-1, 1)).view(expert, -1, w2D)
+-        
++
+     if fc1_smooth_scale is not None:
+         expert = fc1_smooth_scale.shape[0]
+         fc1_smooth_scale = fc1_smooth_scale.view(expert, -1)
+@@ -258,4 +334,4 @@ def fused_topk(
+     # if renormalize:
+     #     topk_weights = topk_weights / topk_weights.sum(dim=-1, keepdim=True)
+ 
+-    return topk_weights, topk_ids
+\ No newline at end of file
++    return topk_weights, topk_ids
+diff --git a/aiter/jit/core.py b/aiter/jit/core.py
+index 7cbef7a147..05894940c6 100644
+--- a/aiter/jit/core.py
++++ b/aiter/jit/core.py
+@@ -14,6 +14,7 @@
+ from torch.utils.file_baton import FileBaton
+ import logging
+ import json
++import multiprocessing
+ from packaging.version import parse, Version
+ 
+ PREBUILD_KERNELS = False
+@@ -50,8 +51,12 @@
+ CK_DIR = os.environ.get("CK_DIR",
+                         f"{AITER_ROOT_DIR}/3rdparty/composable_kernel")
+ bd_dir = f"{this_dir}/build"
++
+ # copy ck to build, thus hippify under bd_dir
+-shutil.copytree(CK_DIR, f'{bd_dir}/ck', dirs_exist_ok=True)
++if multiprocessing.current_process().name == 'MainProcess':
++    shutil.copytree(CK_DIR, f'{bd_dir}/ck', dirs_exist_ok=True)
++    if os.path.exists(f'{bd_dir}/ck/library'):
++        shutil.rmtree(f'{bd_dir}/ck/library')
+ CK_DIR = f'{bd_dir}/ck'
+ 
+ 
+@@ -224,7 +229,7 @@ def exec_blob(blob_gen_cmd, op_dir, src_dir, sources):
+     except Exception as e:
+         logger.error('failed build jit [{}]\n-->[History]: {}'.format(
+             md_name,
+-            ''.join(traceback.format_exception(*sys.exc_info()))
++            '-->'.join(traceback.format_exception(*sys.exc_info()))
+         ))
+         sys.exit()
+     logger.info(
+diff --git a/aiter/jit/optCompilerConfig.json b/aiter/jit/optCompilerConfig.json
+index 874be6823e..5cec649445 100644
+--- a/aiter/jit/optCompilerConfig.json
++++ b/aiter/jit/optCompilerConfig.json
+@@ -196,6 +196,21 @@
+         "verbose": "False",
+         "blob_gen_cmd": "''"
+     },
++    "module_moe_ck2stages": {
++        "srcs": [
++            "f'{AITER_CSRC_DIR}/pybind/moe_ck_2stages_pybind.cu'",
++            "f'{AITER_CSRC_DIR}/py_itfs_ck/moe_ck_2stages_kernel.cu'",
++            "f'{AITER_CSRC_DIR}/py_itfs_ck/moe_ck_2stages_gemm_impl'"
++        ],
++        "md_name": "'module_moe_ck2stages'",
++        "flags_extra_cc": [],
++        "flags_extra_hip": [],
++        "extra_ldflags": "None",
++        "extra_include": [],
++        "isASM": "False",
++        "verbose": "False",
++        "blob_gen_cmd": "''"
++    },
+     "module_moe_sorting": {
+         "srcs": [
+             "f'{AITER_CSRC_DIR}/py_itfs_ck/moe_sorting_kernels.cu'",
+diff --git a/aiter/ops/moe_op.py b/aiter/ops/moe_op.py
+index 365a6ebe58..8b0096e33b 100644
+--- a/aiter/ops/moe_op.py
++++ b/aiter/ops/moe_op.py
+@@ -42,7 +42,7 @@ def fmoe(
+     sorted_token_ids: Tensor,
+     sorted_weight_buf: Tensor,
+     sorted_expert_ids: Tensor,
+-    num_tokens_post_padded: Tensor,
++    num_valid_ids: Tensor,
+     topk: int,
+ ): ...
+ 
+@@ -56,7 +56,7 @@ def fmoe_int8_g1u0(
+     sorted_token_ids: Tensor,
+     sorted_weight_buf: Tensor,
+     sorted_expert_ids: Tensor,
+-    num_tokens_post_padded: Tensor,
++    num_valid_ids: Tensor,
+     topk: int,
+     input_scale: Tensor,
+     fc1_scale: Tensor,
+@@ -74,7 +74,7 @@ def fmoe_g1u1(
+     sorted_token_ids: Tensor,
+     sorted_weight_buf: Tensor,
+     sorted_expert_ids: Tensor,
+-    num_tokens_post_padded: Tensor,
++    num_valid_ids: Tensor,
+     topk: int,
+     input_scale: Tensor,
+     fc1_scale: Tensor,
+@@ -92,7 +92,7 @@ def fmoe_int8_g1u0_a16(
+     sorted_token_ids: Tensor,
+     sorted_weight_buf: Tensor,
+     sorted_expert_ids: Tensor,
+-    num_tokens_post_padded: Tensor,
++    num_valid_ids: Tensor,
+     topk: int,
+     fc1_scale: Tensor,
+     fc2_scale: Tensor,
+@@ -110,7 +110,7 @@ def fmoe_fp8_g1u1_a16(
+     sorted_token_ids: Tensor,
+     sorted_weight_buf: Tensor,
+     sorted_expert_ids: Tensor,
+-    num_tokens_post_padded: Tensor,
++    num_valid_ids: Tensor,
+     topk: int,
+     fc1_scale: Tensor,
+     fc2_scale: Tensor,
+@@ -118,10 +118,11 @@ def fmoe_fp8_g1u1_a16(
+     fc2_smooth_scale: Tensor,
+ ): ...
+ 
++
+ @compile_ops("module_moe_asm")
+ def fmoe_fp8_blockscale_g1u1(
+     out: Tensor,
+-    input: Tensor,  
++    input: Tensor,
+     gate: Tensor,
+     down: Tensor,
+     sorted_token_ids: Tensor,
+@@ -151,5 +152,37 @@ def ck_moe(
+     fc2_smooth_scale: Optional[Tensor] = None,
+     block_m: Optional[int] = 32,
+     expert_mask: Optional[Tensor] = None
+-) -> Tensor:
+-    ...
+\ No newline at end of file
++): ...
++
++
++@compile_ops("module_moe_ck2stages")
++def ck_moe_stage1(
++    hidden_states: Tensor,
++    w1: Tensor,
++    w2: Tensor,
++    sorted_token_ids: Tensor,
++    sorted_expert_ids: Tensor,
++    num_valid_ids: Tensor,
++    out: Tensor,
++    topk: int,
++    w1_scale: Optional[Tensor] = None,
++    a1_scale: Optional[Tensor] = None,
++    block_m: Optional[int] = 32
++): ...
++
++
++@compile_ops("module_moe_ck2stages")
++def ck_moe_stage2(
++    inter_states: Tensor,
++    w1: Tensor,
++    w2: Tensor,
++    sorted_token_ids: Tensor,
++    sorted_expert_ids: Tensor,
++    sorted_weights: Tensor,
++    num_valid_ids: Tensor,
++    out: Tensor,
++    topk: int,
++    w2_scale: Optional[Tensor] = None,
++    a2_scale: Optional[Tensor] = None,
++    block_m: Optional[int] = 32
++): ...
+diff --git a/aiter/ops/quant.py b/aiter/ops/quant.py
+index 2bb335e66c..63101d2728 100644
+--- a/aiter/ops/quant.py
++++ b/aiter/ops/quant.py
+@@ -32,7 +32,7 @@ def pertoken_quant(x, y_scale_dtype=torch.float, x_scale=None, quant_dtype=torch
+         hidden_states = x
+     else:
+         # smooth quant
+-        hidden_states = x.to(x_scale) * x_scale
++        hidden_states = x * x_scale
+     # [m, 1]
+     per_token_amax, _ = torch.max(
+         input=torch.abs(hidden_states),
+@@ -43,7 +43,7 @@ def pertoken_quant(x, y_scale_dtype=torch.float, x_scale=None, quant_dtype=torch
+     if not dtypeMax:
+         dtypeMax = get_dtype_max(quant_dtype)
+ 
+-    per_token_scale = per_token_amax.to(dtype=torch.float32) / dtypeMax
++    per_token_scale = per_token_amax / dtypeMax
+     per_token_scale[per_token_scale == 0] = 1
+ 
+     # quant hidden_states
+@@ -53,14 +53,25 @@ def pertoken_quant(x, y_scale_dtype=torch.float, x_scale=None, quant_dtype=torch
+ 
+ 
+ def per_tensor_quant(x, scale=None, scale_dtype=torch.float, quant_dtype=torch.int8):
++    x = x.to(torch.float)
+     if scale is None:
+         dtypeMax = get_dtype_max(quant_dtype)
+-        scale = torch.abs(x.to(torch.float)).max() / dtypeMax
++        scale = torch.abs(x).max() / dtypeMax
+     y = x/scale
+ 
+     return y.to(quant_dtype), scale.to(scale_dtype)
+ 
+ 
++def per_tensor_quant_fp8_hip(x, scale=None):
++    y = torch.empty(x.shape, dtype=torch.float8_e4m3fnuz, device=x.device)
++    if scale is None:
++        scale = torch.empty(1, dtype=torch.float, device=x.device)
++        dynamic_scaled_fp8_quant(y, x, scale)
++    else:
++        static_scaled_fp8_quant(y, x, scale)
++    return y, scale
++
++
+ @compile_ops("module_quant")
+ def static_scaled_fp8_quant(
+     out: Tensor, input: Tensor, scale: Tensor
+@@ -70,11 +81,7 @@ def static_scaled_fp8_quant(
+ @compile_ops("module_quant")
+ def dynamic_scaled_fp8_quant(
+     out: Tensor, input: Tensor, scale: Tensor
+-):
+-    '''
+-    must init out as zeroes
+-    '''
+-    ...
++):...
+ 
+ 
+ @compile_ops("module_quant")
+diff --git a/csrc/ck_gemm_a8w8/include/gemm_a8w8_common.cuh b/csrc/ck_gemm_a8w8/include/gemm_a8w8_common.cuh
+index a547dafbdb..20eecff65c 100644
+--- a/csrc/ck_gemm_a8w8/include/gemm_a8w8_common.cuh
++++ b/csrc/ck_gemm_a8w8/include/gemm_a8w8_common.cuh
+@@ -28,7 +28,6 @@
+ #include "ck/library/utility/host_tensor.hpp"
+ #include "ck/library/utility/host_tensor_generator.hpp"
+ #include "ck/library/utility/literals.hpp"
+-#include "ck/library/reference_tensor_operation/cpu/reference_gemm.hpp"
+ #include "ck/library/utility/check_err.hpp"
+ 
+ #include "ck/utility/blkgemmpipe_scheduler.hpp"
+diff --git a/csrc/include/aiter_hip_common.h b/csrc/include/aiter_hip_common.h
+index 2b054f4e87..4f1eb202ed 100644
+--- a/csrc/include/aiter_hip_common.h
++++ b/csrc/include/aiter_hip_common.h
+@@ -2,15 +2,15 @@
+ // Copyright (c) 2024, Advanced Micro Devices, Inc. All rights reserved.
+ #include <hip/hip_runtime.h>
+ 
+-#define HIP_CALL(call)                                                                               \
+-    do                                                                                               \
+-    {                                                                                                \
+-        hipError_t err = call;                                                                       \
+-        if (err != hipSuccess)                                                                       \
+-        {                                                                                            \
+-            printf("\n[AITER] fail to call %s... [HIP error](%s)\n", #call, hipGetErrorString(err)); \
+-            exit(0);                                                                                 \
+-        }                                                                                            \
++#define HIP_CALL(call)                                                                                                           \
++    do                                                                                                                           \
++    {                                                                                                                            \
++        hipError_t err = call;                                                                                                   \
++        if (err != hipSuccess)                                                                                                   \
++        {                                                                                                                        \
++            printf("\n[AITER] %s:%d fail to call %s ---> [HIP error](%s)\n", __FILE__, __LINE__, #call, hipGetErrorString(err)); \
++            exit(0);                                                                                                             \
++        }                                                                                                                        \
+     } while (0)
+ 
+ struct p3
+diff --git a/csrc/include/moe_ck.h b/csrc/include/moe_ck.h
+index c0c0cbc12e..3c50f300ec 100644
+--- a/csrc/include/moe_ck.h
++++ b/csrc/include/moe_ck.h
+@@ -14,4 +14,29 @@ torch::Tensor ck_moe(torch::Tensor &hidden_states,          // [m, k], input tok
+                      std::optional<torch::Tensor> a1_scale, // [m, 1], token scale
+                      std::optional<torch::Tensor> a2_scale, // [e, 1, n], smooth-quant-scale for 2nd gemm input
+                      std::optional<int> block_m = 32,
+-                     std::optional<torch::Tensor> expert_mask = std::nullopt);
+\ No newline at end of file
++                     std::optional<torch::Tensor> expert_mask = std::nullopt);
++
++void ck_moe_stage1(torch::Tensor &hidden_states,     // [m, k], input token
++                   torch::Tensor &w1,                // [e, n, k]/[e, 2*n, k], pre-shuffle([e, nr, kr, w])
++                   torch::Tensor &w2,                // [e, n, k], pre-shuffle([e, nr, kr, w])
++                   torch::Tensor &sorted_token_ids,  // [max_num_tokens_padded]
++                   torch::Tensor &sorted_expert_ids, // [max_num_m_blocks]
++                   torch::Tensor &num_valid_ids,     // [1]
++                   torch::Tensor &out,               // [max_num_tokens_padded, inter_dim]
++                   int topk,
++                   std::optional<torch::Tensor> w1_scale, // [e, 1, n], gate(up) scale
++                   std::optional<torch::Tensor> a1_scale, // [m, 1], token scale
++                   std::optional<int> block_m);
++
++void ck_moe_stage2(torch::Tensor &inter_states,      // [m, k], input token
++                   torch::Tensor &w1,                // [e, n, k]/[e, 2*n, k], pre-shuffle([e, nr, kr, w])
++                   torch::Tensor &w2,                // [e, n, k], pre-shuffle([e, nr, kr, w])
++                   torch::Tensor &sorted_token_ids,  // [max_num_tokens_padded]
++                   torch::Tensor &sorted_expert_ids, // [max_num_m_blocks]
++                   torch::Tensor &sorted_weights,    // [max_num_tokens_padded]
++                   torch::Tensor &num_valid_ids,     // [1]
++                   torch::Tensor &out,               // [max_num_tokens_padded, inter_dim]
++                   int topk,
++                   std::optional<torch::Tensor> w2_scale, // [e, 1, n], gate(up) scale
++                   std::optional<torch::Tensor> a2_scale, // [m, 1], token scale
++                   std::optional<int> block_m);
+diff --git a/csrc/include/moe_op.h b/csrc/include/moe_op.h
+index 88ce70f554..3c914b9cfe 100644
+--- a/csrc/include/moe_op.h
++++ b/csrc/include/moe_op.h
+@@ -34,30 +34,30 @@ void moe_align_block_size(torch::Tensor topk_ids, int64_t num_experts,
+                           torch::Tensor token_nums,
+                           torch::Tensor num_tokens_post_pad);
+ 
+-void fmoe(torch::Tensor &out,                    // [token_cnt, dim]
+-          torch::Tensor &input,                  // [token_cnt, dim] M,K
+-          torch::Tensor &gate,                   // [expert, hidden_dim, dim] N,K
+-          torch::Tensor &down,                   // [expert, hidden_dim, dim]
+-          torch::Tensor &sorted_token_ids,       // [max_num_tokens_padded]
+-          torch::Tensor &sorted_weight_buf,      // [max_num_tokens_padded]
+-          torch::Tensor &sorted_expert_ids,      // [max_num_m_blocks]
+-          torch::Tensor &num_tokens_post_padded, // [1]
+-          uint32_t topk                          //
++void fmoe(torch::Tensor &out,               // [token_cnt, dim]
++          torch::Tensor &input,             // [token_cnt, dim] M,K
++          torch::Tensor &gate,              // [expert, hidden_dim, dim] N,K
++          torch::Tensor &down,              // [expert, hidden_dim, dim]
++          torch::Tensor &sorted_token_ids,  // [max_num_tokens_padded]
++          torch::Tensor &sorted_weight_buf, // [max_num_tokens_padded]
++          torch::Tensor &sorted_expert_ids, // [max_num_m_blocks]
++          torch::Tensor &num_valid_ids,     // [1]
++          uint32_t topk                     //
+ );
+ 
+-void fmoe_int8_g1u0(torch::Tensor &out,                    // [token_cnt, dim]
+-                    torch::Tensor &input,                  // [token_cnt, dim] M,K
+-                    torch::Tensor &gate,                   // [expert, hidden_dim, dim] N,K
+-                    torch::Tensor &down,                   // [expert, hidden_dim, dim]
+-                    torch::Tensor &sorted_token_ids,       // [max_num_tokens_padded]
+-                    torch::Tensor &sorted_weight_buf,      // [max_num_tokens_padded]
+-                    torch::Tensor &sorted_expert_ids,      // [max_num_m_blocks]
+-                    torch::Tensor &num_tokens_post_padded, // [1]
+-                    uint32_t topk,                         //
+-                    torch::Tensor &input_scale,            // [token_cnt, 1]
+-                    torch::Tensor &fc1_scale,              // [expert, 1, hidden_dim]
+-                    torch::Tensor &fc2_scale,              // [expert, 1, dim]
+-                    torch::Tensor &fc2_smooth_scale        // [expert, 1, hidden_dim]
++void fmoe_int8_g1u0(torch::Tensor &out,               // [token_cnt, dim]
++                    torch::Tensor &input,             // [token_cnt, dim] M,K
++                    torch::Tensor &gate,              // [expert, hidden_dim, dim] N,K
++                    torch::Tensor &down,              // [expert, hidden_dim, dim]
++                    torch::Tensor &sorted_token_ids,  // [max_num_tokens_padded]
++                    torch::Tensor &sorted_weight_buf, // [max_num_tokens_padded]
++                    torch::Tensor &sorted_expert_ids, // [max_num_m_blocks]
++                    torch::Tensor &num_valid_ids,     // [1]
++                    uint32_t topk,                    //
++                    torch::Tensor &input_scale,       // [token_cnt, 1]
++                    torch::Tensor &fc1_scale,         // [expert, 1, hidden_dim]
++                    torch::Tensor &fc2_scale,         // [expert, 1, dim]
++                    torch::Tensor &fc2_smooth_scale   // [expert, 1, hidden_dim]
+ );
+ 
+ void fmoe_g1u1(torch::Tensor &out,                           // [token_cnt, dim]
+@@ -67,7 +67,7 @@ void fmoe_g1u1(torch::Tensor &out,                           // [token_cnt, dim]
+                torch::Tensor &sorted_token_ids,              // [max_num_tokens_padded]
+                torch::Tensor &sorted_weight_buf,             // [max_num_tokens_padded]
+                torch::Tensor &sorted_expert_ids,             // [max_num_m_blocks]
+-               torch::Tensor &num_tokens_post_padded,        // [1]
++               torch::Tensor &num_valid_ids,                 // [1]
+                uint32_t topk,                                //
+                torch::Tensor &input_scale,                   // [token_cnt, 1]
+                torch::Tensor &fc1_scale,                     // [expert, 1, hidden_dim]
+@@ -75,33 +75,33 @@ void fmoe_g1u1(torch::Tensor &out,                           // [token_cnt, dim]
+                std::optional<torch::Tensor> fc2_smooth_scale // [expert, 1, hidden_dim]
+ );
+ 
+-void fmoe_int8_g1u0_a16(torch::Tensor &out,                    // [token_cnt, dim]
+-                        torch::Tensor &input,                  // [token_cnt, dim] M,K
+-                        torch::Tensor &gate,                   // [expert, inter_dim, dim] N,K
+-                        torch::Tensor &down,                   // [expert, dim, inter_dim]
+-                        torch::Tensor &sorted_token_ids,       // [max_num_tokens_padded]
+-                        torch::Tensor &sorted_weight_buf,      // [max_num_tokens_padded]
+-                        torch::Tensor &sorted_expert_ids,      // [max_num_m_blocks]
+-                        torch::Tensor &num_tokens_post_padded, // [1]
+-                        uint32_t topk,                         //
+-                        torch::Tensor &fc1_scale,              // [expert, 1, hidden_dim]
+-                        torch::Tensor &fc2_scale,              // [expert, 1, dim]
+-                        torch::Tensor &fc1_smooth_scale,       // [expert, 1, hidden_dim]
+-                        torch::Tensor &fc2_smooth_scale        // [expert, 1, hidden_dim]
++void fmoe_int8_g1u0_a16(torch::Tensor &out,               // [token_cnt, dim]
++                        torch::Tensor &input,             // [token_cnt, dim] M,K
++                        torch::Tensor &gate,              // [expert, inter_dim, dim] N,K
++                        torch::Tensor &down,              // [expert, dim, inter_dim]
++                        torch::Tensor &sorted_token_ids,  // [max_num_tokens_padded]
++                        torch::Tensor &sorted_weight_buf, // [max_num_tokens_padded]
++                        torch::Tensor &sorted_expert_ids, // [max_num_m_blocks]
++                        torch::Tensor &num_valid_ids,     // [1]
++                        uint32_t topk,                    //
++                        torch::Tensor &fc1_scale,         // [expert, 1, hidden_dim]
++                        torch::Tensor &fc2_scale,         // [expert, 1, dim]
++                        torch::Tensor &fc1_smooth_scale,  // [expert, 1, hidden_dim]
++                        torch::Tensor &fc2_smooth_scale   // [expert, 1, hidden_dim]
+ );
+-void fmoe_fp8_g1u1_a16(torch::Tensor &out,                    // [token_cnt, dim]
+-                       torch::Tensor &input,                  // [token_cnt, dim] M,K
+-                       torch::Tensor &gate,                   // [expert, inter_dim, dim] N,K
+-                       torch::Tensor &down,                   // [expert, dim, inter_dim]
+-                       torch::Tensor &sorted_token_ids,       // [max_num_tokens_padded]
+-                       torch::Tensor &sorted_weight_buf,      // [max_num_tokens_padded]
+-                       torch::Tensor &sorted_expert_ids,      // [max_num_m_blocks]
+-                       torch::Tensor &num_tokens_post_padded, // [1]
+-                       uint32_t topk,                         //
+-                       torch::Tensor &fc1_scale,              // [expert, 1, hidden_dim]
+-                       torch::Tensor &fc2_scale,              // [expert, 1, dim]
+-                       torch::Tensor &fc1_smooth_scale,       // [expert, 1, hidden_dim]
+-                       torch::Tensor &fc2_smooth_scale        // [expert, 1, hidden_dim]
++void fmoe_fp8_g1u1_a16(torch::Tensor &out,               // [token_cnt, dim]
++                       torch::Tensor &input,             // [token_cnt, dim] M,K
++                       torch::Tensor &gate,              // [expert, inter_dim, dim] N,K
++                       torch::Tensor &down,              // [expert, dim, inter_dim]
++                       torch::Tensor &sorted_token_ids,  // [max_num_tokens_padded]
++                       torch::Tensor &sorted_weight_buf, // [max_num_tokens_padded]
++                       torch::Tensor &sorted_expert_ids, // [max_num_m_blocks]
++                       torch::Tensor &num_valid_ids,     // [1]
++                       uint32_t topk,                    //
++                       torch::Tensor &fc1_scale,         // [expert, 1, hidden_dim]
++                       torch::Tensor &fc2_scale,         // [expert, 1, dim]
++                       torch::Tensor &fc1_smooth_scale,  // [expert, 1, hidden_dim]
++                       torch::Tensor &fc2_smooth_scale   // [expert, 1, hidden_dim]
+ );
+ 
+ void fmoe_fp8_blockscale_g1u1(torch::Tensor &out,                           // [token_cnt, dim]
+diff --git a/csrc/include/moe_sorting.h b/csrc/include/moe_sorting.h
+index 96da4347e2..fd4ae4e330 100644
+--- a/csrc/include/moe_sorting.h
++++ b/csrc/include/moe_sorting.h
+@@ -8,7 +8,7 @@ void moe_sorting_fwd(torch::Tensor &topk_ids,              // [m, topk]
+                      torch::Tensor &sorted_token_ids,      // [max_num_tokens_padded]
+                      torch::Tensor &sorted_weights,        // [max_num_tokens_padded]
+                      torch::Tensor &sorted_expert_ids,     // [max_num_m_blocks]
+-                     torch::Tensor &total_tokens_post_pad, // [1]
++                     torch::Tensor &num_valid_ids, // [1]
+                      torch::Tensor &moe_buf,               // [max_num_tokens_padded]
+                      int num_experts,
+                      int unit_size,
+diff --git a/csrc/include/quant_common.cuh b/csrc/include/quant_common.cuh
+index d951394c72..ce60852c09 100644
+--- a/csrc/include/quant_common.cuh
++++ b/csrc/include/quant_common.cuh
+@@ -67,6 +67,13 @@ __device__ __forceinline__ FP8_TYPE scaled_fp8_conversion(float const val,
+ #endif
+ }
+ 
++__global__ void initializeScale(float* d_data, int size, float value) {  
++    int idx = blockIdx.x * blockDim.x + threadIdx.x;  
++    if (idx < size) {  
++        d_data[idx] = value;  
++    }  
++}  
++
+ // Compute the absolute maximum m of the input tensor and store
+ // m / float8_e4m3::max() in *scale. Each thread block performs a
+ // reduction tree and the memory in scale is atomically updated.
+diff --git a/csrc/kernels/quant_kernels.cu b/csrc/kernels/quant_kernels.cu
+index c67a151d81..48b65a4c27 100644
+--- a/csrc/kernels/quant_kernels.cu
++++ b/csrc/kernels/quant_kernels.cu
+@@ -131,6 +131,8 @@ void dynamic_scaled_fp8_quant(torch::Tensor& out,          // [..., d]
+   const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+   VLLM_DISPATCH_FLOATING_TYPES(
+       input.scalar_type(), "scaled_fp8_quant_kernel", [&] {
++        vllm::initializeScale<<<dim3(1), dim3(64), 0, stream>>>(scale.data_ptr<float>(),
++                                                      1, 0.0f);
+         vllm::segmented_max_reduction<scalar_t><<<grid, block, 0, stream>>>(
+             scale.data_ptr<float>(), input.data_ptr<scalar_t>(), num_elems);
+         vllm::scaled_fp8_quant_kernel<scalar_t><<<grid, block, 0, stream>>>(
+diff --git a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm.hpp b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm.hpp
+new file mode 100644
+index 0000000000..6081c12f1d
+--- /dev/null
++++ b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm.hpp
+@@ -0,0 +1,216 @@
++// SPDX-License-Identifier: MIT
++// Copyright (c) 2024, Advanced Micro Devices, Inc. All rights reserved.
++#pragma once
++#include "ck/ck.hpp"
++#include "ck/tensor_operation/gpu/device/gemm_specialization.hpp"
++#include "ck/tensor_operation/gpu/device/impl/device_moe_gemm.hpp"
++#include "ck/tensor_operation/gpu/device/impl/device_gemm_multiple_d_xdl_cshuffle_v3.hpp"
++#include "ck/tensor_operation/gpu/element/element_wise_operation.hpp"
++#include "ck/tensor_operation/gpu/element/unary_element_wise_operation.hpp"
++
++#include "ck/library/utility/device_memory.hpp"
++#include "ck/library/utility/host_tensor.hpp"
++#include "ck/library/utility/host_tensor_generator.hpp"
++#include "ck/library/utility/literals.hpp"
++#include "ck/library/utility/check_err.hpp"
++
++#include "ck/utility/blkgemmpipe_scheduler.hpp"
++#include <hip/hip_runtime.h>
++
++template <ck::index_t... Is>
++using S = ck::Sequence<Is...>;
++using I8 = int8_t;
++using I32 = int;
++using F16 = ck::half_t;
++using B16 = ck::bhalf_t;
++using F8 = ck::f8_t;
++using F32 = float;
++
++using Row = ck::tensor_layout::gemm::RowMajor;
++using Col = ck::tensor_layout::gemm::ColumnMajor;
++
++struct TypeCast
++{
++    template <typename E, typename C, typename D0, typename D1>
++    __host__ __device__ constexpr void
++    operator()(E &e, const C &c, const D0 &d0, const D1 &d1) const;
++
++    template <>
++    __host__ __device__ constexpr void operator()<F16, float, float, float>(F16 &e, const float &c,
++                                                                            const float &d0,
++                                                                            const float &d1) const
++    {
++        e = ck::type_convert<F16>(c);
++    }
++
++    template <>
++    __host__ __device__ constexpr void operator()<B16, float, float, float>(B16 &e, const float &c,
++                                                                            const float &d0,
++                                                                            const float &d1) const
++    {
++        e = ck::type_convert<B16>(c);
++    }
++};
++
++// for gate, a_scale, b_scale
++struct MulABScale
++{
++    template <typename E, typename C, typename D0, typename D1>
++    __host__ __device__ constexpr void
++    operator()(E &e, const C &c, const D0 &d0, const D1 &d1) const;
++
++    template <>
++    __host__ __device__ constexpr void operator()<F16, float, float, float>(F16 &e,
++                                                                            const float &c,
++                                                                            const float &d0,
++                                                                            const float &d1) const
++    {
++        e = ck::type_convert<F16>(c * d1 * d0);
++    }
++
++    template <>
++    __host__ __device__ constexpr void operator()<B16, float, float, float>(B16 &e,
++                                                                            const float &c,
++                                                                            const float &d0,
++                                                                            const float &d1) const
++    {
++        e = ck::type_convert<B16>(c * d1 * d0);
++    }
++
++    template <>
++    __host__ __device__ constexpr void operator()<F16, int, float, float>(F16 &e,
++                                                                            const int &c,
++                                                                            const float &d0,
++                                                                            const float &d1) const
++    {
++        e = ck::type_convert<F16>(ck::type_convert<F32>(c) * d1 * d0);
++    }
++
++    template <>
++    __host__ __device__ constexpr void operator()<B16, int, float, float>(B16 &e,
++                                                                            const int &c,
++                                                                            const float &d0,
++                                                                            const float &d1) const
++    {
++        e = ck::type_convert<B16>(ck::type_convert<F32>(c) * d1 * d0);
++    }
++};
++
++struct TypeCastExpertWeight
++{
++    template <typename E, typename C, typename D0, typename D1, typename D2>
++    __host__ __device__ constexpr void
++    operator()(E &e, const C &c, const D0 &d0, const D1 &d1, const D2 &d2) const;
++    template <>
++    __host__ __device__ constexpr void operator()<F16, float, float, float, float>(F16 &e,
++                                                                                   const float &c,
++                                                                                   const float &d0,
++                                                                                   const float &d1,
++                                                                                   const float &d2) const
++    {
++        e = ck::type_convert<F16>(c * d2);
++    }
++    template <>
++    __host__ __device__ constexpr void operator()<B16, float, float, float, float>(B16 &e,
++                                                                                   const float &c,
++                                                                                   const float &d0,
++                                                                                   const float &d1,
++                                                                                   const float &d2) const
++    {
++        e = ck::type_convert<B16>(c * d2);
++    }
++
++    template <>
++    __host__ __device__ constexpr void operator()<F16, int, float, float, float>(F16 &e,
++                                                                                   const int &c,
++                                                                                   const float &d0,
++                                                                                   const float &d1,
++                                                                                   const float &d2) const
++    {
++        e = ck::type_convert<F16>(ck::type_convert<F32>(c) * d2);
++    }
++    template <>
++    __host__ __device__ constexpr void operator()<B16, int, float, float, float>(B16 &e,
++                                                                                   const int &c,
++                                                                                   const float &d0,
++                                                                                   const float &d1,
++                                                                                   const float &d2) const
++    {
++        e = ck::type_convert<B16>(ck::type_convert<F32>(c) * d2);
++    }
++};
++
++// d0: ascale, d1: bscale, d2:expert weight
++//warning: hack hack hack here!!!! ignore d0 right now as kernel mul d0 * d2 outside. tofix:felix 
++struct MulABScaleExpertWeight
++{
++    template <typename E, typename C, typename D0, typename D1, typename D2>
++    __host__ __device__ constexpr void
++    operator()(E &e, const C &c, const D0 &d0, const D1 &d1, const D2 &d2) const;
++    template <>
++    __host__ __device__ constexpr void operator()<F16, float, float, float, float>(F16 &e,
++                                                                                   const float &c,
++                                                                                   const float &d0,
++                                                                                   const float &d1,
++                                                                                   const float &d2) const
++    {
++        e = ck::type_convert<F16>(c * d1 * d2);
++    }
++    template <>
++    __host__ __device__ constexpr void operator()<B16, float, float, float, float>(B16 &e,
++                                                                                   const float &c,
++                                                                                   const float &d0,
++                                                                                   const float &d1,
++                                                                                   const float &d2) const
++    {
++        e = ck::type_convert<B16>(c * d1 * d2);
++    }
++
++        template <>
++        __host__ __device__ constexpr void operator()<F16, int, float, float, float>(F16 &e,
++                                                                                       const int &c,
++                                                                                       const float &d0,
++                                                                                       const float &d1,
++                                                                                       const float &d2) const
++        {
++            e = ck::type_convert<F16>(ck::type_convert<F32>(c) * d1 * d2);
++        }
++        template <>
++        __host__ __device__ constexpr void operator()<B16, int, float, float, float>(B16 &e,
++                                                                                       const int &c,
++                                                                                       const float &d0,
++                                                                                       const float &d1,
++                                                                                       const float &d2) const
++        {
++            e = ck::type_convert<B16>(ck::type_convert<F32>(c) * d1 * d2);
++        }
++};
++
++template <typename A0DataType, typename B0DataType, typename AccDataType, typename EDataType, typename CDEElementOp, int MPerBlock, int KPerBlock, int MWAVE, int NWAVE, bool NSwizzle>
++void ck_moe_stage1_gemm(const hipStream_t &stream, int tokens, int sorted_size, int N, int K,
++                        int topk,
++                        void *&hidden_states,                          // [m, k], input token
++                        void *&w1,                                     // [e, n, k]/[e, 2*n, k], pre-shuffle([e, nr, kr, w])
++                        void *&w2,                                     // [expert, dim, inter_dim], pre-shuffle([e, nr, kr, w])
++                        void *&sorted_token_ids,                       // [max_num_tokens_padded]
++                        void *&sorted_expert_ids,                      // [max_num_m_blocks]
++                        void *&num_valid_ids,                          //[1]
++                        void *&out,                                    // [max_num_tokens_padded, inter_dim]
++                        std::optional<void *> w1_scale = std::nullopt, // [e, 1, n], gate(up) scale
++                        std::optional<void *> a1_scale = std::nullopt  // [m, 1], token scale
++);
++
++template <typename A0DataType, typename B0DataType, typename AccDataType, typename EDataType, typename CDEElementOp, int MPerBlock = 32>
++void ck_moe_stage2_gemm(const hipStream_t &stream, int tokens, int sorted_size, int N, int K,
++                        int topk,
++                        void *&inter_states,                           // [max_num_tokens_padded, k], input token
++                        void *&w1,                                     // [e, n, k]/[e, 2*n, k], pre-shuffle([e, nr, kr, w])
++                        void *&w2,                                     // [expert, dim, inter_dim], pre-shuffle([e, nr, kr, w])
++                        void *&sorted_token_ids,                       // [max_num_tokens_padded]
++                        void *&sorted_expert_ids,                      // [max_num_m_blocks]
++                        void *&sorted_weights,                         // [max_num_tokens_padded]
++                        void *&num_valid_ids,                          //[1]
++                        void *&out,                                    // [m, out_dim]
++                        std::optional<void *> w2_scale = std::nullopt, // [e, 1, n], gate(up) scale
++                        std::optional<void *> a2_scale = std::nullopt  // [max_num_tokens_padded, 1], token scale
++);
+\ No newline at end of file
+diff --git a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_b16.cu b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_b16.cu
+new file mode 100644
+index 0000000000..fafd0f15eb
+--- /dev/null
++++ b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_b16.cu
+@@ -0,0 +1,13 @@
++// SPDX-License-Identifier: MIT
++// Copyright (c) 2024, Advanced Micro Devices, Inc. All rights reserved.
++#include "moe_ck_gemm_common.cuh"
++
++using A0DataType = B16;
++using B0DataType = B16;
++using AccDataType = F32;
++using EDataType = B16;
++using CDEElementOp = TypeCast;
++
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128,  1, 1, false)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128,  2, 1, false)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 64, 2, 2, false)
+diff --git a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_b16_f8.cu b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_b16_f8.cu
+new file mode 100644
+index 0000000000..a796f60030
+--- /dev/null
++++ b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_b16_f8.cu
+@@ -0,0 +1,16 @@
++// SPDX-License-Identifier: MIT
++// Copyright (c) 2024, Advanced Micro Devices, Inc. All rights reserved.
++#include "moe_ck_gemm_common.cuh"
++
++using A0DataType = F8;
++using B0DataType = F8;
++using AccDataType = F32;
++using EDataType = B16;
++using CDEElementOp = MulABScale;
++
++CK_MOE_STAGE1_GEMM_DEFINE(32, 256,  1, 1, false)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 256,  2, 1, false)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128, 2, 2, false)
++// CK_MOE_STAGE1_GEMM_DEFINE(32, 256,  1, 1, true)
++// CK_MOE_STAGE1_GEMM_DEFINE(64, 256,  2, 1, true)
++// CK_MOE_STAGE1_GEMM_DEFINE(128, 128, 2, 2, true)
+diff --git a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_f16.cu b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_f16.cu
+new file mode 100644
+index 0000000000..0edd033781
+--- /dev/null
++++ b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_f16.cu
+@@ -0,0 +1,13 @@
++// SPDX-License-Identifier: MIT
++// Copyright (c) 2024, Advanced Micro Devices, Inc. All rights reserved.
++#include "moe_ck_gemm_common.cuh"
++
++using A0DataType = F16;
++using B0DataType = F16;
++using AccDataType = F32;
++using EDataType = F16;
++using CDEElementOp = TypeCast;
++
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128,  1, 1, false)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128,  2, 1, false)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 64, 2, 2, false)
+diff --git a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_f16_f8.cu b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_f16_f8.cu
+new file mode 100644
+index 0000000000..af64f7d102
+--- /dev/null
++++ b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_f16_f8.cu
+@@ -0,0 +1,16 @@
++// SPDX-License-Identifier: MIT
++// Copyright (c) 2024, Advanced Micro Devices, Inc. All rights reserved.
++#include "moe_ck_gemm_common.cuh"
++
++using A0DataType = F8;
++using B0DataType = F8;
++using AccDataType = F32;
++using EDataType = F16;
++using CDEElementOp = MulABScale;
++
++CK_MOE_STAGE1_GEMM_DEFINE(32, 256,  1, 1, false)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 256,  2, 1, false)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128, 2, 2, false)
++// CK_MOE_STAGE1_GEMM_DEFINE(32, 256,  1, 1, true)
++// CK_MOE_STAGE1_GEMM_DEFINE(64, 256,  2, 1, true)
++// CK_MOE_STAGE1_GEMM_DEFINE(128, 128, 2, 2, true)
+\ No newline at end of file
+diff --git a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm2_instance_b16..cu b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm2_instance_b16..cu
+new file mode 100644
+index 0000000000..716abf0caf
+--- /dev/null
++++ b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm2_instance_b16..cu
+@@ -0,0 +1,13 @@
++// SPDX-License-Identifier: MIT
++// Copyright (c) 2024, Advanced Micro Devices, Inc. All rights reserved.
++#include "moe_ck_gemm_common.cuh"
++
++using A0DataType = B16;
++using B0DataType = B16;
++using AccDataType = F32;
++using EDataType = B16;
++using CDEElementOp = TypeCastExpertWeight;
++
++CK_MOE_STAGE2_GEMM_DEFINE(32)
++CK_MOE_STAGE2_GEMM_DEFINE(64)
++CK_MOE_STAGE2_GEMM_DEFINE(128)
+diff --git a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm2_instance_b16_f8.cu b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm2_instance_b16_f8.cu
+new file mode 100644
+index 0000000000..235681f9f2
+--- /dev/null
++++ b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm2_instance_b16_f8.cu
+@@ -0,0 +1,13 @@
++// SPDX-License-Identifier: MIT
++// Copyright (c) 2024, Advanced Micro Devices, Inc. All rights reserved.
++#include "moe_ck_gemm_common.cuh"
++
++using A0DataType = F8;
++using B0DataType = F8;
++using AccDataType = F32;
++using EDataType = B16;
++using CDEElementOp = MulABScaleExpertWeight;
++
++CK_MOE_STAGE2_GEMM_DEFINE(32)
++CK_MOE_STAGE2_GEMM_DEFINE(64)
++CK_MOE_STAGE2_GEMM_DEFINE(128)
+diff --git a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm2_instance_f16.cu b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm2_instance_f16.cu
+new file mode 100644
+index 0000000000..e326412b00
+--- /dev/null
++++ b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm2_instance_f16.cu
+@@ -0,0 +1,14 @@
++// SPDX-License-Identifier: MIT
++// Copyright (c) 2024, Advanced Micro Devices, Inc. All rights reserved.
++#include "moe_ck_gemm_common.cuh"
++
++using A0DataType = F16;
++using B0DataType = F16;
++using AccDataType = F32;
++using EDataType = F16;
++using CDEElementOp = TypeCastExpertWeight;
++
++CK_MOE_STAGE2_GEMM_DEFINE(32)
++CK_MOE_STAGE2_GEMM_DEFINE(64)
++CK_MOE_STAGE2_GEMM_DEFINE(128)
++
+diff --git a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm2_instance_f16_f8.cu b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm2_instance_f16_f8.cu
+new file mode 100644
+index 0000000000..9a8ea43f76
+--- /dev/null
++++ b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm2_instance_f16_f8.cu
+@@ -0,0 +1,13 @@
++// SPDX-License-Identifier: MIT
++// Copyright (c) 2024, Advanced Micro Devices, Inc. All rights reserved.
++#include "moe_ck_gemm_common.cuh"
++
++using A0DataType = F8;
++using B0DataType = F8;
++using AccDataType = F32;
++using EDataType = F16;
++using CDEElementOp = MulABScaleExpertWeight;
++
++CK_MOE_STAGE2_GEMM_DEFINE(32)
++CK_MOE_STAGE2_GEMM_DEFINE(64)
++CK_MOE_STAGE2_GEMM_DEFINE(128)
+diff --git a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm_common.cuh b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm_common.cuh
+new file mode 100644
+index 0000000000..5bb443d031
+--- /dev/null
++++ b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm_common.cuh
+@@ -0,0 +1,297 @@
++// SPDX-License-Identifier: MIT
++// Copyright (c) 2024, Advanced Micro Devices, Inc. All rights reserved.
++#pragma once
++#include "moe_ck_gemm.hpp"
++
++template <typename A0DataType, typename B0DataType, typename AccDataType, typename EDataType, typename CDEElementOp, int MPerBlock, int KPerBlock, int MWAVE, int NWAVE, bool NSwizzle>
++void ck_moe_stage1_gemm(const hipStream_t &stream, int tokens, int sorted_size, int N, int K,
++                        int topk,
++                        void *&hidden_states,           // [m, k], input token
++                        void *&w1,                      // [e, n, k]/[e, 2*n, k], pre-shuffle([e, nr, kr, w])
++                        void *&w2,                      // [expert, dim, inter_dim], pre-shuffle([e, nr, kr, w])
++                        void *&sorted_token_ids,        // [max_num_tokens_padded]
++                        void *&sorted_expert_ids,       // [max_num_m_blocks]
++                        void *&num_valid_ids,           //[1]
++                        void *&out,                     // [max_num_tokens_padded, inter_dim]
++                        std::optional<void *> w1_scale, // [e, 1, n], gate(up) scale
++                        std::optional<void *> a1_scale  // [m, 1], token scale
++)
++{
++    // ~~~~~~~~~~~~~~~~~~~~~~~~following start with ck things
++    ck::index_t StrideA = K;
++    ck::index_t StrideB = K;
++    ck::index_t StrideD = 0;
++    ck::index_t StrideE = N;
++    ck::index_t KBatch = 1;
++    static_assert(NSwizzle==false, "disabled. need other prs to be ready.");
++    // using AccDataType = F32;
++    using CShuffleDataType = F32;
++    using DsDataType = ck::Tuple<F32, F32>;
++
++    using A0Layout = Row;
++    using B0Layout = Col;
++    using D0Layout = Row;
++    using D1Layout = Col;
++    using DsLayout = ck::Tuple<D0Layout, D1Layout>;
++    using ELayout = Row;
++
++    using PassThrough = ck::tensor_operation::element_wise::PassThrough;
++    using AElementOp = PassThrough;
++    using BElementOp = PassThrough;
++    // using CDEElementOp = MultiplyMultiply;
++
++    static constexpr auto GemmSpec = ck::tensor_operation::device::GemmSpecialization::Default;
++    // static constexpr ck::index_t MPerBlock = 128;
++    static constexpr ck::index_t MNPerXDL = 32;
++    static constexpr ck::index_t AK1 = 16 / sizeof(A0DataType);
++    static constexpr ck::index_t BK1 = 16 / sizeof(B0DataType);
++    static constexpr ck::index_t EVec = 16 / sizeof(EDataType);
++    static constexpr ck::index_t D0Vec = 1;
++    static constexpr ck::index_t D1Vec = 1;
++
++    // using DeviceOpInstance = ck::tensor_operation::device::DeviceGemmMultiD_Xdl_CShuffle_V3
++    using DeviceOpInstance = ck::tensor_operation::device::DeviceMoeGemm
++        // clang-format off
++///######|  ALayout|  BLayout| DsLayout| ELayout|      AData|      BData|     DsData|     EData|     AccData|         CShuffle|           A|           B|          CDE|           GEMM| Block|  MPer|  NPer|  KPer| AK1| BK1| MPer| NPer| MXdl| NXdl|  ABlockTransfer| ABlockTransfer| ABlockTransfer| ABlockTransfer| ABlockTransfer| ABlockTransfer| ABlockLds|  BBlockTransfer| BBlockTransfer| BBlockTransfer| BlockTransfer| BBlockTransfer| BBlockTransfer| BBlockLds|    CShuffle|    CShuffle| CBlockTransferClusterLengths|  CBlockTransfer|
++///######|         |         |         |        |       Type|       Type|       Type|      Type|        Type|         DataType| Elementwise| Elementwise|  Elementwise| Spacialization|  Size| Block| Block| Block|    |    |  XDL|  XDL|  Per|  Per|   ThreadCluster|  ThreadCluster| SrcAccessOrder|   SrcVectorDim|      SrcScalar|      DstScalar| AddExtraM|   ThreadCluster|  ThreadCluster| SrcAccessOrder|  SrcVectorDim|      SrcScalar|      DstScalar| AddExtraN| MXdlPerWave| NXdlPerWave|         _MBlock_MWaveMPerXdl| ScalarPerVector|
++///######|         |         |         |        |           |           |           |          |            |                 |   Operation|   Operation|    Operation|               |      |      |      |      |    |    |     |     | Wave| Wave| Lengths_K0_M_K1|   ArrangeOrder|               |               |      PerVector|   PerVector_K1|          | Lengths_K0_N_K1|   ArrangeOrder|               |              |      PerVector|   PerVector_K1|          |  PerShuffle|  PerShuffle|         _NBlock_NWaveNPerXdl|   _NWaveNPerXdl|
++///######|         |         |         |        |           |           |           |          |            |                 |            |            |             |               |      |      |      |      |    |    |     |     |     |     |                |               |               |               |               |               |          |                |               |               |              |               |               |          |            |            |                             |    S<C, D0, D1>|
++///###### RCR
++        // kernel 1: 256->32x128x128 
++        // <      Row,      Col, DsLayout, ELayout, A0DataType, B0DataType, DsDataType, EDataType, AccDataType, CShuffleDataType,  AElementOp,  BElementOp, CDEElementOp,       GemmSpec,   256,   32,   128,    128,  16,  16,  32,   32,    1,    1,     S<8, 32, 1>,     S<1, 0, 2>,    S<1, 0, 2>,               2,             16,             16,          0,     S<8, 32, 1>,    S<1, 0, 2>,     S<1, 0, 2>,             2,              16,             16,          0,          1,           1,               S<1, 32, 1, 8>,      S<8, 8, 1>,  ck::BlockGemmPipelineScheduler::Interwave, ck::BlockGemmPipelineVersion::v1, EDataType>;
++        // <      Row,      Col, DsLayout, ELayout, A0DataType, B0DataType, DsDataType, EDataType, AccDataType, CShuffleDataType,  AElementOp,  BElementOp, CDEElementOp,       GemmSpec,   256,   32,   128,    256,  16,  16,  32,   32,    1,    1,     S<16, 16, 1>,     S<1, 0, 2>,    S<1, 0, 2>,               2,             16,             16,          0,     S<16, 16, 1>,    S<1, 0, 2>,     S<1, 0, 2>,             2,              16,             16,          0,          1,           1,               S<1, 32, 1, 8>,      S<8, 8, 1>,  ck::BlockGemmPipelineScheduler::Intrawave, ck::BlockGemmPipelineVersion::v3, EDataType>;
++        <      Row,      Col, DsLayout, ELayout, A0DataType, B0DataType, DsDataType, EDataType, AccDataType, CShuffleDataType,
++               AElementOp,  BElementOp, CDEElementOp,       GemmSpec,   
++               //threadnum, mblock, nblock, kblock
++               256,   MPerBlock,   128,    KPerBlock,
++               // ak1, bk1
++               AK1,   BK1,
++               // mn_perxdl
++               MNPerXDL,   MNPerXDL,
++               // mn_xdlperwave 
++               MWAVE,    NWAVE,
++               // a,b: loadtranfer cluster, cluster order, srcorder,VECDIM, srcpervec, dstpervec, lds_extra
++            //    S<16, 16, 1>, S<1, 0, 2>, S<1, 0, 2>, 2, 8, 8, 0,
++            //    S<16, 16, 1>, S<1, 0, 2>, S<1, 0, 2>, 2, 8, 8, 0,
++               S<8, 32, 1>, S<1, 0, 2>, S<1, 0, 2>, 2, AK1, AK1, 0,
++               S<8, 32, 1>, S<1, 0, 2>, S<1, 0, 2>, 2, AK1, AK1, 0,
++               //    CShuffle|    CShuffle| CBlockTransferClusterLengths|  CBlockTransfer|
++               //    MXdlPerWave| NXdlPerWave|         _MBlock_MWaveMPerXdl| ScalarPerVector|
++                //  PerShuffle|  PerShuffle|         _NBlock_NWaveNPerXdl|   _NWaveNPerXdl|
++                MWAVE,    1,   S<1, 32, 1, 8>, S<EVec, D0Vec, D1Vec>,
++               ck::BlockGemmPipelineScheduler::Intrawave, ck::BlockGemmPipelineVersion::v1, NSwizzle, true, A0DataType>;
++        // kernel 2: 128->32x128x128
++        //  <      Row,      Col, DsLayout, ELayout, A0DataType, B0DataType, DsDataType, EDataType, AccDataType, CShuffleDataType,  AElementOp,  BElementOp, CDEElementOp,       GemmSpec,   128,   32,   128,    128,  16,  16,  32,   32,    1,    2,     S<8, 16, 1>,     S<1, 0, 2>,    S<1, 0, 2>,               2,             16,             16,          0,     S<8, 16, 1>,    S<1, 0, 2>,     S<1, 0, 2>,             2,              16,             16,          0,          1,           1,               S<1, 16, 1, 8>,      S<8, 8, 1>,  ck::BlockGemmPipelineScheduler::Interwave, ck::BlockGemmPipelineVersion::v1, EDataType>;
++
++    // clang-format on
++
++    auto a_element_op = AElementOp{};
++    auto b_element_op = BElementOp{};
++    auto cde_element_op = CDEElementOp{};
++
++    constexpr ck::index_t NumDTensor = DsDataType::Size();
++
++    constexpr auto I0 = ck::Number<0>{};
++
++    // do GEMM
++    auto device_op = DeviceOpInstance{};
++
++    auto invoker = device_op.MakeInvoker();
++    auto argument =
++        device_op.MakeArgument(sorted_token_ids,
++                               sorted_expert_ids,
++                               num_valid_ids,
++                               hidden_states,
++                               w1,
++                               std::array<const void *, NumDTensor>{a1_scale.has_value() ? a1_scale.value() : nullptr,
++                                                                    w1_scale.has_value() ? w1_scale.value() : nullptr},
++                               out,
++                               tokens,
++                               topk,
++                               sorted_size,
++                               N,
++                               K,
++                               StrideA,
++                               StrideB,
++                               std::array<ck::index_t, NumDTensor>{I0, I0},
++                               StrideE,
++                               KBatch,
++                               a_element_op,
++                               b_element_op,
++                               cde_element_op);
++
++    if (!device_op.IsSupportedArgument(argument))
++    {
++        throw std::runtime_error(
++            "wrong! device_gemm with the specified compilation parameters does "
++            "not support this GEMM problem");
++    }
++
++    invoker.Run(argument, StreamConfig{stream});
++}
++
++#define CK_MOE_STAGE1_GEMM_DEFINE(MPerBlock, KPerBlock, MWaves, NWaves, NSwizzle)                                                                   \
++    template void ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, MPerBlock, KPerBlock, MWaves, NWaves, NSwizzle>( \
++        const hipStream_t &stream,                                                                                                                  \
++        int tokens, int sorted_size, int N, int K,                                                                                                  \
++        int topk,                                                                                                                                   \
++        void *&hidden_states,                                                                                                                       \
++        void *&w1,                                                                                                                                  \
++        void *&w2,                                                                                                                                  \
++        void *&sorted_token_ids,                                                                                                                    \
++        void *&sorted_expert_ids,                                                                                                                   \
++        void *&num_valid_ids,                                                                                                                       \
++        void *&out,                                                                                                                                 \
++        std::optional<void *> w1_scale,                                                                                                             \
++        std::optional<void *> a1_scale);
++
++template <typename A0DataType, typename B0DataType, typename AccDataType, typename EDataType, typename CDEElementOp, int MPerBlock>
++void ck_moe_stage2_gemm(const hipStream_t &stream, int tokens, int sorted_size, int N, int K,
++                        int topk,
++                        void *&inter_states,            // [max_num_tokens_padded, k], input token
++                        void *&w1,                      // [e, n, k]/[e, 2*n, k], pre-shuffle([e, nr, kr, w])
++                        void *&w2,                      // [expert, dim, inter_dim], pre-shuffle([e, nr, kr, w])
++                        void *&sorted_token_ids,        // [max_num_tokens_padded]
++                        void *&sorted_expert_ids,       // [max_num_m_blocks]
++                        void *&sorted_weights,          // [max_num_tokens_padded]
++                        void *&num_valid_ids,           //[1]
++                        void *&out,                     // [m, out_dim]
++                        std::optional<void *> w2_scale, // [e, 1, n], gate(up) scale
++                        std::optional<void *> a2_scale  // [max_num_tokens_padded, 1], token scale
++)
++{
++    // ~~~~~~~~~~~~~~~~~~~~~~~~following start with ck things
++    ck::index_t StrideA = K;
++    ck::index_t StrideB = K;
++    ck::index_t StrideD = 0;
++    ck::index_t StrideE = N;
++    ck::index_t KBatch = 1;
++
++    // using AccDataType = F32;
++    using CShuffleDataType = F32;
++    using DsDataType = ck::Tuple<F32, F32, F32>;
++
++    using A0Layout = Row;
++    using B0Layout = Col;
++    using ELayout = Row;
++    using D0Layout = Row;
++    using D1Layout = Col;
++    using DsLayout = ck::Tuple<D0Layout, D1Layout, ELayout>;
++
++    using PassThrough = ck::tensor_operation::element_wise::PassThrough;
++    using AElementOp = PassThrough;
++    using BElementOp = PassThrough;
++    // using CDEElementOp = MultiplyMultiply;
++
++    static constexpr auto GemmSpec = ck::tensor_operation::device::GemmSpecialization::Default;
++    // static constexpr ck::index_t MPerBlock = 128;
++    static constexpr ck::index_t BLOCKSIZE = 256;
++    static constexpr ck::index_t NPerBlock = 128;
++    static constexpr ck::index_t MNPerXDL = 32;
++    static constexpr ck::index_t KPerBlock = 128 / sizeof(A0DataType);
++    static constexpr ck::index_t MXDLPerWave = MPerBlock <= 64 ? MPerBlock / 32 : MPerBlock / 64; 
++    static constexpr ck::index_t NXDLPerWave = MPerBlock <= 64 ? 1 : 2; 
++    static constexpr ck::index_t CShuffleMXDLPerWave = MXDLPerWave;
++    static constexpr ck::index_t CShuffleNLane = NPerBlock / 2 / NXDLPerWave;
++    static constexpr ck::index_t CShuffleMLane = BLOCKSIZE / CShuffleNLane;
++    static constexpr ck::index_t AK1 = 16 / sizeof(A0DataType);
++    static constexpr ck::index_t BK1 = 16 / sizeof(B0DataType);
++    static constexpr ck::index_t EVec = 2;
++    static constexpr ck::index_t D0Vec = 1;
++    static constexpr ck::index_t D1Vec = 1;
++    static constexpr ck::index_t D2Vec = 1;
++    using DeviceOpInstance = ck::tensor_operation::device::DeviceMoeGemm
++        // clang-format off
++///######|  ALayout|  BLayout| DsLayout| ELayout|      AData|      BData|     DsData|     EData|     AccData|         CShuffle|           A|           B|          CDE|           GEMM| Block|  MPer|  NPer|  KPer| AK1| BK1| MPer| NPer| MXdl| NXdl|  ABlockTransfer| ABlockTransfer| ABlockTransfer| ABlockTransfer| ABlockTransfer| ABlockTransfer| ABlockLds|  BBlockTransfer| BBlockTransfer| BBlockTransfer| BlockTransfer| BBlockTransfer| BBlockTransfer| BBlockLds|    CShuffle|    CShuffle| CBlockTransferClusterLengths|  CBlockTransfer|
++///######|         |         |         |        |       Type|       Type|       Type|      Type|        Type|         DataType| Elementwise| Elementwise|  Elementwise| Spacialization|  Size| Block| Block| Block|    |    |  XDL|  XDL|  Per|  Per|   ThreadCluster|  ThreadCluster| SrcAccessOrder|   SrcVectorDim|      SrcScalar|      DstScalar| AddExtraM|   ThreadCluster|  ThreadCluster| SrcAccessOrder|  SrcVectorDim|      SrcScalar|      DstScalar| AddExtraN| MXdlPerWave| NXdlPerWave|         _MBlock_MWaveMPerXdl| ScalarPerVector|
++///######|         |         |         |        |           |           |           |          |            |                 |   Operation|   Operation|    Operation|               |      |      |      |      |    |    |     |     | Wave| Wave| Lengths_K0_M_K1|   ArrangeOrder|               |               |      PerVector|   PerVector_K1|          | Lengths_K0_N_K1|   ArrangeOrder|               |              |      PerVector|   PerVector_K1|          |  PerShuffle|  PerShuffle|         _NBlock_NWaveNPerXdl|   _NWaveNPerXdl|
++///######|         |         |         |        |           |           |           |          |            |                 |            |            |             |               |      |      |      |      |    |    |     |     |     |     |                |               |               |               |               |               |          |                |               |               |              |               |               |          |            |            |                             |    S<C, D0, D1>|
++///###### RCR
++        // kernel 1: 256->32x128x128 
++        // <      Row,      Col, DsLayout, ELayout, A0DataType, B0DataType, DsDataType, EDataType, AccDataType, CShuffleDataType,  AElementOp,  BElementOp, CDEElementOp,       GemmSpec,   256,   32,   128,    128,  16,  16,  32,   32,    1,    1,     S<8, 32, 1>,     S<1, 0, 2>,    S<1, 0, 2>,               2,             16,             16,          0,     S<8, 32, 1>,    S<1, 0, 2>,     S<1, 0, 2>,             2,              16,             16,          0,          1,           1,               S<1, 32, 1, 8>,      S<8, 8, 1>,  ck::BlockGemmPipelineScheduler::Interwave, ck::BlockGemmPipelineVersion::v1, EDataType>;
++        // <      Row,      Col, DsLayout, ELayout, A0DataType, B0DataType, DsDataType, EDataType, AccDataType, CShuffleDataType,  AElementOp,  BElementOp, CDEElementOp,       GemmSpec,   256,   32,   128,    256,  16,  16,  32,   32,    1,    1,     S<16, 16, 1>,     S<1, 0, 2>,    S<1, 0, 2>,               2,             16,             16,          0,     S<16, 16, 1>,    S<1, 0, 2>,     S<1, 0, 2>,             2,              16,             16,          0,          1,           1,               S<1, 32, 1, 8>,      S<8, 8, 1>,  ck::BlockGemmPipelineScheduler::Intrawave, ck::BlockGemmPipelineVersion::v3, EDataType>;
++        <      Row,      Col, DsLayout, ELayout, A0DataType, B0DataType, DsDataType, EDataType, AccDataType, CShuffleDataType,
++               AElementOp,  BElementOp, CDEElementOp,       GemmSpec,   
++               //threadnum, mblock, nblock, kblock
++               BLOCKSIZE,   MPerBlock,   NPerBlock,    KPerBlock,
++               // ak1, bk1
++               AK1,   BK1,
++               // mn_perxdl
++               MNPerXDL,   MNPerXDL,
++               // mn_xdlperwave 
++               MXDLPerWave,    NXDLPerWave,
++               // a,b: loadtranfer cluster, cluster order, srcorder,VECDIM, srcpervec, dstpervec, lds_extra
++            //    S<16, 16, 1>, S<1, 0, 2>, S<1, 0, 2>, 2, 8, 8, 0,
++            //    S<16, 16, 1>, S<1, 0, 2>, S<1, 0, 2>, 2, 8, 8, 0,
++               S<8, 32, 1>, S<1, 0, 2>, S<1, 0, 2>, 2, AK1, AK1, 0,
++               S<8, 32, 1>, S<1, 0, 2>, S<1, 0, 2>, 2, BK1, BK1, 0,
++               //    CShuffle|    CShuffle| CBlockTransferClusterLengths|  CBlockTransfer|
++               //    MXdlPerWave| NXdlPerWave|         _MBlock_MWaveMPerXdl| ScalarPerVector|
++                //  PerShuffle|  PerShuffle|         _NBlock_NWaveNPerXdl|   _NWaveNPerXdl|
++               CShuffleMXDLPerWave,    1,   S<1, CShuffleMLane, 1, CShuffleNLane>, S<EVec, D0Vec, D1Vec, D2Vec>,
++               ck::BlockGemmPipelineScheduler::Intrawave, ck::BlockGemmPipelineVersion::v1, false, false, A0DataType>;
++        // kernel 2: 128->32x128x128
++        //  <      Row,      Col, DsLayout, ELayout, A0DataType, B0DataType, DsDataType, EDataType, AccDataType, CShuffleDataType,  AElementOp,  BElementOp, CDEElementOp,       GemmSpec,   128,   32,   128,    128,  16,  16,  32,   32,    1,    2,     S<8, 16, 1>,     S<1, 0, 2>,    S<1, 0, 2>,               2,             16,             16,          0,     S<8, 16, 1>,    S<1, 0, 2>,     S<1, 0, 2>,             2,              16,             16,          0,          1,           1,               S<1, 16, 1, 8>,      S<8, 8, 1>,  ck::BlockGemmPipelineScheduler::Interwave, ck::BlockGemmPipelineVersion::v1, EDataType>;
++
++    // clang-format on
++
++    auto a_element_op = AElementOp{};
++    auto b_element_op = BElementOp{};
++    auto cde_element_op = CDEElementOp{};
++
++    constexpr ck::index_t NumDTensor = DsDataType::Size();
++
++    constexpr auto I0 = ck::Number<0>{};
++
++    // do GEMM
++    auto device_op = DeviceOpInstance{};
++
++    auto invoker = device_op.MakeInvoker();
++    auto argument =
++        device_op.MakeArgument(sorted_token_ids,
++                               sorted_expert_ids,
++                               num_valid_ids,
++                               inter_states,
++                               w2,
++                               std::array<const void *, NumDTensor>{a2_scale.has_value() ? a2_scale.value() : nullptr,
++                                                                    w2_scale.has_value() ? w2_scale.value() : nullptr,
++                                                                    sorted_weights},
++                               out,
++                               tokens,
++                               topk,
++                               sorted_size,
++                               N,
++                               K,
++                               StrideA,
++                               StrideB,
++                               std::array<ck::index_t, NumDTensor>{I0, I0, I0},
++                               StrideE,
++                               KBatch,
++                               a_element_op,
++                               b_element_op,
++                               cde_element_op);
++
++    if (!device_op.IsSupportedArgument(argument))
++    {
++        throw std::runtime_error(
++            "wrong! device_gemm with the specified compilation parameters does "
++            "not support this GEMM problem");
++    }
++    invoker.Run(argument, StreamConfig{stream});
++}
++
++#define CK_MOE_STAGE2_GEMM_DEFINE(MPerfBlock)                                                                   \
++    template void ck_moe_stage2_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, MPerfBlock>( \
++        const hipStream_t &stream,                                                                              \
++        int tokens, int sorted_size, int N, int K,                                                              \
++        int topk,                                                                                               \
++        void *&inter_states,                                                                                    \
++        void *&w1,                                                                                              \
++        void *&w2,                                                                                              \
++        void *&sorted_token_ids,                                                                                \
++        void *&sorted_expert_ids,                                                                               \
++        void *&sorted_weights,                                                                                  \
++        void *&num_valid_ids,                                                                                   \
++        void *&out,                                                                                             \
++        std::optional<void *> w2_scale,                                                                         \
++        std::optional<void *> a2_scale);
+\ No newline at end of file
+diff --git a/csrc/py_itfs_ck/moe_ck_2stages_kernel.cu b/csrc/py_itfs_ck/moe_ck_2stages_kernel.cu
+new file mode 100644
+index 0000000000..7774e9d550
+--- /dev/null
++++ b/csrc/py_itfs_ck/moe_ck_2stages_kernel.cu
+@@ -0,0 +1,243 @@
++// SPDX-License-Identifier: MIT
++// Copyright (c) 2024, Advanced Micro Devices, Inc. All rights reserved.
++#include <torch/all.h>
++#include <ATen/cuda/CUDAContext.h>
++#include <c10/cuda/CUDAGuard.h>
++#include "py_itfs_common.h"
++
++#include "moe_ck_gemm.hpp"
++
++#define CK_MOE_STAGE1_GEMM_IMPL(A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, MPerBlock, NSwizzle)                                                                                                                                                                                                                \
++    if (MPerBlock == 32)                                                                                                                                                                                                                                                                                                \
++        ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 32, 256/sizeof(A0DataType), 1, 1, NSwizzle>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr); \
++    else if (MPerBlock == 64)                                                                                                                                                                                                                                                                                           \
++        ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 64, 256/sizeof(A0DataType), 2, 1, NSwizzle>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr); \
++    else if (MPerBlock == 128)                                                                                                                                                                                                                                                                                          \
++        ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 128, 128/sizeof(A0DataType), 2, 2, NSwizzle>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);
++
++
++void ck_moe_stage1(torch::Tensor &hidden_states,     // [m, k], input token
++                   torch::Tensor &w1,                // [e, n, k]/[e, 2*n, k], pre-shuffle([e, nr, kr, w])
++                   torch::Tensor &w2,                // [expert, dim, inter_dim], pre-shuffle([e, nr, kr, w])
++                   torch::Tensor &sorted_token_ids,  // [max_num_tokens_padded]
++                   torch::Tensor &sorted_expert_ids, // [max_num_m_blocks]
++                   torch::Tensor &num_valid_ids,     // [1]
++                   torch::Tensor &out,               // [m * topk, inter_dim]
++                   int topk,
++                   std::optional<torch::Tensor> w1_scale = std::nullopt, // [e, 1, n], gate(up) scale
++                   std::optional<torch::Tensor> a1_scale = std::nullopt, // [m, 1], token scale
++                   std::optional<int> block_m = 32)
++{
++    const at::cuda::OptionalCUDAGuard device_guard(device_of(out));
++    at::cuda::getCurrentCUDAStream().stream();
++    TORCH_CHECK(hidden_states.dtype() == w1.dtype(),
++                "Weights and activations should both be same dtype!");
++
++    TORCH_CHECK(out.dtype() == at::ScalarType::BFloat16 || out.dtype() == at::ScalarType::Half,
++                "Out dtype only support BFloat16/Float16!")
++
++    int tokens = hidden_states.size(0);
++    int sorted_size = sorted_token_ids.size(0);
++    int E = w1.size(0);
++    int N = w1.size(1);
++    int K = w1.size(2);
++    // int max_num_tokens_padded = sorted_token_ids.size(0);
++    // int agvtokens_per_expert = max_num_tokens_padded / E;
++    int MPerBlock = block_m.value();
++    // int M = agvtokens_per_expert < 32 ? 32 : (agvtokens_per_expert < 64 ? 64 : 128);
++
++    void *hidden_states_ptr = hidden_states.data_ptr();
++    void *w1_ptr = w1.data_ptr();
++    void *w2_ptr = w2.data_ptr();
++    void *sorted_token_ids_ptr = sorted_token_ids.data_ptr();
++    void *sorted_expert_ids_ptr = sorted_expert_ids.data_ptr();
++    void *num_valid_ids_ptr = num_valid_ids.data_ptr();
++    void *out_ptr = out.data_ptr();
++    void *w1_scale_ptr = w1_scale.has_value() ? w1_scale.value().data_ptr() : nullptr;
++    void *a1_scale_ptr = a1_scale.has_value() ? a1_scale.value().data_ptr() : nullptr;
++
++    // BF16
++    if (hidden_states.dtype() == at::ScalarType::BFloat16)
++    {
++        using A0DataType = B16;
++        using B0DataType = B16;
++        using AccDataType = F32;
++        using EDataType = B16;
++        using CDEElementOp = TypeCast;
++        CK_MOE_STAGE1_GEMM_IMPL(A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, MPerBlock, false);
++    }
++    // FP16
++    else if (hidden_states.dtype() == at::ScalarType::Half)
++    {
++        using A0DataType = F16;
++        using B0DataType = F16;
++        using AccDataType = F32;
++        using EDataType = F16;
++        using CDEElementOp = TypeCast;
++        CK_MOE_STAGE1_GEMM_IMPL(A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, MPerBlock, false);
++    }
++    // FP8
++    else if (hidden_states.dtype() == at::ScalarType::Float8_e4m3fnuz)
++    {
++        using A0DataType = F8;
++        using B0DataType = F8;
++        TORCH_CHECK(a1_scale.has_value() && w1_scale.has_value(),
++                    "MoE Quant must input scale!");
++        TORCH_CHECK(a1_scale.value().dtype() == at::ScalarType::Float,
++                    "Scales must be Float dtype!");
++        using AccDataType = F32;
++        using CDEElementOp = MulABScale;
++        if (out.dtype() == at::ScalarType::Half)
++        {
++            // if (N % 8 == 0 && N > 8192)
++            // {
++            //     CK_MOE_STAGE1_GEMM_IMPL(A0DataType, B0DataType, AccDataType, F16, CDEElementOp, MPerBlock, true);
++            // }
++            // else
++            {
++                CK_MOE_STAGE1_GEMM_IMPL(A0DataType, B0DataType, AccDataType, F16, CDEElementOp, MPerBlock, false);
++            }
++        }
++        else if (out.dtype() == at::ScalarType::BFloat16)
++        {
++            // if (N % 8 == 0 && N > 8192)
++            // {
++            //     CK_MOE_STAGE1_GEMM_IMPL(A0DataType, B0DataType, AccDataType, B16, CDEElementOp, MPerBlock, true);
++            // }
++            // else
++            {
++                CK_MOE_STAGE1_GEMM_IMPL(A0DataType, B0DataType, AccDataType, B16, CDEElementOp, MPerBlock, false);
++            }
++        }
++    }
++    // // I8
++    // else if (hidden_states.dtype() == at::ScalarType::Char)
++    // {
++    //     using A0DataType = I8;
++    //     using B0DataType = I8;
++    //     TORCH_CHECK(a1_scale.has_value() && w1_scale.has_value(),
++    //                 "MoE Quant must input scale!");
++    //     TORCH_CHECK(a1_scale.value().dtype() == at::ScalarType::Float,
++    //                 "Scales must be Float dtype!");
++    //     using AccDataType = I32;
++    //     using CDEElementOp = MulABScale;
++    //     if (out.dtype() == at::ScalarType::Half)
++    //     {
++    //         CK_MOE_STAGE1_GEMM_IMPL(A0DataType, B0DataType, AccDataType, F16, CDEElementOp, MPerBlock);
++    //     }
++    //     else if (out.dtype() == at::ScalarType::BFloat16)
++    //     {
++    //         CK_MOE_STAGE1_GEMM_IMPL(A0DataType, B0DataType, AccDataType, B16, CDEElementOp, MPerBlock);
++    //     }
++    // }
++}
++
++#define CK_MOE_STAGE2_GEMM_IMPL(A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, MPerBlock)                                                                                                                                                                                                                                   \
++    if (MPerBlock == 32)                                                                                                                                                                                                                                                                                                                   \
++        ck_moe_stage2_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 32>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, inter_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr, num_valid_ids_ptr, out_ptr, w2_scale_ptr, a2_scale_ptr); \
++    else if (MPerBlock == 64)                                                                                                                                                                                                                                                                                                              \
++        ck_moe_stage2_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 64>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, inter_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr, num_valid_ids_ptr, out_ptr, w2_scale_ptr, a2_scale_ptr); \
++    else if (MPerBlock == 128)                                                                                                                                                                                                                                                                                                             \
++        ck_moe_stage2_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 128>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, inter_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr, num_valid_ids_ptr, out_ptr, w2_scale_ptr, a2_scale_ptr);
++
++void ck_moe_stage2(torch::Tensor &inter_states,      // [m, k], input token
++                   torch::Tensor &w1,                // [e, n, k]/[e, 2*n, k], pre-shuffle([e, nr, kr, w])
++                   torch::Tensor &w2,                // [expert, dim, inter_dim], pre-shuffle([e, nr, kr, w])
++                   torch::Tensor &sorted_token_ids,  // [max_num_tokens_padded]
++                   torch::Tensor &sorted_expert_ids, // [max_num_m_blocks]
++                   torch::Tensor &sorted_weights,    // [max_num_tokens_padded]
++                   torch::Tensor &num_valid_ids,     // [1]
++                   torch::Tensor &out,               // [max_num_tokens_padded, inter_dim]
++                   int topk,
++                   std::optional<torch::Tensor> w2_scale = std::nullopt, // [e, 1, n], gate(up) scale
++                   std::optional<torch::Tensor> a2_scale = std::nullopt, // [m, 1], token scale
++                   std::optional<int> block_m = 32)
++{
++    TORCH_CHECK(inter_states.dtype() == w2.dtype(),
++                "Weights and activations should both be same dtype!");
++
++    TORCH_CHECK(out.dtype() == at::ScalarType::BFloat16 || out.dtype() == at::ScalarType::Half,
++                "Out dtype only support BFloat16/Float16!")
++
++    int tokens = inter_states.size(0);
++    int sorted_size = sorted_token_ids.size(0);
++    int E = w1.size(0);
++    int N = w1.size(2);
++    int K = w2.size(2);
++    // int max_num_tokens_padded = sorted_token_ids.size(0);
++    // int agvtokens_per_expert = max_num_tokens_padded / E;
++    int MPerBlock = block_m.value();
++    // int M = agvtokens_per_expert < 32 ? 32 : (agvtokens_per_expert < 64 ? 64 : 128);
++
++    void *inter_states_ptr = inter_states.data_ptr();
++    void *w1_ptr = w1.data_ptr();
++    void *w2_ptr = w2.data_ptr();
++    void *sorted_token_ids_ptr = sorted_token_ids.data_ptr();
++    void *sorted_expert_ids_ptr = sorted_expert_ids.data_ptr();
++    void *sorted_weights_ptr = sorted_weights.data_ptr();
++    void *num_valid_ids_ptr = num_valid_ids.data_ptr();
++    void *out_ptr = out.data_ptr();
++    void *w2_scale_ptr = w2_scale.has_value() ? w2_scale.value().data_ptr() : nullptr;
++    void *a2_scale_ptr = a2_scale.has_value() ? a2_scale.value().data_ptr() : nullptr;
++
++    // BF16
++    if (inter_states.dtype() == at::ScalarType::BFloat16)
++    {
++        using A0DataType = B16;
++        using B0DataType = B16;
++        using AccDataType = F32;
++        using EDataType = B16;
++        using CDEElementOp = TypeCastExpertWeight;
++        CK_MOE_STAGE2_GEMM_IMPL(A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, MPerBlock);
++    }
++    // FP16
++    else if (inter_states.dtype() == at::ScalarType::Half)
++    {
++        using A0DataType = F16;
++        using B0DataType = F16;
++        using AccDataType = F32;
++        using EDataType = F16;
++        using CDEElementOp = TypeCastExpertWeight;
++        CK_MOE_STAGE2_GEMM_IMPL(A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, MPerBlock);
++    }
++    // FP8
++    else if (inter_states.dtype() == at::ScalarType::Float8_e4m3fnuz)
++    {
++        using A0DataType = F8;
++        using B0DataType = F8;
++        TORCH_CHECK(a2_scale.has_value() && w2_scale.has_value(),
++                    "MoE Quant must input scale!");
++        TORCH_CHECK(a2_scale.value().dtype() == at::ScalarType::Float,
++                    "Scales must be Float dtype!");
++        using AccDataType = F32;
++        using CDEElementOp = MulABScaleExpertWeight;
++        if (out.dtype() == at::ScalarType::Half)
++        {
++            CK_MOE_STAGE2_GEMM_IMPL(A0DataType, B0DataType, AccDataType, F16, CDEElementOp, MPerBlock);
++        }
++        else if (out.dtype() == at::ScalarType::BFloat16)
++        {
++            CK_MOE_STAGE2_GEMM_IMPL(A0DataType, B0DataType, AccDataType, B16, CDEElementOp, MPerBlock);
++        }
++    }
++    // // I8
++    // else if (inter_states.dtype() == at::ScalarType::Char)
++    // {
++    //     using A0DataType = I8;
++    //     using B0DataType = I8;
++    //     TORCH_CHECK(a2_scale.has_value() && w2_scale.has_value(),
++    //                 "MoE Quant must input scale!");
++    //     TORCH_CHECK(a2_scale.value().dtype() == at::ScalarType::Float,
++    //                 "Scales must be Float dtype!");
++    //     using AccDataType = I32;
++    //     using CDEElementOp = MulABScaleExpertWeight;
++    //     if (out.dtype() == at::ScalarType::Half)
++    //     {
++    //         CK_MOE_STAGE2_GEMM_IMPL(A0DataType, B0DataType, AccDataType, F16, CDEElementOp, MPerBlock);
++    //     }
++    //     else if (out.dtype() == at::ScalarType::BFloat16)
++    //     {
++    //         CK_MOE_STAGE2_GEMM_IMPL(A0DataType, B0DataType, AccDataType, B16, CDEElementOp, MPerBlock);
++    //     }
++    // }
++}
+diff --git a/csrc/py_itfs_ck/moe_kernels.cu b/csrc/py_itfs_ck/moe_kernels.cu
+index a6a76da602..7fddb24f35 100644
+--- a/csrc/py_itfs_ck/moe_kernels.cu
++++ b/csrc/py_itfs_ck/moe_kernels.cu
+@@ -36,7 +36,7 @@ torch::Tensor ck_moe(torch::Tensor &hidden_states,          // [m, k], input tok
+     auto sorted_ids = torch::empty({max_num_tokens_padded}, torch::TensorOptions().dtype(torch::kInt32).device(device));
+     auto sorted_weights = torch::empty({max_num_tokens_padded}, torch::TensorOptions().dtype(torch::kFloat32).device(device));
+     auto sorted_expert_ids = torch::empty({max_num_m_blocks}, torch::TensorOptions().dtype(torch::kInt32).device(device));
+-    auto num_tokens_post_pad = torch::empty({1}, torch::TensorOptions().dtype(torch::kInt32).device(device));
++    auto num_valid_ids = torch::empty({1}, torch::TensorOptions().dtype(torch::kInt32).device(device));
+     auto out = torch::empty({tokens, hidden_size}, torch::TensorOptions().dtype(hidden_states.dtype()).device(device));
+ 
+     auto prec_i = torchDTypeToStr(hidden_states.dtype());
+@@ -91,7 +91,7 @@ torch::Tensor ck_moe(torch::Tensor &hidden_states,          // [m, k], input tok
+         activation,
+         gate_only,
+         fused_quant,
+-        expert_mask.has_value(), 
++        expert_mask.has_value(),
+     };
+ 
+     fused_moe_args args{hidden_states.data_ptr(),
+@@ -101,7 +101,7 @@ torch::Tensor ck_moe(torch::Tensor &hidden_states,          // [m, k], input tok
+                         w1_scale.has_value() ? w1_scale.value().data_ptr() : nullptr,
+                         w2_scale.has_value() ? w2_scale.value().data_ptr() : nullptr,
+                         a2_scale.has_value() ? a2_scale.value().data_ptr() : nullptr,
+-                        expert_mask.has_value() ? expert_mask.value().data_ptr() : nullptr, 
++                        expert_mask.has_value() ? expert_mask.value().data_ptr() : nullptr,
+                         out.data_ptr(),
+                         ws_ptr,
+ 
+@@ -110,7 +110,7 @@ torch::Tensor ck_moe(torch::Tensor &hidden_states,          // [m, k], input tok
+                         sorted_ids.data_ptr(),
+                         sorted_weights.data_ptr(),
+                         sorted_expert_ids.data_ptr(),
+-                        num_tokens_post_pad.data_ptr(),
++                        num_valid_ids.data_ptr(),
+ 
+                         block_size,
+                         hidden_size,
+@@ -124,4 +124,4 @@ torch::Tensor ck_moe(torch::Tensor &hidden_states,          // [m, k], input tok
+ 
+     fused_moe(traits, args, {stream});
+     return out;
+-}
+\ No newline at end of file
++}
+diff --git a/csrc/py_itfs_ck/moe_sorting_kernels.cu b/csrc/py_itfs_ck/moe_sorting_kernels.cu
+index a2ea913e96..be7a69c047 100644
+--- a/csrc/py_itfs_ck/moe_sorting_kernels.cu
++++ b/csrc/py_itfs_ck/moe_sorting_kernels.cu
+@@ -7,13 +7,13 @@
+ 
+ #include "moe_sorting_api.hpp"
+ 
+-void moe_sorting_fwd(torch::Tensor &topk_ids,              // [m, topk]
+-                     torch::Tensor &topk_weights,          // [m, topk]
+-                     torch::Tensor &sorted_token_ids,      // [max_num_tokens_padded]
+-                     torch::Tensor &sorted_weights,        // [max_num_tokens_padded]
+-                     torch::Tensor &sorted_expert_ids,     // [max_num_m_blocks]
+-                     torch::Tensor &total_tokens_post_pad, // [1]
+-                     torch::Tensor &moe_buf,               // [max_num_tokens_padded]
++void moe_sorting_fwd(torch::Tensor &topk_ids,          // [m, topk]
++                     torch::Tensor &topk_weights,      // [m, topk]
++                     torch::Tensor &sorted_token_ids,  // [max_num_tokens_padded]
++                     torch::Tensor &sorted_weights,    // [max_num_tokens_padded]
++                     torch::Tensor &sorted_expert_ids, // [max_num_m_blocks]
++                     torch::Tensor &num_valid_ids,     // [1]
++                     torch::Tensor &moe_buf,           // [max_num_tokens_padded]
+                      int num_experts,
+                      int unit_size,
+                      std::optional<torch::Tensor> local_expert_mask = std::nullopt)
+@@ -39,16 +39,15 @@ void moe_sorting_fwd(torch::Tensor &topk_ids,              // [m, topk]
+                     "fp32",                       // weight_type; // currently always float
+                     local_expert_mask.has_value() // if mask experts as local expert
+                 },
+-                {
+-                 topk_ids.data_ptr(),              // p_topk_ids
+-                 topk_weights.data_ptr(),          // p_weights
++                {topk_ids.data_ptr(),     // p_topk_ids
++                 topk_weights.data_ptr(), // p_weights
+                  local_expert_mask.has_value() ? local_expert_mask.value().data_ptr() : nullptr,
+-                 sorted_token_ids.data_ptr(),      // p_sorted_token_ids
+-                 sorted_weights.data_ptr(),        // p_sorted_weights
+-                 sorted_expert_ids.data_ptr(),     // p_sorted_expert_ids
+-                 total_tokens_post_pad.data_ptr(), // p_total_tokens_post_pad
+-                 moe_buf.data_ptr(),               // p_moe_buf
+-                 ws_ptr,                           // p_workspace 
++                 sorted_token_ids.data_ptr(),  // p_sorted_token_ids
++                 sorted_weights.data_ptr(),    // p_sorted_weights
++                 sorted_expert_ids.data_ptr(), // p_sorted_expert_ids
++                 num_valid_ids.data_ptr(),     // p_total_tokens_post_pad
++                 moe_buf.data_ptr(),           // p_moe_buf
++                 ws_ptr,                       // p_workspace
+                  num_tokens, unit_size, num_experts, topk, (int)moe_buf.nbytes()},
+                 {stream});
+ }
+diff --git a/csrc/py_itfs_cu/asm_fmoe.cpp b/csrc/py_itfs_cu/asm_fmoe.cpp
+index 9df47d24e7..e5de688343 100644
+--- a/csrc/py_itfs_cu/asm_fmoe.cpp
++++ b/csrc/py_itfs_cu/asm_fmoe.cpp
+@@ -88,15 +88,15 @@ class FMoeKernel
+     }
+ 
+     template <typename T, typename T_O, bool switchGxy = false>
+-    void launch_kernel(torch::Tensor &out,                    // [token_cnt, dim]
+-                       torch::Tensor &input,                  // [token_cnt, dim] M,K
+-                       torch::Tensor &w1,                     // [expert, inter_dim, dim] N,K
+-                       torch::Tensor &w2,                     // [expert, dim, inter_dim]
+-                       torch::Tensor &sorted_token_ids,       // [max_num_tokens_padded]
+-                       torch::Tensor &sorted_weight_buf,      // [max_num_tokens_padded]
+-                       torch::Tensor &sorted_expert_ids,      // [max_num_m_blocks]
+-                       torch::Tensor &num_tokens_post_padded, // [1]
+-                       uint32_t topk,                         //
++    void launch_kernel(torch::Tensor &out,               // [token_cnt, dim]
++                       torch::Tensor &input,             // [token_cnt, dim] M,K
++                       torch::Tensor &w1,                // [expert, inter_dim, dim] N,K
++                       torch::Tensor &w2,                // [expert, dim, inter_dim]
++                       torch::Tensor &sorted_token_ids,  // [max_num_tokens_padded]
++                       torch::Tensor &sorted_weight_buf, // [max_num_tokens_padded]
++                       torch::Tensor &sorted_expert_ids, // [max_num_m_blocks]
++                       torch::Tensor &num_valid_ids,     // [1]
++                       uint32_t topk,                    //
+                        std::optional<torch::Tensor> input_dqn = std::nullopt,
+                        std::optional<torch::Tensor> w1_dqn = std::nullopt,
+                        std::optional<torch::Tensor> w2_dqn = std::nullopt,
+@@ -137,7 +137,7 @@ class FMoeKernel
+         args.ptr_O = out.data_ptr();
+         args.ptr_X = input.data_ptr();
+         args.ptr_GU = w1.data_ptr();
+-        args.ptr_XC = num_tokens_post_padded.data_ptr();
++        args.ptr_XC = num_valid_ids.data_ptr();
+         args.ptr_D = w2.data_ptr();
+         if constexpr (std::is_same<T, uint8_t>::value)
+         {
+@@ -252,15 +252,15 @@ int get_heuristic_tile(int inter_dim, int sub_X_cnt, const std::vector<int> &ava
+     return selectedTile;
+ };
+ 
+-void fmoe(torch::Tensor &out,                    // [token_cnt, dim]
+-          torch::Tensor &input,                  // [token_cnt, dim] M,K
+-          torch::Tensor &gate,                   // [expert, inter_dim, dim] N,K
+-          torch::Tensor &down,                   // [expert, dim, inter_dim]
+-          torch::Tensor &sorted_token_ids,       // [max_num_tokens_padded]
+-          torch::Tensor &sorted_weight_buf,      // [max_num_tokens_padded]
+-          torch::Tensor &sorted_expert_ids,      // [max_num_m_blocks]
+-          torch::Tensor &num_tokens_post_padded, // [1]
+-          uint32_t topk                          //
++void fmoe(torch::Tensor &out,               // [token_cnt, dim]
++          torch::Tensor &input,             // [token_cnt, dim] M,K
++          torch::Tensor &gate,              // [expert, inter_dim, dim] N,K
++          torch::Tensor &down,              // [expert, dim, inter_dim]
++          torch::Tensor &sorted_token_ids,  // [max_num_tokens_padded]
++          torch::Tensor &sorted_weight_buf, // [max_num_tokens_padded]
++          torch::Tensor &sorted_expert_ids, // [max_num_m_blocks]
++          torch::Tensor &num_valid_ids,     // [1]
++          uint32_t topk                     //
+ )
+ {
+     // g1u0
+@@ -284,23 +284,23 @@ void fmoe(torch::Tensor &out,                    // [token_cnt, dim]
+                                                 sorted_token_ids,
+                                                 sorted_weight_buf,
+                                                 sorted_expert_ids,
+-                                                num_tokens_post_padded,
++                                                num_valid_ids,
+                                                 topk);
+ }
+ 
+-void fmoe_int8_g1u0(torch::Tensor &out,                    // [token_cnt, dim]
+-                    torch::Tensor &input,                  // [token_cnt, dim] M,K
+-                    torch::Tensor &gate,                   // [expert, inter_dim, dim] N,K
+-                    torch::Tensor &down,                   // [expert, dim, inter_dim]
+-                    torch::Tensor &sorted_token_ids,       // [max_num_tokens_padded]
+-                    torch::Tensor &sorted_weight_buf,      // [max_num_tokens_padded]
+-                    torch::Tensor &sorted_expert_ids,      // [max_num_m_blocks]
+-                    torch::Tensor &num_tokens_post_padded, // [1]
+-                    uint32_t topk,                         //
+-                    torch::Tensor &input_scale,            // [token_cnt, 1]
+-                    torch::Tensor &fc1_scale,              // [expert, 1, inter_dim]
+-                    torch::Tensor &fc2_scale,              // [expert, 1, dim]
+-                    torch::Tensor &fc2_smooth_scale        // [expert, 1, inter_dim]
++void fmoe_int8_g1u0(torch::Tensor &out,               // [token_cnt, dim]
++                    torch::Tensor &input,             // [token_cnt, dim] M,K
++                    torch::Tensor &gate,              // [expert, inter_dim, dim] N,K
++                    torch::Tensor &down,              // [expert, dim, inter_dim]
++                    torch::Tensor &sorted_token_ids,  // [max_num_tokens_padded]
++                    torch::Tensor &sorted_weight_buf, // [max_num_tokens_padded]
++                    torch::Tensor &sorted_expert_ids, // [max_num_m_blocks]
++                    torch::Tensor &num_valid_ids,     // [1]
++                    uint32_t topk,                    //
++                    torch::Tensor &input_scale,       // [token_cnt, 1]
++                    torch::Tensor &fc1_scale,         // [expert, 1, inter_dim]
++                    torch::Tensor &fc2_scale,         // [expert, 1, dim]
++                    torch::Tensor &fc2_smooth_scale   // [expert, 1, inter_dim]
+ )
+ {
+     FMoeKernel *impl_ptr = nullptr;
+@@ -359,7 +359,7 @@ void fmoe_int8_g1u0(torch::Tensor &out,                    // [token_cnt, dim]
+                                                sorted_token_ids,
+                                                sorted_weight_buf,
+                                                sorted_expert_ids,
+-                                               num_tokens_post_padded,
++                                               num_valid_ids,
+                                                topk,
+                                                // quant args
+                                                input_scale,
+@@ -375,7 +375,7 @@ void fmoe_g1u1(torch::Tensor &out,                                          // [
+                torch::Tensor &sorted_token_ids,                             // [max_num_tokens_padded]
+                torch::Tensor &sorted_weight_buf,                            // [max_num_tokens_padded]
+                torch::Tensor &sorted_expert_ids,                            // [max_num_m_blocks]
+-               torch::Tensor &num_tokens_post_padded,                       // [1]
++               torch::Tensor &num_valid_ids,                                // [1]
+                uint32_t topk,                                               //
+                torch::Tensor &input_scale,                                  // [token_cnt, 1]
+                torch::Tensor &fc1_scale,                                    // [expert, 1, inter_dim]
+@@ -616,7 +616,7 @@ void fmoe_g1u1(torch::Tensor &out,                                          // [
+                                                sorted_token_ids,
+                                                sorted_weight_buf,
+                                                sorted_expert_ids,
+-                                               num_tokens_post_padded,
++                                               num_valid_ids,
+                                                topk,
+                                                // quant args
+                                                input_scale,
+@@ -625,19 +625,19 @@ void fmoe_g1u1(torch::Tensor &out,                                          // [
+                                                fc2_smooth_scale);
+ }
+ 
+-void fmoe_int8_g1u0_a16(torch::Tensor &out,                    // [token_cnt, dim]
+-                        torch::Tensor &input,                  // [token_cnt, dim] M,K
+-                        torch::Tensor &gate,                   // [expert, inter_dim, dim] N,K
+-                        torch::Tensor &down,                   // [expert, dim, inter_dim]
+-                        torch::Tensor &sorted_token_ids,       // [max_num_tokens_padded]
+-                        torch::Tensor &sorted_weight_buf,      // [max_num_tokens_padded]
+-                        torch::Tensor &sorted_expert_ids,      // [max_num_m_blocks]
+-                        torch::Tensor &num_tokens_post_padded, // [1]
+-                        uint32_t topk,                         //
+-                        torch::Tensor &fc1_scale,              // [expert, 1, inter_dim]
+-                        torch::Tensor &fc2_scale,              // [expert, 1, dim]
+-                        torch::Tensor &fc1_smooth_scale,       // [expert, 1, dim]
+-                        torch::Tensor &fc2_smooth_scale        // [expert, 1, inter_dim]
++void fmoe_int8_g1u0_a16(torch::Tensor &out,               // [token_cnt, dim]
++                        torch::Tensor &input,             // [token_cnt, dim] M,K
++                        torch::Tensor &gate,              // [expert, inter_dim, dim] N,K
++                        torch::Tensor &down,              // [expert, dim, inter_dim]
++                        torch::Tensor &sorted_token_ids,  // [max_num_tokens_padded]
++                        torch::Tensor &sorted_weight_buf, // [max_num_tokens_padded]
++                        torch::Tensor &sorted_expert_ids, // [max_num_m_blocks]
++                        torch::Tensor &num_valid_ids,     // [1]
++                        uint32_t topk,                    //
++                        torch::Tensor &fc1_scale,         // [expert, 1, inter_dim]
++                        torch::Tensor &fc2_scale,         // [expert, 1, dim]
++                        torch::Tensor &fc1_smooth_scale,  // [expert, 1, dim]
++                        torch::Tensor &fc2_smooth_scale   // [expert, 1, inter_dim]
+ )
+ {
+     static FMoeKernel impl("fmoe_kernel_func", "fmoe_int8_g1u0_smf.co");
+@@ -648,7 +648,7 @@ void fmoe_int8_g1u0_a16(torch::Tensor &out,                    // [token_cnt, di
+                                                 sorted_token_ids,
+                                                 sorted_weight_buf,
+                                                 sorted_expert_ids,
+-                                                num_tokens_post_padded,
++                                                num_valid_ids,
+                                                 topk,
+                                                 // quant args
+                                                 fc1_smooth_scale,
+@@ -657,19 +657,19 @@ void fmoe_int8_g1u0_a16(torch::Tensor &out,                    // [token_cnt, di
+                                                 fc2_smooth_scale);
+ }
+ 
+-void fmoe_fp8_g1u1_a16(torch::Tensor &out,                    // [token_cnt, dim]
+-                       torch::Tensor &input,                  // [token_cnt, dim] M,K
+-                       torch::Tensor &gate,                   // [expert, inter_dim*2, dim] N,K
+-                       torch::Tensor &down,                   // [expert, dim, inter_dim]
+-                       torch::Tensor &sorted_token_ids,       // [max_num_tokens_padded]
+-                       torch::Tensor &sorted_weight_buf,      // [max_num_tokens_padded]
+-                       torch::Tensor &sorted_expert_ids,      // [max_num_m_blocks]
+-                       torch::Tensor &num_tokens_post_padded, // [1]
+-                       uint32_t topk,                         //
+-                       torch::Tensor &fc1_scale,              // [expert, 1, inter_dim]
+-                       torch::Tensor &fc2_scale,              // [expert, 1, dim]
+-                       torch::Tensor &fc1_smooth_scale,       // [expert, 1, dim]
+-                       torch::Tensor &fc2_smooth_scale        // [expert, 1, inter_dim]
++void fmoe_fp8_g1u1_a16(torch::Tensor &out,               // [token_cnt, dim]
++                       torch::Tensor &input,             // [token_cnt, dim] M,K
++                       torch::Tensor &gate,              // [expert, inter_dim*2, dim] N,K
++                       torch::Tensor &down,              // [expert, dim, inter_dim]
++                       torch::Tensor &sorted_token_ids,  // [max_num_tokens_padded]
++                       torch::Tensor &sorted_weight_buf, // [max_num_tokens_padded]
++                       torch::Tensor &sorted_expert_ids, // [max_num_m_blocks]
++                       torch::Tensor &num_valid_ids,     // [1]
++                       uint32_t topk,                    //
++                       torch::Tensor &fc1_scale,         // [expert, 1, inter_dim]
++                       torch::Tensor &fc2_scale,         // [expert, 1, dim]
++                       torch::Tensor &fc1_smooth_scale,  // [expert, 1, dim]
++                       torch::Tensor &fc2_smooth_scale   // [expert, 1, inter_dim]
+ )
+ {
+     FMoeKernel *impl_ptr = nullptr;
+@@ -697,7 +697,7 @@ void fmoe_fp8_g1u1_a16(torch::Tensor &out,                    // [token_cnt, dim
+                                                      sorted_token_ids,
+                                                      sorted_weight_buf,
+                                                      sorted_expert_ids,
+-                                                     num_tokens_post_padded,
++                                                     num_valid_ids,
+                                                      topk,
+                                                      // quant args
+                                                      fc1_smooth_scale,
+diff --git a/csrc/pybind/moe_ck_2stages_pybind.cu b/csrc/pybind/moe_ck_2stages_pybind.cu
+new file mode 100644
+index 0000000000..6f8892b127
+--- /dev/null
++++ b/csrc/pybind/moe_ck_2stages_pybind.cu
+@@ -0,0 +1,33 @@
++// SPDX-License-Identifier: MIT
++// Copyright (c) 2024, Advanced Micro Devices, Inc. All rights reserved.
++#include "moe_ck.h"
++
++PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
++{
++      m.def("ck_moe_stage1", &ck_moe_stage1,
++            py::arg("hidden_states"),
++            py::arg("w1"),
++            py::arg("w2"),
++            py::arg("sorted_token_ids"),
++            py::arg("sorted_expert_ids"),
++            py::arg("num_valid_ids"),
++            py::arg("out"),
++            py::arg("topk"),
++            py::arg("w1_scale") = std::nullopt,
++            py::arg("a1_scale") = std::nullopt,
++            py::arg("block_m") = 32);
++
++      m.def("ck_moe_stage2", &ck_moe_stage2,
++            py::arg("inter_states"),
++            py::arg("w1"),
++            py::arg("w2"),
++            py::arg("sorted_token_ids"),
++            py::arg("sorted_expert_ids"),
++            py::arg("sorted_weights"),
++            py::arg("num_valid_ids"),
++            py::arg("out"),
++            py::arg("topk"),
++            py::arg("w2_scale") = std::nullopt,
++            py::arg("a2_scale") = std::nullopt,
++            py::arg("block_m") = 32);
++}
+diff --git a/csrc/pybind/moe_ck_pybind.cu b/csrc/pybind/moe_ck_pybind.cu
+index ed68a8ec35..26e3ff70bd 100644
+--- a/csrc/pybind/moe_ck_pybind.cu
++++ b/csrc/pybind/moe_ck_pybind.cu
+@@ -4,10 +4,11 @@
+ 
+ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
+ {
+-    m.def("ck_moe", &ck_moe,
+-          py::arg("hidden_states"), py::arg("w1"), py::arg("w2"),
+-          py::arg("topk_weights"), py::arg("topk_ids"),
+-          py::arg("w1_scale") = std::nullopt, py::arg("w2_scale") = std::nullopt,
+-          py::arg("a1_scale") = std::nullopt, py::arg("a2_scale") = std::nullopt,
+-          py::arg("block_m") = 32, py::arg("expert_mask") = std::nullopt);
++      m.def("ck_moe", &ck_moe,
++            py::arg("hidden_states"), py::arg("w1"), py::arg("w2"),
++            py::arg("topk_weights"), py::arg("topk_ids"),
++            py::arg("w1_scale") = std::nullopt, py::arg("w2_scale") = std::nullopt,
++            py::arg("a1_scale") = std::nullopt, py::arg("a2_scale") = std::nullopt,
++            py::arg("block_m") = 32,
++            py::arg("expert_mask") = std::nullopt);
+ }
+diff --git a/csrc/pybind/moe_op_pybind.cu b/csrc/pybind/moe_op_pybind.cu
+index 8ecb4f4529..ba38549e14 100644
+--- a/csrc/pybind/moe_op_pybind.cu
++++ b/csrc/pybind/moe_op_pybind.cu
+@@ -30,7 +30,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
+             py::arg("out"), py::arg("input"),
+             py::arg("gate"), py::arg("down"),
+             py::arg("sorted_token_ids"), py::arg("sorted_weight_buf"),
+-            py::arg("sorted_expert_ids"), py::arg("num_tokens_post_padded"),
++            py::arg("sorted_expert_ids"), py::arg("num_valid_ids"),
+             py::arg("topk"), py::arg("input_scale"),
+             py::arg("fc1_scale"), py::arg("fc2_scale"),
+             py::arg("fc2_smooth_scale") = std::nullopt);
+diff --git a/csrc/pybind/moe_sorting_pybind.cu b/csrc/pybind/moe_sorting_pybind.cu
+index 39aea0f5eb..7b3cfeaa15 100644
+--- a/csrc/pybind/moe_sorting_pybind.cu
++++ b/csrc/pybind/moe_sorting_pybind.cu
+@@ -7,7 +7,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
+     m.def("moe_sorting_fwd", &moe_sorting_fwd,
+           py::arg("topk_ids"), py::arg("topk_weights"), 
+           py::arg("sorted_token_ids"), py::arg("sorted_weights"), 
+-          py::arg("sorted_expert_ids"), py::arg("total_tokens_post_pad"), 
++          py::arg("sorted_expert_ids"), py::arg("num_valid_ids"), 
+           py::arg("moe_buf"), py::arg("num_experts"), 
+           py::arg("unit_size"), py::arg("local_expert_mask")= std::nullopt);
+ }
+diff --git a/csrc/rocm_ops.cpp b/csrc/rocm_ops.cpp
+index cf3afdb0ae..a3cddf9d3a 100644
+--- a/csrc/rocm_ops.cpp
++++ b/csrc/rocm_ops.cpp
+@@ -155,6 +155,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
+             py::arg("sorted_expert_ids"), py::arg("total_tokens_post_pad"),
+             py::arg("moe_buf"), py::arg("num_experts"),
+             py::arg("unit_size"), py::arg("local_expert_mask") = std::nullopt);
++
+       m.def("pa_fwd_naive", &pa_fwd_naive, "pa_fwd_naive",
+             py::arg("Q"),
+             py::arg("K"),
+@@ -179,7 +180,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
+             py::arg("out"), py::arg("input"),
+             py::arg("gate"), py::arg("down"),
+             py::arg("sorted_token_ids"), py::arg("sorted_weight_buf"),
+-            py::arg("sorted_expert_ids"), py::arg("num_tokens_post_padded"),
++            py::arg("sorted_expert_ids"), py::arg("num_valid_ids"),
+             py::arg("topk"), py::arg("input_scale"),
+             py::arg("fc1_scale"), py::arg("fc2_scale"),
+             py::arg("fc2_smooth_scale") = std::nullopt);
+diff --git a/op_tests/test_moe_2stage.py b/op_tests/test_moe_2stage.py
+new file mode 100644
+index 0000000000..50f6ce55f3
+--- /dev/null
++++ b/op_tests/test_moe_2stage.py
+@@ -0,0 +1,365 @@
++# SPDX-License-Identifier: MIT
++# Copyright (c) 2024, Advanced Micro Devices, Inc. All rights reserved.
++
++import torch
++import torch.nn.functional as F
++import triton.language as tl
++import numpy as np
++import sys
++import os
++from typing import Any, Callable, Dict, Optional, Tuple
++import aiter
++from aiter.test_common import checkAllclose, perftest
++from aiter import pertoken_quant
++from aiter.fused_moe_gelu import fused_topk
++from aiter.fused_moe_bf16_asm import asm_moe, torch_moe, moe_sorting_ck, ck_moe_2stages
++from aiter.ops.shuffle import shuffle_weight
++
++
++@perftest(num_iters=3)
++def torch_moe_stage1(hidden_states,
++                     w1,  # E, inter_dim*2, model_dim
++                     w2,  # E, model_dim, inter_dim
++                     topk_weight, topk_ids,
++                     dtype=torch.float16,
++                     # following for quant
++                     fc1_scale=None,  # [expert, inter_dim, 1]
++                     w1_scale=None,  # [1]
++                     a1_scale=None,  # [expert]]
++                     block_size=32
++                     ):
++    ctype = torch.float  # compute type
++    hidden_states = hidden_states.to(ctype)
++    w1 = w1.to(ctype)
++
++    B, D = hidden_states.shape
++    topk = topk_weight.shape[1]
++    N = w1.shape[1]
++    num_experts, model_dim, inter_dim = w2.shape
++    hidden_states = hidden_states.view(
++        B, -1, D).repeat(1, topk, 1)
++
++    max_num_tokens_padded = topk_ids.numel() + num_experts * block_size - topk
++
++    # gose to quant D_w8a8/w8a8
++    if fc1_scale is not None:
++        w1 = (w1.view(-1, D) * fc1_scale.view(-1, 1)).view(num_experts, -1, D)
++    if a1_scale is not None and w1_scale is not None:
++        hidden_states = hidden_states * a1_scale
++        w1 = w1 * w1_scale.view(-1, 1, 1)
++
++    out = torch.zeros(
++        (B, topk, N),
++        dtype=ctype,
++        device=hidden_states.device,
++    )
++    for E_id in range(w1.shape[0]):
++        mask = topk_ids == E_id
++        if mask.sum():
++            sub_tokens = hidden_states[mask]
++            act_input = sub_tokens @ (w1[E_id].transpose(0, 1))
++            out[mask] = act_input
++
++    return out.to(dtype)
++
++
++@perftest(num_iters=3)
++def torch_moe_stage2(hidden_states,
++                     w1,  # E, inter_dim*2, model_dim
++                     w2,  # E, model_dim, inter_dim
++                     topk_weights, topk_ids,
++                     sorted_weights, sorted_ids,
++                     sorted_expert_ids, num_valid_ids,
++                     dtype=torch.float16,
++                     w2_scale=None,  # [1]
++                     a2_scale=None,  # [expert]]
++                     block_size=32
++                     ):
++    ctype = torch.float  # compute type
++    hidden_states = hidden_states.to(ctype)
++    w2 = w2.to(ctype)
++
++    token_num, topk = topk_ids.shape
++    # M, _ = hidden_states.shape
++    num_experts, model_dim, inter_dim = w2.shape
++    max_num_m_blocks = sorted_expert_ids.shape[0]
++
++    # gose to quant D_w8a8/w8a8
++    if a2_scale is not None and w2_scale is not None:
++        hidden_states = hidden_states * a2_scale
++        w2 = w2 * w2_scale.view(-1, 1, 1)
++
++    out = torch.zeros(
++        (token_num, topk, model_dim),
++        dtype=ctype,
++        device=hidden_states.device,
++    )
++    for E_id in range(w1.shape[0]):
++        mask = topk_ids == E_id
++        if mask.sum():
++            sub_tokens = hidden_states[mask]
++            act_input = sub_tokens @ (w2[E_id].transpose(0, 1))
++            out[mask] = act_input
++    return (out * topk_weights.view(token_num, -1, 1)).sum(1).to(dtype)
++
++
++def torch_moe(hidden_states, w1, w2, topk_weight, topk_ids,
++              # following for quant
++              fc1_scale=None,  # [expert, inter_dim, 1]
++              fc2_scale=None,  # [expert, model_dim, 1]
++              fc1_smooth_scale=None,  # [expert, 1, model_dim]
++              fc2_smooth_scale=None,  # [expert, 1, inter_dim]
++              ):
++    B, D = hidden_states.shape
++    topk = topk_weight.shape[1]
++    dtype = hidden_states.dtype
++    hidden_states = hidden_states.view(
++        B, -1, D).repeat(1, topk, 1)
++    out = torch.zeros(
++        (B, topk, D),
++        dtype=dtype,
++        device=hidden_states.device,
++    )
++    # g1u1(w1 include gate and up)
++    if w2.shape[2]*2 == w1.shape[1]:
++        moeType = "g1u1"
++        inter_dim = w2.shape[2]
++    # g1u0(w1 only include gate)
++    else:
++        moeType = "g1u0"
++        inter_dim = w1.shape[1]
++    # gose to quant D_w8a8/w8a8
++    if fc1_scale is not None:
++        expert = w1.shape[0]
++        w2D = w2.shape[-1]
++        w1 = (w1.view(-1, D).to(fc1_scale) *
++              fc1_scale.view(-1, 1)).to(dtype).view(expert, -1, D)
++        w2 = (w2.view(-1, w2D).to(fc2_scale) *
++              fc2_scale.view(-1, 1)).to(dtype).view(expert, -1, w2D)
++    if fc1_smooth_scale is not None:
++        expert = fc1_smooth_scale.shape[0]
++        fc1_smooth_scale = fc1_smooth_scale.view(expert, -1).to(dtype)
++        fc2_smooth_scale = fc2_smooth_scale.view(expert, -1).to(dtype)
++
++    for E_id in range(w1.shape[0]):
++        mask = topk_ids == E_id
++        if mask.sum():
++            sub_tokens = hidden_states[mask]
++            if fc1_smooth_scale is not None:
++                sub_tokens = sub_tokens * (
++                    fc1_smooth_scale[E_id])
++            act_input = sub_tokens @ (w1[E_id].transpose(0, 1))
++            if moeType == "g1u1":
++                gate, up = act_input.split([inter_dim, inter_dim], dim=-1)
++                act_out = F.silu(gate) * up
++            else:
++                act_out = F.gelu(act_input)
++            if fc2_smooth_scale is not None:
++                act_out = act_out * (
++                    fc2_smooth_scale[E_id])
++            out[mask] = act_out @ (w2[E_id].transpose(0, 1))
++
++    return (
++        out * topk_weight.view(B, -1, 1).to(out.dtype)
++    ).sum(dim=1)
++
++
++@perftest()
++def ck_moe_stage1(hidden_states,
++                  w1,  # [E, inter_dim*2, model_dim]
++                  w2,  # [E, model_dim, inter_dim]
++                  sorted_token_ids,  # [max_num_tokens_padded]
++                  sorted_expert_ids,  # [max_num_m_blocks]
++                  num_valid_ids,  # [1]
++                  w1_scale, a1_scale, dtype,
++                  topk,
++                  block_size=32
++                  ):
++    token_num = hidden_states.shape[0]
++    D = w1.shape[1]
++    num_experts, model_dim, inter_dim = w2.shape
++    max_num_tokens_padded = sorted_token_ids.shape[0]
++    # max_num_tokens_padded = sorted_expert_ids.shape[0]*block_size
++
++    out = torch.zeros(
++        (token_num, topk, D),
++        dtype=dtype,
++        device=hidden_states.device,
++    )
++    aiter.ck_moe_stage1(hidden_states, w1, w2, sorted_token_ids,
++                        sorted_expert_ids, num_valid_ids, out, topk, w1_scale, a1_scale, block_size)
++    return out
++
++
++@perftest()
++def ck_moe_stage2(hidden_states,
++                  w1,  # [E, inter_dim*2, model_dim]
++                  w2,  # [E, model_dim, inter_dim]
++                  sorted_token_ids,  # [max_num_tokens_padded]
++                  sorted_expert_ids,  # [max_num_m_blocks]
++                  sorted_weights,  # [max_num_tokens_padded]
++                  num_valid_ids,  # [1]
++                  w2_scale, a2_scale, dtype,
++                  topk,
++                  block_size=32
++                  ):
++    token_num = hidden_states.shape[0]
++    D = w2.shape[1]
++    num_experts, model_dim, inter_dim = w2.shape
++    max_num_tokens_padded = sorted_token_ids.shape[0]
++    # max_num_tokens_padded = sorted_expert_ids.shape[0]*block_size
++
++    out = torch.zeros(
++        (token_num, D),
++        dtype=dtype,
++        device=hidden_states.device,
++    )
++    aiter.ck_moe_stage2(hidden_states, w1, w2, sorted_token_ids,
++                        sorted_expert_ids, sorted_weights,
++                        num_valid_ids, out, topk, w2_scale, a2_scale, block_size)
++    return out
++
++
++@perftest()
++def ck_moe_fused_2stages(hidden_states,
++                         # [expert(local_expert:EP), inter_dim(*2), dim] N,K
++                         w1,
++                         w2,  # [expert(local_expert:EP), dim, inter_dim]
++                         topk_weight, topk_ids,
++                         # following for int8 quant
++                         # [expert(local_expert:EP), inter_dim, 1]
++                         fc1_scale=None,
++                         # [expert(local_expert:EP), model_dim, 1]
++                         fc2_scale=None,
++                         block_size=32,
++                         a1_scale=None
++                         ):
++    return ck_moe_2stages(hidden_states, w1, w2, topk_weight, topk_ids,
++                          fc1_scale, fc2_scale, block_size=block_size, a1_scale=a1_scale)
++
++
++def test_fmoe(dtype, token, model_dim, inter_dim, E, topk, quant='No', use_g1u1=False, shared_E=0):
++    input = torch.randn((token, model_dim), dtype=dtype, device="cuda")
++    if use_g1u1:
++        w1 = torch.randn((E+shared_E, inter_dim*2, model_dim),
++                         dtype=dtype, device="cuda") / 10
++    else:
++        w1 = torch.randn((E+shared_E, inter_dim, model_dim),
++                         dtype=dtype, device="cuda")
++    w2 = torch.randn((E+shared_E, model_dim, inter_dim),
++                     dtype=dtype, device="cuda")
++    score = torch.randn((token, E), device="cuda", dtype=dtype)
++    topk_weights, topk_ids = fused_topk(input, score, topk, True)
++
++    E, model_dim, inter_dim = w2.shape
++    M, topk = topk_ids.shape
++    BLOCK_SIZE_M = 128
++    sorted_ids, sorted_weights, sorted_expert_ids, num_valid_ids, moe_buf = moe_sorting_ck(topk_ids, topk_weights, E,
++                                                                                           model_dim, dtype, BLOCK_SIZE_M)
++
++    quant_dtype = torch.float8_e4m3fnuz
++    w1_qt, w1_scale = aiter.pertoken_quant(w1.view(E, -1),
++                                           quant_dtype=quant_dtype)
++    w2_qt, w2_scale = aiter.pertoken_quant(w2.view(E, -1),
++                                           quant_dtype=quant_dtype)
++    w1_qt = w1_qt.view(w1.shape)
++    w2_qt = w2_qt.view(w2.shape)
++
++    a1_qt, a1_scale = aiter.per_tensor_quant(input,  quant_dtype=quant_dtype)
++    # a1_qt, a1_scale = aiter.per_tensor_quant_fp8_hip(input)
++
++    out1_ref, us_ref = torch_moe_stage1(a1_qt, w1_qt,
++                                        w2_qt,
++                                        topk_weights, topk_ids,
++                                        dtype=dtype,
++                                        fc1_scale=None,
++                                        w1_scale=w1_scale,
++                                        a1_scale=a1_scale,
++                                        block_size=BLOCK_SIZE_M)
++    if use_g1u1:
++        gate, up = out1_ref.split([inter_dim, inter_dim], dim=-1)
++        input2 = F.silu(gate) * up
++    else:
++        input2 = F.gelu(out1_ref)
++    a2_qt, a2_scale = aiter.per_tensor_quant(input2,  quant_dtype=quant_dtype)
++    # a2_qt, a2_scale = aiter.per_tensor_quant_fp8_hip(input2)
++    out2_ref, us_ref = torch_moe_stage2(a2_qt,
++                                        w1_qt,  # E, inter_dim*2, model_dim
++                                        w2_qt,  # E, model_dim, inter_dim
++                                        topk_weights, topk_ids,
++                                        sorted_weights, sorted_ids,
++                                        sorted_expert_ids, num_valid_ids,
++                                        dtype=dtype,
++                                        # [expert, inter_dim, 1]
++                                        w2_scale=w2_scale,
++                                        a2_scale=a2_scale,
++                                        block_size=BLOCK_SIZE_M
++                                        )
++
++    out_ref = torch_moe(input, w1, w2, topk_weights, topk_ids)
++
++    # checkAllclose(out_ref, out2_ref, msg="[torch] 1_stage vs 2_stage")
++
++    out1_qt, us = ck_moe_stage1(a1_qt,
++                                shuffle_weight(w1_qt, layout=(32, 32)),
++                                w2,
++                                sorted_ids,
++                                sorted_expert_ids,
++                                num_valid_ids,
++                                w1_scale, a1_scale,
++                                dtype, topk, BLOCK_SIZE_M)
++    checkAllclose(out1_ref, out1_qt,
++                  msg=f'ck_moe_stage1:{us:.2f} us, {token*model_dim*inter_dim*topk*2/us/1000/1000:.2f} tflops......(quant:{quant_dtype})')
++
++    if use_g1u1:
++        gate, up = out1_qt.split([inter_dim, inter_dim], dim=-1)
++        input2 = F.silu(gate) * up
++    else:
++        input2 = F.gelu(out1_qt)
++    # a2_qt, a2_scale = aiter.per_tensor_quant_fp8_hip(input2)
++    a2_qt, a2_scale = aiter.per_tensor_quant(input2,  quant_dtype=quant_dtype)
++
++    out2_qt, us = ck_moe_stage2(a2_qt,
++                                w1_qt,
++                                shuffle_weight(w2_qt, layout=(32, 32)),
++                                sorted_ids,
++                                sorted_expert_ids,
++                                sorted_weights,
++                                num_valid_ids,
++                                w2_scale, a2_scale,
++                                dtype, topk, BLOCK_SIZE_M)
++    checkAllclose(out2_ref, out2_qt,
++                  msg=f'ck_moe_stage2:{us:.2f} us, {token*model_dim*inter_dim*topk*2/us/1000/1000:.2f} tflops......(quant:{quant_dtype})')
++
++    out_ck_qt, us = ck_moe_fused_2stages(input,
++                                         shuffle_weight(
++                                             w1_qt, layout=(32, 32)),
++                                         shuffle_weight(
++                                             w2_qt, layout=(32, 32)),
++                                         topk_weights, topk_ids,
++                                         w1_scale, w2_scale,
++                                         #  block_size=BLOCK_SIZE_M
++                                         )
++
++    checkAllclose(out2_ref, out_ck_qt,
++                  msg=f'ck_moe_fused_2stages:{us:.2f} us, {token*model_dim*inter_dim*topk*2/us/1000/1000:.2f} tflops......(quant:{quant_dtype})')
++
++    out_ck_nqt, us = ck_moe_fused_2stages(input,
++                                          shuffle_weight(w1, layout=(32, 32)),
++                                          shuffle_weight(w2, layout=(32, 32)),
++                                          topk_weights, topk_ids,
++                                          None, None,
++                                          #   block_size=BLOCK_SIZE_M
++                                          )
++
++    checkAllclose(out_ref, out_ck_nqt,
++                  msg=f'ck_moe_fused_2stages:{us:.2f} us, {token*model_dim*inter_dim*topk*2/us/1000/1000:.2f} tflops......(No quant)')
++
++
++for dtype in [torch.float16]:
++    for m in [32, 128]:
++        for dim in [8192]:
++            for inter_dim in [6144, 16384]:
++                expert, topk = 8, 2
++                test_fmoe(dtype, m, dim, inter_dim, expert, topk,
++                          quant='fp8quant', use_g1u1=True)
+diff --git a/op_tests/test_quant.py b/op_tests/test_quant.py
+index cb4b3c7863..28bfc2915f 100644
+--- a/op_tests/test_quant.py
++++ b/op_tests/test_quant.py
+@@ -14,7 +14,7 @@
+ def test_aiter_perTensorQuantFp8(input, scale=None):
+     out = torch.empty(input.shape, dtype=torch.float8_e4m3fnuz, device=input.device)
+     if scale is None:
+-        scale = torch.zeros(1, dtype=torch.float32, device=input.device)
++        scale = torch.empty(1, dtype=torch.float32, device=input.device)
+         aiter.dynamic_scaled_fp8_quant(out, input, scale)
+     else:
+         aiter.static_scaled_fp8_quant(out, input, scale)

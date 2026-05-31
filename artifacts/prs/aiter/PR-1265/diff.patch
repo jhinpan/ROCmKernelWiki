@@ -1,0 +1,1156 @@
+diff --git a/3rdparty/composable_kernel b/3rdparty/composable_kernel
+index 2d1c9e28e2..211d64e18a 160000
+--- a/3rdparty/composable_kernel
++++ b/3rdparty/composable_kernel
+@@ -1 +1 @@
+-Subproject commit 2d1c9e28e2f9e0731681df926f5766c4e2debcd4
++Subproject commit 211d64e18a1bf2ecb1d13c5eb87983bdcabb3b5e
+diff --git a/aiter/__init__.py b/aiter/__init__.py
+index 6cbad0568f..e033e382d8 100644
+--- a/aiter/__init__.py
++++ b/aiter/__init__.py
+@@ -57,6 +57,7 @@ def getLogger():
+ from .ops.gemm_op_a4w4 import *
+ from .ops.batched_gemm_op_a8w8 import *
+ from .ops.batched_gemm_op_bf16 import *
++from .ops.deepgemm import *
+ from .ops.aiter_operator import *
+ from .ops.activation import *
+ from .ops.attention import *
+diff --git a/aiter/jit/optCompilerConfig.json b/aiter/jit/optCompilerConfig.json
+index 42bccaa69a..ed8eead45c 100644
+--- a/aiter/jit/optCompilerConfig.json
++++ b/aiter/jit/optCompilerConfig.json
+@@ -269,6 +269,23 @@
+         "is_standalone": "False",
+         "blob_gen_cmd": "f'{AITER_CSRC_DIR}/ck_gemm_a8w8_bpreshuffle/gen_instances.py --working_path {{}} --tune_file {AITER_CONFIG_GEMM_A8W8_BPRESHUFFLE_FILE}'"
+     },
++    "module_deepgemm": {
++        "srcs": [
++            "f'{AITER_CSRC_DIR}/pybind/deepgemm_pybind.cu'",
++            "f'{AITER_CSRC_DIR}/ck_deepgemm/deepgemm.cu'"
++
++        ],
++        "flags_extra_cc": [],
++        "flags_extra_hip": [],
++        "md_name": "'module_deepgemm'",
++        "extra_ldflags": "None",
++        "extra_include": ["f'{CK_DIR}/example/ck_tile/18_flatmm'", "f'{AITER_CSRC_DIR}/ck_deepgemm/include'"],
++        "verbose": "False", 
++        "is_python_module": "True",
++        "is_standalone": "False",
++        "hip_clang_path": "os.environ.get('FLATMM_HIP_CLANG_PATH')",
++        "blob_gen_cmd": "f'{AITER_CSRC_DIR}/ck_deepgemm/gen_instances.py --working_path {{}}'"
++    },
+     "module_gemm_a8w8_asm": {
+         "srcs": [
+             "f'{AITER_CSRC_DIR}/pybind/gemm_a8w8_asm_pybind.cu'",
+diff --git a/aiter/ops/deepgemm.py b/aiter/ops/deepgemm.py
+new file mode 100644
+index 0000000000..7d1779acf8
+--- /dev/null
++++ b/aiter/ops/deepgemm.py
+@@ -0,0 +1,30 @@
++# SPDX-License-Identifier: MIT
++# Copyright (C) 2025, Advanced Micro Devices, Inc. All rights reserved.
++
++from torch import Tensor
++from typing import Optional
++from ..jit.core import (
++    compile_ops,
++)
++
++
++@compile_ops("module_deepgemm", fc_name="deepgemm")
++def deepgemm_ck(
++    XQ: Tensor,
++    WQ: Tensor,
++    Y: Tensor,
++    group_layout: Tensor,
++    x_scale: Optional[Tensor] = None,
++    w_scale: Optional[Tensor] = None,
++) -> Tensor: ...
++
++
++def deepgemm(
++    XQ: Tensor,
++    WQ: Tensor,
++    Y: Tensor,
++    group_layout: Tensor,
++    x_scale: Optional[Tensor] = None,
++    w_scale: Optional[Tensor] = None,
++):
++    return deepgemm_ck(XQ, WQ, Y, group_layout, x_scale, w_scale)
+diff --git a/csrc/ck_deepgemm/deepgemm.cu b/csrc/ck_deepgemm/deepgemm.cu
+new file mode 100644
+index 0000000000..4658150779
+--- /dev/null
++++ b/csrc/ck_deepgemm/deepgemm.cu
+@@ -0,0 +1,149 @@
++// SPDX-License-Identifier: MIT
++// Copyright (C) 2024-2025, Advanced Micro Devices, Inc. All rights reserved.
++
++#include "deepgemm_common.cuh"
++#include "deepgemm_lookup.h"
++#include "deepgemm_manifest.h"
++#include <cmath>
++#include "py_itfs_common.h"
++
++using RowwiseKernel = std::function<
++    torch::Tensor(torch::Tensor &, torch::Tensor &,
++                  torch::Tensor &, torch::Tensor &,
++                  std::optional<torch::Tensor>, std::optional<torch::Tensor>)>;
++
++// Define a custom hash function for std::tuple<int, int, int>
++struct IntTupleHash
++{
++  size_t operator()(const std::tuple<int, int, int> &t) const
++  {
++    auto hash1 = std::hash<int>{}(std::get<0>(t));
++    auto hash2 = std::hash<int>{}(std::get<1>(t));
++    auto hash3 = std::hash<int>{}(std::get<2>(t));
++    return hash1 ^ hash2 ^ hash3;
++  }
++};
++
++// For certain high priority shapes, we directly use the best kernel rather
++// than use heuristics.
++using RowwiseKernelMap = std::unordered_map<
++    std::tuple<int, int, int>,
++    RowwiseKernel,
++    IntTupleHash>;
++
++template <typename ABDataType, typename AccDataType, typename CDataType>
++RowwiseKernel rowwise_heuristic_dispatch(int M, int N, int K)
++{
++  // Apply shape heuristics to find a suitable kernel implementation.
++  if (M < 128) 
++  {
++    return deepgemm_256x32x64x256_16x16x64_1x4<ABDataType, AccDataType, CDataType>;
++  }
++  else
++  {
++    return deepgemm_256x128x128x128_16x16x64_1x4<ABDataType, AccDataType, CDataType>;
++  }
++}
++
++// Helper function to return the next largest power of 2
++static constexpr int nextPow2(unsigned int num)
++{
++  if (num <= 1)
++    return 1;
++  return 1 << (CHAR_BIT * sizeof(num) - __builtin_clz(num - 1));
++}
++
++template <typename ABDataType, typename AccDataType, typename CDataType>
++RowwiseKernel rowwise_dispatch(int M, int N, int K)
++{
++  // TODO: add tuner @lalala-sh
++  // For a given shape, either find the best kernel via lookup or heuristic.
++  // For many small M shapes, we bucket them to the next largest kernel.
++  // This is fine since kernels are padded anyway.
++
++  // static const auto lookup = [&]
++  // {
++  //   return RowwiseKernelMap{GENERATE_LOOKUP_TABLE(ABDataType, AccDataType, CDataType)};
++  // }();
++
++  // // First check if this shape(M,N,K) is available in the direct lookup.
++  // auto it = lookup.find({M, N, K});
++  // // If we found an optimal kernel, use it.
++  // if (it != lookup.end())
++  // {
++  //   return it->second;
++  // }
++
++  // int padded_m = M;
++  // if (M > 1 && M <= 16)
++  // {
++  //   padded_m = 16;
++  // }
++  // else if (M <= 16384)
++  // {
++  //   padded_m = nextPow2(M);
++  // }
++  // else if (M <= 20480)
++  // {
++  //   padded_m = 20480;
++  // }
++  // // Second check if this shape(padded_m,N,K) is available in the direct lookup.
++  // it = lookup.find({padded_m, N, K});
++  // // If we found an optimal kernel, use it.
++  // if (it != lookup.end())
++  // {
++  //   return it->second;
++  // }
++  // Otherwise, use heuristics.
++  return rowwise_heuristic_dispatch<ABDataType, AccDataType, CDataType>(M, N, K);
++}
++
++torch::Tensor deepgemm(
++  torch::Tensor &XQ,
++  torch::Tensor &WQ,
++  torch::Tensor &Y,
++  torch::Tensor &grouped_layout,
++  std::optional<torch::Tensor> x_scale,
++  std::optional<torch::Tensor> w_scale)
++{
++  TORCH_CHECK(XQ.dtype() == WQ.dtype(),
++              "Weights and activations should both be int8/fp8!");
++  if (x_scale != std::nullopt && w_scale != std::nullopt)
++    TORCH_CHECK(x_scale.value().dtype() == w_scale.value().dtype(),
++                "Scales should have the same dtype!");
++
++  int M = XQ.size(0);
++  int N = WQ.size(0);
++  int K = XQ.size(1);
++  int KBatch = 1;
++
++
++
++  if (XQ.dtype() == at::ScalarType::BFloat16 || XQ.dtype() == at::ScalarType::Half)
++  {
++    if (XQ.dtype() == at::ScalarType::Half)
++    {
++      rowwise_dispatch<fp16, float, fp16>(M, N, K)(XQ, WQ, Y, grouped_layout, x_scale, w_scale);
++    }
++    else
++    {
++      rowwise_dispatch<bf16, float, bf16>(M, N, K)(XQ, WQ, Y, grouped_layout, x_scale, w_scale);
++    }
++  }
++  else if (XQ.dtype() == torch_fp8)
++  {
++    if (Y.dtype() == at::ScalarType::Half)
++    {
++      rowwise_dispatch<fp8, float, fp16>(M, N, K)(XQ, WQ, Y, grouped_layout, x_scale, w_scale);
++    }
++    else if (Y.dtype() == at::ScalarType::BFloat16)
++    {
++      rowwise_dispatch<fp8, float, bf16>(M, N, K)(XQ, WQ, Y, grouped_layout, x_scale, w_scale);
++    }
++  }
++  else
++  {
++    TORCH_CHECK(false, "Unsupported scales/output dtype!");
++  }
++  return Y;
++}
+\ No newline at end of file
+diff --git a/csrc/ck_deepgemm/deepgemm_common.py b/csrc/ck_deepgemm/deepgemm_common.py
+new file mode 100644
+index 0000000000..8ce7401e76
+--- /dev/null
++++ b/csrc/ck_deepgemm/deepgemm_common.py
+@@ -0,0 +1,64 @@
++# SPDX-License-Identifier: MIT
++# Copyright (C) 2025, Advanced Micro Devices, Inc. All rights reserved.
++from dataclasses import dataclass
++
++
++@dataclass
++class kernelInstance:
++    BLOCK_SIZE: int
++    # GroupCount: int
++    MPerBLOCK: int
++    NPerBLOCK: int
++    KPerBLOCK: int
++    WAVE_TILE_M: int
++    WAVE_TILE_N: int
++    WAVE_TILE_K: int
++    WAVE_MAP_M: int
++    WAVE_MAP_N: int
++
++    @property
++    def name(self) -> str:
++        return ("_").join(
++            [
++                "deepgemm",
++                ("x").join(
++                    map(
++                        lambda x: str(x),
++                        [
++                            self.BLOCK_SIZE,
++                            self.MPerBLOCK,
++                            self.NPerBLOCK,
++                            self.KPerBLOCK,
++                        ],
++                    )
++                ),
++                ("x").join(
++                    map(
++                        lambda x: str(x),
++                        [self.WAVE_TILE_M, self.WAVE_TILE_N, self.WAVE_TILE_K],
++                    )
++                ),
++                ("x").join(map(lambda x: str(x), [self.WAVE_MAP_M, self.WAVE_MAP_N])),
++            ]
++        )
++
++
++# fmt: off
++kernels_list = {
++#   (    M,     N,     K): kernel:        BLOCK_SIZE| MPerBLOCK| NPerBLOCK| KPerBLOCK| WAVE_TILE_M| WAVE_TILE_N| WAVE_TILE_K| WAVE_MAP_M| WAVE_MAP_N|  LOOP_SCHED|PIPELINE_VERSION
++    1:                     kernelInstance(       256,       128,       128,       128,           16,         16,          64,         1,           4),
++    2:                     kernelInstance(       256,       128,       128,       128,           16,         16,          32,         1,           4),
++    3:                     kernelInstance(       256,        32,        64,       256,           16,         16,          64,         1,           4),
++    4:                     kernelInstance(       256,        32,        64,       256,           16,         16,          32,         1,           4),
++}
++
++
++default_kernels_dict = {
++#   (    M,     N,     K): kernel:        BLOCK_SIZE| MPerBLOCK| NPerBLOCK| KPerBLOCK| WAVE_TILE_M| WAVE_TILE_N| WAVE_MAP_M| WAVE_MAP_N| ABLOCK_TRANSFER| BBLOCK_TRANSFER| CBLOCK_TRANSFER| CBLOCK_SPV| CSHUFFLE_MX| CSHUFFLE_NX|  LOOP_SCHED|PIPELINE_VERSION
++    (-1):                     kernelInstance(       256,       128,       128,       128,           16,         16,          64,         1,           4),
++    (-2):                     kernelInstance(       256,       128,       128,       128,           16,         16,          32,         1,           4),
++    (-3):                     kernelInstance(       256,       32,       64,       256,           16,         16,          64,         1,           4),
++    (-4):                     kernelInstance(       256,       32,       64,       256,           16,         16,          32,         1,           4),
++
++}
++# fmt: on
+diff --git a/csrc/ck_deepgemm/gen_instances.py b/csrc/ck_deepgemm/gen_instances.py
+new file mode 100644
+index 0000000000..bb94547401
+--- /dev/null
++++ b/csrc/ck_deepgemm/gen_instances.py
+@@ -0,0 +1,305 @@
++# SPDX-License-Identifier: MIT
++# Copyright (C) 2024-2025, Advanced Micro Devices, Inc. All rights reserved.
++import os
++from pathlib import Path
++import pandas as pd
++import argparse
++import shutil
++import torch
++from deepgemm_common import kernelInstance, kernels_list, default_kernels_dict
++
++
++class deepgemm_codegen:
++    def __init__(self, working_path, istune=False):
++        self.working_path = working_path
++        self.impl_path = os.path.join(working_path, "impl")
++        self.instances_path = os.path.join(working_path, "instances")
++        self.istune = istune
++        # self.a_dtype = a_dtype.upper()
++        # self.b_dtype = b_dtype.upper()
++        # self.c_dtype = c_dtype.upper()
++        # self.quant_type = quant_type
++        assert (istune == False, "not surpport tuning!")
++
++    def gen_instance(self, k: kernelInstance):
++        INSTANCE_IMPL = f"""// SPDX-License-Identifier: MIT
++// Copyright (c) 2024, Advanced Micro Devices, Inc. All rights reserved.
++#include "deepgemm_common.cuh"
++template <typename ABDataType, typename AccDataType, typename CDataType>
++torch::Tensor
++{k.name}(
++    torch::Tensor &XQ,
++    torch::Tensor &WQ,
++    torch::Tensor &Y,
++    torch::Tensor &group_layout,
++    std::optional<torch::Tensor> x_scale,
++    std::optional<torch::Tensor> w_scale)
++{{{{
++    // The smallest kernel we have available. Works well for memory bound shapes.
++    int group_count = Y.size(0);
++    int M = XQ.size(1);
++    int N = Y.size(2);
++    int K = XQ.size(2);
++    int Stride_A = K;
++    int Stride_B = K;
++    int Stride_C = N;
++    {{INSTANCE_CONTENT}}
++    return Y;
++}}}}
++"""
++        INSTANCE_CONTENT = f"""if (x_scale != std::nullopt && w_scale != std::nullopt )
++        {{{{
++            auto per_a_scale_dev_ptr = ck_tile::FlatmmScalePointer<1>{{static_cast<float*>(x_scale.value().data_ptr())}};
++            auto per_b_scale_dev_ptr = ck_tile::FlatmmScalePointer<1>{{static_cast<float*>(w_scale.value().data_ptr())}};
++            ck_tile::MaskedGroupedFlatmmHostArgs<decltype(per_a_scale_dev_ptr), decltype(per_b_scale_dev_ptr)> kernel_args{{
++                reinterpret_cast<ck_tile::index_t *>(group_layout.data_ptr()),
++                group_count,
++                M,
++                N,
++                K,
++                reinterpret_cast<const void*>(XQ.data_ptr()),
++                Stride_A,
++                reinterpret_cast<const void*>(WQ.data_ptr()),
++                Stride_B,
++                {{}},{{}},
++                reinterpret_cast<void*>(Y.data_ptr()),
++                Stride_C,
++                1, //KBatch
++                per_a_scale_dev_ptr,
++                per_b_scale_dev_ptr
++            }};
++            using TileConfig = MGroupedFlatmmConfig<ABDataType,
++                {k.MPerBLOCK},
++                {k.NPerBLOCK},
++                {k.KPerBLOCK},
++                {k.WAVE_MAP_M},
++                {k.WAVE_MAP_N},
++                {k.WAVE_TILE_M},
++                {k.WAVE_TILE_N},
++                64>;
++            // Run kernel instance.
++            auto stream_config = ck_stream_config{{at::hip::getCurrentHIPStreamMasqueradingAsCUDA().stream()}};
++            grouped_flatmm<TileConfig, ABDataType, ABDataType, ck_tile::tuple<>, AccDataType, CDataType, row_major, col_major, ck_tile::tuple<>, row_major, false, ck_tile::element_wise::PassThrough>(kernel_args, stream_config);
++        }}}}
++        else
++        {{{{
++            auto per_a_scale_dev_ptr = ck_tile::FlatmmScalePointer<-1>{{nullptr}};
++            auto per_b_scale_dev_ptr = ck_tile::FlatmmScalePointer<-1>{{nullptr}};
++            ck_tile::MaskedGroupedFlatmmHostArgs<decltype(per_a_scale_dev_ptr), decltype(per_b_scale_dev_ptr)> kernel_args{{
++                reinterpret_cast<ck_tile::index_t *>(group_layout.data_ptr()),
++                group_count,
++                M,
++                N,
++                K,
++                reinterpret_cast<const void*>(XQ.data_ptr()),
++                Stride_A,
++                reinterpret_cast<const void*>(WQ.data_ptr()),
++                Stride_B,
++                {{}},{{}},
++                reinterpret_cast<void*>(Y.data_ptr()),
++                Stride_C,
++                1, //KBatch
++                per_a_scale_dev_ptr,
++                per_b_scale_dev_ptr
++            }};
++            using TileConfig = MGroupedFlatmmConfig<ABDataType,
++                {k.MPerBLOCK},
++                {k.NPerBLOCK},
++                {k.KPerBLOCK},
++                {k.WAVE_MAP_M},
++                {k.WAVE_MAP_N},
++                {k.WAVE_TILE_M},
++                {k.WAVE_TILE_N},
++                32>;
++            // Run kernel instance.
++            auto stream_config = ck_stream_config{{at::hip::getCurrentHIPStreamMasqueradingAsCUDA().stream()}};
++            grouped_flatmm<TileConfig, ABDataType, ABDataType, ck_tile::tuple<>, AccDataType, CDataType, row_major, col_major, ck_tile::tuple<>, row_major, false, ck_tile::element_wise::PassThrough>(kernel_args, stream_config);
++        }}}}
++"""
++
++        INSTANCE_IMPL_str = INSTANCE_IMPL.format(INSTANCE_CONTENT=(INSTANCE_CONTENT))
++
++        Path(os.path.join(self.impl_path, f"{k.name}.cuh")).write_text(
++            INSTANCE_IMPL_str
++        )
++
++        INSTANCE_template = """// SPDX-License-Identifier: MIT
++// Copyright (c) 2024, Advanced Micro Devices, Inc. All rights reserved.
++#include "impl/{name}.cuh"
++template torch::Tensor
++{name}<{dtypes}>(
++    torch::Tensor &XQ,
++    torch::Tensor &WQ,
++    torch::Tensor &Y,
++    torch::Tensor &grouped_layout,
++    std::optional<torch::Tensor> x_scale,
++    std::optional<torch::Tensor> w_scale);
++"""
++        # if self.istune:
++        #     INSTANCE_abI8_dBF16_eBF16 = INSTANCE_template.format(
++        #         name=k.name, dtypes="I8, B16"
++        #     )
++        #     Path(
++        #         os.path.join(self.instances_path, f"{k.name}_abI8_dB16_eB16.cpp")
++        #     ).write_text(INSTANCE_abI8_dBF16_eBF16)
++        # else:
++        for CDtype in ["bf16", "fp16"]:
++            for ABDtype in ["bf16", "fp16", "fp8"]:
++                for AccDtype in ["float"]:
++                    intsance = INSTANCE_template.format(
++                        name=k.name, dtypes=f"{ABDtype}, {AccDtype}, {CDtype}"
++                    )
++                    Path(
++                        os.path.join(
++                            self.instances_path,
++                            f"{k.name}_ab{ABDtype}_acc{AccDtype}_C{CDtype}.cpp",
++                        )
++                    ).write_text(intsance)
++
++    def gen_lookup_dict(self, kernels_dict):
++        LOOKUP_head = """#pragma once
++// SPDX-License-Identifier: MIT
++// Copyright (c) 2024, Advanced Micro Devices, Inc. All rights reserved.
++// #ifdef USE_ROCM
++#define GENERATE_LOOKUP_TABLE(ABTYPE, ACCTYPE, CTYPE)                                                                                      \\
++   {                                                                                                                             \\"""
++
++        LOOKUP_template = """
++       {{{MNK},                                                                                                       \\
++        {kernel_name}<ABTYPE, ACCTYPE, CTYPE>}},                       \\"""
++
++        LOOKUP_end = """
++   }
++// #endif // USE_ROCM
++"""
++        with open(os.path.join(self.working_path, "deepgemm_lookup.h"), "w") as f:
++            f.write(LOOKUP_head)
++            for mnk, k in kernels_dict.items():
++                if not self.istune and (isinstance(mnk, tuple) and mnk[0] > 0):
++                    f.write(
++                        LOOKUP_template.format(
++                            MNK="{"
++                            + (", ").join(map(lambda x: str(x), list(mnk)))
++                            + "}",
++                            kernel_name=k.name,
++                        )
++                    )
++                elif self.istune and isinstance(mnk, int):
++                    f.write(LOOKUP_template.format(MNK=mnk, kernel_name=k.name))
++            f.write(LOOKUP_end)
++
++    def gen_manifest_head(self, kernels_dict):
++        MAINFEST_head = """#pragma once
++// SPDX-License-Identifier: MIT
++// Copyright (c) 2024, Advanced Micro Devices, Inc. All rights reserved.
++// #ifdef USE_ROCM
++#include <cstdlib>
++#include <torch/extension.h>
++"""
++        MAINFEST_template = """
++template <typename ABDataType, typename DDataType, typename EDataType>
++torch::Tensor
++{kernel_name}(
++    torch::Tensor &XQ,
++    torch::Tensor &WQ,
++    torch::Tensor &Y,
++    torch::Tensor &grouped_layout,
++    std::optional<torch::Tensor> x_scale,
++    std::optional<torch::Tensor> w_scale);
++"""
++        MAINFEST_end = """
++// endif // USE_ROCM
++"""
++
++        with open(os.path.join(self.working_path, "deepgemm_manifest.h"), "w") as f:
++            f.write(MAINFEST_head)
++            for mnk, k in kernels_dict.items():
++                f.write(MAINFEST_template.format(kernel_name=k.name))
++            f.write(MAINFEST_end)
++
++    def gen_instances(self, kernels_dict):
++        if os.path.exists(self.impl_path):
++            shutil.rmtree(self.impl_path)
++        os.mkdir(self.impl_path)
++        if os.path.exists(self.instances_path):
++            shutil.rmtree(self.instances_path)
++        os.mkdir(self.instances_path)
++
++        for mnk, k in kernels_dict.items():
++            self.gen_instance(k)
++
++        self.gen_lookup_dict(kernels_dict)
++        self.gen_manifest_head(kernels_dict)
++
++
++def get_tune_dict(tune_dict_csv):
++    tune_dict = default_kernels_dict
++    if os.path.exists(tune_dict_csv):
++        tune_df = pd.read_csv(tune_dict_csv)
++        if torch.cuda.is_available():
++            gpu = torch.cuda.current_device()
++            device_properties = torch.cuda.get_device_properties(gpu)
++            cu_num = device_properties.multi_processor_count
++            tune_df = tune_df[tune_df["cu_num"] == cu_num].reset_index()
++        for i in range(len(tune_df)):
++            M = tune_df.loc[i, "M"]
++            N = tune_df.loc[i, "N"]
++            K = tune_df.loc[i, "K"]
++            kid = tune_df.loc[i, "kernelId"]
++            tune_dict[(M, N, K)] = kernels_list[kid]
++    return tune_dict
++
++
++if __name__ == "__main__":
++    parser = argparse.ArgumentParser(
++        prog="generate",
++        description="gen API for CK gemm a8w8 kernel",
++    )
++
++    # the directory for list_blobs/gen_blobs to write files into
++    parser.add_argument(
++        "-w",
++        "--working_path",
++        default="./",
++        required=False,
++        help="the path where all the blobs are going to be generated",
++    )
++
++    # parser.add_argument(
++    #     "-f",
++    #     "--tune_file",
++    #     default="aiter/configs/a8w8_tuned_gemm.csv",
++    #     required=False,
++    #     help="tune_file include the result after run gemm_a8w8_tune.py",
++    # )
++
++    # parser.add_argument(
++    #     "--tune", action="store_true", required=False, help="generated tune instances"
++    # )
++
++    parser.add_argument(
++        "--out_type",
++        default="all",
++        required=False,
++        help="Specifie the type of scale\n \
++            all: [bf16, fp16] \n  \
++            bf16, fp16",
++    )
++
++    # parser.add_argument(
++    #     "--scale_type",
++    #     default="all",
++    #     required=False,
++    #     help="Specifie the type of scale\n \
++    #         all: [fp32, same as out] \n  \
++    #         same: [same as out]"
++    # )
++
++    args = parser.parse_args()
++    # TODO: use tune flag.
++    codegen = deepgemm_codegen(args.working_path, False)
++
++    # if args.tune:
++    codegen.gen_instances(kernels_list)
++    # else:
++    # codegen.gen_instances(get_tune_dict(args.tune_file))
+diff --git a/csrc/ck_deepgemm/include/deepgemm.h b/csrc/ck_deepgemm/include/deepgemm.h
+new file mode 100644
+index 0000000000..ac201ca969
+--- /dev/null
++++ b/csrc/ck_deepgemm/include/deepgemm.h
+@@ -0,0 +1,24 @@
++#pragma once
++// SPDX-License-Identifier: MIT
++// Copyright (C) 2025, Advanced Micro Devices, Inc. All rights reserved.
++#include "flatmm_basic.hpp"
++#include "py_itfs_common.h"
++#include <torch/all.h>
++#include <torch/extension.h>
++
++template <class scaleM = ck_tile::FlatmmScalePointer<-1>,
++          class scaleN = ck_tile::FlatmmScalePointer<-1>>
++using m_grouped_flatmm_args = ck_tile::MaskedGroupedFlatmmHostArgs<scaleM, scaleN>;
++using ck_stream_config      = ck_tile::stream_config;
++using row_major             = ck_tile::tensor_layout::gemm::RowMajor;
++using col_major             = ck_tile::tensor_layout::gemm::ColumnMajor;
++using bf16                  = ck_tile::bf16_t;
++using fp16                  = ck_tile::half_t;
++using fp8                   = ck_tile::fp8_t;
++
++torch::Tensor deepgemm(torch::Tensor& XQ,
++                       torch::Tensor& WQ,
++                       torch::Tensor& Y,
++                       torch::Tensor& group_layout,
++                       std::optional<torch::Tensor> x_scale,
++                       std::optional<torch::Tensor> w_scale);
+diff --git a/csrc/ck_deepgemm/include/deepgemm_common.cuh b/csrc/ck_deepgemm/include/deepgemm_common.cuh
+new file mode 100644
+index 0000000000..f0beb029fa
+--- /dev/null
++++ b/csrc/ck_deepgemm/include/deepgemm_common.cuh
+@@ -0,0 +1,214 @@
++// SPDX-License-Identifier: MIT
++// Copyright (C) 2025, Advanced Micro Devices, Inc. All rights reserved.
++
++#pragma once
++#include <cstdlib>
++#include <initializer_list>
++#include <iostream>
++#include <numeric>
++
++#include <ATen/ATen.h>
++#include <ATen/hip/HIPContext.h>
++#include <ATen/hip/impl/HIPGuardImplMasqueradingAsCUDA.h>
++#include <ATen/hip/impl/HIPStreamMasqueradingAsCUDA.h>
++#include <torch/extension.h>
++
++#include "ck_tile/core.hpp"
++#include "ck_tile/host/kernel_launch.hpp"
++#include "ck_tile/ops/epilogue.hpp"
++#include "ck_tile/ops/flatmm.hpp"
++#include "ck_tile/ops/gemm.hpp"
++#include "deepgemm.h"
++
++template <typename DataType,
++          int M_Tile_,
++          int N_Tile_,
++          int K_Tile_,
++          int M_Warp_,
++          int N_Warp_,
++          int M_Warp_Tile_,
++          int N_Warp_Tile_,
++          int K_Warp_Tile_>
++struct MGroupedFlatmmConfig
++{
++    static constexpr ck_tile::index_t M_Tile = M_Tile_;
++    static constexpr ck_tile::index_t N_Tile = N_Tile_;
++    static constexpr ck_tile::index_t K_Tile = K_Tile_ / sizeof(DataType);
++
++    static constexpr ck_tile::index_t M_Warp = M_Warp_;
++    static constexpr ck_tile::index_t N_Warp = N_Warp_;
++    static constexpr ck_tile::index_t K_Warp = 1;
++
++    static constexpr ck_tile::index_t M_Warp_Tile = M_Warp_Tile_;
++    static constexpr ck_tile::index_t N_Warp_Tile = N_Warp_Tile_;
++    // TODO:
++    static constexpr ck_tile::index_t K_Warp_Tile =
++        64 / sizeof(DataType); // sizeof(DataType) == 2 ? 32 : 64;
++
++    static constexpr bool kPadM = false;
++    static constexpr bool kPadN = false;
++    static constexpr bool kPadK = false;
++
++    static constexpr bool TransposeC            = false;
++    static constexpr bool UseStructuredSparsity = false;
++
++    static constexpr int kBlockPerCu                = 1;
++    static constexpr int TileParitionerGroupNum     = 8;
++    static constexpr int TileParitionerM01          = 4;
++    static constexpr auto Scheduler                 = ck_tile::GemmPipelineScheduler::Default;
++    static constexpr ck_tile::index_t NumWaveGroups = 1;
++    static constexpr bool DoubleSmemBuffer          = false;
++
++    static constexpr int N_Repeat          = N_Tile / N_Warp_Tile / N_Warp;
++    static constexpr bool TiledMMAPermuteN = N_Repeat % 2 == 0;
++};
++
++template <typename FlatmmConfig,
++          typename ADataType,
++          typename BDataType,
++          typename DsDatatype,
++          typename AccDataType,
++          typename CDataType,
++          typename ALayout,
++          typename BLayout,
++          typename DsLayout,
++          typename ELayout,
++          bool persistent,
++          typename CDEElementWise,
++          typename KernelArguments>
++void grouped_flatmm(KernelArguments& args, ck_stream_config& s)
++{
++    using CodegenFlatmmShape = ck_tile::TileGemmShape<
++        ck_tile::sequence<FlatmmConfig::M_Tile, FlatmmConfig::N_Tile, FlatmmConfig::K_Tile>,
++        ck_tile::sequence<FlatmmConfig::M_Warp, FlatmmConfig::N_Warp, FlatmmConfig::K_Warp>,
++        ck_tile::sequence<FlatmmConfig::M_Warp_Tile,
++                          FlatmmConfig::N_Warp_Tile,
++                          FlatmmConfig::K_Warp_Tile>>;
++
++    using TilePartitioner =
++        ck_tile::GemmSpatiallyLocalTilePartitioner<CodegenFlatmmShape,
++                                                   FlatmmConfig::TileParitionerGroupNum,
++                                                   FlatmmConfig::TileParitionerM01>;
++
++    using Traits = ck_tile::TileGemmTraits<FlatmmConfig::kPadM,
++                                           FlatmmConfig::kPadN,
++                                           FlatmmConfig::kPadK,
++                                           ALayout,
++                                           BLayout,
++                                           ELayout,
++                                           FlatmmConfig::NumWaveGroups>;
++
++    using CodegenGemmTraits = ck_tile::TileGemmUniversalTraits<FlatmmConfig::kPadM,
++                                                               FlatmmConfig::kPadN,
++                                                               FlatmmConfig::kPadK,
++                                                               FlatmmConfig::DoubleSmemBuffer,
++                                                               ALayout,
++                                                               BLayout,
++                                                               ELayout,
++                                                               FlatmmConfig::TransposeC,
++                                                               FlatmmConfig::UseStructuredSparsity,
++                                                               persistent,
++                                                               FlatmmConfig::NumWaveGroups,
++                                                               true>;
++
++    using GemmPipelineProblem =
++        ck_tile::GemmPipelineProblem<ADataType, BDataType, AccDataType, CodegenFlatmmShape, Traits>;
++
++    using BaseGemmPipeline = ck_tile::BaseFlatmmPipelineAGmemBGmemCRegV1<GemmPipelineProblem>;
++
++    const ck_tile::index_t k_grain     = args.k_batch * FlatmmConfig::K_Tile;
++    const ck_tile::index_t K_split     = (args.K + k_grain - 1) / k_grain * FlatmmConfig::K_Tile;
++    const ck_tile::index_t num_loop    = TilePartitioner::GetLoopNum(K_split);
++    const bool has_hot_loop            = BaseGemmPipeline::BlockHasHotloop(num_loop);
++    const ck_tile::TailNumber tail_num = BaseGemmPipeline::GetBlockLoopTailNum(num_loop);
++
++    const auto Run = [&](const auto has_hot_loop_,
++                         const auto tail_number_,
++                         const auto memory_operation_) {
++        constexpr bool has_hot_loop_v   = has_hot_loop_.value;
++        constexpr auto tail_number_v    = tail_number_.value;
++        constexpr auto scheduler        = FlatmmConfig::Scheduler;
++        constexpr auto memory_operation = memory_operation_.value;
++
++        using CodegenPipelineProblem = ck_tile::FlatmmPipelineProblem<ADataType,
++                                                                      BDataType,
++                                                                      AccDataType,
++                                                                      CodegenFlatmmShape,
++                                                                      CodegenGemmTraits,
++                                                                      scheduler,
++                                                                      has_hot_loop_v,
++                                                                      tail_number_v>;
++
++        using CodegenFlatmmPipeline =
++            ck_tile::FlatmmPipelineAGmemBGmemCRegV1<CodegenPipelineProblem>;
++
++        using GemmEpilogue = ck_tile::CShuffleEpilogue<
++            ck_tile::CShuffleEpilogueProblem<ADataType,
++                                             BDataType,
++                                             DsDatatype,
++                                             AccDataType,
++                                             CDataType,
++                                             DsLayout,
++                                             ELayout,
++                                             CDEElementWise,
++                                             TilePartitioner::MPerBlock,
++                                             TilePartitioner::NPerBlock,
++                                             FlatmmConfig::M_Warp,
++                                             FlatmmConfig::N_Warp,
++                                             FlatmmConfig::M_Warp_Tile,
++                                             FlatmmConfig::N_Warp_Tile,
++                                             FlatmmConfig::K_Warp_Tile,
++                                             CodegenPipelineProblem::TransposeC,
++                                             memory_operation,
++                                             FlatmmConfig::NumWaveGroups>>;
++
++        // ToDo: Will add the codegen part to test different pipeline policies in GEMM.
++        // Now we only use the BlockGemmASmemBSmemCRegV1DefaultPolicy.
++        using Kernel =
++            ck_tile::GroupedFlatmmKernel<TilePartitioner, CodegenFlatmmPipeline, GemmEpilogue>;
++
++        auto kargs = Kernel::MakeKernelArgs(args);
++
++        const dim3 grids      = Kernel::GridSize(kargs);
++        constexpr dim3 blocks = Kernel::BlockSize();
++
++        ck_tile::launch_kernel(
++            s, ck_tile::make_kernel<FlatmmConfig::kBlockPerCu>(Kernel{}, grids, blocks, 0, kargs));
++    };
++
++    const auto RunSplitk = [&](const auto has_hot_loop_, const auto tail_number_) {
++        if(args.k_batch == 1)
++        {
++            Run(has_hot_loop_,
++                tail_number_,
++                ck_tile::integral_constant<ck_tile::memory_operation_enum,
++                                           ck_tile::memory_operation_enum::set>{});
++        }
++        else
++        {
++            Run(has_hot_loop_,
++                tail_number_,
++                ck_tile::integral_constant<ck_tile::memory_operation_enum,
++                                           ck_tile::memory_operation_enum::atomic_add>{});
++        }
++    };
++
++    if(tail_num == ck_tile::TailNumber::Odd)
++    {
++        RunSplitk(ck_tile::bool_constant<true>{},
++                  ck_tile::integral_constant<ck_tile::TailNumber, ck_tile::TailNumber::Odd>{});
++    }
++    else if(tail_num == ck_tile::TailNumber::Even)
++    {
++        RunSplitk(ck_tile::bool_constant<true>{},
++                  ck_tile::integral_constant<ck_tile::TailNumber, ck_tile::TailNumber::Even>{});
++    }
++    else
++    {
++        std::ostringstream err;
++        err << "For compute pipeline tail number should always be Full, but have \"" << tail_num
++            << "\" which is not supported! PrefetchStages: " << BaseGemmPipeline::PrefetchStages
++            << "\n File: " << __FILE__ << ":" << __LINE__ << ", in function: " << __func__;
++        throw std::runtime_error(err.str());
++    }
++}
+diff --git a/csrc/include/rocm_ops.hpp b/csrc/include/rocm_ops.hpp
+old mode 100755
+new mode 100644
+index 89b3315d7e..bac56cb04e
+--- a/csrc/include/rocm_ops.hpp
++++ b/csrc/include/rocm_ops.hpp
+@@ -169,6 +169,17 @@
+           py::arg("kernelId") = 0,    \
+           py::arg("splitK")   = 0);
+ 
++#define DEEPGEMM_PYBIND                      \
++    m.def("deepgemm",                        \
++          &deepgemm,                         \
++          "deepgemm",                        \
++          py::arg("XQ"),                     \
++          py::arg("WQ"),                     \
++          py::arg("Y"),                      \
++          py::arg("group_layout"),           \
++          py::arg("x_scale") = std::nullopt, \
++          py::arg("w_scale") = std::nullopt);
++
+ #define CACHE_PYBIND                                                                \
+     m.def("swap_blocks",                                                            \
+           &aiter::swap_blocks,                                                      \
+diff --git a/csrc/pybind/deepgemm_pybind.cu b/csrc/pybind/deepgemm_pybind.cu
+new file mode 100644
+index 0000000000..a5f6c37baa
+--- /dev/null
++++ b/csrc/pybind/deepgemm_pybind.cu
+@@ -0,0 +1,9 @@
++// SPDX-License-Identifier: MIT
++// Copyright (C) 2024-2025, Advanced Micro Devices, Inc. All rights reserved.
++#include "rocm_ops.hpp"
++#include "deepgemm.h"
++
++PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
++{
++    DEEPGEMM_PYBIND;
++}
+\ No newline at end of file
+diff --git a/csrc/rocm_ops.cpp b/csrc/rocm_ops.cpp
+index 25f4f64631..db81f468e9 100644
+--- a/csrc/rocm_ops.cpp
++++ b/csrc/rocm_ops.cpp
+@@ -18,6 +18,7 @@
+ #include "communication_asm.h"
+ #include "custom.h"
+ #include "custom_all_reduce.h"
++#include "deepgemm.h"
+ #include "gemm_a4w4_blockscale.h"
+ #include "gemm_a8w8.h"
+ #include "gemm_a8w8_blockscale.h"
+@@ -34,8 +35,8 @@
+ #include "rmsnorm.h"
+ #include "rocsolgemm.cuh"
+ #include "rope.h"
+-#include "smoothquant.h"
+ #include "sample.h"
++#include "smoothquant.h"
+ #include <torch/extension.h>
+ 
+ // #include "torch/mha_batch_prefill.h"
+@@ -101,5 +102,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
+     SAMPLE_PYBIND;
+     HIPBSOLGEMM_PYBIND;
+     ROCSOLGEMM_PYBIND;
++    DEEPGEMM_PYBIND;
+ }
+ #endif
+diff --git a/op_tests/test_deepgemm.py b/op_tests/test_deepgemm.py
+new file mode 100644
+index 0000000000..26bb24fbf9
+--- /dev/null
++++ b/op_tests/test_deepgemm.py
+@@ -0,0 +1,211 @@
++# SPDX-License-Identifier: MIT
++# Copyright (C) 2025, Advanced Micro Devices, Inc. All rights reserved.
++
++import torch
++import itertools
++import random
++import aiter
++from aiter import dtypes
++from aiter.ops.shuffle import shuffle_weight
++from aiter.test_common import checkAllclose, benchmark, run_perftest
++from aiter.jit.utils.chip_info import get_gfx
++from aiter import deepgemm
++import pandas as pd
++import argparse
++
++# pd.set_option('display.max_rows', 200)
++# pd.set_option('display.max_columns', 100)
++# pd.set_option('display.width', 1000)
++TEST_NUM_ITERS = 100
++
++
++# @perftest(num_iters=TEST_NUM_ITERS)
++def run_torch(x, weight, x_scale, w_scale, dtype=dtypes.bf16):
++    if x_scale is not None:
++        x = x.to(dtypes.fp32) * x_scale
++    if w_scale is not None:
++        weight = weight.to(dtypes.fp32) * w_scale
++
++    out = torch.einsum("gmk,gnk->gmn", x, weight).to(dtype)
++
++    return out.to(dtype)
++
++
++@benchmark()
++def test_deepgemm(
++    num_groups: int,
++    expect_m: int,
++    k: int,
++    n: int,
++    XQDType,
++    WQDType,
++    quant_dtype=aiter.dtypes.fp8,
++    dtypes=torch.bfloat16,
++):
++    # TODO: add support for gfx950
++    if get_gfx() not in ["gfx942"]:
++        return
++    max_m = 256 if expect_m < 128 else 2 * expect_m
++    x = torch.randn((num_groups, max_m, k), device="cuda", dtype=dtypes)
++    weight = torch.randn((num_groups, n, k), device="cuda", dtype=dtypes)
++    out = torch.zeros((num_groups, max_m, n), device="cuda", dtype=dtypes)
++
++    torch_quant = aiter.get_torch_quant(quant_dtype)
++
++    x, x_scale = torch_quant(x, quant_dtype=XQDType)
++    weight, w_scale = torch_quant(weight, quant_dtype=WQDType)
++
++    ref_out = run_torch(x, weight, x_scale, w_scale, dtype=dtypes)
++
++    masked_m = torch.empty((num_groups,), device="cuda", dtype=torch.int)
++    for j in range(num_groups):
++        masked_m[j] = int(expect_m * random.uniform(0.7, 1.3))
++        ref_out[j][masked_m[j] :] = 0.0
++    assert masked_m.amax().item() <= max_m
++
++    weightshuffle = shuffle_weight(weight, layout=(16, 16))
++
++    out, us = run_perftest(
++        deepgemm,
++        x,
++        weightshuffle,
++        out,
++        masked_m,
++        x_scale,
++        w_scale,
++    )
++
++    err = checkAllclose(out, ref_out, msg="")
++
++    tflops = masked_m.sum() * k * n * 2 / us / 1e6
++    size_a = masked_m.sum() * k * x.element_size()
++    size_b = (
++        min(masked_m.sum() / num_groups, 1) * num_groups * k * n * weight.element_size()
++    )
++    size_c = masked_m.sum() * n * out.element_size()
++
++    bandwidth = (size_a + size_b + size_c) / us / 1e3
++
++    return {
++        "us": us,
++        "err": err,
++        "tflops": f"{tflops.item():.2f}TFLOPs",
++        "bandwidth": f"{bandwidth.item():.2f}GB/s",
++    }
++
++
++l_dtype = ["bf16", "fp16"]
++l_num_groups = [
++    16,
++]
++l_expect_m = [
++    1,
++    2,
++    4,
++    8,
++    16,
++    32,
++    64,
++    128,
++    256,
++    512,
++    1024,
++]
++l_dim = [(7168, 4096)]
++l_quant = [
++    (aiter.QuantType.No, None, None),  # a16w16
++    (aiter.QuantType.per_Token, dtypes.fp8, dtypes.fp8),  # a8w8
++]
++
++parser = argparse.ArgumentParser(
++    formatter_class=argparse.RawTextHelpFormatter,
++    description="config input of test",
++)
++
++parser.add_argument(
++    "-d",
++    "--dtype",
++    type=str,
++    choices=l_dtype,
++    nargs="?",
++    const=None,
++    default=None,
++    help="""Data type.
++    e.g.: -d bf16""",
++)
++parser.add_argument(
++    "-num_groups",
++    type=dtypes.str2tuple,
++    nargs="?",
++    const=None,
++    default=None,
++    help="""num of groups.
++    e.g.: -num_groups 128""",
++)
++parser.add_argument(
++    "-expect_m",
++    type=dtypes.str2tuple,
++    nargs="?",
++    const=None,
++    default=None,
++    help="""expect m of each groups.
++    e.g.: -expect_m 1024""",
++)
++parser.add_argument(
++    "-dim",
++    type=dtypes.str2tuple,
++    nargs="?",
++    const=None,
++    default=None,
++    help="""k, n of gemm.
++    e.g.: -dim 6144,4096""",
++)
++
++parser.add_argument(
++    "-q",
++    "--quant",
++    type=int,
++    choices=range(len(l_quant)),
++    help="""select quantization type:
++    0 : aiter.QuantType.No, None, None),  # a16w16
++    1 : aiter.QuantType.per_Token, dtypes.fp8, dtypes.fp8  # a8w8""",
++)
++
++args = parser.parse_args()
++if args.dtype is None:
++    l_dtype = [dtypes.d_dtypes[key] for key in l_dtype]
++else:
++    l_dtype = [dtypes.d_dtypes[args.dtype]]
++
++if args.dim is not None:
++    l_dim = [args.dim]
++
++if args.num_groups is not None:
++    l_num_groups = [args.num_groups]
++
++if args.expect_m is not None:
++    l_expect_m = [args.expect_m]
++
++l_quant = [l_quant[args.quant]] if args.quant is not None else l_quant
++
++for (
++    dtype,
++    num_groups,
++    (quant_type, aq_dtype, wq_dtype),
++    (k, n),
++) in itertools.product(l_dtype, l_num_groups, l_quant, l_dim):
++    df = []
++    for expect_m in l_expect_m:
++        ret = test_deepgemm(
++            num_groups,
++            expect_m,
++            k,
++            n,
++            aq_dtype,
++            wq_dtype,
++            quant_type,
++            dtype,
++        )
++        df.append(ret)
++    df = pd.DataFrame(df)
++    aiter.logger.info(f"summary:\n{df}")

@@ -1,0 +1,1370 @@
+diff --git a/flydsl/src/flydsl/dialects/ext/flir.py b/flydsl/src/flydsl/dialects/ext/flir.py
+index 4199596b0..a6db18649 100644
+--- a/flydsl/src/flydsl/dialects/ext/flir.py
++++ b/flydsl/src/flydsl/dialects/ext/flir.py
+@@ -280,16 +280,49 @@ def __init__(
+         wrap_arith: bool = False,
+     ):
+         self.memref = _unwrap_value(memref_value) if memref_value is not None else None
+-        self.shape = tuple(int(s) for s in shape) if shape is not None else ()
++        # Support dynamic shapes: allow MLIR Values (typically index-typed) in `shape`.
++        # Only cast Python numerics to int; keep MLIR Values as-is.
++        if shape is None:
++            self.shape = ()
++        else:
++            _shape = []
++            for s in shape:
++                # IMPORTANT: keep Python ints as ints (do NOT materialize index constants here),
++                # otherwise static shapes turn into Values and break shape/stride inference.
++                if isinstance(s, int):
++                    _shape.append(int(s))
++                    continue
++                s_u = _unwrap_value(s)
++                if isinstance(s_u, Value):
++                    _shape.append(s_u)
++                else:
++                    _shape.append(int(s_u))
++            self.shape = tuple(_shape)
+         self.rank = len(self.shape)
+         self.wrap_arith = bool(wrap_arith)
+         if strides is None:
++            # If any shape dim is dynamic, caller must provide explicit strides.
++            if any(isinstance(d, Value) for d in self.shape):
++                raise ValueError(
++                    "TensorView(strides=None) requires fully-static `shape` (Python ints). "
++                    "For dynamic shapes, pass explicit `strides=`."
++                )
+             strides = []
+             stride = 1
+             for size in reversed(self.shape):
+                 strides.insert(0, stride)
+                 stride *= int(size)
+-        self.strides = tuple(int(s) for s in strides)
++        _strides = []
++        for s in strides:
++            if isinstance(s, int):
++                _strides.append(int(s))
++                continue
++            s_u = _unwrap_value(s)
++            if isinstance(s_u, Value):
++                _strides.append(s_u)
++            else:
++                _strides.append(int(s_u))
++        self.strides = tuple(_strides)
+         if base_indices is None:
+             base_indices = [0] * self.rank
+         self.base_indices = [_to_index_value(b) for b in base_indices]
+@@ -300,6 +333,8 @@ def __init__(
+ 
+     def numel(self) -> int:
+         """Return total number of elements in the view."""
++        if any(isinstance(d, Value) for d in self.shape):
++            raise ValueError("TensorView.numel() requires fully-static shape (Python ints).")
+         total = 1
+         for size in self.shape:
+             total *= int(size)
+@@ -2057,14 +2092,42 @@ def make_fragment_like(template, element_type: Type = None, loc: Optional[Locati
+     loc = _get_location(loc)
+     if isinstance(template, TensorView):
+         elem_ty = element_type or template.element_type
+-        memref_type = MemRefType.get(template.shape, elem_ty)
++        # Fragments are register/scratch buffers: their shapes must be statically known.
++        shape_ints: list[int] = []
++        for s in template.shape:
++            s_u = _unwrap_value(s)
++            if isinstance(s_u, Value):
++                c = _try_get_constant_index(s_u)
++                if c is None:
++                    raise ValueError(
++                        "make_fragment_like(TensorView) requires a statically-known template.shape; "
++                        "got a non-constant Value."
++                    )
++                shape_ints.append(int(c))
++            else:
++                shape_ints.append(int(s_u))
++        memref_type = MemRefType.get(shape_ints, elem_ty)
+         with ip or InsertionPoint.current:
+             buffer = memref.AllocaOp(memref_type, [], [], loc=loc).result
+         zeros = [0] * template.rank
++        # Prefer static shape/strides for the fragment view.
++        strides_ints: list[int] = []
++        for st in template.strides:
++            st_u = _unwrap_value(st)
++            if isinstance(st_u, Value):
++                c = _try_get_constant_index(st_u)
++                if c is None:
++                    raise ValueError(
++                        "make_fragment_like(TensorView) requires statically-known template.strides; "
++                        "got a non-constant Value."
++                    )
++                strides_ints.append(int(c))
++            else:
++                strides_ints.append(int(st_u))
+         return TensorView(
+             buffer,
+-            template.shape,
+-            strides=template.strides,
++            shape_ints,
++            strides=strides_ints,
+             base_indices=zeros,
+             element_type=elem_ty,
+             wrap_arith=True,
+@@ -2073,13 +2136,26 @@ def make_fragment_like(template, element_type: Type = None, loc: Optional[Locati
+         if element_type is None:
+             raise ValueError("make_fragment_like(tiled_copy, element_type=...) requires element_type")
+         val_shape = template.val_shape
+-        memref_type = MemRefType.get(val_shape, element_type)
++        # TiledCopy shapes should be static; accept Value constants defensively.
++        shape_ints: list[int] = []
++        for s in val_shape:
++            s_u = _unwrap_value(s)
++            if isinstance(s_u, Value):
++                c = _try_get_constant_index(s_u)
++                if c is None:
++                    raise ValueError(
++                        "make_fragment_like(TiledCopy) requires a statically-known val_shape; got a non-constant Value."
++                    )
++                shape_ints.append(int(c))
++            else:
++                shape_ints.append(int(s_u))
++        memref_type = MemRefType.get(shape_ints, element_type)
+         with ip or InsertionPoint.current:
+             buffer = memref.AllocaOp(memref_type, [], [], loc=loc).result
+-        zeros = [0] * len(val_shape)
++        zeros = [0] * len(shape_ints)
+         return TensorView(
+             buffer,
+-            val_shape,
++            shape_ints,
+             strides=None,
+             base_indices=zeros,
+             element_type=element_type,
+@@ -2106,11 +2182,24 @@ def make_rmem_tensor(shape, element_type: Type, loc: Optional[Location] = None,
+     loc = _get_location(loc)
+     if not isinstance(shape, (tuple, list)):
+         raise NotImplementedError("Dynamic shape not supported in make_rmem_tensor yet")
+-    memref_type = MemRefType.get(shape, element_type)
++    # Register memrefs must have statically-known shapes.
++    shape_ints: list[int] = []
++    for s in shape:
++        s_u = _unwrap_value(s)
++        if isinstance(s_u, Value):
++            c = _try_get_constant_index(s_u)
++            if c is None:
++                raise NotImplementedError(
++                    "Dynamic (non-constant) shapes not supported in make_rmem_tensor yet"
++                )
++            shape_ints.append(int(c))
++        else:
++            shape_ints.append(int(s_u))
++    memref_type = MemRefType.get(shape_ints, element_type)
+     with ip or InsertionPoint.current:
+         buffer = memref.AllocaOp(memref_type, [], [], loc=loc).result
+-    zeros = [0] * len(shape)
+-    return TensorView(buffer, tuple(int(s) for s in shape), strides=None, base_indices=zeros, element_type=element_type)
++    zeros = [0] * len(shape_ints)
++    return TensorView(buffer, shape_ints, strides=None, base_indices=zeros, element_type=element_type)
+ 
+ 
+ def make_identity_tensor(shape, loc: Optional[Location] = None, ip: Optional[InsertionPoint] = None):
+@@ -2135,14 +2224,22 @@ def make_identity_tensor(shape, loc: Optional[Location] = None, ip: Optional[Ins
+     if isinstance(shape, TensorView):
+         dims = shape.shape
+     elif isinstance(shape, (tuple, list)):
+-        dims = tuple(int(s) for s in shape)
++        _dims = []
++        for s in shape:
++            s_u = _unwrap_value(s)
++            if isinstance(s_u, Value):
++                _dims.append(s_u)
++            else:
++                _dims.append(int(s_u))
++        dims = tuple(_dims)
+     else:
+         raise ValueError("make_identity_tensor expects a TensorView or shape tuple")
+-    strides = []
+-    stride = 1
++    # Row-major strides, computed in MLIR index arithmetic to support dynamic dims.
++    strides: list[Value] = []
++    stride = _unwrap_value(_to_index_value(1, loc))
+     for size in reversed(dims):
+         strides.insert(0, stride)
+-        stride *= int(size)
++        stride = arith.MulIOp(_unwrap_value(stride), _unwrap_value(_to_index_value(size, loc)), loc=loc).result
+     base = [_to_index_value(0, loc) for _ in dims]
+     return TensorView(None, dims, strides=strides, base_indices=base, element_type=IndexType.get())
+ 
+@@ -2350,6 +2447,12 @@ def make_tensor(memref, layout=None, shape=None, strides=None, loc: Optional[Loc
+     if layout is not None:
+         _unwrap_value(layout)
+     if strides is None:
++        # For dynamic shapes, require explicit strides (can't compute them in Python).
++        if any(isinstance(_unwrap_value(s), Value) for s in shape):
++            raise ValueError(
++                "make_tensor(strides=None) requires fully-static `shape` (Python ints). "
++                "For dynamic shapes, pass explicit `strides=`."
++            )
+         strides = []
+         stride = 1
+         for size in reversed(shape):
+@@ -2366,10 +2469,22 @@ def __init__(self, tensor_view: TensorView, tile_shape):
+         self.tensor = tensor_view
+         self.tile_shape = tuple(int(s) for s in tile_shape)
+         self.rank = tensor_view.rank
+-        self.block_shape = tuple(
+-            max(1, (tensor_view.shape[i] + self.tile_shape[i] - 1) // self.tile_shape[i])
+-            for i in range(self.rank)
+-        )
++        # Support dynamic tensor shapes by computing block_shape using MLIR index arithmetic.
++        # For static shapes (Python ints), this still works via `_to_index_value`.
++        one = _unwrap_value(_to_index_value(1))
++        block_shape = []
++        for i in range(self.rank):
++            dim = _unwrap_value(_to_index_value(tensor_view.shape[i]))
++            tile_i = int(self.tile_shape[i])
++            tile = _unwrap_value(_to_index_value(tile_i))
++            # ceil_div(dim, tile) = (dim + tile - 1) // tile
++            numer = _unwrap_value(_add_index(dim, tile_i - 1))
++            blk = _unwrap_value(arith.DivUIOp(_unwrap_value(numer), _unwrap_value(tile)).result)
++            # Best-effort clamp to >=1 to avoid degenerate zero shapes.
++            cmp = _unwrap_value(arith.CmpIOp(arith.CmpIPredicate.ult, _unwrap_value(blk), _unwrap_value(one)).result)
++            blk = _unwrap_value(arith.SelectOp(_unwrap_value(cmp), _unwrap_value(one), _unwrap_value(blk)).result)
++            block_shape.append(blk)
++        self.block_shape = tuple(block_shape)
+ 
+     def _normalize_indices(self, key):
+         if isinstance(key, tuple):
+@@ -2635,7 +2750,17 @@ def recurse(dim, src_idx, dst_idx, pred_idx):
+                     memref_dialect.store(val, dst_view.memref, store_idx)
+                 return
+ 
+-            extent = int(copy_shape[dim])
++            extent_dim = _unwrap_value(copy_shape[dim])
++            if isinstance(extent_dim, Value):
++                c = _try_get_constant_index(extent_dim)
++                if c is None:
++                    raise ValueError(
++                        "flir.copy requires statically-known copy extents for the scalar recursion path; "
++                        "got a non-constant Value."
++                    )
++                extent = int(c)
++            else:
++                extent = int(extent_dim)
+             
+             # Check for vectorization opportunity on the last dimension
+             if dim == len(copy_shape) - 1 and vector_size > 1 and extent % vector_size == 0:
+@@ -2765,7 +2890,16 @@ def emit_tensor_load(copy_shape, src_view: TensorView, pred_val: Optional[Value]
+         if len(copy_shape) != 1:
+             raise ValueError("copy(load-only) currently supports only 1D shapes")
+ 
+-        extent = int(copy_shape[0])
++        extent0 = _unwrap_value(copy_shape[0])
++        if isinstance(extent0, Value):
++            c = _try_get_constant_index(extent0)
++            if c is None:
++                raise ValueError(
++                    "copy(load-only) requires a statically-known 1D extent; got a non-constant Value."
++                )
++            extent = int(c)
++        else:
++            extent = int(extent0)
+ 
+         vector_size = 1
+         if isinstance(copy_desc, TiledCopy) and copy_desc.copy_atom:
+diff --git a/kernels/layernorm_kernel.py b/kernels/layernorm_kernel.py
+index 60c01e2da..54186d8f0 100644
+--- a/kernels/layernorm_kernel.py
++++ b/kernels/layernorm_kernel.py
+@@ -5,12 +5,13 @@
+ codegen and performance. Only test-only helpers/imports are removed.
+ """
+ 
++from _mlir import ir
++
+ from flydsl.dialects.ext import flir, arith
+ from flydsl.dialects.ext.python_control_flow import range_constexpr
+ from . import reduce as reduce_utils
+ from flydsl.runtime.device import get_rocm_arch as get_hip_arch
+ from flydsl.utils import SmemAllocator
+-from _mlir import ir
+ import _mlir.extras.types as T
+ 
+ 
+@@ -38,6 +39,7 @@ def dtype_to_elem_type(dtype_str: str):
+ 
+ def build_layernorm_module(M: int, N: int, dtype_str: str):
+     arch = get_hip_arch()
++    DYN = ir.ShapedType.get_dynamic_size()
+     # gfx950 supports efficient BF16 pack via v_cvt_pk_bf16_f32.
+     # gfx942 does *not* support it and tends to lower f32->bf16 to heavier sequences,
+     # so we keep the manual pack there for performance.
+@@ -66,10 +68,11 @@ def init_gpu_module(self):
+         @flir.kernel
+         def layernorm_kernel(
+             self: flir.T.i64,
+-            Input: lambda: T.memref(M, N, _state["elem_type"]),
++            Input: lambda: T.memref(DYN, N, _state["elem_type"]),
+             Gamma: lambda: T.memref(N, _state["elem_type"]),
+             Beta: lambda: T.memref(N, _state["elem_type"]),
+-            Output: lambda: T.memref(M, N, _state["elem_type"]),
++            Output: lambda: T.memref(DYN, N, _state["elem_type"]),
++            m_in: lambda: T.index(),
+         ):
+             # Normalize to MLIR index Values early so downstream ops always see `Value`.
+             row = flir.const_index(flir.block_idx("x"))
+@@ -89,8 +92,8 @@ def layernorm_kernel(
+             # FLIR-style tensor views + tiled copies (like elementwise_add_kernel).
+             c0_idx = flir.const_index(0)
+             tile_cols = BLOCK_THREADS * VEC_WIDTH  # python int
+-            tensor_In = flir.make_tensor(Input, shape=(M, N), strides=(N, 1))
+-            tensor_Out = flir.make_tensor(Output, shape=(M, N), strides=(N, 1))
++            tensor_In = flir.make_tensor(Input, shape=(m_in, N), strides=(N, 1))
++            tensor_Out = flir.make_tensor(Output, shape=(m_in, N), strides=(N, 1))
+             tensor_Gamma = flir.make_tensor(Gamma, shape=(N,), strides=(1,))
+             tensor_Beta = flir.make_tensor(Beta, shape=(N,), strides=(1,))
+             gIn = flir.zipped_divide(tensor_In, (1, tile_cols))
+@@ -376,19 +379,20 @@ def layernorm_kernel(
+         @flir.jit
+         def __call__(
+             self: flir.T.i64,
+-            Input: lambda: T.memref(M, N, _state["elem_type"]),
++            Input: lambda: T.memref(DYN, N, _state["elem_type"]),
+             Gamma: lambda: T.memref(N, _state["elem_type"]),
+             Beta: lambda: T.memref(N, _state["elem_type"]),
+-            Output: lambda: T.memref(M, N, _state["elem_type"]),
++            Output: lambda: T.memref(DYN, N, _state["elem_type"]),
++            m_in: lambda: T.index(),
+         ):
+             c1 = (flir.arith_ext.index(1))
+-            gx = (flir.arith_ext.index(M))
++            gx = (m_in)
+             bx = (flir.arith_ext.index(BLOCK_THREADS))
+             flir.gpu_ext.LaunchFuncOp(
+                 ["layernorm_module", "layernorm_kernel"],
+                 grid_size=(gx, c1, c1),
+                 block_size=(bx, c1, c1),
+-                kernel_operands=[Input, Gamma, Beta, Output],
++                kernel_operands=[Input, Gamma, Beta, Output, m_in],
+             )
+ 
+     return _LayerNorm()
+diff --git a/kernels/preshuffle_gemm.py b/kernels/preshuffle_gemm.py
+index fe4e8efda..e1fc077dc 100644
+--- a/kernels/preshuffle_gemm.py
++++ b/kernels/preshuffle_gemm.py
+@@ -11,6 +11,8 @@
+ - `ck_v1_single_lds`: CK-like Intrawave + bpreshuffle v1 spirit (single LDS buffer for A)
+ """
+ 
++import os
++
+ import flydsl
+ from flydsl.dialects.ext import flir
+ from flydsl.dialects.ext.python_control_flow import range_constexpr
+@@ -195,11 +197,13 @@ def kernel_gemm(
+                 else None
+             )
+ 
+-            a_rsrc = buffer_ops.create_buffer_resource(arg_a)
+-            b_rsrc = buffer_ops.create_buffer_resource(arg_b)
+-            c_rsrc = buffer_ops.create_buffer_resource(arg_c)
+-            scale_a_rsrc = buffer_ops.create_buffer_resource(arg_scale_a)
+-            scale_b_rsrc = buffer_ops.create_buffer_resource(arg_scale_b)
++            # Note: We assume N is aligned (no N-tail support in this kernel).
++            a_rsrc = buffer_ops.create_buffer_resource(arg_a, max_size=False)
++            c_rsrc = buffer_ops.create_buffer_resource(arg_c, max_size=False)
++            scale_a_rsrc = buffer_ops.create_buffer_resource(arg_scale_a, max_size=False)
++
++            b_rsrc = buffer_ops.create_buffer_resource(arg_b, max_size=True)
++            scale_b_rsrc = buffer_ops.create_buffer_resource(arg_scale_b, max_size=True)
+ 
+             bx_m = bx * tile_m
+             by_n = by * tile_n
+@@ -936,10 +940,13 @@ def __call__(
+             c1 = arith.constant(1, index=True)
+             bdx = arith.constant(256, index=True)
+             # Dynamic launch sizes: avoid baking M/N into the host stub.
+-            # NOTE: This assumes M and N are multiples of tile_m/tile_n (as in current tests).
++            # We support M-tail by launching ceil(M/tile_m) tiles in X and relying on hardware
++            # OOB checking (see max_size=False resources in the kernel). We keep N aligned for perf:
++            # grid.y uses exact division (no N-tail support).
+             tm = arith.constant(tile_m, index=True)
+             tn = arith.constant(tile_n, index=True)
+-            gx = c_m / tm
++            one = arith.constant(1, index=True)
++            gx = (c_m + tm - one) / tm
+             gy = c_n / tn
+             flir.gpu_ext.LaunchFuncOp(
+                 [module_name, "kernel_gemm"],
+diff --git a/kernels/rmsnorm_kernel.py b/kernels/rmsnorm_kernel.py
+index 03851d5aa..caba51b0b 100644
+--- a/kernels/rmsnorm_kernel.py
++++ b/kernels/rmsnorm_kernel.py
+@@ -5,12 +5,13 @@
+ codegen and performance. Only test-only helpers/imports are removed.
+ """
+ 
++from _mlir import ir
++
+ from flydsl.dialects.ext import flir, arith
+ from flydsl.dialects.ext.python_control_flow import range_constexpr
+ from . import reduce as reduce_utils
+ from flydsl.runtime.device import get_rocm_arch as get_hip_arch
+ from flydsl.utils import SmemAllocator
+-from _mlir import ir
+ import _mlir.extras.types as T
+ 
+ 
+@@ -39,6 +40,7 @@ def dtype_to_elem_type(dtype_str: str):
+ 
+ def build_rmsnorm_module(M: int, N: int, dtype_str: str):
+     arch = get_hip_arch()
++    DYN = ir.ShapedType.get_dynamic_size()
+     allocator = SmemAllocator(None, arch=arch)
+     RED_SLOTS = max(1, (BLOCK_THREADS + WARP_SIZE - 1) // WARP_SIZE)
+     _state = {}
+@@ -60,9 +62,10 @@ def init_gpu_module(self):
+         @flir.kernel
+         def rmsnorm_kernel(
+             self: flir.T.i64,
+-            Input: lambda: T.memref(M, N, _state["elem_type"]),
++            Input: lambda: T.memref(DYN, N, _state["elem_type"]),
+             Gamma: lambda: T.memref(N, _state["elem_type"]),
+-            Output: lambda: T.memref(M, N, _state["elem_type"]),
++            Output: lambda: T.memref(DYN, N, _state["elem_type"]),
++            m_in: lambda: T.index(),
+         ):
+             # Normalize to MLIR index Values early so downstream ops always see `Value`.
+             row = flir.const_index(flir.block_idx("x"))
+@@ -82,8 +85,8 @@ def rmsnorm_kernel(
+             # FLir-style tensor views + tiled copies (like elementwise_add_kernel).
+             c0_idx = flir.const_index(0)
+             tile_cols = BLOCK_THREADS * VEC_WIDTH  # python int
+-            tensor_In = flir.make_tensor(Input, shape=(M, N), strides=(N, 1))
+-            tensor_Out = flir.make_tensor(Output, shape=(M, N), strides=(N, 1))
++            tensor_In = flir.make_tensor(Input, shape=(m_in, N), strides=(N, 1))
++            tensor_Out = flir.make_tensor(Output, shape=(m_in, N), strides=(N, 1))
+             tensor_Gamma = flir.make_tensor(Gamma, shape=(N,), strides=(1,))
+             tensor_S = flir.make_tensor(s_row, shape=(1, N), strides=(N, 1))
+             gIn = flir.zipped_divide(tensor_In, (1, tile_cols))
+@@ -298,18 +301,19 @@ def rmsnorm_kernel(
+         @flir.jit
+         def __call__(
+             self: flir.T.i64,
+-            Input: lambda: T.memref(M, N, _state["elem_type"]),
++            Input: lambda: T.memref(DYN, N, _state["elem_type"]),
+             Gamma: lambda: T.memref(N, _state["elem_type"]),
+-            Output: lambda: T.memref(M, N, _state["elem_type"]),
++            Output: lambda: T.memref(DYN, N, _state["elem_type"]),
++            m_in: lambda: T.index(),
+         ):
+             c1 = arith.as_value(flir.arith_ext.index(1))
+-            gx = arith.as_value(flir.arith_ext.index(M))
++            gx = arith.as_value(m_in)
+             bx = arith.as_value(flir.arith_ext.index(BLOCK_THREADS))
+             flir.gpu_ext.LaunchFuncOp(
+                 ["rmsnorm_module", "rmsnorm_kernel"],
+                 grid_size=(gx, c1, c1),
+                 block_size=(bx, c1, c1),
+-                kernel_operands=[Input, Gamma, Output],
++                kernel_operands=[Input, Gamma, Output, m_in],
+             )
+ 
+     return _RMSNorm()
+diff --git a/kernels/softmax_kernel.py b/kernels/softmax_kernel.py
+index c209b82bf..bd831e78e 100644
+--- a/kernels/softmax_kernel.py
++++ b/kernels/softmax_kernel.py
+@@ -26,6 +26,7 @@ def next_power_of_2(x):
+ 
+ def build_softmax_module(M, N, dtype_str="f32"):
+     gpu_arch = get_hip_arch()
++    DYN = ir.ShapedType.get_dynamic_size()
+ 
+     # Kernel Config
+     # Adaptive Block Size
+@@ -86,8 +87,9 @@ def init_gpu_module(self):
+         @flir.kernel
+         def softmax_kernel(
+             self: flir.T.i64,
+-            A: lambda: T.memref(M, N, _state["elem_type"]),
+-            C: lambda: T.memref(M, N, _state["elem_type"]),
++            A: lambda: T.memref(DYN, N, _state["elem_type"]),
++            C: lambda: T.memref(DYN, N, _state["elem_type"]),
++            m_in: lambda: T.index(),
+         ):
+             row = flir.const_index(flir.block_idx("x"))
+             tid = flir.const_index(flir.thread_idx("x"))
+@@ -101,8 +103,8 @@ def softmax_kernel(
+             # Rocir-style: tensor views + tiled copies (like elementwise_add_kernel).
+             c0_idx = flir.const_index(0)
+             tile_cols = BLOCK_SIZE * VEC_WIDTH  # python int
+-            tensor_A = flir.make_tensor(A, shape=(M, N), strides=(N, 1))
+-            tensor_C = flir.make_tensor(C, shape=(M, N), strides=(N, 1))
++            tensor_A = flir.make_tensor(A, shape=(m_in, N), strides=(N, 1))
++            tensor_C = flir.make_tensor(C, shape=(m_in, N), strides=(N, 1))
+             s_red_tv = flir.make_tensor(s_red, shape=(RED_SLOTS,), strides=(1,))
+             gA = flir.zipped_divide(tensor_A, (1, tile_cols))
+             gC = flir.zipped_divide(tensor_C, (1, tile_cols))
+@@ -391,17 +393,18 @@ def softmax_kernel(
+         @flir.jit
+         def __call__(
+             self: flir.T.i64,
+-            A: lambda: T.memref(M, N, _state["elem_type"]),
+-            C: lambda: T.memref(M, N, _state["elem_type"]),
++            A: lambda: T.memref(DYN, N, _state["elem_type"]),
++            C: lambda: T.memref(DYN, N, _state["elem_type"]),
++            m_in: lambda: T.index(),
+         ):
+             c1 = arith.as_value(flir.arith_ext.index(1))
+-            gx = arith.as_value(flir.arith_ext.index(M))
++            gx = arith.as_value(m_in)
+             bx = arith.as_value(flir.arith_ext.index(BLOCK_SIZE))
+             flir.gpu_ext.LaunchFuncOp(
+                 [self.GPU_MODULE_NAME, "softmax_kernel"],
+                 grid_size=(gx, c1, c1),
+                 block_size=(bx, c1, c1),
+-                kernel_operands=[A, C],
++                kernel_operands=[A, C, m_in],
+             )
+ 
+     return _Softmax()
+diff --git a/tests/kernels/benchmark_common.py b/tests/kernels/benchmark_common.py
+index d47bb49a2..80557fb69 100644
+--- a/tests/kernels/benchmark_common.py
++++ b/tests/kernels/benchmark_common.py
+@@ -157,30 +157,32 @@ def _bench_flydsl_torch(*, op: str, M: int, N: int, dtype: str, warmup: int, ite
+ 
+     if op == "softmax":
+         from kernels.softmax_kernel import build_softmax_module
+-        m = build_softmax_module(M, N, dtype)
++        # M is runtime; module construction uses a dummy M.
++        # `flydsl.compile()` already has its own cache.
++        m = build_softmax_module(1, N, dtype)
+         exe = flydsl.compile(m)
+         x = torch.randn((M, N), device="cuda", dtype=torch_dtype)
+         y = torch.empty((M, N), device="cuda", dtype=torch_dtype)
+-        return bench_gpu_us_torch(lambda: exe(x, y), warmup=warmup, iters=iters)
++        return bench_gpu_us_torch(lambda: exe(x, y, M), warmup=warmup, iters=iters)
+ 
+     if op == "layernorm":
+         from kernels.layernorm_kernel import build_layernorm_module
+-        m = build_layernorm_module(M, N, dtype)
++        m = build_layernorm_module(1, N, dtype)
+         exe = flydsl.compile(m)
+         x = torch.randn((M, N), device="cuda", dtype=torch_dtype)
+         gamma = torch.randn((N,), device="cuda", dtype=torch_dtype)
+         beta = torch.randn((N,), device="cuda", dtype=torch_dtype)
+         y = torch.empty((M, N), device="cuda", dtype=torch_dtype)
+-        return bench_gpu_us_torch(lambda: exe(x, gamma, beta, y), warmup=warmup, iters=iters)
++        return bench_gpu_us_torch(lambda: exe(x, gamma, beta, y, M), warmup=warmup, iters=iters)
+ 
+     if op == "rmsnorm":
+         from kernels.rmsnorm_kernel import build_rmsnorm_module
+-        m = build_rmsnorm_module(M, N, dtype)
++        m = build_rmsnorm_module(1, N, dtype)
+         exe = flydsl.compile(m)
+         x = torch.randn((M, N), device="cuda", dtype=torch_dtype)
+         gamma = torch.randn((N,), device="cuda", dtype=torch_dtype)
+         y = torch.empty((M, N), device="cuda", dtype=torch_dtype)
+-        return bench_gpu_us_torch(lambda: exe(x, gamma, y), warmup=warmup, iters=iters)
++        return bench_gpu_us_torch(lambda: exe(x, gamma, y, M), warmup=warmup, iters=iters)
+ 
+     raise ValueError(f"unknown op: {op}")
+ 
+diff --git a/tests/kernels/test_eltwise_add.py b/tests/kernels/test_eltwise_add.py
+index a1fe1b2a6..6f4f3a069 100644
+--- a/tests/kernels/test_eltwise_add.py
++++ b/tests/kernels/test_eltwise_add.py
+@@ -38,17 +38,17 @@
+ VAL_M, VAL_N = 4, 4
+ COPY_VEC = 8
+ 
+-def create_elementwise_add_kernel(M: int, N: int, dtype=F32Type):
++def create_elementwise_add_kernel(N: int, dtype=F32Type):
+     """Create elementwise addition kernel demonstrating FLIR API.
+     
+     Args:
+-        M, N: Tensor dimensions
++        N: Compile-time constant leading dimension (row stride)
+         dtype: Element type
+         
+     Returns:
+         Compiled kernel module
+     """
+-    print(f"\n[FLIR INFO] Creating elementwise add kernel for {M}x{N}")
++    print(f"\n[FLIR INFO] Creating elementwise add kernel (dynamic M, static N={N})")
+     print(f"[FLIR INFO] Element type: {dtype}")
+ 
+     # NOTE: Kernel operands in the lowered module use dynamic memref types.
+@@ -65,6 +65,7 @@ def elementwise_add_kernel(
+             A: lambda: T.memref(S, S, dtype.get()),
+             B: lambda: T.memref(S, S, dtype.get()),
+             C: lambda: T.memref(S, S, dtype.get()),
++            m_in: lambda: T.index(),
+         ):
+             # ===== Step 1: Thread and Block IDs =====
+             tid_x = flir.thread_idx("x")
+@@ -111,9 +112,12 @@ def elementwise_add_kernel(
+                 val_shape=(VAL_M, VAL_N),
+             )
+ 
+-            tensor_A = flir.make_tensor(A, shape=(M, N), strides=(N, 1))
+-            tensor_B = flir.make_tensor(B, shape=(M, N), strides=(N, 1))
+-            tensor_C = flir.make_tensor(C, shape=(M, N), strides=(N, 1))
++            # Strides must be compile-time constants because downstream helpers like
++            # `make_fragment_like(TensorView)` require statically-known template.strides.
++            # This means the kernel is specialized on the leading dimension `N`.
++            tensor_A = flir.make_tensor(A, shape=(m_in, N), strides=(N, 1))
++            tensor_B = flir.make_tensor(B, shape=(m_in, N), strides=(N, 1))
++            tensor_C = flir.make_tensor(C, shape=(m_in, N), strides=(N, 1))
+ 
+             TILE_M = THR_M * VAL_M
+             TILE_N = THR_N * VAL_N
+@@ -121,7 +125,7 @@ def elementwise_add_kernel(
+             gA = flir.zipped_divide(tensor_A, tile_shape)
+             gB = flir.zipped_divide(tensor_B, tile_shape)
+             gC = flir.zipped_divide(tensor_C, tile_shape)
+-            idC = flir.make_identity_tensor((M, N))
++            idC = flir.make_identity_tensor((m_in, N))
+             cC = flir.zipped_divide(idC, tile_shape)
+ 
+             blk_coord = (blk_coord_y, blk_coord_x)
+@@ -150,7 +154,7 @@ def elementwise_add_kernel(
+             for linear in range_constexpr(total_vals):
+                 lin_idx = flir.const_index(linear)
+                 coords = thrCrd.coords_from_linear(lin_idx)
+-                pred_val = flir.elem_less(coords, (M, N))
++                pred_val = flir.elem_less(coords, (m_in, N))
+                 pred_offsets = tuple(frgPred.offsets_from_linear(lin_idx))
+                 frgPred[pred_offsets] = pred_val
+ 
+@@ -175,19 +179,20 @@ def __call__(
+             A: lambda: T.memref(S, S, dtype.get()),
+             B: lambda: T.memref(S, S, dtype.get()),
+             C: lambda: T.memref(S, S, dtype.get()),
++            m_in: lambda: T.index(),
+         ):
+             c1 = Index(1)
+             tile_m = THR_M * VAL_M
+             tile_n = THR_N * VAL_N
+-            gx = Index((N + tile_n - 1) // tile_n)
+-            gy = Index((M + tile_m - 1) // tile_m)
++            gx = (Index(N) + Index(tile_n) - c1) // Index(tile_n)
++            gy = (m_in + Index(tile_m) - c1) // Index(tile_m)
+             bdx = Index(THR_N)
+             bdy = Index(THR_M)
+             flir.gpu_ext.LaunchFuncOp(
+                 ["elementwise_kernels", "elementwise_add_kernel"],
+                 grid_size=(gx, gy, c1),
+                 block_size=(bdx, bdy, c1),
+-                kernel_operands=[A, B, C],
++                kernel_operands=[A, B, C, m_in],
+             )
+ 
+     print("[FLIR INFO] Generated MLIR module")
+@@ -202,30 +207,6 @@ def __call__(
+     # (5120, 4000),
+ ]
+ 
+-# Compute Max Dims for shared kernel
+-MAX_M = max(s[0] for s in TEST_SHAPES)
+-MAX_N = max(s[1] for s in TEST_SHAPES)
+-
+-# Cache compiled kernel executor (singleton)
+-_compiled_kernel_exe = None
+-
+-def get_or_compile_kernel(dtype=F32Type):
+-    """Get or compile the single shared kernel for MAX dimensions."""
+-    global _compiled_kernel_exe
+-    
+-    if _compiled_kernel_exe is None:
+-        print(f"\n[FLIR INFO] Compiling SHARED kernel for max dimensions: {MAX_M}x{MAX_N}")
+-        
+-        # Create kernel with MAX dimensions
+-        m = create_elementwise_add_kernel(MAX_M, MAX_N, dtype)
+-        print(f"[FLIR INFO] Compiling via flydsl.compile...")
+-        _compiled_kernel_exe = flydsl.compile(m)
+-    else:
+-        print(f"[FLIR INFO] Reusing SHARED kernel (max: {MAX_M}x{MAX_N})")
+-    
+-    return _compiled_kernel_exe
+-
+-
+ @pytest.mark.parametrize(
+     ("M", "N"),
+     TEST_SHAPES,
+@@ -240,19 +221,9 @@ def test_compile_and_run(M, N, dtype=F32Type, benchmark=False, iterations=100):
+     print(f"GPU: {get_rocm_arch()}")
+     print("="*80)
+     
+-    # Kernel selection:
+-    # - If the requested MxN fits within TEST_SHAPES' MAX_M/MAX_N, reuse the shared MAX kernel
+-    #   and use padded buffers.
+-    # - If the requested M or N exceeds MAX, compile an exact-shape kernel and skip padding.
+-    use_shared_max_kernel = (M <= MAX_M) and (N <= MAX_N)
+-    if use_shared_max_kernel:
+-        exe = get_or_compile_kernel(dtype)
+-        compile_M, compile_N = MAX_M, MAX_N
+-    else:
+-        print(f"\n[FLIR INFO] Requested shape {M}x{N} exceeds shared max {MAX_M}x{MAX_N}; compiling exact-shape kernel.")
+-        m = create_elementwise_add_kernel(M, N, dtype)
+-        exe = flydsl.compile(m)
+-        compile_M, compile_N = M, N
++    print(f"\n[FLIR INFO] Compiling kernel for dynamic M, static N={N} (may hit compile cache)...")
++    m = create_elementwise_add_kernel(N, dtype)
++    exe = flydsl.compile(m)
+     
+     # Prepare data
+     np.random.seed(42)
+@@ -261,26 +232,10 @@ def test_compile_and_run(M, N, dtype=F32Type, benchmark=False, iterations=100):
+     b_host = np.random.randn(M, N).astype(torch_dtype)
+     expected = a_host + b_host
+     
+-    if use_shared_max_kernel:
+-        # Padded data for shared kernel (must match MAX_M x MAX_N strides)
+-        # The kernel expects buffers of size MAX_M * MAX_N with stride MAX_N
+-        a_padded = np.zeros((MAX_M, MAX_N), dtype=torch_dtype)
+-        b_padded = np.zeros((MAX_M, MAX_N), dtype=torch_dtype)
+-        c_padded = np.zeros((MAX_M, MAX_N), dtype=torch_dtype)
+-        
+-        a_padded[:M, :N] = a_host
+-        b_padded[:M, :N] = b_host
+-        
+-        # Device tensors (full MAX size)
+-        t_dtype = torch.float32 if dtype == F32Type else torch.float16
+-        A = torch.tensor(a_padded, device="cuda", dtype=t_dtype)
+-        B = torch.tensor(b_padded, device="cuda", dtype=t_dtype)
+-        C = torch.empty((MAX_M, MAX_N), device="cuda", dtype=t_dtype)
+-    else:
+-        t_dtype = torch.float32 if dtype == F32Type else torch.float16
+-        A = torch.tensor(a_host, device="cuda", dtype=t_dtype)
+-        B = torch.tensor(b_host, device="cuda", dtype=t_dtype)
+-        C = torch.empty((M, N), device="cuda", dtype=t_dtype)
++    t_dtype = torch.float32 if dtype == F32Type else torch.float16
++    A = torch.tensor(a_host, device="cuda", dtype=t_dtype)
++    B = torch.tensor(b_host, device="cuda", dtype=t_dtype)
++    C = torch.empty((M, N), device="cuda", dtype=t_dtype)
+     
+     # Launch configuration (must match kernel tiling)
+     # - blockDim should provide exactly THR_M*THR_N threads (tidx in [0, THR_M*THR_N))
+@@ -292,18 +247,15 @@ def test_compile_and_run(M, N, dtype=F32Type, benchmark=False, iterations=100):
+     grid_y = (M + TILE_M - 1) // TILE_M
+     
+     print(f"\n[FLIR INFO] Launch configuration:")
+-    kernel_tag = f"{compile_M}x{compile_N}"
++    kernel_tag = f"{M}x{N}"
+     print(f"  Grid: ({grid_x}, {grid_y}, 1) [Tiles: {TILE_M}x{TILE_N}, kernel={kernel_tag}]")
+     print(f"  Block: ({BLOCK_X}, {BLOCK_Y}, 1)")
+     
+     # Launch kernel via executor
+-    exe(A, B, C)
++    exe(A, B, C, M)
+     torch.cuda.synchronize()
+     
+-    if use_shared_max_kernel:
+-        c_host = C[:M, :N].cpu().numpy()
+-    else:
+-        c_host = C.cpu().numpy()
++    c_host = C.cpu().numpy()
+     
+     # Verify results
+     error = np.max(np.abs(c_host - expected))
+@@ -318,7 +270,7 @@ def test_compile_and_run(M, N, dtype=F32Type, benchmark=False, iterations=100):
+         print(f"\n[FLIR INFO] Running benchmark via run_perftest ({iterations} iterations)...")
+ 
+         def kernel_launch():
+-            exe(A, B, C)
++            exe(A, B, C, M, N)
+ 
+         # run_perftest returns (data, avg_us)
+         _, avg_us = run_perftest(kernel_launch, num_iters=iterations, num_warmup=10)
+@@ -359,19 +311,19 @@ def kernel_launch():
+     args = parser.parse_args()
+     
+     if args.run_all_shapes:
+-        # Run all shapes to demonstrate kernel caching
++        # Run all shapes to demonstrate compile caching behavior (if enabled).
+         print("\n" + "="*80)
+-        print("Running all test shapes (demonstrates kernel caching)")
++        print("Running all test shapes (demonstrates compile caching)")
+         print("="*80)
+         for M, N in TEST_SHAPES:
+             print(f"\n--- Testing shape {M}x{N} (1st run) ---")
+             test_compile_and_run(M, N, dtype=F32Type, benchmark=False)
+             
+-            # Run again to show kernel is reused
+-            print(f"\n--- Testing shape {M}x{N} (2nd run - should reuse kernel) ---")
++            # Run again: flydsl.compile may hit its cache and avoid redoing heavy work.
++            print(f"\n--- Testing shape {M}x{N} (2nd run - should hit compile cache) ---")
+             test_compile_and_run(M, N, dtype=F32Type, benchmark=False)
+         
+-        print("\nPASS - All shapes tested with kernel caching!")
++        print("\nPASS - All shapes tested with compile caching!")
+     else:
+         test_compile_and_run(
+             args.M, args.N,
+diff --git a/tests/kernels/test_gpu_layout.py b/tests/kernels/test_gpu_layout.py
+index bff09564a..703eb379e 100644
+--- a/tests/kernels/test_gpu_layout.py
++++ b/tests/kernels/test_gpu_layout.py
+@@ -7,21 +7,24 @@
+ import sys
+ 
+ from flydsl.compiler.pipeline import Pipeline, run_pipeline
+-from flydsl.dialects.ext import flir, memref
+-from flydsl.dialects.ext.arith import Index
++from flydsl.dialects.ext import flir, memref, arith
+ import _mlir.extras.types as T
++from _mlir import ir
+ 
+ 
+ def test_layout_based_transpose():
+     """Matrix transpose using flir layout algebra (compilation smoke test)."""
+     M, N = 32, 64
++    S = ir.ShapedType.get_dynamic_size()
+ 
+     class _Transpose(flir.MlirModule):
+         @flir.kernel
+         def transpose_layout(
+             self: flir.T.i64,
+-            Input: lambda: T.memref(M, N, T.f32()),
+-            Output: lambda: T.memref(N, M, T.f32()),
++            Input: lambda: T.memref(S, S, T.f32()),
++            Output: lambda: T.memref(S, S, T.f32()),
++            m_in: lambda: T.index(),
++            n_in: lambda: T.index(),
+         ):
+             bx, by = flir.block_idx("x"), flir.block_idx("y")
+             tx, ty = flir.thread_idx("x"), flir.thread_idx("y")
+@@ -30,20 +33,20 @@ def transpose_layout(
+             row = (by * bdy + ty)
+             col = (bx * bdx + tx)
+ 
+-            M_c, N_c = Index(M), Index(N)
+-            one = Index(1)
++            M_c, N_c = arith.ArithValue(m_in), arith.ArithValue(n_in)
++            one = arith.index(1)
+             input_layout = flir.make_layout(
+-                flir.make_shape(M_c, N_c),
+-                flir.make_stride(N_c, one),
++                flir.make_shape(arith.as_value(M_c), arith.as_value(N_c)),
++                flir.make_stride(arith.as_value(N_c), one),
+             )
+             output_layout = flir.make_layout(
+-                flir.make_shape(N_c, M_c),
+-                flir.make_stride(M_c, one),
++                flir.make_shape(arith.as_value(N_c), arith.as_value(M_c)),
++                flir.make_stride(arith.as_value(M_c), one),
+             )
+             _ = input_layout
+             _ = output_layout
+ 
+-            valid = (row < M_c) & (col < N_c)
++            valid = (arith.ArithValue(row) < M_c) & (arith.ArithValue(col) < N_c)
+             if valid:
+                 val = memref.load(Input, [row, col])
+                 memref.store(val, Output, [col, row])
+@@ -51,18 +54,22 @@ def transpose_layout(
+         @flir.jit
+         def __call__(
+             self: flir.T.i64,
+-            Input: lambda: T.memref(M, N, T.f32()),
+-            Output: lambda: T.memref(N, M, T.f32()),
++            Input: lambda: T.memref(S, S, T.f32()),
++            Output: lambda: T.memref(S, S, T.f32()),
++            m_in: lambda: T.index(),
++            n_in: lambda: T.index(),
+         ):
+-            c1 = Index(1)
+-            blk = Index(16)
+-            gx = Index((N + 15) // 16)
+-            gy = Index((M + 15) // 16)
++            c1 = arith.index(1)
++            blk = arith.index(16)
++            n_c = arith.ArithValue(n_in)
++            m_c = arith.ArithValue(m_in)
++            gx = arith.as_value((n_c + arith.index(15)) // blk)
++            gy = arith.as_value((m_c + arith.index(15)) // blk)
+             flir.gpu_ext.LaunchFuncOp(
+                 ["kernels", "transpose_layout"],
+                 grid_size=(gx, gy, c1),
+                 block_size=(blk, blk, c1),
+-                kernel_operands=[Input, Output],
++                kernel_operands=[Input, Output, m_in, n_in],
+             )
+ 
+     m = _Transpose()
+@@ -90,10 +97,10 @@ def copy_with_layout(
+             row = (by * bdy + ty)
+             col = (bx * bdx + tx)
+ 
+-            M_c, N_c = Index(M), Index(N)
+-            in_stride = Index(in_stride_val)
+-            out_stride = Index(out_stride_val)
+-            one = Index(1)
++            M_c, N_c = arith.index(M), arith.index(N)
++            in_stride = arith.index(in_stride_val)
++            out_stride = arith.index(out_stride_val)
++            one = arith.index(1)
+ 
+             in_layout = flir.make_layout(
+                 flir.make_shape(M_c, N_c),
+@@ -119,10 +126,10 @@ def __call__(
+             Input: lambda: T.memref(M * in_stride_val, T.f32()),
+             Output: lambda: T.memref(M * out_stride_val, T.f32()),
+         ):
+-            c1 = Index(1)
+-            blk = Index(16)
+-            gx = Index((N + 15) // 16)
+-            gy = Index((M + 15) // 16)
++            c1 = arith.index(1)
++            blk = arith.index(16)
++            gx = arith.index((N + 15) // 16)
++            gy = arith.index((M + 15) // 16)
+             flir.gpu_ext.LaunchFuncOp(
+                 ["kernels", "copy_with_layout"],
+                 grid_size=(gx, gy, c1),
+diff --git a/tests/kernels/test_gpu_rocdsl.py b/tests/kernels/test_gpu_rocdsl.py
+index de0aa69dd..1af5f31d1 100644
+--- a/tests/kernels/test_gpu_rocdsl.py
++++ b/tests/kernels/test_gpu_rocdsl.py
+@@ -63,13 +63,16 @@ def __call__(
+ 
+ def test_matrix_transpose_flir_layout_emits():
+     M, N = 32, 64
++    S = ir.ShapedType.get_dynamic_size()
+ 
+     class _Transpose(flir.MlirModule):
+         @flir.kernel
+         def matrixTranspose(
+             self: flir.T.i64,
+-            A: lambda: T.memref(M, N, T.f32()),
+-            B: lambda: T.memref(N, M, T.f32()),
++            A: lambda: T.memref(S, S, T.f32()),
++            B: lambda: T.memref(S, S, T.f32()),
++            m_in: lambda: T.index(),
++            n_in: lambda: T.index(),
+         ):
+             bx = flir.block_idx("x")
+             by = flir.block_idx("y")
+@@ -80,8 +83,11 @@ def matrixTranspose(
+             row = (by * tile + ty)
+             col = (bx * tile + tx)
+ 
+-            a_layout = flir.make_layout(flir.make_shape(M, N), flir.make_stride(N, 1))
+-            b_layout = flir.make_layout(flir.make_shape(N, M), flir.make_stride(M, 1))
++            m_c = arith.ArithValue(m_in)
++            n_c = arith.ArithValue(n_in)
++            one = arith.index(1)
++            a_layout = flir.make_layout(flir.make_shape(arith.as_value(m_c), arith.as_value(n_c)), flir.make_stride(arith.as_value(n_c), one))
++            b_layout = flir.make_layout(flir.make_shape(arith.as_value(n_c), arith.as_value(m_c)), flir.make_stride(arith.as_value(m_c), one))
+             _ = a_layout
+             _ = b_layout
+ 
+@@ -94,24 +100,30 @@ def matrixTranspose(
+             # We still emit flir.crd2idx above to exercise layout lowering.
+             _ = a_idx
+             _ = b_idx
+-            a_val = memref.load(A, [row, col])
+-            memref.store(a_val, B, [col, row])
++            valid = (arith.ArithValue(row) < m_c) & (arith.ArithValue(col) < n_c)
++            if valid:
++                a_val = memref.load(A, [row, col])
++                memref.store(a_val, B, [col, row])
+ 
+         @flir.jit
+         def __call__(
+             self: flir.T.i64,
+-            A: lambda: T.memref(M, N, T.f32()),
+-            B: lambda: T.memref(N, M, T.f32()),
++            A: lambda: T.memref(S, S, T.f32()),
++            B: lambda: T.memref(S, S, T.f32()),
++            m_in: lambda: T.index(),
++            n_in: lambda: T.index(),
+         ):
+             c1 = arith.index(1)
+             blk = arith.index(16)
+-            gx = arith.index((N + 15) // 16)
+-            gy = arith.index((M + 15) // 16)
++            n_c = arith.ArithValue(n_in)
++            m_c = arith.ArithValue(m_in)
++            gx = arith.as_value((n_c + arith.index(15)) // blk)
++            gy = arith.as_value((m_c + arith.index(15)) // blk)
+             flir.gpu_ext.LaunchFuncOp(
+                 ["kernels", "matrixTranspose"],
+                 grid_size=(gx, gy, c1),
+                 block_size=(blk, blk, c1),
+-                kernel_operands=[A, B],
++                kernel_operands=[A, B, m_in, n_in],
+             )
+ 
+     m = _Transpose()
+@@ -123,14 +135,18 @@ def __call__(
+ 
+ def test_matmul_uses_scf_for_and_flir_layout():
+     M, N, K = 32, 32, 64
++    S = ir.ShapedType.get_dynamic_size()
+ 
+     class _Matmul(flir.MlirModule):
+         @flir.kernel
+         def matmul(
+             self: flir.T.i64,
+-            A: lambda: T.memref(M, K, T.f32()),
+-            B: lambda: T.memref(K, N, T.f32()),
+-            C: lambda: T.memref(M, N, T.f32()),
++            A: lambda: T.memref(S, S, T.f32()),
++            B: lambda: T.memref(S, S, T.f32()),
++            C: lambda: T.memref(S, S, T.f32()),
++            m_in: lambda: T.index(),
++            n_in: lambda: T.index(),
++            k_in: lambda: T.index(),
+         ):
+             bx = flir.block_idx("x")
+             by = flir.block_idx("y")
+@@ -141,20 +157,20 @@ def matmul(
+             row = (by * tile + ty)
+             col = (bx * tile + tx)
+ 
+-            m_c = arith.index(M)
+-            n_c = arith.index(N)
+-            k_c = arith.index(K)
++            m_c = arith.ArithValue(m_in)
++            n_c = arith.ArithValue(n_in)
++            k_c = arith.ArithValue(k_in)
+             one = arith.index(1)
+ 
+-            c_layout = flir.make_layout(flir.make_shape(m_c, n_c), flir.make_stride(n_c, one))
++            c_layout = flir.make_layout(flir.make_shape(arith.as_value(m_c), arith.as_value(n_c)), flir.make_stride(arith.as_value(n_c), one))
+             thread_coord = flir.make_coord(row, col)
+             _ = flir.crd2idx(thread_coord, c_layout)
+ 
+-            valid = (row < m_c) & (col < n_c)
++            valid = (arith.ArithValue(row) < m_c) & (arith.ArithValue(col) < n_c)
+             if valid:
+                 sum_val = arith.f32(0.0)
+                 # Python `for` + reassignment is auto-lowered into scf.for with iter_args/yield/results.
+-                for k in range(k_c):
++                for k in range(arith.as_value(k_c)):
+                     a_val = memref.load(A, [row, k])
+                     b_val = memref.load(B, [k, col])
+                     sum_val = sum_val + (a_val * b_val)
+@@ -164,19 +180,24 @@ def matmul(
+         @flir.jit
+         def __call__(
+             self: flir.T.i64,
+-            A: lambda: T.memref(M, K, T.f32()),
+-            B: lambda: T.memref(K, N, T.f32()),
+-            C: lambda: T.memref(M, N, T.f32()),
++            A: lambda: T.memref(S, S, T.f32()),
++            B: lambda: T.memref(S, S, T.f32()),
++            C: lambda: T.memref(S, S, T.f32()),
++            m_in: lambda: T.index(),
++            n_in: lambda: T.index(),
++            k_in: lambda: T.index(),
+         ):
+             c1 = arith.index(1)
+             blk = arith.index(16)
+-            gx = arith.index((N + 15) // 16)
+-            gy = arith.index((M + 15) // 16)
++            n_c = arith.ArithValue(n_in)
++            m_c = arith.ArithValue(m_in)
++            gx = arith.as_value((n_c + arith.index(15)) // blk)
++            gy = arith.as_value((m_c + arith.index(15)) // blk)
+             flir.gpu_ext.LaunchFuncOp(
+                 ["kernels", "matmul"],
+                 grid_size=(gx, gy, c1),
+                 block_size=(blk, blk, c1),
+-                kernel_operands=[A, B, C],
++                kernel_operands=[A, B, C, m_in, n_in, k_in],
+             )
+ 
+     m = _Matmul()
+diff --git a/tests/kernels/test_gpu_simple.py b/tests/kernels/test_gpu_simple.py
+index 33f975c81..1eac669ab 100644
+--- a/tests/kernels/test_gpu_simple.py
++++ b/tests/kernels/test_gpu_simple.py
+@@ -4,21 +4,25 @@
+ """
+ 
+ from flydsl.compiler.pipeline import Pipeline, run_pipeline
+-from flydsl.dialects.ext import flir, memref
++from flydsl.dialects.ext import flir, memref, arith
++from _mlir import ir
+ import _mlir.extras.types as T
+ 
+ 
+ def test_vector_add():
+     """Vector addition test: C = A + B"""
+     M, N = 32, 64
++    S = ir.ShapedType.get_dynamic_size()
+ 
+     class _VecAdd(flir.MlirModule):
+         @flir.kernel
+         def vecAdd(
+             self: flir.T.i64,
+-            A: lambda: T.memref(M, N, T.f32()),
+-            B: lambda: T.memref(M, N, T.f32()),
+-            C: lambda: T.memref(M, N, T.f32()),
++            A: lambda: T.memref(S, S, T.f32()),
++            B: lambda: T.memref(S, S, T.f32()),
++            C: lambda: T.memref(S, S, T.f32()),
++            m_in: lambda: T.index(),
++            n_in: lambda: T.index(),
+         ):
+             # Get block/thread IDs and dimensions
+             bx, by = flir.block_idx("x"), flir.block_idx("y")
+@@ -29,28 +33,36 @@ def vecAdd(
+             row = (by * bdy + ty)
+             col = (bx * bdx + tx)
+ 
+-            # Vector addition: C[row,col] = A[row,col] + B[row,col]
+-            a = memref.load(A, [row, col])
+-            b = memref.load(B, [row, col])
+-            c = a + b
+-            memref.store(c, C, [row, col])
++            # Vector addition with bounds guard so one compiled kernel can be reused for any M.
++            m_v = arith.ArithValue(m_in)
++            n_v = arith.ArithValue(n_in)
++            valid = (arith.ArithValue(row) < m_v) & (arith.ArithValue(col) < n_v)
++            if valid:
++                a = memref.load(A, [row, col])
++                b = memref.load(B, [row, col])
++                c = a + b
++                memref.store(c, C, [row, col])
+ 
+         @flir.jit
+         def __call__(
+             self: flir.T.i64,
+-            A: lambda: T.memref(M, N, T.f32()),
+-            B: lambda: T.memref(M, N, T.f32()),
+-            C: lambda: T.memref(M, N, T.f32()),
++            A: lambda: T.memref(S, S, T.f32()),
++            B: lambda: T.memref(S, S, T.f32()),
++            C: lambda: T.memref(S, S, T.f32()),
++            m_in: lambda: T.index(),
++            n_in: lambda: T.index(),
+         ):
+-            c1 = flir.arith_ext.index(1)
+-            bx = flir.arith_ext.index(N // 16)
+-            by = flir.arith_ext.index(M // 16)
+-            b16 = flir.arith_ext.index(16)
++            c1 = arith.index(1)
++            b16 = arith.index(16)
++            n_v = arith.ArithValue(n_in)
++            m_v = arith.ArithValue(m_in)
++            bx = arith.as_value((n_v + arith.index(15)) // b16)
++            by = arith.as_value((m_v + arith.index(15)) // b16)
+             flir.gpu_ext.LaunchFuncOp(
+                 ["kernels", "vecAdd"],
+                 grid_size=(bx, by, c1),
+                 block_size=(b16, b16, c1),
+-                kernel_operands=[A, B, C],
++                kernel_operands=[A, B, C, m_in, n_in],
+             )
+ 
+     m = _VecAdd()
+diff --git a/tests/kernels/test_gpu_with_rocir_coords.py b/tests/kernels/test_gpu_with_rocir_coords.py
+index 142894aef..11a5d5c98 100644
+--- a/tests/kernels/test_gpu_with_rocir_coords.py
++++ b/tests/kernels/test_gpu_with_rocir_coords.py
+@@ -37,6 +37,8 @@ class _Coords(flir.MlirModule):
+         def coords_to_linear(
+             self: flir.T.i64,
+             C: lambda: T.memref(S, S, T.i32()),
++            m_in: lambda: T.index(),
++            n_in: lambda: T.index(),
+         ):
+             bx = flir.block_idx("x")
+             by = flir.block_idx("y")
+@@ -48,8 +50,9 @@ def coords_to_linear(
+             row = (by * tile + ty)
+             col = (bx * tile + tx)
+ 
+-            m_c = arith.index(M)
+-            n_c = arith.index(N)
++            # Use runtime sizes so the same compiled kernel can be reused for different M.
++            m_c = arith.ArithValue(m_in)
++            n_c = arith.ArithValue(n_in)
+             one = arith.index(1)
+ 
+             # Create flir layout for output matrix C
+@@ -63,23 +66,30 @@ def coords_to_linear(
+             # Use crd2idx to compute linear index (will be lowered to arith ops)
+             idx = flir.crd2idx(thread_coord, c_layout)
+             idx_i32 = arith.index_cast(T.i32(), idx)
+-            memref.store(idx_i32, C, [row, col])
++            valid = (arith.ArithValue(row) < m_c) & (arith.ArithValue(col) < n_c)
++            if valid:
++                memref.store(idx_i32, C, [row, col])
+ 
+         @flir.jit
+         def __call__(
+             self: flir.T.i64,
+             C: lambda: T.memref(S, S, T.i32()),
++            m_in: lambda: T.index(),
++            n_in: lambda: T.index(),
+         ):
+             # Wrap the kernel launch inside a host-side function.
+             c1 = arith.index(1)
+             blk = arith.index(16)
+-            gx = arith.index((N + 15) // 16)
+-            gy = arith.index((M + 15) // 16)
++            blk = arith.index(16)
++            n_c = arith.ArithValue(n_in)
++            m_c = arith.ArithValue(m_in)
++            gx = arith.as_value((n_c + arith.index(15)) // blk)
++            gy = arith.as_value((m_c + arith.index(15)) // blk)
+             flir.gpu_ext.LaunchFuncOp(
+                 ["kernels", "coords_to_linear"],
+                 grid_size=(gx, gy, c1),
+                 block_size=(blk, blk, c1),
+-                kernel_operands=[C],
++                kernel_operands=[C, m_in, n_in],
+             )
+ 
+     print("\n Generated MLIR with flir coordinate operations:")
+@@ -98,7 +108,7 @@ def __call__(
+     expected = np.arange(M * N, dtype=np.int32).reshape(M, N)
+     C = torch.empty((M, N), device="cuda", dtype=torch.int32)
+ 
+-    exe(C)
++    exe(C, M, N)
+     torch.cuda.synchronize()
+     c_host = C.cpu().numpy()
+ 
+diff --git a/tests/kernels/test_layernorm.py b/tests/kernels/test_layernorm.py
+index 15a5e2bd3..227c74ef1 100644
+--- a/tests/kernels/test_layernorm.py
++++ b/tests/kernels/test_layernorm.py
+@@ -115,7 +115,7 @@ def run_test(M: int, N: int, dtype: str = "f32"):
+     print("Launching kernel...")
+ 
+     def kernel_launch():
+-        exe(input_dev, gamma_dev, beta_dev, output_dev)
++        exe(input_dev, gamma_dev, beta_dev, output_dev, M)
+ 
+     # One run for correctness visibility, then benchmark via shared harness.
+     kernel_launch()
+diff --git a/tests/kernels/test_preshuffle_gemm.py b/tests/kernels/test_preshuffle_gemm.py
+index 1287591af..bd517eb03 100644
+--- a/tests/kernels/test_preshuffle_gemm.py
++++ b/tests/kernels/test_preshuffle_gemm.py
+@@ -81,7 +81,10 @@ def run_torch(x, weight, x_scale, w_scale, bias=None, dtype=torch.bfloat16):
+     [
+         (16, 5120, 8192, 16, 64, 512), 
+         (5120, 5120, 8320, 64, 256, 128), 
+-        (9728, 8192, 8320, 128, 128, 128)
++        (9728, 8192, 8320, 128, 128, 128),
++        # Tail case: M is not a multiple of tile_m (N stays aligned). Kernel should handle via
++        # OOB-checked A/scaleA/C buffer ops (max_size=False) + ceil_div grid sizing on M.
++        (5133, 5120, 8320, 64, 256, 128),
+     ]
+ )
+ def test_mfma_a8_flir_preshuffle(
+diff --git a/tests/kernels/test_rmsnorm.py b/tests/kernels/test_rmsnorm.py
+index cc8b02543..60a6134c7 100644
+--- a/tests/kernels/test_rmsnorm.py
++++ b/tests/kernels/test_rmsnorm.py
+@@ -107,7 +107,7 @@ def run_test(M: int, N: int, dtype: str = "f32"):
+     print("Launching kernel...")
+ 
+     def kernel_launch():
+-        exe(input_dev, gamma_dev, output_dev)
++        exe(input_dev, gamma_dev, output_dev, M)
+ 
+     # run_perftest returns (data, avg_us)
+     _, avg_us = run_perftest(lambda: (kernel_launch(), torch.cuda.synchronize()), num_iters=BENCH_ITERS, num_warmup=WARMUP_ITERS)
+diff --git a/tests/kernels/test_softmax.py b/tests/kernels/test_softmax.py
+index 26da98cad..6cde31f9e 100644
+--- a/tests/kernels/test_softmax.py
++++ b/tests/kernels/test_softmax.py
+@@ -82,7 +82,7 @@ def run_test(M, N, dtype_str):
+         c_dev = torch.empty((M, N), device="cuda", dtype=DTYPE_BF16)
+     
+     def kernel_launch():
+-        exe(a_dev, c_dev)
++        exe(a_dev, c_dev, M)
+ 
+     # One run for correctness visibility, then benchmark via shared harness.
+     kernel_launch()
+diff --git a/tests/kernels/test_vec_add.py b/tests/kernels/test_vec_add.py
+index 2c940a9b0..5ed8a0189 100644
+--- a/tests/kernels/test_vec_add.py
++++ b/tests/kernels/test_vec_add.py
+@@ -44,7 +44,6 @@ def create_vec_add_kernel(
+     ITERS_PER_THREAD = TILE_SIZE // VEC_WIDTH
+ 
+     gpu_arch = get_rocm_arch()
+-    num_blocks = (size + TILE_ELEMS - 1) // TILE_ELEMS
+     S = ir.ShapedType.get_dynamic_size()
+ 
+     class _VecAdd(flir.MlirModule):
+@@ -57,6 +56,7 @@ def vec_add(
+             A: lambda: T.memref(S, dtype.get()),
+             B: lambda: T.memref(S, dtype.get()),
+             C: lambda: T.memref(S, dtype.get()),
++            n: lambda: T.index(),
+         ):
+             tid_x = flir.thread_idx("x")
+             tid_y = flir.thread_idx("y")
+@@ -92,9 +92,9 @@ def vec_add(
+                 val_shape=(TILE_SIZE,),
+             )
+ 
+-            tensor_A = flir.make_tensor(A, shape=(size,), strides=(1,))
+-            tensor_B = flir.make_tensor(B, shape=(size,), strides=(1,))
+-            tensor_C = flir.make_tensor(C, shape=(size,), strides=(1,))
++            tensor_A = flir.make_tensor(A, shape=(n,), strides=(1,))
++            tensor_B = flir.make_tensor(B, shape=(n,), strides=(1,))
++            tensor_C = flir.make_tensor(C, shape=(n,), strides=(1,))
+ 
+             tile_shape = (TILE_ELEMS,)
+ 
+@@ -102,7 +102,7 @@ def vec_add(
+             gB = flir.zipped_divide(tensor_B, tile_shape)
+             gC = flir.zipped_divide(tensor_C, tile_shape)
+ 
+-            idC = flir.make_identity_tensor((size,))
++            idC = flir.make_identity_tensor((n,))
+             cC = flir.zipped_divide(idC, tile_shape)
+ 
+             blk_coord = (bid_x,)
+@@ -132,7 +132,7 @@ def vec_add(
+             for linear in range(total_vals):
+                 lin_idx = flir.const_index(linear)
+                 coords = thrCrd.coords_from_linear(lin_idx)
+-                pred_val = flir.elem_less(coords, (size,))
++                pred_val = flir.elem_less(coords, (n,))
+                 pred_offsets = tuple(frgPred.offsets_from_linear(lin_idx))
+                 frgPred[pred_offsets] = pred_val
+ 
+@@ -158,15 +158,17 @@ def __call__(
+             A: lambda: T.memref(S, dtype.get()),
+             B: lambda: T.memref(S, dtype.get()),
+             C: lambda: T.memref(S, dtype.get()),
++            n: lambda: T.index(),
+         ):
+             c1 = arith.index(1)
+-            gx = arith.index(num_blocks)
++            c_tile_elems = arith.index(TILE_ELEMS)
++            gx = (n + c_tile_elems - c1) // c_tile_elems
+             bx = arith.index(THREADS_PER_BLOCK)
+             flir.gpu_ext.LaunchFuncOp(
+                 [self.GPU_MODULE_NAME, "vec_add"],
+                 grid_size=(gx, c1, c1),
+                 block_size=(bx, c1, c1),
+-                kernel_operands=[A, B, C],
++                kernel_operands=[A, B, C, n],
+             )
+ 
+     return _VecAdd().module
+@@ -257,7 +259,7 @@ def benchmark_vector_add(tile_size: int = 4):
+     c_dev = torch.empty_like(a_dev)
+ 
+     def kernel_launch():
+-        exe(a_dev, b_dev, c_dev)
++        exe(a_dev, b_dev, c_dev, SIZE)
+         torch.cuda.synchronize()
+ 
+     # Run benchmark

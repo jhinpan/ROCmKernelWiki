@@ -1,0 +1,1366 @@
+diff --git a/aiter/ops/triton/_triton_kernels/fused_fp8_quant.py b/aiter/ops/triton/_triton_kernels/fused_fp8_quant.py
+index 088b1ce415..4622cba837 100644
+--- a/aiter/ops/triton/_triton_kernels/fused_fp8_quant.py
++++ b/aiter/ops/triton/_triton_kernels/fused_fp8_quant.py
+@@ -343,3 +343,251 @@ def _fused_reduce_act_mul_fp8_group_quant(
+         y_scale.to(y_scale_ptr.dtype.element_ty),
+         mask=g_offs < num_bs_cols,
+     )
++
++
++@triton.jit
++def _fused_reduce_rms_fp8_group_quant_kernel(
++    inp1_ptr,
++    weight1_ptr,
++    inp2_ptr,
++    weight2_ptr,
++    inp3_ptr,
++    res1_ptr,
++    out1_fp8_ptr,
++    out1_bs_ptr,
++    out2_ptr,
++    out_res1_ptr,
++    out1_ptr,
++    out3_ptr,
++    eps1,
++    eps2,
++    n_rows,
++    inp1_n_cols,
++    inp2_n_cols,
++    inp3_n_cols,
++    inp1_spk_stride,
++    inp2_spk_stride,
++    inp3_spk_stride,
++    inp1_row_stride,
++    inp2_row_stride,
++    inp3_row_stride,
++    inp1_col_stride,
++    inp2_col_stride,
++    inp3_col_stride,
++    res1_row_stride,
++    res1_col_stride,
++    out1_fp8_row_stride,
++    out1_fp8_col_stride,
++    out1_bs_row_stride,
++    out1_bs_col_stride,
++    out2_row_stride,
++    out2_col_stride,
++    out_res1_row_stride,
++    out_res1_col_stride,
++    out1_row_stride,
++    out1_col_stride,
++    out3_row_stride,
++    out3_col_stride,
++    BLOCK_SIZE_N1: tl.constexpr,
++    BLOCK_SIZE_N2: tl.constexpr,
++    BLOCK_SIZE_N3: tl.constexpr,
++    N_MASK1: tl.constexpr,
++    N_MASK2: tl.constexpr,
++    N_MASK3: tl.constexpr,
++    QUANT_BLOCK_SIZE: tl.constexpr,
++    DTYPE_MAX: tl.constexpr,
++    DTYPE_MIN: tl.constexpr,
++    HAVE_SECOND_INPUT: tl.constexpr,
++    FIRST_INPUT_RES: tl.constexpr,
++    FIRST_INPUT_OUT: tl.constexpr,
++    HAS_SPLITK: tl.constexpr,
++    NUM_SPLITK: tl.constexpr,
++    NUM_SPLITK_POW2: tl.constexpr,
++):
++    m_pid = tl.program_id(0)
++
++    if m_pid < n_rows:
++        n1_offs = tl.arange(0, BLOCK_SIZE_N1)
++        NUM_QUANT_BLOCKS: tl.constexpr = BLOCK_SIZE_N1 // QUANT_BLOCK_SIZE
++
++        if N_MASK1:
++            mask1 = n1_offs < inp1_n_cols
++            other1 = 0.0
++        else:
++            mask1 = None
++            other1 = None
++        if HAS_SPLITK:
++            spk_offs = tl.arange(0, NUM_SPLITK_POW2)
++            if NUM_SPLITK_POW2 != NUM_SPLITK:
++                if N_MASK1:
++                    mask1_in = (spk_offs[:, None] < NUM_SPLITK) & (
++                        n1_offs[None, :] < inp1_n_cols
++                    )
++                else:
++                    mask1_in = spk_offs[:, None] < NUM_SPLITK
++                other1_in = 0.0
++            else:
++                if N_MASK1:
++                    mask1_in = mask1[None, :]
++                else:
++                    mask1_in = mask1
++                other1_in = other1
++
++            inp1 = tl.load(
++                inp1_ptr
++                + spk_offs[:, None] * inp1_spk_stride
++                + m_pid * inp1_row_stride
++                + n1_offs[None, :] * inp1_col_stride,
++                mask=mask1_in,
++                other=other1_in,
++                cache_modifier=".cg",
++            ).to(tl.float32)
++            inp1 = tl.sum(inp1, axis=0)
++        else:
++            inp1 = tl.load(
++                inp1_ptr + m_pid * inp1_row_stride + n1_offs * inp1_col_stride,
++                mask=mask1,
++                other=other1,
++                cache_modifier=".cg",
++            ).to(tl.float32)
++
++        if FIRST_INPUT_RES:
++            res1 = tl.load(
++                res1_ptr + m_pid * res1_row_stride + n1_offs * res1_col_stride,
++                mask=mask1,
++                other=other1,
++                cache_modifier=".cg",
++            ).to(tl.float32)
++            inp1 = inp1 + res1
++
++        w1 = tl.load(weight1_ptr + n1_offs, mask=mask1, other=other1).to(tl.float32)
++
++        norm1 = _rmsmorm_op(inp1, w1, inp1_n_cols, eps1)
++
++        if FIRST_INPUT_OUT:
++            tl.store(
++                out1_ptr + m_pid * out1_row_stride + n1_offs * out1_col_stride,
++                norm1,
++                mask=mask1,
++            )
++
++        out1_fp8, out1_block_scales = _fp8_quant_op(
++            norm1, 1, BLOCK_SIZE_N1, QUANT_BLOCK_SIZE, DTYPE_MAX, DTYPE_MIN
++        )
++        out1_fp8 = tl.ravel(out1_fp8)
++        out1_block_scales = tl.ravel(out1_block_scales)
++
++        # store the results
++        tl.store(
++            out1_fp8_ptr + m_pid * out1_fp8_row_stride + n1_offs * out1_fp8_col_stride,
++            out1_fp8.to(out1_fp8_ptr.dtype.element_ty),
++            mask=mask1,
++        )
++        g_offs = tl.arange(0, NUM_QUANT_BLOCKS)
++        num_bs_cols = (inp1_n_cols + QUANT_BLOCK_SIZE - 1) // QUANT_BLOCK_SIZE
++        tl.store(
++            out1_bs_ptr + m_pid * out1_bs_row_stride + g_offs * out1_bs_col_stride,
++            out1_block_scales.to(out1_bs_ptr.dtype.element_ty),
++            mask=g_offs < num_bs_cols,
++        )
++
++        if FIRST_INPUT_RES:
++            inp1 = inp1.to(out_res1_ptr.dtype.element_ty)
++            tl.store(
++                out_res1_ptr
++                + m_pid * out_res1_row_stride
++                + n1_offs * out_res1_col_stride,
++                inp1,
++                mask=mask1,
++            )
++    elif m_pid < 2 * n_rows:
++        m_pid -= n_rows
++        if HAS_SPLITK:
++            spk_offs = tl.arange(0, NUM_SPLITK_POW2)
++        if HAVE_SECOND_INPUT:
++            n2_offs = tl.arange(0, BLOCK_SIZE_N2)
++            if N_MASK2:
++                mask2 = n2_offs < inp1_n_cols
++                other2 = 0.0
++            else:
++                mask2 = None
++                other2 = None
++            if HAS_SPLITK:
++                if NUM_SPLITK_POW2 != NUM_SPLITK:
++                    if N_MASK2:
++                        mask2_in = (spk_offs[:, None] < NUM_SPLITK) & (
++                            n2_offs[None, :] < inp2_n_cols
++                        )
++                    else:
++                        mask2_in = spk_offs[:, None] < NUM_SPLITK
++                    other2_in = 0.0
++                else:
++                    if N_MASK2:
++                        mask2_in = mask2[None, :]
++                    else:
++                        mask2_in = mask2
++                    other2_in = other2
++                inp2 = tl.load(
++                    inp2_ptr
++                    + spk_offs[:, None] * inp2_spk_stride
++                    + m_pid * inp2_row_stride
++                    + n2_offs[None, :] * inp2_col_stride,
++                    mask=mask2_in,
++                    other=other2_in,
++                    cache_modifier=".cg",
++                ).to(tl.float32)
++                inp2 = tl.sum(inp2, axis=0)
++            else:
++                inp2 = tl.load(
++                    inp2_ptr + m_pid * inp2_row_stride + n2_offs * inp2_col_stride,
++                    mask=mask2,
++                    other=other2,
++                    cache_modifier=".cg",
++                ).to(tl.float32)
++            w2 = tl.load(weight2_ptr + n2_offs, mask=mask2, other=other2).to(tl.float32)
++            norm2 = _rmsmorm_op(inp2, w2, inp2_n_cols, eps2)
++            tl.store(
++                out2_ptr + m_pid * out2_row_stride + n2_offs * out2_col_stride,
++                norm2,
++                mask=mask2,
++            )
++    elif m_pid < 3 * n_rows:
++        m_pid -= 2 * n_rows
++        if HAS_SPLITK:
++            spk_offs = tl.arange(0, NUM_SPLITK_POW2)
++            n3_offs = tl.arange(0, BLOCK_SIZE_N3)
++            if N_MASK3:
++                mask3 = n3_offs < inp3_n_cols
++                other3 = 0.0
++            else:
++                mask3 = None
++                other3 = None
++            if NUM_SPLITK_POW2 != NUM_SPLITK:
++                if N_MASK3:
++                    mask3_in = (spk_offs[:, None] < NUM_SPLITK) & (
++                        n3_offs[None, :] < inp3_n_cols
++                    )
++                else:
++                    mask3_in = spk_offs[:, None] < NUM_SPLITK
++                other3_in = 0.0
++            else:
++                if N_MASK3:
++                    mask3_in = mask3[None, :]
++                else:
++                    mask3_in = mask3
++                other3_in = other3
++            inp3 = tl.load(
++                inp3_ptr
++                + spk_offs[:, None] * inp3_spk_stride
++                + m_pid * inp3_row_stride
++                + n3_offs[None, :] * inp3_col_stride,
++                mask=mask3_in,
++                other=other3_in,
++                cache_modifier=".cg",
++            ).to(tl.float32)
++            inp3 = tl.sum(inp3, axis=0)
++            tl.store(
++                out3_ptr + m_pid * out3_row_stride + n3_offs * out3_col_stride,
++                inp3,
++                mask=mask3,
++            )
+diff --git a/aiter/ops/triton/_triton_kernels/gemm_a16w8_blockscale.py b/aiter/ops/triton/_triton_kernels/gemm_a16w8_blockscale.py
+new file mode 100644
+index 0000000000..4f8d0ddaf3
+--- /dev/null
++++ b/aiter/ops/triton/_triton_kernels/gemm_a16w8_blockscale.py
+@@ -0,0 +1,237 @@
++# SPDX-License-Identifier: MIT
++# Copyright (C) 2024-2025, Advanced Micro Devices, Inc. All rights reserved.
++
++import functools
++import json
++import os
++import triton
++import triton.language as tl
++from aiter.ops.triton._triton_kernels.fused_fp8_quant import _fp8_quant_op
++from aiter.ops.triton.utils._triton.pid_preprocessing import pid_grid, remap_xcd
++import aiter.ops.triton.utils._triton.arch_info as arch_info
++from aiter.ops.triton.utils.core import AITER_TRITON_CONFIGS_PATH
++
++
++@triton.heuristics(
++    {
++        "EVEN_K": lambda args: args["K"] % args["BLOCK_SIZE_K"] == 0,
++        "GRID_MN": lambda args: triton.cdiv(args["M"], args["BLOCK_SIZE_M"])
++        * triton.cdiv(args["N"], args["BLOCK_SIZE_N"]),
++    }
++)
++@triton.jit
++def _gemm_a16w8_blockscale_kernel(
++    # Pointers to matrices
++    a_ptr,
++    b_ptr,
++    c_ptr,
++    b_scale_ptr,
++    # Matrix dimensions
++    M,
++    N,
++    K,
++    # The stride variables represent how much to increase the ptr by when
++    # moving by 1 element in a particular dimension. E.g. `stride_am` is
++    # how much to increase `a_ptr` by to get the element one row down
++    # (A has M rows).
++    stride_am,
++    stride_ak,
++    stride_bk,
++    stride_bn,
++    stride_ck,
++    stride_cm,
++    stride_cn,
++    stride_bscale_k,
++    stride_bscale_n,
++    # Meta-parameters
++    GROUP_K: tl.constexpr,
++    GROUP_N: tl.constexpr,
++    BLOCK_SIZE_M: tl.constexpr,
++    BLOCK_SIZE_N: tl.constexpr,
++    BLOCK_SIZE_K: tl.constexpr,
++    GROUP_SIZE_M: tl.constexpr,
++    NUM_KSPLIT: tl.constexpr,
++    SPLITK_BLOCK_SIZE: tl.constexpr,
++    EVEN_K: tl.constexpr,
++    GRID_MN: tl.constexpr,
++    PREQUANT: tl.constexpr,
++    DTYPE_MAX: tl.constexpr,
++    DTYPE_MIN: tl.constexpr,
++    cache_modifier: tl.constexpr,
++):
++    """
++    Note: this is Triton jited function and not meant to be called directly. Call gemm_a8w8_blockscale function
++    below
++
++    Computes the 8 bit matmul C = A x B using the block-scale quantization approach.
++
++    Key parameters:
++    - A: Matrix A with shape (M, K).
++    - B: Matrix B with shape (K, N).
++    - C: Matrix C with shape (M, N).
++    - A_scale: Scale tensor for A with shape (M, *scale_k).
++    - B_scale: Scale tensor for B with shape (*scale_k, **scale_n).
++
++    *scale_k = (K + GROUP_K - 1) // GROUP_K
++    **scale_n = (N + GROUP_N - 1) // GROUP_N
++    """
++
++    tl.assume(stride_am > 0)
++    tl.assume(stride_ak > 0)
++    tl.assume(stride_bk > 0)
++    tl.assume(stride_bn > 0)
++    tl.assume(stride_ck > 0)
++    tl.assume(stride_cm > 0)
++    tl.assume(stride_cn > 0)
++    tl.assume(stride_bscale_k > 0)
++    tl.assume(stride_bscale_n > 0)
++
++    # -----------------------------------------------------------
++    # Map program ids `pid` to the block of C it should compute.
++    # This is done in a grouped ordering to promote L2 data reuse.
++    pid_unified = tl.program_id(axis=0)
++    pid_k = pid_unified % NUM_KSPLIT
++    pid = pid_unified // NUM_KSPLIT
++    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
++    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
++
++    if NUM_KSPLIT == 1:
++        pid_m, pid_n = pid_grid(pid, num_pid_m, num_pid_n, GROUP_SIZE_M=GROUP_SIZE_M)
++    else:
++        pid_m = pid // num_pid_n
++        pid_n = pid % num_pid_n
++
++    tl.assume(pid_m >= 0)
++    tl.assume(pid_n >= 0)
++    tl.assume(pid_k >= 0)
++
++    if (pid_k * SPLITK_BLOCK_SIZE) < K:
++
++        # SPLITK_BLOCK_SIZE = tl.cdiv(K, NUM_KSPLIT)
++        num_k_iter = tl.cdiv(SPLITK_BLOCK_SIZE, BLOCK_SIZE_K)
++
++        # Create pointers for first block of A and B input matrices
++        offs_k = tl.arange(0, BLOCK_SIZE_K)
++        offs_k_split = pid_k * SPLITK_BLOCK_SIZE + offs_k
++        offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
++        offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
++        a_ptrs = a_ptr + (
++            offs_am[:, None] * stride_am + offs_k_split[None, :] * stride_ak
++        )
++        b_ptrs = b_ptr + (
++            offs_k_split[:, None] * stride_bk + offs_bn[None, :] * stride_bn
++        )
++
++        # Create pointers for the scales
++        offs_ks = (pid_k * SPLITK_BLOCK_SIZE) // GROUP_K
++        offs_bsn = offs_bn // GROUP_N
++        b_scale_ptrs = (
++            b_scale_ptr + offs_ks * stride_bscale_k + offs_bsn * stride_bscale_n
++        )
++        offs_ks_step = BLOCK_SIZE_K // GROUP_K
++
++        acc_dtype = tl.float32 if c_ptr.type.element_ty != tl.int8 else tl.int32
++        accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=acc_dtype)
++
++        for k in range(pid_k * num_k_iter, (pid_k + 1) * num_k_iter):
++            # Load the next block of A and B, generate a mask by checking the K dimension.
++            # If it is out of bounds, set it to 0.
++            if EVEN_K:
++                a = tl.load(a_ptrs)
++                b = tl.load(b_ptrs, cache_modifier=cache_modifier)
++            else:
++                a = tl.load(
++                    a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K, other=0.0
++                )
++                b = tl.load(
++                    b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0
++                )
++
++            b_scale = tl.load(b_scale_ptrs)
++
++            if PREQUANT:
++                a, a_scale = _fp8_quant_op(
++                    a, BLOCK_SIZE_M, BLOCK_SIZE_K, BLOCK_SIZE_K, DTYPE_MAX, DTYPE_MIN
++                )
++                a = a.to(b_ptr.type.element_ty).reshape(BLOCK_SIZE_M, BLOCK_SIZE_K)
++                a_scale = a_scale.reshape(BLOCK_SIZE_M)
++                accumulator += (
++                    tl.dot(a, b, input_precision="ieee")
++                    * a_scale[:, None]
++                    * b_scale[None, :]
++                )
++            else:
++                b = b.to(a_ptr.type.element_ty)
++                accumulator += tl.dot(a, b, input_precision="ieee") * b_scale[None, :]
++
++            # Advance the ptrs to the next K block.
++            a_ptrs += BLOCK_SIZE_K * stride_ak
++            b_ptrs += BLOCK_SIZE_K * stride_bk
++
++            # k_cur = k * BLOCK_SIZE_K // GROUP_K
++            # k_nxt = (k + 1) * BLOCK_SIZE_K // GROUP_K
++            # offs_ks = k_nxt - k_cur
++            b_scale_ptrs += offs_ks_step * stride_bscale_k
++
++        c = accumulator.to(c_ptr.type.element_ty)
++
++        # Write back the block of the output matrix C with masks.
++        offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M).to(tl.int64)
++        offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N).to(tl.int64)
++        c_ptrs = (
++            c_ptr
++            + stride_cm * offs_cm[:, None]
++            + stride_cn * offs_cn[None, :]
++            + pid_k * stride_ck
++        )
++        c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
++        tl.store(c_ptrs, c, mask=c_mask)
++
++
++@functools.lru_cache(maxsize=1024)
++def _get_config(
++    M: int,
++    N: int,
++    K: int,
++):
++    if not hasattr(_get_config, "_config_dict"):
++        dev = arch_info.get_device()
++        _get_config._config_dict = {}
++        fpath = f"{AITER_TRITON_CONFIGS_PATH}/gemm/{dev}-GEMM-A16W8_BLOCKSCALE.json"
++        with open(fpath, "r") as file:
++            config = json.load(file)
++        _get_config._config_dict["default"] = config
++
++    key = f"{N}_{K}"
++    if key not in _get_config._config_dict.keys():
++        dev = arch_info.get_device()
++        fpath = f"{AITER_TRITON_CONFIGS_PATH}/gemm/{dev}-GEMM-A16W8_BLOCKSCALE-N={N}-K={K}.json"
++        if os.path.exists(fpath):
++            with open(fpath, "r") as file:
++                config = json.load(file)
++                _get_config._config_dict[key] = config
++        else:
++            key = "default"  # fall back to default config
++
++    if M < 16 and "small" in _get_config._config_dict[key]:
++        return _get_config._config_dict[key]["small"]
++    elif M < 32 and "small_M16" in _get_config._config_dict[key]:
++        return _get_config._config_dict[key]["small_M16"]
++    elif M <= 128:
++        BLK_M = triton.next_power_of_2(M)
++        if BLK_M == 32 and "medium_M32" in _get_config._config_dict[key]:
++            return _get_config._config_dict[key]["medium_M32"]
++        elif BLK_M == 64 and "medium_M64" in _get_config._config_dict[key]:
++            return _get_config._config_dict[key]["medium_M64"]
++        elif BLK_M == 128 and "medium_M128" in _get_config._config_dict[key]:
++            return _get_config._config_dict[key]["medium_M128"]
++    elif M <= 256 and "large" in _get_config._config_dict[key]:
++        return _get_config._config_dict[key]["large"]
++    else:
++        BLK_M = triton.next_power_of_2(M)
++        if f"xlarge_M{BLK_M}" in _get_config._config_dict[key]:
++            return _get_config._config_dict[key][f"xlarge_M{BLK_M}"]
++        elif "xlarge" in _get_config._config_dict[key]:
++            return _get_config._config_dict[key]["xlarge"]
++
++    return _get_config._config_dict[key]["any"]
+diff --git a/aiter/ops/triton/configs/gemm/MI300X-GEMM-A16W8_BLOCKSCALE.json b/aiter/ops/triton/configs/gemm/MI300X-GEMM-A16W8_BLOCKSCALE.json
+new file mode 100644
+index 0000000000..0f61c4b3d9
+--- /dev/null
++++ b/aiter/ops/triton/configs/gemm/MI300X-GEMM-A16W8_BLOCKSCALE.json
+@@ -0,0 +1,14 @@
++{
++  "any": {
++    "BLOCK_SIZE_M": 128,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 8,
++    "num_warps": 8,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  }
++}
+diff --git a/aiter/ops/triton/configs/gemm/MI350X-GEMM-A16W8_BLOCKSCALE-N=7168-K=2048.json b/aiter/ops/triton/configs/gemm/MI350X-GEMM-A16W8_BLOCKSCALE-N=7168-K=2048.json
+new file mode 100644
+index 0000000000..bb843acafc
+--- /dev/null
++++ b/aiter/ops/triton/configs/gemm/MI350X-GEMM-A16W8_BLOCKSCALE-N=7168-K=2048.json
+@@ -0,0 +1,87 @@
++{
++  "small": {
++    "BLOCK_SIZE_M": 8,
++    "BLOCK_SIZE_N": 32,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 2,
++    "num_stages": 2,
++    "waves_per_eu": 8,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 8
++  },
++  "small_M16": {
++    "BLOCK_SIZE_M": 16,
++    "BLOCK_SIZE_N": 64,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 4
++  },
++  "medium_M32": {
++    "BLOCK_SIZE_M": 32,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 8,
++    "num_stages": 2,
++    "waves_per_eu": 4,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 4
++  },
++  "medium_M64": {
++    "BLOCK_SIZE_M": 32,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 8,
++    "num_stages": 2,
++    "waves_per_eu": 4,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 4
++  },
++  "medium_M128": {
++    "BLOCK_SIZE_M": 32,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 8,
++    "num_warps": 8,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  },
++  "large": {
++    "BLOCK_SIZE_M": 32,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 8,
++    "num_stages": 2,
++    "waves_per_eu": 2,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  },
++  "xlarge": {
++    "BLOCK_SIZE_M": 128,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 8,
++    "num_warps": 8,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  }
++}
++
+diff --git a/aiter/ops/triton/configs/gemm/MI350X-GEMM-A16W8_BLOCKSCALE.json b/aiter/ops/triton/configs/gemm/MI350X-GEMM-A16W8_BLOCKSCALE.json
+new file mode 100644
+index 0000000000..0f61c4b3d9
+--- /dev/null
++++ b/aiter/ops/triton/configs/gemm/MI350X-GEMM-A16W8_BLOCKSCALE.json
+@@ -0,0 +1,14 @@
++{
++  "any": {
++    "BLOCK_SIZE_M": 128,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 8,
++    "num_warps": 8,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  }
++}
+diff --git a/aiter/ops/triton/fused_fp8_quant.py b/aiter/ops/triton/fused_fp8_quant.py
+index afbc5023ef..cddb9eece7 100644
+--- a/aiter/ops/triton/fused_fp8_quant.py
++++ b/aiter/ops/triton/fused_fp8_quant.py
+@@ -6,6 +6,7 @@
+     _fused_rms_fp8_group_quant_kernel,
+     _fused_flatten_fp8_group_quant_kernel,
+     _fused_reduce_act_mul_fp8_group_quant,
++    _fused_reduce_rms_fp8_group_quant_kernel,
+ )
+ from aiter.ops.triton._triton_kernels.activation import (
+     _get_activation_from_str,
+@@ -361,3 +362,224 @@ def fused_reduce_act_mul_fp8_group_quant(
+     )
+ 
+     return (y, y_scale), y2
++
++
++def fused_reduce_rms_fp8_group_quant(
++    inp1,
++    inp1_weight,
++    inp1_epsilon,
++    inp2=None,
++    inp2_weight=None,
++    inp2_epsilon=None,
++    inp3=None,
++    group_size=128,
++    dtype_quant=fp8_dtype,
++    dtype=None,
++    res1=None,
++    output_unquantized_inp1=False,
++    out3=None,
++):
++    """
++    This op contains several steps:
++        1. if res1 is not None, inp1 = inp1 + res1, and store inp1 to out_res1
++        2. perform RMS norm along the last dimenion for inp1
++        3. if inp2 is not None, perform RMS norm along the last dimenion for inp2
++        4. perform fp8 quantization for inp1 only
++        5. if inp3 is not None, perform sum reduction along the first dimension, in the meantime, the inp1 and inp2 has to have the identical first diemsion as inp3
++
++    Key parameters:
++    - x: Matrix X with shape (M, N1, N2).
++
++    Returns:
++    - out1_fp8: The output matrix with shape (M, N1).
++    - out1_bs: The output matrix with shape (M, cdiv(N1, group_size)).
++    - out1: The output matrix with shape (M, N1).
++    - out2: The output matrix with shape (M, N2).
++    - out_res1: The output matrix with shape (M, N1).
++    - out3: The output matrix with shape (M, N3).
++    - out1: The output matrix with shape (M, N1).
++    """
++
++    out_dtype = dtype if dtype is not None else inp1.dtype
++    SPK = 1
++    HAS_SPLITK = False
++    inp1_spk_stride = 0
++    inp1_row_stride = 0
++    inp1_col_stride = 0
++    if inp1.dim() == 3:
++        SPK, M, N1 = inp1.shape
++        assert SPK > 1, "Split-k dimension should have more than 1 element."
++        HAS_SPLITK = True
++        inp1_spk_stride = inp1.stride(0)
++        inp1_row_stride = inp1.stride(1)
++        inp1_col_stride = inp1.stride(2)
++    else:
++        M, N1 = inp1.shape
++        inp1_row_stride = inp1.stride(0)
++        inp1_col_stride = inp1.stride(1)
++    BLOCK_SIZE_N1 = max(triton.next_power_of_2(N1), group_size)
++    if inp2 is not None:
++        if SPK > 1:
++            assert (
++                inp2.dim() == 3 and inp2.shape[0] == SPK and inp2.shape[1] == M
++            ), f"Incompatible shapes {inp1.shape=}, {inp2.shape=}"
++            _, _, N2 = inp2.shape
++        else:
++            _, N2 = inp2.shape
++        BLOCK_SIZE_N2 = triton.next_power_of_2(N2)
++    else:
++        N2 = 0
++        BLOCK_SIZE_N2 = 1
++    if inp3 is not None:
++        assert (
++            inp3.dim() == 3 and inp3.shape[0] == SPK and inp3.shape[1] == M
++        ), f"Incompatible shapes {inp1.shape=}, {inp3.shape=}"
++        _, _, N3 = inp3.shape
++        BLOCK_SIZE_N3 = triton.next_power_of_2(N3)
++    else:
++        N3 = 0
++        BLOCK_SIZE_N3 = 1
++
++    out1_fp8 = torch.empty((M, N1), dtype=dtype_quant, device=inp1.device)
++    out1_bs = torch.empty(
++        (M, (N1 + group_size - 1) // group_size),
++        dtype=torch.float32,
++        device=inp1.device,
++    )
++    out1_fp8_row_stride = out1_fp8.stride(0)
++    out1_fp8_col_stride = out1_fp8.stride(1)
++    out1_bs_row_stride = out1_bs.stride(0)
++    out1_bs_col_stride = out1_bs.stride(1)
++
++    out2 = None
++    inp2_spk_stride = 0
++    out2_row_stride = 0
++    out2_col_stride = 0
++    inp2_row_stride = 0
++    inp2_col_stride = 0
++    if inp2 is not None:
++        out2 = torch.empty((M, N2), dtype=out_dtype, device=inp1.device)
++        if SPK > 1:
++            inp2_spk_stride = inp2.stride(0)
++            inp2_row_stride = inp2.stride(1)
++            inp2_col_stride = inp2.stride(2)
++        else:
++            inp2_row_stride = inp2.stride(0)
++            inp2_col_stride = inp2.stride(1)
++        out2_row_stride = out2.stride(0)
++        out2_col_stride = out2.stride(1)
++
++    inp3_spk_stride = 0
++    out3_row_stride = 0
++    out3_col_stride = 0
++    inp3_row_stride = 0
++    inp3_col_stride = 0
++    if inp3 is not None:
++        if out3 is None:
++            out3 = torch.empty((M, N3), dtype=out_dtype, device=inp1.device)
++        inp3_spk_stride = inp3.stride(0)
++        inp3_row_stride = inp3.stride(1)
++        inp3_col_stride = inp3.stride(2)
++        out3_row_stride = out3.stride(0)
++        out3_col_stride = out3.stride(1)
++
++    out1 = None
++    out1_row_stride = 0
++    out1_col_stride = 0
++    if output_unquantized_inp1:
++        out1 = torch.empty((M, N1), dtype=out_dtype, device=inp1.device)
++        out1_row_stride = out1.stride(0)
++        out1_col_stride = out1.stride(1)
++
++    out_res1 = None
++    res1_row_stride = 0
++    res1_col_stride = 0
++    out_res1_row_stride = 0
++    out_res1_col_stride = 0
++    if res1 is not None:
++        Mr, Nr = res1.shape
++        assert (
++            M == Mr and N1 == Nr
++        ), "The shape should be identical between inp1 and res1"
++        out_res1 = torch.empty((M, N1), dtype=out_dtype, device=inp1.device)
++        res1_row_stride = res1.stride(0)
++        res1_col_stride = res1.stride(1)
++        out_res1_row_stride = out_res1.stride(0)
++        out_res1_col_stride = out_res1.stride(1)
++
++    max_BN = max(BLOCK_SIZE_N1, BLOCK_SIZE_N2, BLOCK_SIZE_N3)
++    if max_BN <= 512:
++        num_warps = 1
++    elif max_BN <= 2048:
++        num_warps = 4
++    elif max_BN <= 4096:
++        num_warps = 8
++    else:
++        num_warps = 16
++
++    DTYPE_MAX = (
++        torch.finfo(out1_fp8.dtype).max
++        if torch.is_floating_point(out1_fp8)
++        else torch.iinfo(out1_fp8.dtype).max
++    )
++    _fused_reduce_rms_fp8_group_quant_kernel[(3 * M if HAS_SPLITK else 2 * M,)](
++        inp1,
++        inp1_weight,
++        inp2,
++        inp2_weight,
++        inp3,
++        res1,
++        out1_fp8,
++        out1_bs,
++        out2,
++        out_res1,
++        out1,
++        out3,
++        inp1_epsilon,
++        inp2_epsilon,
++        M,
++        N1,
++        N2,
++        N3,
++        inp1_spk_stride,
++        inp2_spk_stride,
++        inp3_spk_stride,
++        inp1_row_stride,
++        inp2_row_stride,
++        inp3_row_stride,
++        inp1_col_stride,
++        inp2_col_stride,
++        inp3_col_stride,
++        res1_row_stride,
++        res1_col_stride,
++        out1_fp8_row_stride,
++        out1_fp8_col_stride,
++        out1_bs_row_stride,
++        out1_bs_col_stride,
++        out2_row_stride,
++        out2_col_stride,
++        out_res1_row_stride,
++        out_res1_col_stride,
++        out1_row_stride,
++        out1_col_stride,
++        out3_row_stride,
++        out3_col_stride,
++        BLOCK_SIZE_N1=BLOCK_SIZE_N1,
++        BLOCK_SIZE_N2=BLOCK_SIZE_N2,
++        BLOCK_SIZE_N3=BLOCK_SIZE_N3,
++        N_MASK1=(BLOCK_SIZE_N1 != N1),
++        N_MASK2=(BLOCK_SIZE_N2 != N2),
++        N_MASK3=(BLOCK_SIZE_N3 != N3),
++        QUANT_BLOCK_SIZE=group_size,
++        DTYPE_MAX=DTYPE_MAX,
++        DTYPE_MIN=-DTYPE_MAX,
++        HAVE_SECOND_INPUT=(inp2 is not None),
++        FIRST_INPUT_RES=(res1 is not None),
++        FIRST_INPUT_OUT=output_unquantized_inp1,
++        HAS_SPLITK=HAS_SPLITK,
++        NUM_SPLITK=SPK,
++        NUM_SPLITK_POW2=triton.next_power_of_2(SPK),
++        num_warps=num_warps,
++    )
++
++    return (out1_fp8, out1_bs), out1, out2, out_res1, out3
+diff --git a/aiter/ops/triton/gemm_a16w8_blockscale.py b/aiter/ops/triton/gemm_a16w8_blockscale.py
+new file mode 100644
+index 0000000000..3dbf8db721
+--- /dev/null
++++ b/aiter/ops/triton/gemm_a16w8_blockscale.py
+@@ -0,0 +1,142 @@
++# SPDX-License-Identifier: MIT
++# Copyright (C) 2024-2025, Advanced Micro Devices, Inc. All rights reserved.
++
++from typing import Optional
++import torch
++import triton
++from aiter.ops.triton._triton_kernels.gemm_a8w8_blockscale import (
++    _gemm_a8w8_blockscale_reduce_kernel,
++)
++from aiter.ops.triton._triton_kernels.gemm_a16w8_blockscale import (
++    _gemm_a16w8_blockscale_kernel,
++    _get_config,
++)
++from aiter.ops.triton.utils.logger import AiterTritonLogger
++
++_LOGGER = AiterTritonLogger()
++
++
++def gemm_a16w8_blockscale(
++    x: torch.Tensor,
++    w: torch.Tensor,
++    w_scale: torch.Tensor,
++    dtype: Optional[float] = torch.bfloat16,
++    y: Optional[torch.Tensor] = None,
++    pre_quant: Optional[bool] = False,
++    config: Optional[dict] = None,
++):
++    """
++    Computes the 8 bit matmul Y = X x WT using the block-scale quantization approach.
++
++    Key parameters:
++    - X: Matrix X with shape (M, K).
++    - W: Matrix W with shape (N, K).
++    - W_scale: Scale tensor for W with shape (**scale_n, *scale_k).
++
++    Returns:
++    - Y: The output matrix with shape (M, N).
++
++    *scale_k = (K + scale_block_size_k - 1) // scale_block_size_k
++    **scale_n = (N + scale_block_size_n - 1) // scale_block_size_n
++    """
++    _LOGGER.info(
++        f"GEMM_A8W8_BLOCKSCALE: x={tuple(x.shape)} w={tuple(w.shape)} w_scale={tuple(w_scale.shape)}"
++    )
++
++    M, K = x.shape
++    N, K = w.shape
++
++    # Check constraints.
++    assert x.shape[1] == w.shape[1], "Incompatible dimensions!!!"
++
++    # Transpose w and w_scale
++    w = w.T
++    w_scale = w_scale.T
++
++    if y is None:
++        y = torch.empty((M, N), dtype=dtype, device=x.device)
++
++    if config is None:
++        config = _get_config(M, N, K)
++
++    config["SPLITK_BLOCK_SIZE"] = triton.cdiv(K, config["NUM_KSPLIT"])
++    if config["NUM_KSPLIT"] > 1:
++        y_pp = torch.empty(
++            (config["NUM_KSPLIT"], M, N), dtype=torch.float32, device=y.device
++        )
++    else:
++        y_pp = None
++
++    if config["BLOCK_SIZE_K"] > config["SPLITK_BLOCK_SIZE"]:
++        config["BLOCK_SIZE_K"] = triton.next_power_of_2(config["SPLITK_BLOCK_SIZE"])
++        if config["BLOCK_SIZE_K"] > config["SPLITK_BLOCK_SIZE"]:
++            config["BLOCK_SIZE_K"] = config["BLOCK_SIZE_K"] // 4
++    config["BLOCK_SIZE_K"] = max(config["BLOCK_SIZE_K"], 16)
++
++    # Scale block sizes
++    # TODO: need a better way to pass scale block sizes around
++    config["GROUP_K"] = triton.next_power_of_2(triton.cdiv(K, w_scale.shape[0]))
++    config["GROUP_N"] = triton.next_power_of_2(triton.cdiv(N, w_scale.shape[1]))
++
++    DTYPE_MAX = (
++        torch.finfo(w.dtype).max
++        if torch.is_floating_point(w)
++        else torch.iinfo(w.dtype).max
++    )
++    # grid = (config["NUM_KSPLIT"], triton.cdiv(M, config["BLOCK_SIZE_M"]) * triton.cdiv(N, config["BLOCK_SIZE_N"]),)
++    grid = lambda META: (  # noqa: E731
++        (
++            META["NUM_KSPLIT"]
++            * triton.cdiv(M, META["BLOCK_SIZE_M"])
++            * triton.cdiv(N, META["BLOCK_SIZE_N"])
++        ),
++    )
++    _gemm_a16w8_blockscale_kernel[grid](
++        x,
++        w,
++        y if config["NUM_KSPLIT"] == 1 else y_pp,
++        w_scale,
++        M,
++        N,
++        K,
++        x.stride(0),
++        x.stride(1),
++        w.stride(0),
++        w.stride(1),
++        0 if config["NUM_KSPLIT"] == 1 else y_pp.stride(0),
++        y.stride(0) if config["NUM_KSPLIT"] == 1 else y_pp.stride(1),
++        y.stride(1) if config["NUM_KSPLIT"] == 1 else y_pp.stride(2),
++        w_scale.stride(0),
++        w_scale.stride(1),
++        PREQUANT=pre_quant,
++        DTYPE_MAX=DTYPE_MAX,
++        DTYPE_MIN=-DTYPE_MAX,
++        **config,
++    )
++
++    if config["NUM_KSPLIT"] > 1:
++        REDUCE_BLOCK_SIZE_M = 32
++        REDUCE_BLOCK_SIZE_N = 32
++        ACTUAL_KSPLIT = triton.cdiv(K, config["SPLITK_BLOCK_SIZE"])
++
++        grid_reduce = (
++            triton.cdiv(M, REDUCE_BLOCK_SIZE_M),
++            triton.cdiv(N, REDUCE_BLOCK_SIZE_N),
++        )
++        _gemm_a8w8_blockscale_reduce_kernel[grid_reduce](
++            y_pp,
++            y,
++            M,
++            N,
++            y_pp.stride(0),
++            y_pp.stride(1),
++            y_pp.stride(2),
++            y.stride(0),
++            y.stride(1),
++            REDUCE_BLOCK_SIZE_M,
++            REDUCE_BLOCK_SIZE_N,
++            ACTUAL_KSPLIT,
++            triton.next_power_of_2(config["NUM_KSPLIT"]),
++        )
++
++    return y
+diff --git a/aiter/ops/triton/gemm_a8w8_blockscale.py b/aiter/ops/triton/gemm_a8w8_blockscale.py
+index 6ec327059d..a88f4d796b 100644
+--- a/aiter/ops/triton/gemm_a8w8_blockscale.py
++++ b/aiter/ops/triton/gemm_a8w8_blockscale.py
+@@ -25,6 +25,7 @@ def gemm_a8w8_blockscale(
+     dtype: Optional[float] = torch.bfloat16,
+     y: Optional[torch.Tensor] = None,
+     config: Optional[dict] = None,
++    skip_reduce: Optional[bool] = False,
+ ):
+     """
+     Computes the 8 bit matmul Y = X x WT using the block-scale quantization approach.
+@@ -55,18 +56,20 @@ def gemm_a8w8_blockscale(
+     w = w.T  # (K, N)
+     w_scale = w_scale.T  # (scale_k, scale_n)
+ 
+-    if y is None:
+-        y = torch.empty((M, N), dtype=dtype, device=x.device)
+-
+     if config is None:
+         config = _get_config(M, N, K)
+ 
++    if y is None and (config["NUM_KSPLIT"] == 1 or not skip_reduce):
++        y = torch.empty((M, N), dtype=dtype, device=x.device)
++
+     config["SPLITK_BLOCK_SIZE"] = triton.cdiv(
+         K, config["NUM_KSPLIT"]
+     )  # How big each split_k partition is
+     if config["NUM_KSPLIT"] > 1:
+         y_pp = torch.empty(
+-            (config["NUM_KSPLIT"], M, N), dtype=torch.float32, device=y.device
++            (config["NUM_KSPLIT"], M, N),
++            dtype=torch.float32,
++            device=x.device,
+         )
+     else:
+         y_pp = None
+@@ -125,6 +128,9 @@ def gemm_a8w8_blockscale(
+     )
+ 
+     if config["NUM_KSPLIT"] > 1:
++        if skip_reduce:
++            return y_pp
++
+         REDUCE_BLOCK_SIZE_M = 32
+         REDUCE_BLOCK_SIZE_N = 32
+         ACTUAL_KSPLIT = triton.cdiv(K, config["SPLITK_BLOCK_SIZE"])
+diff --git a/op_tests/triton_tests/test_fused_fp8_quant.py b/op_tests/triton_tests/test_fused_fp8_quant.py
+index 52ca1133c0..42e3f0b822 100644
+--- a/op_tests/triton_tests/test_fused_fp8_quant.py
++++ b/op_tests/triton_tests/test_fused_fp8_quant.py
+@@ -4,6 +4,7 @@
+     fused_rms_fp8_group_quant,
+     fused_flatten_fp8_group_quant,
+     fused_reduce_act_mul_fp8_group_quant,
++    fused_reduce_rms_fp8_group_quant,
+ )
+ from op_tests.triton_tests.test_quant_mxfp4 import torch_dynamic_mxfp4_quant
+ import aiter
+@@ -23,7 +24,14 @@ def rmsnorm(input, weight, eps=1e-6):
+ def per_token_fp8_group_quant(x, dtype_quant, group_size=128):
+     DTYPE_MAX = torch.finfo(dtype_quant).max
+     M, N = x.shape
+-    x_reshape = x.reshape(M, N // group_size, group_size).to(torch.float32)
++    if N % group_size > 0:
++        num_pad = group_size - (N % group_size)
++        x_reshape = F.pad(x, (0, num_pad, 0, 0), "constant", 0)
++        x_reshape = x_reshape.reshape(
++            M, (N + group_size - 1) // group_size, group_size
++        ).to(torch.float32)
++    else:
++        x_reshape = x.reshape(M, N // group_size, group_size).to(torch.float32)
+     x_max = torch.max(torch.abs(x_reshape), dim=-1, keepdim=True)[0]
+     x_max = torch.where(x_max < 1e-10, 1e-10, x_max).to(torch.float32)
+     x_scale = x_max / DTYPE_MAX
+@@ -31,7 +39,7 @@ def per_token_fp8_group_quant(x, dtype_quant, group_size=128):
+     x_quant = torch.clamp(x_reshape * scale_recip, -DTYPE_MAX, DTYPE_MAX).to(
+         dtype_quant
+     )
+-    x_quant = x_quant.reshape(M, N)
++    x_quant = x_quant.reshape(M, (N + group_size - 1) // group_size * group_size)[:, :N]
+     x_scale = x_scale.squeeze(-1)
+ 
+     return x_quant, x_scale
+@@ -295,3 +303,97 @@ def test_fused_reduce_act_mul_fp8_group_quant(
+         y_q_triton, y_s_triton, dtype=torch.float32, group_size=group_size
+     )
+     torch.testing.assert_close(y_upcast_torch, y_upcast_triton, atol=0.1, rtol=0.1)
++
++
++def run_torch_reduce_rms_fp8_group_quant(
++    x1, w1, eps1, x2, w2, eps2, res1, x3, dtype_quant, dtype, group_size
++):
++    out_dtype = dtype if dtype is not None else x1.dtype
++    if x1.dim() == 3:
++        x1 = torch.sum(x1, dim=0)
++        x2 = torch.sum(x2, dim=0)
++        assert x3 is not None
++        x3 = torch.sum(x3, dim=0).to(out_dtype)
++    else:
++        assert x3 is None
++    if res1 is not None:
++        s = x1 + res1
++        y_res1 = s.to(out_dtype)
++    else:
++        s = x1
++        y_res1 = None
++    y1 = rmsnorm(s, w1, eps1)
++    y2 = rmsnorm(x2, w2, eps2)
++    y1_q, y1_s = per_token_fp8_group_quant(y1, dtype_quant, group_size)
++    return (y1_q, y1_s), y1.to(out_dtype), y2.to(out_dtype), y_res1, x3
++
++
++def generate_fused_reduce_rms_quant_data(M, N1, N2, N3, SPK, dtype=torch.bfloat16):
++    if SPK > 1:
++        x1 = torch.randn((SPK, M, N1), dtype=torch.float32, device="cuda") / 10
++        x2 = torch.randn((SPK, M, N2), dtype=torch.float32, device="cuda") / 10
++        x3 = torch.randn((SPK, M, N3), dtype=torch.float32, device="cuda") / 10
++    else:
++        x1 = torch.randn((M, N1), dtype=dtype, device="cuda") / 10
++        x2 = torch.randn((M, N2), dtype=dtype, device="cuda") / 10
++        x3 = None
++
++    w1 = torch.ones((N1,), dtype=torch.float32, device="cuda")
++    w2 = torch.ones((N2,), dtype=torch.float32, device="cuda")
++    res1 = torch.randn((M, N1), dtype=dtype, device="cuda") / 10
++    return x1, w1, x2, w2, res1, x3
++
++
++@pytest.mark.parametrize("M", [1, 32, 256, 8192])
++@pytest.mark.parametrize(
++    "N1, N2, N3", [(128, 128, 128), (1536, 512, 64), (7168, 7168, 7168)]
++)
++@pytest.mark.parametrize("SPK", [1, 4, 14])
++@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
++def test_fused_reduce_rms_fp8_group_quant(
++    M: int, N1: int, N2: int, N3: int, SPK: int, dtype
++):
++    group_size = 128
++    dtype_quant = aiter.dtypes.fp8
++    x1, w1, x2, w2, res1, x3 = generate_fused_reduce_rms_quant_data(
++        M, N1, N2, N3, SPK, dtype
++    )
++    (y1_q_torch, y1_s_torch), y1_torch, y2_torch, y1_res_torch, y3_torch = (
++        run_torch_reduce_rms_fp8_group_quant(
++            x1, w1, 1e-6, x2, w2, 1e-6, res1, x3, dtype_quant, dtype, group_size
++        )
++    )
++
++    (y1_q_triton, y1_s_triton), y1_triton, y2_triton, y1_res_triton, y3_triton = (
++        fused_reduce_rms_fp8_group_quant(
++            x1,
++            w1,
++            1e-6,
++            inp2=x2,
++            inp2_weight=w2,
++            inp2_epsilon=1e-6,
++            inp3=x3,
++            group_size=group_size,
++            dtype_quant=dtype_quant,
++            dtype=dtype,
++            res1=res1,
++            output_unquantized_inp1=True,
++        )
++    )
++
++    torch.testing.assert_close(y1_torch, y1_triton, atol=0.1, rtol=0.1)
++    torch.testing.assert_close(y2_torch, y2_triton, atol=0.1, rtol=0.1)
++
++    if y1_res_torch is not None:
++        torch.testing.assert_close(y1_res_torch, y1_res_triton, atol=0.1, rtol=0.1)
++
++    y1_upcast_torch = upcast(
++        y1_q_torch, y1_s_torch, dtype=torch.float32, group_size=group_size
++    )
++    y1_upcast_triton = upcast(
++        y1_q_triton, y1_s_triton, dtype=torch.float32, group_size=group_size
++    )
++    torch.testing.assert_close(y1_upcast_torch, y1_upcast_triton, atol=0.1, rtol=0.1)
++
++    if y3_torch is not None:
++        torch.testing.assert_close(y3_torch, y3_triton, atol=0.1, rtol=0.1)
+diff --git a/op_tests/triton_tests/test_gemm_a16w8_blockscale.py b/op_tests/triton_tests/test_gemm_a16w8_blockscale.py
+new file mode 100644
+index 0000000000..32152692ef
+--- /dev/null
++++ b/op_tests/triton_tests/test_gemm_a16w8_blockscale.py
+@@ -0,0 +1,161 @@
++# SPDX-License-Identifier: MIT
++# Copyright (C) 2024-2025, Advanced Micro Devices, Inc. All rights reserved.
++
++import torch
++import triton
++import pytest
++from aiter.ops.triton.gemm_a16w8_blockscale import gemm_a16w8_blockscale
++from aiter.ops.triton.utils.types import get_fp8_dtypes
++from aiter.ops.triton.utils.types import str_to_torch_dtype
++
++# from op_tests.triton_tests.test_fused_fp8_quant import per_token_fp8_group_quant
++import torch.nn.functional as F
++
++
++block_shape = (128, 128)
++
++
++def run_torch(x, weight, w_scale, dtype=torch.bfloat16):
++    block_shape_n, block_shape_k = block_shape
++    m, k = x.shape
++    n = weight.shape[0]
++    scale_n = (n + block_shape_n - 1) // block_shape_n
++    scale_k = (k + block_shape_k - 1) // block_shape_k
++
++    # the pre-quant version now has accuracy issues
++    # x, x_scale = per_token_fp8_group_quant(x, weight.dtype, block_shape_k)
++    # x_scale = x_scale.repeat_interleave(block_shape_k, dim=1)
++    # x = x.to(x_scale.dtype) * x_scale[:m, :k]
++    # x = x.view(m, k)
++
++    w_scale = w_scale.repeat_interleave(block_shape_n, dim=0)
++    w_scale = w_scale.repeat_interleave(block_shape_k, dim=1)
++    weight = weight.to(w_scale.dtype) * w_scale[:n, :k]
++
++    out = F.linear(x.to(torch.float32), weight.to(torch.float32))
++
++    return out.to(dtype)
++
++
++def run_triton(x, weight, w_scale, dtype=torch.bfloat16, y=None):
++    return gemm_a16w8_blockscale(x, weight, w_scale, dtype, y, pre_quant=False)
++
++
++e5m2_type, e4m3_type = get_fp8_dtypes()
++
++
++def get_x_vals():
++
++    x_vals = [(1024 * v, 1024 * v, 1024 * v) for v in range(1, 9)]
++    x_vals += [(4864, 4096, 8192), (9728, 8192, 65536)]
++    x_vals += [
++        (1, 1280, 8192),
++        (32, 1280, 8192),
++        (64, 1280, 8192),
++        (128, 1280, 8192),
++        (192, 1280, 8192),
++        (256, 1280, 8192),
++        (320, 1280, 8192),
++        (512, 1280, 8192),
++        (1024, 1280, 8192),
++        (2048, 1280, 8192),
++        (4096, 1280, 8192),
++        (8192, 1280, 8192),
++        (16384, 1280, 8192),
++        (1, 8192, 1024),
++        (32, 8192, 1024),
++        (64, 8192, 1024),
++        (128, 8192, 1024),
++        (192, 8192, 1024),
++        (256, 8192, 1024),
++        (320, 8192, 1024),
++        (512, 8192, 1024),
++        (1024, 8192, 1024),
++        (2048, 8192, 1024),
++        (4096, 8192, 1024),
++        (8192, 8192, 1024),
++        (16384, 8192, 1024),
++        (2048, 2048, 2049),
++        (159, 17389, 597),
++        (16, 576, 7168),
++    ]
++    x_vals += [
++        (256, 8192, 1024),
++        (256, 1024, 8192),
++        (256, 32768, 8192),
++        (256, 8192, 32768),
++    ]
++    # x_vals += [(1, 1, 1)]  # minimal case
++    return x_vals
++
++
++def generate_gemm_a16w8_blockscale_inputs(
++    M: int,
++    N: int,
++    K: int,
++    block_shape_n: int,
++    block_shape_k: int,
++    dtype=torch.bfloat16,
++    layout: str = "TN",
++    output=False,
++):
++    """
++    The GEMM kernel expects:
++    - x: (M, K) -> row-major format
++    - w: (N, K) -> column-major format
++    """
++    scale_n = (N + block_shape_n - 1) // block_shape_n
++    scale_k = (K + block_shape_k - 1) // block_shape_k
++
++    if layout[0] == "T":
++        x = torch.randn((M, K), dtype=torch.bfloat16).cuda() / 10
++    else:
++        x = torch.randn((K, M), dtype=torch.bfloat16).cuda().T / 10
++
++    if layout[1] == "N":
++        weight = (torch.rand((N, K), dtype=torch.float16, device="cuda") / 10).to(
++            e4m3_type
++        )
++    else:
++        weight = (
++            (torch.rand((K, N), dtype=torch.float16, device="cuda") / 10)
++            .to(e4m3_type)
++            .T
++        )
++
++    w_scale = torch.rand([scale_n, scale_k], dtype=torch.float32, device="cuda")
++
++    y = None
++    if output:
++        y = torch.empty((M, N), dtype=dtype, device="cuda").cuda()
++
++    return x, weight, w_scale, y
++
++
++@pytest.mark.parametrize(
++    "dtype, M, N, K, output",
++    [
++        (dtype, *shape, output)
++        for output in [True, False]
++        for dtype in ["bf16"]
++        for shape in get_x_vals()
++    ],
++)
++def test_gemm(dtype, M, N, K, output):
++    block_shape_n, block_shape_k = block_shape
++
++    dtype = str_to_torch_dtype[dtype]
++    x, weight, w_scale, y = generate_gemm_a16w8_blockscale_inputs(
++        M,
++        N,
++        K,
++        block_shape_n,
++        block_shape_k,
++        dtype=dtype,
++        output=output,
++    )
++
++    a = run_torch(x, weight, w_scale, dtype)
++    b = run_triton(x, weight, w_scale, dtype, y)
++
++    triton.testing.assert_close(a, b, atol=0.1, rtol=0.1)

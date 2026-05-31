@@ -1,0 +1,1562 @@
+diff --git a/aiter/ops/triton/_triton_kernels/gemm/basic/gemm_a16w8_blockscale.py b/aiter/ops/triton/_triton_kernels/gemm/basic/gemm_a16w8_blockscale.py
+index 0279eeb605..fe1e927791 100644
+--- a/aiter/ops/triton/_triton_kernels/gemm/basic/gemm_a16w8_blockscale.py
++++ b/aiter/ops/triton/_triton_kernels/gemm/basic/gemm_a16w8_blockscale.py
+@@ -4,11 +4,33 @@
+ import triton.language as tl
+ from aiter.ops.triton._triton_kernels.quant.fused_fp8_quant import _fp8_quant_op
+ from aiter.ops.triton.utils._triton.pid_preprocessing import pid_grid
++from aiter.ops.triton.utils._triton.kernel_repr import make_kernel_repr
+ from aiter.ops.triton.utils.gemm_config_utils import get_gemm_config
+ 
+ import triton
+ 
+ 
++_gemm_a16w8_blockscale_repr = make_kernel_repr(
++    "_gemm_a16w8_blockscale_kernel",
++    [
++        "BLOCK_SIZE_M",
++        "BLOCK_SIZE_N",
++        "BLOCK_SIZE_K",
++        "GROUP_SIZE_M",
++        "num_warps",
++        "num_stages",
++        "waves_per_eu",
++        "matrix_instr_nonkdim",
++        "cache_modifier",
++        "NUM_KSPLIT",
++        "SPLITK_BLOCK_SIZE",
++        "EVEN_K",
++        "GRID_MN",
++        "PREQUANT",
++    ],
++)
++
++
+ @triton.heuristics(
+     {
+         "EVEN_K": lambda args: args["K"] % args["BLOCK_SIZE_K"] == 0,
+@@ -16,7 +38,7 @@
+         * triton.cdiv(args["N"], args["BLOCK_SIZE_N"]),
+     }
+ )
+-@triton.jit
++@triton.jit(repr=_gemm_a16w8_blockscale_repr)
+ def _gemm_a16w8_blockscale_kernel(
+     # Pointers to matrices
+     a_ptr,
+@@ -54,6 +76,10 @@ def _gemm_a16w8_blockscale_kernel(
+     PREQUANT: tl.constexpr,
+     DTYPE_MAX: tl.constexpr,
+     DTYPE_MIN: tl.constexpr,
++    num_warps: tl.constexpr,
++    num_stages: tl.constexpr,
++    waves_per_eu: tl.constexpr,
++    matrix_instr_nonkdim: tl.constexpr,
+     cache_modifier: tl.constexpr,
+ ):
+     """
+@@ -185,10 +211,224 @@ def _gemm_a16w8_blockscale_kernel(
+         tl.store(c_ptrs, c, mask=c_mask)
+ 
+ 
+-def _get_config(
+-    M: int,
+-    N: int,
+-    K: int,
++_gemm_a16w8_blockscale_preshuffle_repr = make_kernel_repr(
++    "_gemm_a16w8_blockscale_preshuffle_kernel",
++    [
++        "BLOCK_SIZE_M",
++        "BLOCK_SIZE_N",
++        "BLOCK_SIZE_K",
++        "GROUP_SIZE_M",
++        "num_warps",
++        "num_stages",
++        "waves_per_eu",
++        "matrix_instr_nonkdim",
++        "cache_modifier",
++        "NUM_KSPLIT",
++        "SPLITK_BLOCK_SIZE",
++        "EVEN_K",
++        "GRID_MN",
++        "PREQUANT",
++    ],
++)
++
++
++@triton.heuristics(
++    {
++        "EVEN_K": lambda args: args["K"] % args["BLOCK_SIZE_K"] == 0,
++        "GRID_MN": lambda args: triton.cdiv(args["M"], args["BLOCK_SIZE_M"])
++        * triton.cdiv(args["N"], args["BLOCK_SIZE_N"]),
++    }
++)
++@triton.jit(repr=_gemm_a16w8_blockscale_repr)
++def _gemm_a16w8_blockscale_preshuffle_kernel(
++    # Pointers to matrices
++    a_ptr,
++    b_ptr,
++    c_ptr,
++    b_scale_ptr,
++    # Matrix dimensions
++    M,
++    N,
++    K,
++    # The stride variables represent how much to increase the ptr by when
++    # moving by 1 element in a particular dimension. E.g. `stride_am` is
++    # how much to increase `a_ptr` by to get the element one row down
++    # (A has M rows).
++    stride_am,
++    stride_ak,
++    stride_bn,
++    stride_bk,
++    stride_ck,
++    stride_cm,
++    stride_cn,
++    stride_bscale_n,
++    stride_bscale_k,
++    # Meta-parameters
++    GROUP_K: tl.constexpr,
++    GROUP_N: tl.constexpr,
++    BLOCK_SIZE_M: tl.constexpr,
++    BLOCK_SIZE_N: tl.constexpr,
++    BLOCK_SIZE_K: tl.constexpr,
++    GROUP_SIZE_M: tl.constexpr,
++    NUM_KSPLIT: tl.constexpr,
++    SPLITK_BLOCK_SIZE: tl.constexpr,
++    EVEN_K: tl.constexpr,
++    GRID_MN: tl.constexpr,
++    PREQUANT: tl.constexpr,
++    DTYPE_MAX: tl.constexpr,
++    DTYPE_MIN: tl.constexpr,
++    num_warps: tl.constexpr,
++    num_stages: tl.constexpr,
++    waves_per_eu: tl.constexpr,
++    matrix_instr_nonkdim: tl.constexpr,
++    cache_modifier: tl.constexpr,
+ ):
++    """
++    Note: this is Triton jited function and not meant to be called directly. Call gemm_a8w8_blockscale function
++    below
++
++    Computes the 8 bit matmul C = A x B using the block-scale quantization approach.
++
++    Key parameters:
++    - A: Matrix A with shape (M, K).
++    - B: Matrix B with shape (K, N).
++    - C: Matrix C with shape (M, N).
++    - A_scale: Scale tensor for A with shape (M, *scale_k).
++    - B_scale: Scale tensor for B with shape (*scale_k, **scale_n).
++
++    *scale_k = (K + GROUP_K - 1) // GROUP_K
++    **scale_n = (N + GROUP_N - 1) // GROUP_N
++    """
++
++    tl.assume(stride_am > 0)
++    tl.assume(stride_ak > 0)
++    tl.assume(stride_bk > 0)
++    tl.assume(stride_bn > 0)
++    tl.assume(stride_ck > 0)
++    tl.assume(stride_cm > 0)
++    tl.assume(stride_cn > 0)
++    tl.assume(stride_bscale_k > 0)
++    tl.assume(stride_bscale_n > 0)
++
++    # -----------------------------------------------------------
++    # Map program ids `pid` to the block of C it should compute.
++    # This is done in a grouped ordering to promote L2 data reuse.
++    pid_unified = tl.program_id(axis=0)
++    pid_k = pid_unified % NUM_KSPLIT
++    pid = pid_unified // NUM_KSPLIT
++    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
++    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
++
++    if NUM_KSPLIT == 1:
++        pid_m, pid_n = pid_grid(pid, num_pid_m, num_pid_n, GROUP_SIZE_M=GROUP_SIZE_M)
++    else:
++        pid_m = pid // num_pid_n
++        pid_n = pid % num_pid_n
++
++    tl.assume(pid_m >= 0)
++    tl.assume(pid_n >= 0)
++    tl.assume(pid_k >= 0)
++
++    if (pid_k * SPLITK_BLOCK_SIZE) < K:
++
++        # SPLITK_BLOCK_SIZE = tl.cdiv(K, NUM_KSPLIT)
++        num_k_iter = tl.cdiv(SPLITK_BLOCK_SIZE, BLOCK_SIZE_K)
++
++        # Create pointers for first block of A and B input matrices
++        offs_k = tl.arange(0, BLOCK_SIZE_K)
++        offs_k_shuffle_arr = tl.arange(0, BLOCK_SIZE_K * 16)
++        offs_k_split = pid_k * SPLITK_BLOCK_SIZE + offs_k
++        offs_k_shuffle = pid_k * SPLITK_BLOCK_SIZE * 16 + offs_k_shuffle_arr
++
++        offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
++        offs_bn = (pid_n * (BLOCK_SIZE_N // 16) + tl.arange(0, BLOCK_SIZE_N // 16)) % (
++            N // 16
++        )
++        a_ptrs = a_ptr + (
++            offs_am[:, None] * stride_am + offs_k_split[None, :] * stride_ak
++        )
++        b_ptrs = b_ptr + (
++            offs_bn[:, None] * stride_bn + offs_k_shuffle[None, :] * stride_bk
++        )
++
++        # Create pointers for the scales
++        offs_bsn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
++        offs_k_scale = (pid_k * SPLITK_BLOCK_SIZE) // GROUP_K
++        offs_b_scale_n = offs_bsn // GROUP_N
++        b_scale_ptrs = (
++            b_scale_ptr
++            + offs_k_scale * stride_bscale_k
++            + offs_b_scale_n * stride_bscale_n
++        )
++        offs_ks_step = BLOCK_SIZE_K // GROUP_K
++
++        acc_dtype = tl.float32 if c_ptr.type.element_ty != tl.int8 else tl.int32
++        accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=acc_dtype)
++
++        for k in range(pid_k * num_k_iter, (pid_k + 1) * num_k_iter):
++            # Load the next block of A and B, generate a mask by checking the K dimension.
++            # If it is out of bounds, set it to 0.
++            if EVEN_K:
++                a = tl.load(a_ptrs)
++                b = tl.load(b_ptrs, cache_modifier=cache_modifier)
++
++            b = (
++                b.reshape(
++                    1,
++                    BLOCK_SIZE_N // 16,
++                    BLOCK_SIZE_K // 32,
++                    2,
++                    16,
++                    16,
++                )
++                .permute(0, 1, 4, 2, 3, 5)
++                .reshape(BLOCK_SIZE_N, BLOCK_SIZE_K)
++                .trans(1, 0)
++            )
++
++            b_scale = tl.load(b_scale_ptrs)
++
++            if PREQUANT:
++                a, a_scale = _fp8_quant_op(
++                    a, BLOCK_SIZE_M, BLOCK_SIZE_K, BLOCK_SIZE_K, DTYPE_MAX, DTYPE_MIN
++                )
++                a = a.to(b_ptr.type.element_ty).reshape(BLOCK_SIZE_M, BLOCK_SIZE_K)
++                a_scale = a_scale.reshape(BLOCK_SIZE_M)
++                accumulator += (
++                    tl.dot(a, b, input_precision="ieee")
++                    * a_scale[:, None]
++                    * b_scale[None, :]
++                )
++            else:
++                b = b.to(a_ptr.type.element_ty)
++                accumulator += tl.dot(a, b, input_precision="ieee") * b_scale[None, :]
++
++            # Advance the ptrs to the next K block.
++            a_ptrs += BLOCK_SIZE_K * stride_ak
++            b_ptrs += BLOCK_SIZE_K * 16 * stride_bk
++
++            # k_cur = k * BLOCK_SIZE_K // GROUP_K
++            # k_nxt = (k + 1) * BLOCK_SIZE_K // GROUP_K
++            # offs_ks = k_nxt - k_cur
++            b_scale_ptrs += offs_ks_step * stride_bscale_k
++
++        c = accumulator.to(c_ptr.type.element_ty)
++
++        # Write back the block of the output matrix C with masks.
++        offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M).to(tl.int64)
++        offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N).to(tl.int64)
++        c_ptrs = (
++            c_ptr
++            + stride_cm * offs_cm[:, None]
++            + stride_cn * offs_cn[None, :]
++            + pid_k * stride_ck
++        )
++        c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
++        tl.store(c_ptrs, c, mask=c_mask)
++
++
++def _get_config(M: int, N: int, K: int, shuffle: bool = False):
++    shuffle_suffix = "_PRESHUFFLED" if shuffle else ""
++    config_name = f"GEMM-A16W8_BLOCKSCALE{shuffle_suffix}"
+ 
+-    return get_gemm_config("GEMM-A16W8_BLOCKSCALE", M, N, K)
++    return get_gemm_config(config_name, M, N, K)
+diff --git a/aiter/ops/triton/configs/gemm/gfx942-GEMM-A16W8_BLOCKSCALE_PRESHUFFLED.json b/aiter/ops/triton/configs/gemm/gfx942-GEMM-A16W8_BLOCKSCALE_PRESHUFFLED.json
+new file mode 100644
+index 0000000000..97c355f55b
+--- /dev/null
++++ b/aiter/ops/triton/configs/gemm/gfx942-GEMM-A16W8_BLOCKSCALE_PRESHUFFLED.json
+@@ -0,0 +1,14 @@
++{
++    "any": {
++        "BLOCK_SIZE_M": 128,
++        "BLOCK_SIZE_N": 256,
++        "BLOCK_SIZE_K": 128,
++        "GROUP_SIZE_M": 8,
++        "num_warps": 8,
++        "num_stages": 2,
++        "waves_per_eu": 1,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": null,
++        "NUM_KSPLIT": 1
++    }
++}
+diff --git a/aiter/ops/triton/configs/gemm/gfx950-GEMM-A16W8_BLOCKSCALE_PRESHUFFLED-N=2112-K=7168.json b/aiter/ops/triton/configs/gemm/gfx950-GEMM-A16W8_BLOCKSCALE_PRESHUFFLED-N=2112-K=7168.json
+new file mode 100644
+index 0000000000..da84c2de36
+--- /dev/null
++++ b/aiter/ops/triton/configs/gemm/gfx950-GEMM-A16W8_BLOCKSCALE_PRESHUFFLED-N=2112-K=7168.json
+@@ -0,0 +1,86 @@
++{
++  "M_LEQ_8": {
++    "BLOCK_SIZE_M": 8,
++    "BLOCK_SIZE_N": 16,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 2,
++    "num_stages": 3,
++    "waves_per_eu": 8,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 14
++  },
++  "M_LEQ_16": {
++    "BLOCK_SIZE_M": 16,
++    "BLOCK_SIZE_N": 16,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 2,
++    "num_stages": 2,
++    "waves_per_eu": 6,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 14
++  },
++  "M_LEQ_32": {
++    "BLOCK_SIZE_M": 16,
++    "BLOCK_SIZE_N": 16,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 2,
++    "num_stages": 2,
++    "waves_per_eu": 8,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 8
++  },
++  "M_LEQ_64": {
++    "BLOCK_SIZE_M": 32,
++    "BLOCK_SIZE_N": 16,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 2,
++    "waves_per_eu": 4,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 7
++  },
++  "M_LEQ_128": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 32,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 2,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 7
++  },
++  "M_LEQ_256": {
++    "BLOCK_SIZE_M": 128,
++    "BLOCK_SIZE_N": 64,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 2,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 7
++  },
++  "any": {
++    "BLOCK_SIZE_M": 128,
++    "BLOCK_SIZE_N": 64,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 2,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  }
++}
+diff --git a/aiter/ops/triton/configs/gemm/gfx950-GEMM-A16W8_BLOCKSCALE_PRESHUFFLED-N=7168-K=2048.json b/aiter/ops/triton/configs/gemm/gfx950-GEMM-A16W8_BLOCKSCALE_PRESHUFFLED-N=7168-K=2048.json
+new file mode 100644
+index 0000000000..d34af64b75
+--- /dev/null
++++ b/aiter/ops/triton/configs/gemm/gfx950-GEMM-A16W8_BLOCKSCALE_PRESHUFFLED-N=7168-K=2048.json
+@@ -0,0 +1,86 @@
++{
++  "M_LEQ_8": {
++    "BLOCK_SIZE_M": 4,
++    "BLOCK_SIZE_N": 16,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 8,
++    "num_warps": 2,
++    "num_stages": 2,
++    "waves_per_eu": 4,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  },
++  "M_LEQ_16": {
++    "BLOCK_SIZE_M": 8,
++    "BLOCK_SIZE_N": 16,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 4,
++    "num_warps": 2,
++    "num_stages": 2,
++    "waves_per_eu": 4,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  },
++  "M_LEQ_32": {
++    "BLOCK_SIZE_M": 16,
++    "BLOCK_SIZE_N": 16,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 4,
++    "num_warps": 2,
++    "num_stages": 2,
++    "waves_per_eu": 4,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  },
++  "M_LEQ_64": {
++    "BLOCK_SIZE_M": 4,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 2,
++    "num_stages": 1,
++    "waves_per_eu": 2,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 16
++  },
++  "M_LEQ_128": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 16,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 4,
++    "num_warps": 2,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  },
++  "M_LEQ_256": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 32,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 4,
++    "num_warps": 2,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  },
++  "any": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 32,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 4,
++    "num_warps": 2,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  }
++}
+diff --git a/aiter/ops/triton/configs/gemm/gfx950-GEMM-A16W8_BLOCKSCALE_PRESHUFFLED.json b/aiter/ops/triton/configs/gemm/gfx950-GEMM-A16W8_BLOCKSCALE_PRESHUFFLED.json
+new file mode 100644
+index 0000000000..97c355f55b
+--- /dev/null
++++ b/aiter/ops/triton/configs/gemm/gfx950-GEMM-A16W8_BLOCKSCALE_PRESHUFFLED.json
+@@ -0,0 +1,14 @@
++{
++    "any": {
++        "BLOCK_SIZE_M": 128,
++        "BLOCK_SIZE_N": 256,
++        "BLOCK_SIZE_K": 128,
++        "GROUP_SIZE_M": 8,
++        "num_warps": 8,
++        "num_stages": 2,
++        "waves_per_eu": 1,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": null,
++        "NUM_KSPLIT": 1
++    }
++}
+diff --git a/aiter/ops/triton/configs/gemm/gfx950-GEMM-A8W8_BLOCKSCALE_PRESHUFFLED-N=2112-K=7168.json b/aiter/ops/triton/configs/gemm/gfx950-GEMM-A8W8_BLOCKSCALE_PRESHUFFLED-N=2112-K=7168.json
+index 21f45a0aa4..0a48c27a03 100644
+--- a/aiter/ops/triton/configs/gemm/gfx950-GEMM-A8W8_BLOCKSCALE_PRESHUFFLED-N=2112-K=7168.json
++++ b/aiter/ops/triton/configs/gemm/gfx950-GEMM-A8W8_BLOCKSCALE_PRESHUFFLED-N=2112-K=7168.json
+@@ -1,81 +1,81 @@
+ {
+   "M_LEQ_8": {
+-    "BLOCK_SIZE_M": 16,
+-    "BLOCK_SIZE_N": 32,
++    "BLOCK_SIZE_M": 8,
++    "BLOCK_SIZE_N": 16,
+     "BLOCK_SIZE_K": 128,
+     "GROUP_SIZE_M": 1,
+     "num_warps": 2,
+-    "num_stages": 2,
+-    "waves_per_eu": 1,
++    "num_stages": 3,
++    "waves_per_eu": 8,
+     "matrix_instr_nonkdim": 16,
+     "cache_modifier": ".cg",
+     "NUM_KSPLIT": 14
+   },
+   "M_LEQ_16": {
+     "BLOCK_SIZE_M": 16,
+-    "BLOCK_SIZE_N": 32,
++    "BLOCK_SIZE_N": 16,
+     "BLOCK_SIZE_K": 128,
+     "GROUP_SIZE_M": 1,
+     "num_warps": 2,
+-    "num_stages": 2,
+-    "waves_per_eu": 1,
++    "num_stages": 3,
++    "waves_per_eu": 8,
+     "matrix_instr_nonkdim": 16,
+     "cache_modifier": ".cg",
+     "NUM_KSPLIT": 14
+   },
+   "M_LEQ_32": {
+-    "BLOCK_SIZE_M": 64,
+-    "BLOCK_SIZE_N": 32,
++    "BLOCK_SIZE_M": 16,
++    "BLOCK_SIZE_N": 16,
+     "BLOCK_SIZE_K": 128,
+     "GROUP_SIZE_M": 1,
+     "num_warps": 2,
+     "num_stages": 2,
+-    "waves_per_eu": 1,
++    "waves_per_eu": 6,
+     "matrix_instr_nonkdim": 16,
+-    "cache_modifier": ".cg",
+-    "NUM_KSPLIT": 14
++    "cache_modifier": null,
++    "NUM_KSPLIT": 7
+   },
+   "M_LEQ_64": {
+-    "BLOCK_SIZE_M": 64,
+-    "BLOCK_SIZE_N": 32,
++    "BLOCK_SIZE_M": 32,
++    "BLOCK_SIZE_N": 16,
+     "BLOCK_SIZE_K": 128,
+     "GROUP_SIZE_M": 1,
+     "num_warps": 2,
+     "num_stages": 2,
+-    "waves_per_eu": 1,
++    "waves_per_eu": 6,
+     "matrix_instr_nonkdim": 16,
+-    "cache_modifier": ".cg",
+-    "NUM_KSPLIT": 14
++    "cache_modifier": null,
++    "NUM_KSPLIT": 7
+   },
+   "M_LEQ_128": {
+-    "BLOCK_SIZE_M": 64,
+-    "BLOCK_SIZE_N": 32,
++    "BLOCK_SIZE_M": 32,
++    "BLOCK_SIZE_N": 16,
+     "BLOCK_SIZE_K": 128,
+     "GROUP_SIZE_M": 1,
+     "num_warps": 2,
+     "num_stages": 2,
+-    "waves_per_eu": 1,
++    "waves_per_eu": 4,
+     "matrix_instr_nonkdim": 16,
+     "cache_modifier": null,
+     "NUM_KSPLIT": 7
+   },
+   "M_LEQ_256": {
+-    "BLOCK_SIZE_M": 128,
+-    "BLOCK_SIZE_N": 32,
++    "BLOCK_SIZE_M": 32,
++    "BLOCK_SIZE_N": 16,
+     "BLOCK_SIZE_K": 128,
+     "GROUP_SIZE_M": 1,
+     "num_warps": 2,
+-    "num_stages": 2,
+-    "waves_per_eu": 1,
++    "num_stages": 3,
++    "waves_per_eu": 2,
+     "matrix_instr_nonkdim": 16,
+     "cache_modifier": null,
+-    "NUM_KSPLIT": 7
++    "NUM_KSPLIT": 1
+   },
+   "any": {
+     "BLOCK_SIZE_M": 128,
+     "BLOCK_SIZE_N": 32,
+     "BLOCK_SIZE_K": 128,
+-    "GROUP_SIZE_M": 4,
++    "GROUP_SIZE_M": 8,
+     "num_warps": 2,
+     "num_stages": 2,
+     "waves_per_eu": 2,
+diff --git a/aiter/ops/triton/configs/gemm/gfx950-GEMM-A8W8_BLOCKSCALE_PRESHUFFLED-N=3072-K=1536.json b/aiter/ops/triton/configs/gemm/gfx950-GEMM-A8W8_BLOCKSCALE_PRESHUFFLED-N=3072-K=1536.json
+index a0b741b40a..f6fdae3c05 100644
+--- a/aiter/ops/triton/configs/gemm/gfx950-GEMM-A8W8_BLOCKSCALE_PRESHUFFLED-N=3072-K=1536.json
++++ b/aiter/ops/triton/configs/gemm/gfx950-GEMM-A8W8_BLOCKSCALE_PRESHUFFLED-N=3072-K=1536.json
+@@ -1,21 +1,21 @@
+ {
+   "M_LEQ_8": {
+     "BLOCK_SIZE_M": 4,
+-    "BLOCK_SIZE_N": 32,
++    "BLOCK_SIZE_N": 16,
+     "BLOCK_SIZE_K": 128,
+-    "GROUP_SIZE_M": 8,
++    "GROUP_SIZE_M": 4,
+     "num_warps": 2,
+     "num_stages": 3,
+-    "waves_per_eu": 8,
++    "waves_per_eu": 2,
+     "matrix_instr_nonkdim": 16,
+     "cache_modifier": null,
+     "NUM_KSPLIT": 1
+   },
+   "M_LEQ_16": {
+     "BLOCK_SIZE_M": 8,
+-    "BLOCK_SIZE_N": 32,
++    "BLOCK_SIZE_N": 16,
+     "BLOCK_SIZE_K": 128,
+-    "GROUP_SIZE_M": 8,
++    "GROUP_SIZE_M": 4,
+     "num_warps": 2,
+     "num_stages": 3,
+     "waves_per_eu": 1,
+@@ -24,49 +24,49 @@
+     "NUM_KSPLIT": 1
+   },
+   "M_LEQ_32": {
+-    "BLOCK_SIZE_M": 32,
+-    "BLOCK_SIZE_N": 32,
++    "BLOCK_SIZE_M": 16,
++    "BLOCK_SIZE_N": 16,
+     "BLOCK_SIZE_K": 128,
+-    "GROUP_SIZE_M": 1,
++    "GROUP_SIZE_M": 4,
+     "num_warps": 2,
+     "num_stages": 3,
+-    "waves_per_eu": 1,
++    "waves_per_eu": 6,
+     "matrix_instr_nonkdim": 16,
+-    "cache_modifier": ".cg",
+-    "NUM_KSPLIT": 4
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
+   },
+   "M_LEQ_64": {
+-    "BLOCK_SIZE_M": 64,
+-    "BLOCK_SIZE_N": 32,
++    "BLOCK_SIZE_M": 16,
++    "BLOCK_SIZE_N": 16,
+     "BLOCK_SIZE_K": 128,
+-    "GROUP_SIZE_M": 1,
++    "GROUP_SIZE_M": 8,
+     "num_warps": 2,
+     "num_stages": 3,
+-    "waves_per_eu": 1,
++    "waves_per_eu": 4,
+     "matrix_instr_nonkdim": 16,
+-    "cache_modifier": ".cg",
+-    "NUM_KSPLIT": 4
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
+   },
+   "M_LEQ_128": {
+-    "BLOCK_SIZE_M": 64,
+-    "BLOCK_SIZE_N": 32,
++    "BLOCK_SIZE_M": 32,
++    "BLOCK_SIZE_N": 16,
+     "BLOCK_SIZE_K": 128,
+-    "GROUP_SIZE_M": 8,
++    "GROUP_SIZE_M": 4,
+     "num_warps": 2,
+-    "num_stages": 2,
+-    "waves_per_eu": 1,
++    "num_stages": 3,
++    "waves_per_eu": 2,
+     "matrix_instr_nonkdim": 16,
+     "cache_modifier": null,
+     "NUM_KSPLIT": 1
+   },
+   "M_LEQ_256": {
+-    "BLOCK_SIZE_M": 64,
+-    "BLOCK_SIZE_N": 32,
++    "BLOCK_SIZE_M": 32,
++    "BLOCK_SIZE_N": 16,
+     "BLOCK_SIZE_K": 128,
+     "GROUP_SIZE_M": 4,
+     "num_warps": 2,
+     "num_stages": 3,
+-    "waves_per_eu": 1,
++    "waves_per_eu": 2,
+     "matrix_instr_nonkdim": 16,
+     "cache_modifier": null,
+     "NUM_KSPLIT": 1
+diff --git a/aiter/ops/triton/configs/gemm/gfx950-GEMM-A8W8_BLOCKSCALE_PRESHUFFLED-N=4096-K=512.json b/aiter/ops/triton/configs/gemm/gfx950-GEMM-A8W8_BLOCKSCALE_PRESHUFFLED-N=4096-K=512.json
+new file mode 100644
+index 0000000000..37ed7734ec
+--- /dev/null
++++ b/aiter/ops/triton/configs/gemm/gfx950-GEMM-A8W8_BLOCKSCALE_PRESHUFFLED-N=4096-K=512.json
+@@ -0,0 +1,86 @@
++{
++  "M_LEQ_8": {
++    "BLOCK_SIZE_M": 4,
++    "BLOCK_SIZE_N": 16,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 4,
++    "num_warps": 2,
++    "num_stages": 3,
++    "waves_per_eu": 2,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  },
++  "M_LEQ_16": {
++    "BLOCK_SIZE_M": 8,
++    "BLOCK_SIZE_N": 16,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 4,
++    "num_warps": 2,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  },
++  "M_LEQ_32": {
++    "BLOCK_SIZE_M": 16,
++    "BLOCK_SIZE_N": 16,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 4,
++    "num_warps": 2,
++    "num_stages": 3,
++    "waves_per_eu": 2,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  },
++  "M_LEQ_64": {
++    "BLOCK_SIZE_M": 32,
++    "BLOCK_SIZE_N": 16,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 4,
++    "num_warps": 2,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  },
++  "M_LEQ_128": {
++    "BLOCK_SIZE_M": 16,
++    "BLOCK_SIZE_N": 16,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 2,
++    "num_stages": 3,
++    "waves_per_eu": 2,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 1
++  },
++  "M_LEQ_256": {
++    "BLOCK_SIZE_M": 32,
++    "BLOCK_SIZE_N": 16,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 4,
++    "num_warps": 2,
++    "num_stages": 3,
++    "waves_per_eu": 4,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  },
++  "any": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 32,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 8,
++    "num_warps": 2,
++    "num_stages": 2,
++    "waves_per_eu": 2,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  }
++}
+diff --git a/aiter/ops/triton/configs/gemm/gfx950-GEMM-A8W8_BLOCKSCALE_PRESHUFFLED-N=4608-K=7168.json b/aiter/ops/triton/configs/gemm/gfx950-GEMM-A8W8_BLOCKSCALE_PRESHUFFLED-N=4608-K=7168.json
+new file mode 100644
+index 0000000000..56e5c173d9
+--- /dev/null
++++ b/aiter/ops/triton/configs/gemm/gfx950-GEMM-A8W8_BLOCKSCALE_PRESHUFFLED-N=4608-K=7168.json
+@@ -0,0 +1,86 @@
++{
++  "M_LEQ_8": {
++    "BLOCK_SIZE_M": 8,
++    "BLOCK_SIZE_N": 16,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 2,
++    "num_stages": 3,
++    "waves_per_eu": 2,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 8
++  },
++  "M_LEQ_16": {
++    "BLOCK_SIZE_M": 16,
++    "BLOCK_SIZE_N": 16,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 2,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 8
++  },
++  "M_LEQ_32": {
++    "BLOCK_SIZE_M": 32,
++    "BLOCK_SIZE_N": 16,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 2,
++    "num_stages": 3,
++    "waves_per_eu": 4,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 8
++  },
++  "M_LEQ_64": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 32,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 2,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 7
++  },
++  "M_LEQ_128": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 16,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 2,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 7
++  },
++  "M_LEQ_256": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 16,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 8,
++    "num_warps": 2,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  },
++  "any": {
++    "BLOCK_SIZE_M": 128,
++    "BLOCK_SIZE_N": 32,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 4,
++    "num_warps": 2,
++    "num_stages": 2,
++    "waves_per_eu": 2,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  }
++}
+diff --git a/aiter/ops/triton/configs/gemm/gfx950-GEMM-A8W8_BLOCKSCALE_PRESHUFFLED-N=7168-K=2048.json b/aiter/ops/triton/configs/gemm/gfx950-GEMM-A8W8_BLOCKSCALE_PRESHUFFLED-N=7168-K=2048.json
+new file mode 100644
+index 0000000000..a31af19c4f
+--- /dev/null
++++ b/aiter/ops/triton/configs/gemm/gfx950-GEMM-A8W8_BLOCKSCALE_PRESHUFFLED-N=7168-K=2048.json
+@@ -0,0 +1,86 @@
++{
++  "M_LEQ_8": {
++    "BLOCK_SIZE_M": 4,
++    "BLOCK_SIZE_N": 16,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 4,
++    "num_warps": 2,
++    "num_stages": 3,
++    "waves_per_eu": 8,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  },
++  "M_LEQ_16": {
++    "BLOCK_SIZE_M": 8,
++    "BLOCK_SIZE_N": 16,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 4,
++    "num_warps": 2,
++    "num_stages": 3,
++    "waves_per_eu": 6,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  },
++  "M_LEQ_32": {
++    "BLOCK_SIZE_M": 16,
++    "BLOCK_SIZE_N": 16,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 8,
++    "num_warps": 2,
++    "num_stages": 3,
++    "waves_per_eu": 6,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  },
++  "M_LEQ_64": {
++    "BLOCK_SIZE_M": 32,
++    "BLOCK_SIZE_N": 16,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 4,
++    "num_warps": 2,
++    "num_stages": 3,
++    "waves_per_eu": 2,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  },
++  "M_LEQ_128": {
++    "BLOCK_SIZE_M": 32,
++    "BLOCK_SIZE_N": 16,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 8,
++    "num_warps": 2,
++    "num_stages": 2,
++    "waves_per_eu": 2,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  },
++  "M_LEQ_256": {
++    "BLOCK_SIZE_M": 128,
++    "BLOCK_SIZE_N": 32,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 4,
++    "num_warps": 2,
++    "num_stages": 3,
++    "waves_per_eu": 2,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  },
++  "any": {
++    "BLOCK_SIZE_M": 128,
++    "BLOCK_SIZE_N": 32,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 8,
++    "num_warps": 2,
++    "num_stages": 2,
++    "waves_per_eu": 2,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  }
++}
+diff --git a/aiter/ops/triton/configs/gemm/gfx950-GEMM-A8W8_BLOCKSCALE_PRESHUFFLED-N=7168-K=2304.json b/aiter/ops/triton/configs/gemm/gfx950-GEMM-A8W8_BLOCKSCALE_PRESHUFFLED-N=7168-K=2304.json
+new file mode 100644
+index 0000000000..e348663f42
+--- /dev/null
++++ b/aiter/ops/triton/configs/gemm/gfx950-GEMM-A8W8_BLOCKSCALE_PRESHUFFLED-N=7168-K=2304.json
+@@ -0,0 +1,86 @@
++{
++  "M_LEQ_8": {
++    "BLOCK_SIZE_M": 4,
++    "BLOCK_SIZE_N": 16,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 4,
++    "num_warps": 2,
++    "num_stages": 3,
++    "waves_per_eu": 2,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  },
++  "M_LEQ_16": {
++    "BLOCK_SIZE_M": 8,
++    "BLOCK_SIZE_N": 16,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 4,
++    "num_warps": 2,
++    "num_stages": 3,
++    "waves_per_eu": 2,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  },
++  "M_LEQ_32": {
++    "BLOCK_SIZE_M": 16,
++    "BLOCK_SIZE_N": 16,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 4,
++    "num_warps": 2,
++    "num_stages": 3,
++    "waves_per_eu": 8,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  },
++  "M_LEQ_64": {
++    "BLOCK_SIZE_M": 32,
++    "BLOCK_SIZE_N": 16,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 4,
++    "num_warps": 2,
++    "num_stages": 3,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  },
++  "M_LEQ_128": {
++    "BLOCK_SIZE_M": 32,
++    "BLOCK_SIZE_N": 16,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 4,
++    "num_warps": 2,
++    "num_stages": 2,
++    "waves_per_eu": 2,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  },
++  "M_LEQ_256": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 32,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 2,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 1
++  },
++  "any": {
++    "BLOCK_SIZE_M": 128,
++    "BLOCK_SIZE_N": 32,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 8,
++    "num_warps": 2,
++    "num_stages": 2,
++    "waves_per_eu": 2,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  }
++}
+diff --git a/aiter/ops/triton/gemm/basic/gemm_a16w8_blockscale.py b/aiter/ops/triton/gemm/basic/gemm_a16w8_blockscale.py
+index 707d56fdff..aeeb013aa6 100644
+--- a/aiter/ops/triton/gemm/basic/gemm_a16w8_blockscale.py
++++ b/aiter/ops/triton/gemm/basic/gemm_a16w8_blockscale.py
+@@ -9,9 +9,11 @@
+ )
+ from aiter.ops.triton._triton_kernels.gemm.basic.gemm_a16w8_blockscale import (
+     _gemm_a16w8_blockscale_kernel,
++    _gemm_a16w8_blockscale_preshuffle_kernel,
+     _get_config,
+ )
+ from aiter.ops.triton.utils.logger import AiterTritonLogger
++from aiter.ops.triton.utils.gemm_config_utils import compute_splitk_params
+ 
+ _LOGGER = AiterTritonLogger()
+ 
+@@ -22,8 +24,9 @@ def gemm_a16w8_blockscale(
+     w_scale: torch.Tensor,
+     dtype: Optional[float] = torch.bfloat16,
+     y: Optional[torch.Tensor] = None,
+-    pre_quant: Optional[bool] = False,
++    prequant: Optional[bool] = False,
+     config: Optional[dict] = None,
++    skip_reduce: Optional[bool] = False,
+ ):
+     """
+     Computes the 8 bit matmul Y = X x WT using the block-scale quantization approach.
+@@ -53,25 +56,22 @@ def gemm_a16w8_blockscale(
+     w = w.T
+     w_scale = w_scale.T
+ 
+-    if y is None:
+-        y = torch.empty((M, N), dtype=dtype, device=x.device)
+-
+     if config is None:
+         config, _ = _get_config(M, N, K)
+ 
+-    config["SPLITK_BLOCK_SIZE"] = triton.cdiv(K, config["NUM_KSPLIT"])
++    return_y_pp = config["NUM_KSPLIT"] > 1 and skip_reduce
++
+     if config["NUM_KSPLIT"] > 1:
+         y_pp = torch.empty(
+-            (config["NUM_KSPLIT"], M, N), dtype=torch.float32, device=y.device
++            (config["NUM_KSPLIT"], M, N), dtype=torch.float32, device=x.device
+         )
+     else:
+         y_pp = None
+ 
+-    if config["BLOCK_SIZE_K"] > config["SPLITK_BLOCK_SIZE"]:
+-        config["BLOCK_SIZE_K"] = triton.next_power_of_2(config["SPLITK_BLOCK_SIZE"])
+-        if config["BLOCK_SIZE_K"] > config["SPLITK_BLOCK_SIZE"]:
+-            config["BLOCK_SIZE_K"] = config["BLOCK_SIZE_K"] // 4
+-    config["BLOCK_SIZE_K"] = max(config["BLOCK_SIZE_K"], 16)
++    if y is None and not return_y_pp:
++        y = torch.empty((M, N), dtype=dtype, device=x.device)
++
++    compute_splitk_params(config, K)
+ 
+     # Scale block sizes
+     # TODO: need a better way to pass scale block sizes around
+@@ -108,13 +108,147 @@ def gemm_a16w8_blockscale(
+         y.stride(1) if config["NUM_KSPLIT"] == 1 else y_pp.stride(2),
+         w_scale.stride(0),
+         w_scale.stride(1),
+-        PREQUANT=pre_quant,
++        PREQUANT=prequant,
+         DTYPE_MAX=DTYPE_MAX,
+         DTYPE_MIN=-DTYPE_MAX,
+         **config,
+     )
+ 
++    if return_y_pp:
++        return y_pp
++    elif config["NUM_KSPLIT"] > 1:
++        REDUCE_BLOCK_SIZE_M = 32
++        REDUCE_BLOCK_SIZE_N = 32
++        ACTUAL_KSPLIT = triton.cdiv(K, config["SPLITK_BLOCK_SIZE"])
++
++        grid_reduce = (
++            triton.cdiv(M, REDUCE_BLOCK_SIZE_M),
++            triton.cdiv(N, REDUCE_BLOCK_SIZE_N),
++        )
++        _gemm_a8w8_blockscale_reduce_kernel[grid_reduce](
++            y_pp,
++            y,
++            M,
++            N,
++            y_pp.stride(0),
++            y_pp.stride(1),
++            y_pp.stride(2),
++            y.stride(0),
++            y.stride(1),
++            REDUCE_BLOCK_SIZE_M,
++            REDUCE_BLOCK_SIZE_N,
++            ACTUAL_KSPLIT,
++            triton.next_power_of_2(config["NUM_KSPLIT"]),
++        )
++
++    return y
++
++
++def gemm_a16w8_blockscale_preshuffle(
++    x: torch.Tensor,
++    w: torch.Tensor,
++    w_scale: torch.Tensor,
++    dtype: Optional[float] = torch.bfloat16,
++    y: Optional[torch.Tensor] = None,
++    prequant: Optional[bool] = False,
++    config: Optional[dict] = None,
++    skip_reduce: Optional[bool] = False,
++):
++    """
++    Computes the 8 bit matmul Y = X x WT using the block-scale quantization approach.
++
++    Key parameters:
++    - X: Matrix X with shape (M, K).
++    - W: Matrix W with shape (N, K).
++    - W_scale: Scale tensor for W with shape (**scale_n, *scale_k).
++
++    Returns:
++    - Y: The output matrix with shape (M, N).
++
++    *scale_k = (K + scale_block_size_k - 1) // scale_block_size_k
++    **scale_n = (N + scale_block_size_n - 1) // scale_block_size_n
++    """
++    _LOGGER.info(
++        f"GEMM_A8W8_BLOCKSCALE: x={tuple(x.shape)} w={tuple(w.shape)} w_scale={tuple(w_scale.shape)}"
++    )
++
++    M, K = x.shape
++    N, K = w.shape
++    N = N * 16
++    K = K // 16
++
++    # Check constraints.
++    assert x.shape[1] == w.shape[1] // 16, "Incompatible dimensions!!!"
++
++    if config is None:
++        config, _ = _get_config(M, N, K, True)
++
++    return_y_pp = config["NUM_KSPLIT"] > 1 and skip_reduce
++
+     if config["NUM_KSPLIT"] > 1:
++        y_pp = torch.empty(
++            (config["NUM_KSPLIT"], M, N), dtype=torch.float32, device=x.device
++        )
++    else:
++        y_pp = None
++
++    if y is None and not return_y_pp:
++        y = torch.empty((M, N), dtype=dtype, device=x.device)
++
++    compute_splitk_params(config, K)
++
++    # Scale block sizes
++    # TODO: need a better way to pass scale block sizes around
++    config["GROUP_K"] = triton.next_power_of_2(
++        triton.cdiv(K, w_scale.shape[1])
++    )  # scale_block_size_k
++    config["GROUP_N"] = triton.next_power_of_2(
++        triton.cdiv(N, w_scale.shape[0])
++    )  # scale_block_size_n
++
++    assert (
++        config["GROUP_K"] == config["BLOCK_SIZE_K"]
++    ), "GROUP_K must equal BLOCK_SIZE_K"
++
++    DTYPE_MAX = (
++        torch.finfo(w.dtype).max
++        if torch.is_floating_point(w)
++        else torch.iinfo(w.dtype).max
++    )
++    # grid = (config["NUM_KSPLIT"], triton.cdiv(M, config["BLOCK_SIZE_M"]) * triton.cdiv(N, config["BLOCK_SIZE_N"]),)
++    grid = lambda META: (  # noqa: E731
++        (
++            META["NUM_KSPLIT"]
++            * triton.cdiv(M, META["BLOCK_SIZE_M"])
++            * triton.cdiv(N, META["BLOCK_SIZE_N"])
++        ),
++    )
++    _gemm_a16w8_blockscale_preshuffle_kernel[grid](
++        x,
++        w,
++        y if config["NUM_KSPLIT"] == 1 else y_pp,
++        w_scale,
++        M,
++        N,
++        K,
++        x.stride(0),
++        x.stride(1),
++        w.stride(0),
++        w.stride(1),
++        0 if config["NUM_KSPLIT"] == 1 else y_pp.stride(0),
++        y.stride(0) if config["NUM_KSPLIT"] == 1 else y_pp.stride(1),
++        y.stride(1) if config["NUM_KSPLIT"] == 1 else y_pp.stride(2),
++        w_scale.stride(0),
++        w_scale.stride(1),
++        PREQUANT=prequant,
++        DTYPE_MAX=DTYPE_MAX,
++        DTYPE_MIN=-DTYPE_MAX,
++        **config,
++    )
++
++    if return_y_pp:
++        return y_pp
++    elif config["NUM_KSPLIT"] > 1:
+         REDUCE_BLOCK_SIZE_M = 32
+         REDUCE_BLOCK_SIZE_N = 32
+         ACTUAL_KSPLIT = triton.cdiv(K, config["SPLITK_BLOCK_SIZE"])
+diff --git a/aiter/ops/triton/gemm/basic/gemm_afp4wfp4.py b/aiter/ops/triton/gemm/basic/gemm_afp4wfp4.py
+index d716982a49..19c7948d5d 100644
+--- a/aiter/ops/triton/gemm/basic/gemm_afp4wfp4.py
++++ b/aiter/ops/triton/gemm/basic/gemm_afp4wfp4.py
+@@ -90,7 +90,8 @@ def gemm_afp4wfp4_fake_tensor(
+     if block_size_k >= 2 * K:
+         num_ksplit = 1
+ 
+-    if num_ksplit > 1 and skip_reduce:
++    return_y_pp = num_ksplit > 1 and skip_reduce
++    if return_y_pp:
+         if _USE_GEMM_SPLITK_BF16:
+             y_pp = torch.empty((num_ksplit, M, N), dtype=y.dtype, device=x.device)
+         else:
+@@ -162,6 +163,8 @@ def gemm_afp4wfp4_(
+         config["NUM_KSPLIT"] = 1
+     config["BLOCK_SIZE_K"] = max(config["BLOCK_SIZE_K"], 128)
+ 
++    return_y_pp = config["NUM_KSPLIT"] > 1 and skip_reduce
++
+     if config["NUM_KSPLIT"] > 1:
+         if _USE_GEMM_SPLITK_BF16:
+             y_pp = torch.empty(
+@@ -175,7 +178,7 @@ def gemm_afp4wfp4_(
+         config["SPLITK_BLOCK_SIZE"] = 2 * K
+         y_pp = None
+ 
+-    if y is None and (config["NUM_KSPLIT"] == 1 or not skip_reduce):
++    if y is None and not return_y_pp:
+         y = torch.empty((M, N), dtype=dtype, device=x.device)
+ 
+     # config["BLOCK_SIZE_N"] = max(config["BLOCK_SIZE_N"], 32)
+@@ -211,10 +214,9 @@ def gemm_afp4wfp4_(
+         **config,
+     )
+ 
+-    if config["NUM_KSPLIT"] > 1:
+-        if skip_reduce:
+-            return y_pp
+-
++    if return_y_pp:
++        return y_pp
++    elif config["NUM_KSPLIT"] > 1:
+         REDUCE_BLOCK_SIZE_M = 16
+         # TODO: Need to debug - REDUCE_BLOCK_SIZE_N=128 with fp32 partials fails
+         # NOTE: REDUCE_BLOCK_SIZE_N=16 gives best perf with fp32 partials and
+@@ -442,6 +444,8 @@ def gemm_afp4wfp4_preshuffle(
+     if config is None:
+         config, _ = _get_config(M, N, K, True)
+ 
++    return_y_pp = config["NUM_KSPLIT"] > 1 and skip_reduce
++
+     if config["NUM_KSPLIT"] > 1:
+         SPLITK_BLOCK_SIZE, BLOCK_SIZE_K, NUM_KSPLIT = get_splitk(
+             K, config["BLOCK_SIZE_K"], config["NUM_KSPLIT"]
+@@ -463,7 +467,7 @@ def gemm_afp4wfp4_preshuffle(
+         config["SPLITK_BLOCK_SIZE"] = 2 * K
+         y_pp = None
+ 
+-    if y is None and (config["NUM_KSPLIT"] == 1 or not skip_reduce):
++    if y is None and not return_y_pp:
+         y = torch.empty((M, N), dtype=dtype, device=x.device)
+ 
+     if config["BLOCK_SIZE_K"] >= 2 * K:
+@@ -543,10 +547,9 @@ def gemm_afp4wfp4_preshuffle(
+             **config,
+         )
+ 
+-    if config["NUM_KSPLIT"] > 1:
+-        if skip_reduce:
+-            return y_pp
+-
++    if return_y_pp:
++        return y_pp
++    elif config["NUM_KSPLIT"] > 1:
+         REDUCE_BLOCK_SIZE_M = 16
+         # TODO: Need to debug - REDUCE_BLOCK_SIZE_N=128 with fp32 partials fails
+         # NOTE: REDUCE_BLOCK_SIZE_N=16 gives best perf with fp32 partials and
+diff --git a/op_tests/triton_tests/gemm/basic/test_gemm_a16w8_blockscale.py b/op_tests/triton_tests/gemm/basic/test_gemm_a16w8_blockscale.py
+index 71e619d587..a4b816c57b 100644
+--- a/op_tests/triton_tests/gemm/basic/test_gemm_a16w8_blockscale.py
++++ b/op_tests/triton_tests/gemm/basic/test_gemm_a16w8_blockscale.py
+@@ -4,9 +4,13 @@
+ import torch
+ import triton
+ import pytest
+-from aiter.ops.triton.gemm.basic.gemm_a16w8_blockscale import gemm_a16w8_blockscale
++from aiter.ops.triton.gemm.basic.gemm_a16w8_blockscale import (
++    gemm_a16w8_blockscale,
++    gemm_a16w8_blockscale_preshuffle,
++)
+ from aiter.ops.triton.utils.types import get_fp8_dtypes
+ from aiter.ops.triton.utils.types import str_to_torch_dtype
++from aiter.ops.shuffle import shuffle_weight
+ 
+ # from op_tests.triton_tests.test_fused_fp8_quant import per_token_fp8_group_quant
+ import torch.nn.functional as F
+@@ -37,8 +41,8 @@ def run_torch(x, weight, w_scale, dtype=torch.bfloat16):
+     return out.to(dtype)
+ 
+ 
+-def run_triton(x, weight, w_scale, dtype=torch.bfloat16, y=None):
+-    return gemm_a16w8_blockscale(x, weight, w_scale, dtype, y, pre_quant=False)
++def run_triton(impl, x, weight, w_scale, prequant, dtype=torch.bfloat16, y=None):
++    return impl(x, weight, w_scale, dtype, y, prequant=prequant)
+ 
+ 
+ e5m2_type, e4m3_type = get_fp8_dtypes()
+@@ -85,6 +89,16 @@ def get_x_vals():
+         (256, 32768, 8192),
+         (256, 8192, 32768),
+     ]
++    x_vals += [
++        (16, 2112, 7168),
++        (32, 2112, 7168),
++        (64, 2112, 7168),
++        (128, 2112, 7168),
++        (16, 7168, 2048),
++        (32, 7168, 2048),
++        (64, 7168, 2048),
++        (128, 7168, 2048),
++    ]
+     # x_vals += [(1, 1, 1)]  # minimal case
+     return x_vals
+ 
+@@ -97,7 +111,8 @@ def generate_gemm_a16w8_blockscale_inputs(
+     block_shape_k: int,
+     dtype=torch.bfloat16,
+     layout: str = "TN",
+-    output=False,
++    output: bool = False,
++    shuffle: bool = False,
+ ):
+     """
+     The GEMM kernel expects:
+@@ -125,27 +140,44 @@ def generate_gemm_a16w8_blockscale_inputs(
+ 
+     w_scale = torch.rand([scale_n, scale_k], dtype=torch.float32, device="cuda")
+ 
++    if shuffle:
++        weight_shuffle_layout = (16, 16)
++        weight_shuffled = shuffle_weight(weight, weight_shuffle_layout).reshape(
++            weight.shape[0] // weight_shuffle_layout[0],
++            weight.shape[1] * weight_shuffle_layout[0],
++        )
++    else:
++        weight_shuffled = weight
++
+     y = None
+     if output:
+         y = torch.empty((M, N), dtype=dtype, device="cuda").cuda()
+ 
+-    return x, weight, w_scale, y
++    return x, weight, weight_shuffled, w_scale, y
+ 
+ 
+ @pytest.mark.parametrize(
+     "dtype, M, N, K, output",
+     [
+         (dtype, *shape, output)
+-        for output in [True, False]
++        for output in [False]
+         for dtype in ["bf16"]
+         for shape in get_x_vals()
+     ],
+ )
+-def test_gemm(dtype, M, N, K, output):
++@pytest.mark.parametrize("shuffle", [True, False])
++@pytest.mark.parametrize("prequant", [False])
++def test_gemm(dtype, M, N, K, output, shuffle, prequant):
+     block_shape_n, block_shape_k = block_shape
+ 
++    if shuffle:
++        if N % 16 > 0 or K % 32 > 0:
++            pytest.skip(
++                "N has to be multiple of 16 and K has to be multiple of 32 for preshuffle cases"
++            )
++
+     dtype = str_to_torch_dtype[dtype]
+-    x, weight, w_scale, y = generate_gemm_a16w8_blockscale_inputs(
++    x, weight, weight_triton, w_scale, y = generate_gemm_a16w8_blockscale_inputs(
+         M,
+         N,
+         K,
+@@ -153,9 +185,11 @@ def test_gemm(dtype, M, N, K, output):
+         block_shape_k,
+         dtype=dtype,
+         output=output,
++        shuffle=shuffle,
+     )
+ 
+     a = run_torch(x, weight, w_scale, dtype)
+-    b = run_triton(x, weight, w_scale, dtype, y)
++    impl = gemm_a16w8_blockscale_preshuffle if shuffle else gemm_a16w8_blockscale
++    b = run_triton(impl, x, weight_triton, w_scale, prequant, dtype, y)
+ 
+     triton.testing.assert_close(a, b, atol=0.1, rtol=0.1)
+diff --git a/op_tests/triton_tests/gemm/basic/test_gemm_a8w8_blockscale.py b/op_tests/triton_tests/gemm/basic/test_gemm_a8w8_blockscale.py
+index 5a720a2f3e..29771e33a7 100644
+--- a/op_tests/triton_tests/gemm/basic/test_gemm_a8w8_blockscale.py
++++ b/op_tests/triton_tests/gemm/basic/test_gemm_a8w8_blockscale.py
+@@ -102,14 +102,14 @@ def get_x_vals():
+         (32, 7168, 2048),
+         (64, 7168, 2048),
+         (128, 7168, 2048),
+-        (16, 4096, 7168),
+-        (32, 4096, 7168),
+-        (64, 4096, 7168),
+-        (128, 4096, 7168),
+-        (16, 7168, 256),
+-        (32, 7168, 256),
+-        (64, 7168, 256),
+-        (128, 7168, 256),
++        (16, 4608, 7168),
++        (32, 4608, 7168),
++        (64, 4608, 7168),
++        (128, 4608, 7168),
++        (16, 7168, 2304),
++        (32, 7168, 2304),
++        (64, 7168, 2304),
++        (128, 7168, 2304),
+     ]
+     # x_vals += [(1, 1, 1)]  # minimal case
+     return x_vals
+@@ -159,7 +159,6 @@ def generate_gemm_a8w8_blockscale_inputs(
+ 
+     if shuffle:
+         weight_shuffle_layout = (16, 16)
+-        # weight_shuffle_layout = (16, 32)
+         weight_shuffled = shuffle_weight(weight, weight_shuffle_layout).reshape(
+             weight.shape[0] // weight_shuffle_layout[0],
+             weight.shape[1] * weight_shuffle_layout[0],
+@@ -174,6 +173,7 @@ def generate_gemm_a8w8_blockscale_inputs(
+         y = torch.empty((M, N), dtype=dtype, device="cuda").cuda()
+ 
+     return x, weight, weight_shuffled, x_scale, x_scale_shuffled, w_scale, y
++    return x, weight, weight_shuffled, x_scale, x_scale_shuffled, w_scale, y
+ 
+ 
+ @pytest.mark.parametrize(
+@@ -225,6 +225,19 @@ def test_gemm(dtype, M, N, K, layout, output, impl: str):
+             shuffle=("_shuffle" in impl),
+         )
+     )
++    x, weight, weight_triton, x_scale, x_scale_shuffled, w_scale, y = (
++        generate_gemm_a8w8_blockscale_inputs(
++            M,
++            N,
++            K,
++            block_shape_n,
++            block_shape_k,
++            dtype=dtype,
++            layout=layout,
++            output=output,
++            shuffle=("_shuffle" in impl),
++        )
++    )
+ 
+     a = run_torch(x, weight, x_scale, w_scale, dtype)
+ 

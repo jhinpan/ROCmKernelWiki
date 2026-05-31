@@ -1,0 +1,2393 @@
+diff --git a/aiter/ops/triton/_triton_kernels/moe/moe_op_gemm_int8_smoothquant.py b/aiter/ops/triton/_triton_kernels/moe/moe_op_gemm_int8_smoothquant.py
+new file mode 100644
+index 0000000000..cb96ba783a
+--- /dev/null
++++ b/aiter/ops/triton/_triton_kernels/moe/moe_op_gemm_int8_smoothquant.py
+@@ -0,0 +1,416 @@
++# adapted from triton_kernels package
++# original code https://github.com/triton-lang/triton/blob/main/python/triton_kernels/triton_kernels/matmul_ogs_details/_matmul_ogs.py
++
++import torch
++import triton
++import triton.language as tl
++from aiter.ops.triton.utils._triton.pid_preprocessing import pid_grid
++
++
++def matmul_launch_metadata(grid, kernel, args):
++    ret = dict()
++    M, N, K = None, args["N"], args["K"]
++    Y, X, W = args["Y"], args["X"], args["W"]
++    hist = args["ExptHist"]
++    if hist is not None:
++        n_rows = int(hist.float().mean())
++        n_tokens = float(hist.sum())
++        n_w_bytes = (W.numel() * W.element_size() // hist.numel()) * (hist > 0).sum()
++    else:
++        n_tokens = None
++        n_w_bytes = W.numel() * W.element_size()
++
++    def repr(s, x):
++        return f"{s}={x}" if x is not None else f"E_{len(hist)}({s})={n_rows}"
++
++    nbits = X.dtype.itemsize * 8
++    ret["name"] = f"{kernel.name} [{repr('M', M)}, {repr('N', N)}, {repr('K', K)}]"
++    gindx = args.get("GatherIndx", None)
++    if gindx is not None:
++        ret["name"] += "_layer1"
++    else:
++        ret["name"] += "_layer2"
++    if args["B"] is not None:
++        ret["name"] += "_bias"
++    alpha = args.get("alpha", 0)
++    act_red_n = args.get("ACTIVATION_REDUCTION_N", 1)
++    if alpha != 0:
++        if act_red_n == 1:
++            ret["name"] += "_silu"
++        else:
++            ret["name"] += "_swiglu"
++
++    fM = n_tokens
++    fK = K if K is not None else n_tokens
++    ret[f"flops{nbits}"] = 2.0 * fM * N * fK
++
++    n_x_bytes = X.numel() * X.element_size()
++    n_y_bytes = Y.numel() * Y.element_size()
++    if hist is not None:
++        assert n_tokens is not None
++        n_expts_act = args["N_EXPTS_ACT"]
++
++        if gindx is not None:
++            # recreate inverse GatherIndx.
++            dst = torch.full_like(gindx, -1)
++            idx = torch.arange(len(gindx), device=gindx.device, dtype=torch.int32)
++            mask = gindx != -1
++            dst[gindx[mask]] = idx[mask]
++            n_read_rows = (dst.view((-1, n_expts_act)) != -1).any(dim=1).sum()
++        else:
++            n_read_rows = n_tokens
++        n_x_bytes = n_read_rows * X.shape[-1] * X.element_size()
++        n_y_bytes = n_tokens * Y.shape[-1] * Y.element_size()
++    ret["bytes"] = int(n_x_bytes + n_y_bytes + n_w_bytes)
++
++    return ret
++
++
++@triton.jit
++def clip(x, limit, clip_lower: tl.constexpr):
++    res = tl.minimum(x, limit)
++    if clip_lower:
++        res = tl.maximum(-limit, res)
++    return res
++
++
++@triton.jit
++def _swiglu(input, alpha, limit, ADD_RESIDUAL: tl.constexpr):
++    gelu, linear = tl.split(tl.reshape(input, (input.shape[0], input.shape[1] // 2, 2)))
++    gelu = gelu.to(tl.float32)
++    if limit is not None:
++        gelu = clip(gelu, limit, clip_lower=False)
++    linear = linear.to(tl.float32)
++    if limit is not None:
++        linear = clip(linear, limit, clip_lower=True)
++    s = gelu / (1 + tl.exp2(-1.44269504089 * alpha * gelu))
++    if ADD_RESIDUAL:
++        return tl.fma(s, linear, s)  # s * (linear + 1)
++    else:
++        return s * linear
++
++
++@triton.jit
++def unshuffle_weights(w, BLOCK_N, BLOCK_K):
++    w = w.trans()
++    w = w.reshape(1, BLOCK_N // 16, BLOCK_K // 32, 2, 16, 16)
++    w = w.permute(0, 1, 4, 2, 3, 5)
++    w = w.reshape(BLOCK_N, BLOCK_K)
++    w = w.trans()
++    return w
++
++
++@triton.jit
++def _reduce_grouped(
++    X,
++    stride_xb: tl.uint64,
++    stride_xm: tl.uint64,
++    stride_xn,
++    Out,
++    stride_om: tl.uint64,
++    stride_on,
++    InIndx,
++    B,
++    N,
++    alpha,
++    limit,
++    ACTIVATION_REDUCTION_N: tl.constexpr,
++    K: tl.constexpr,
++    BLOCK_N: tl.constexpr,
++    EVEN_N: tl.constexpr,
++    ADD_RESIDUAL: tl.constexpr,
++    APPLY_ACTIVATION: tl.constexpr,
++):
++    pid_t = tl.program_id(1)
++    pid_n = tl.program_id(0)
++
++    BLOCK_N_OUT: tl.constexpr = BLOCK_N // ACTIVATION_REDUCTION_N
++    start = pid_t * K
++    # load indices into a tuple
++    if InIndx is None:
++        indxs = (pid_t,)
++    else:
++        indxs = ()
++        for i in tl.static_range(0, K):
++            indxs = indxs + (tl.load(InIndx + start + i),)
++    XPtrs = X + (pid_n * BLOCK_N + tl.arange(0, BLOCK_N)) * stride_xn
++    OutPtrs = Out + (pid_n * BLOCK_N_OUT + tl.arange(0, BLOCK_N_OUT)) * stride_on
++
++    acc = tl.zeros([BLOCK_N_OUT], dtype=tl.float32)
++    x_n_mask = pid_n * BLOCK_N + tl.arange(0, BLOCK_N) < N
++    # accumulate contributions for this tile
++    for i in tl.static_range(0, K):
++        curr = tl.zeros([BLOCK_N], dtype=tl.float32)
++        # iterate over split_k partial values
++        for b in tl.range(0, B):
++            x_row_ptr = XPtrs + indxs[i] * stride_xm + b * stride_xb
++            if EVEN_N:
++                vals = tl.load(x_row_ptr)
++            else:
++                vals = tl.load(x_row_ptr, mask=x_n_mask, other=0.0)
++            vals = vals.to(tl.float32)
++            curr += vals
++
++        # apply nonlinearity to split-k output
++        if APPLY_ACTIVATION:
++            curr = _swiglu(curr[None, :], alpha, limit, ADD_RESIDUAL=ADD_RESIDUAL)
++        curr = tl.reshape(curr, [curr.shape[-1]])
++        # update final accumulator
++        acc += curr
++    # Compute per-32-col MXFP scales for this tile if requested
++    Nrem = N // ACTIVATION_REDUCTION_N
++
++    # write-back for this tile
++    out_ptr = OutPtrs + pid_t * stride_om
++    if EVEN_N:
++        tl.store(out_ptr, acc)
++    else:
++        out_n_mask = pid_n * BLOCK_N_OUT + tl.arange(0, BLOCK_N_OUT) < Nrem
++        tl.store(out_ptr, acc, mask=out_n_mask)
++
++
++@triton.jit(launch_metadata=matmul_launch_metadata)
++def _moe_gemm_int8_smoothquant(
++    Y,
++    stride_y_k,
++    stride_y_m,
++    stride_y_n,
++    X,
++    stride_x_m,
++    stride_x_k,
++    XScale,
++    stride_x_scale,
++    W,
++    stride_w_e,
++    stride_w_k,
++    stride_w_n,
++    WScale,
++    stride_w_scale_e,
++    stride_w_scale_n,
++    B,
++    stride_b_e,  # Bias
++    Gammas,
++    N,
++    K,
++    # expt data
++    GatherIndx,
++    ExptHist,
++    ExptOffs,
++    ExptOffsSum,
++    ExptData,
++    # true grid size
++    grid_m,
++    grid_n,
++    alpha,
++    limit,
++    ACTIVATION_REDUCTION_N: tl.constexpr,
++    APPLY_ACTIVATION: tl.constexpr,
++    ADD_RESIDUAL: tl.constexpr,
++    # MoE config
++    N_EXPTS_ACT: tl.constexpr,
++    # optimization config
++    BLOCK_M: tl.constexpr,
++    BLOCK_N: tl.constexpr,
++    BLOCK_K: tl.constexpr,
++    GROUP_M: tl.constexpr,
++    PRESHUFFLED: tl.constexpr,
++    EVEN_K: tl.constexpr,
++    MASK_K_LIMIT: tl.constexpr,
++    SPLIT_K: tl.constexpr,
++    W_CACHE_MODIFIER: tl.constexpr,
++    UPCAST_INDICES: tl.constexpr = False,
++):
++    """
++    Int8 MoE GEMM with SmoothQuant support and per-token per-channel scaling.
++
++    SmoothQuant formula:
++        Y = (X diag(s)^-1) · (diag(s) W)
++
++    Where s is the smoothing factor
++
++    Implementation:
++        Y = (X @ W) * x_scale * w_scale
++
++    Key parameters:
++    - X is int8 activations [M, K] (quantized X diag(s)^-1)
++    - W is int8 weights [E, K, N] (quantized diag(s)W)
++    - x_scale is fp32 per-token scale [M] (dequant scale for X̂)
++    - w_scale is fp32 per-output-channel scale [E, N] (dequant scale for Ŵ)
++
++    Activation functions:
++    - alpha=0: No activation
++    - alpha==1, ADD_RESIDUAL=False: SiLU
++    - alpha!=0: SwiGLU
++    """
++    # Assume positive strides for compiler hints
++    tl.assume(stride_y_k >= 0)
++    tl.assume(stride_y_m >= 0)
++    tl.assume(stride_y_n >= 0)
++    tl.assume(stride_x_m >= 0)
++    tl.assume(stride_x_k >= 0)
++    tl.assume(stride_w_e >= 0)
++    tl.assume(stride_w_k >= 0)
++    tl.assume(stride_w_n >= 0)
++    if B is not None:
++        tl.assume(stride_b_e >= 0)
++    tl.assume(grid_m >= 0)
++    tl.assume(grid_n >= 0)
++
++    OUT_BLOCK_N: tl.constexpr = BLOCK_N // ACTIVATION_REDUCTION_N
++    yN = N // ACTIVATION_REDUCTION_N
++
++    pid = tl.program_id(0)
++    padding_m: tl.constexpr = 0
++
++    index_type: tl.constexpr = tl.int64 if UPCAST_INDICES else tl.int32
++
++    unpadded_m = grid_m - padding_m
++    tl.assume(unpadded_m >= 0)
++    total_actual_tiles = unpadded_m * grid_n * SPLIT_K
++    if padding_m > 0 and pid >= total_actual_tiles:
++        return
++
++    pid_emnk = pid
++    pid_mnk = pid_emnk % (unpadded_m * grid_n * SPLIT_K)
++    pid_k = pid_mnk % SPLIT_K
++    pid_mn = pid_mnk // SPLIT_K
++    pid_m, pid_n = pid_grid(pid_mn, unpadded_m, grid_n, GROUP_M)
++    # For split-k, advance to the output k slice
++    if SPLIT_K > 1:
++        Y += pid_k.to(index_type) * stride_y_k
++    # unpack expert data
++    expt_data = tl.load(ExptData + pid_m)
++    if expt_data == -1:
++        return
++    expt_id = expt_data & 0x0000FFFF
++    block_id = expt_data >> 16
++    M = tl.load(ExptHist + expt_id)
++    start_m = tl.load(ExptOffs + expt_id)
++    expt_id, block_id = expt_id.to(index_type), block_id.to(index_type)
++    start_m = start_m.to(index_type)
++    pid_n, pid_k = pid_n.to(index_type), pid_k.to(index_type)
++
++    # A pointers
++    offs_x_m = BLOCK_M * block_id + tl.arange(0, BLOCK_M)
++    offs_x_m = tl.max_contiguous(tl.multiple_of(offs_x_m % M, BLOCK_M), BLOCK_M)
++    if GatherIndx is None:
++        X += start_m * stride_x_m
++        XScale += start_m * stride_x_scale
++    else:
++        GatherIndx += start_m
++        # no needs to bounds-check here because `offs_x_m` wraps around M dim
++        offs_x_m = tl.load(GatherIndx + offs_x_m) // N_EXPTS_ACT
++    offs_x_k = BLOCK_K * pid_k + tl.arange(0, BLOCK_K)
++    XPtrs = (
++        X
++        + offs_x_m.to(index_type)[:, None] * stride_x_m
++        + offs_x_k.to(index_type)[None, :] * stride_x_k
++    )
++
++    # B pointers
++    if PRESHUFFLED:
++        PACKED_BLOCK_N: tl.constexpr = BLOCK_N // 16
++        PACKED_BLOCK_K: tl.constexpr = BLOCK_K * 16
++        PACKED_N = N // 16
++    else:
++        PACKED_BLOCK_N: tl.constexpr = BLOCK_N
++        PACKED_BLOCK_K: tl.constexpr = BLOCK_K
++        PACKED_N = N
++
++    offs_w_n = pid_n * PACKED_BLOCK_N + tl.arange(0, PACKED_BLOCK_N)
++    offs_w_n = tl.max_contiguous(
++        tl.multiple_of(offs_w_n % PACKED_N, PACKED_BLOCK_N),
++        PACKED_BLOCK_N,
++    )
++    offs_w_k = pid_k * PACKED_BLOCK_K + tl.arange(0, PACKED_BLOCK_K)
++    W += expt_id * stride_w_e
++    WPtrs = W + (
++        offs_w_k.to(index_type)[:, None] * stride_w_k
++        + offs_w_n.to(index_type)[None, :] * stride_w_n
++    )
++
++    num_k_iter = tl.cdiv(K, BLOCK_K * SPLIT_K)
++    if not EVEN_K:
++        num_k_iter -= 1
++
++    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.int32)
++    for k in range(num_k_iter):
++        x = tl.load(XPtrs)
++        w = tl.load(WPtrs, cache_modifier=W_CACHE_MODIFIER)
++        if PRESHUFFLED:
++            w = unshuffle_weights(w, BLOCK_N, BLOCK_K)
++
++        acc += tl.dot(x, w, input_precision="ieee")
++
++        XPtrs += (BLOCK_K * SPLIT_K) * stride_x_k
++        WPtrs += (PACKED_BLOCK_K * SPLIT_K) * stride_w_k
++
++    if not EVEN_K:
++        mask_x_k = offs_x_k < MASK_K_LIMIT
++        if PRESHUFFLED:
++            mask_w_k = offs_w_k < MASK_K_LIMIT * 16
++        else:
++            mask_w_k = offs_w_k < MASK_K_LIMIT
++
++        x = tl.load(XPtrs, mask=mask_x_k[None, :], other=0)
++        w = tl.load(
++            WPtrs, mask=mask_w_k[:, None], other=0, cache_modifier=W_CACHE_MODIFIER
++        )
++        if PRESHUFFLED:
++            w = unshuffle_weights(w, BLOCK_N, BLOCK_K)
++
++        acc += tl.dot(x, w, input_precision="ieee")
++
++    # per-token activation scale
++    offs_m = BLOCK_M * block_id + tl.arange(0, BLOCK_M)
++    mask_m = offs_m < M
++    x_scale_ptrs = XScale + offs_x_m * stride_x_scale
++
++    # per-channel weight scale (load using full BLOCK_N)
++    offs_y_n = BLOCK_N * pid_n + tl.arange(0, BLOCK_N)
++    mask_n = offs_y_n < N
++    w_scale_ptrs = WScale + expt_id * stride_w_scale_e + offs_y_n * stride_w_scale_n
++
++    x_scale = tl.load(x_scale_ptrs, mask=mask_m, other=1.0)
++    w_scale = tl.load(w_scale_ptrs, mask=mask_n, other=1.0)
++    acc = acc * x_scale[:, None] * w_scale[None, :]
++
++    # bias
++    if B is not None:
++        BPtrs = B + expt_id * stride_b_e + offs_y_n
++        if pid_k == 0:
++            bias = tl.load(BPtrs, mask=mask_n, other=0, cache_modifier=W_CACHE_MODIFIER)
++        else:
++            bias = tl.full([BLOCK_N], 0, dtype=tl.float32)
++        acc = acc + bias[None, :]
++
++    if APPLY_ACTIVATION and SPLIT_K == 1:
++        out = _swiglu(acc, alpha, limit, ADD_RESIDUAL=ADD_RESIDUAL)
++        tl.static_assert(
++            out.shape[1] == OUT_BLOCK_N,
++            f"Activation fn out.shape[1] ({out.shape[1]}) doesn't match computed OUT_BLOCK_N ({OUT_BLOCK_N})",
++        )
++        offs_y_n = OUT_BLOCK_N * pid_n + tl.arange(0, OUT_BLOCK_N)
++        mask_n = offs_y_n < yN
++    else:
++        tl.static_assert(
++            ACTIVATION_REDUCTION_N == 1,
++            "Activation reduction must be 1 if no activation fn is provided",
++        )
++        out = acc
++
++    # Apply gammas if provided
++    if Gammas is not None:
++        gammas = tl.load(Gammas + start_m + offs_m, mask=mask_m, other=0.0)
++        out *= gammas[:, None]
++
++    # Write back
++    Y += start_m * stride_y_m
++    offs_y_m = offs_m
++    YPtrs = (
++        Y
++        + offs_y_m.to(index_type)[:, None] * stride_y_m
++        + offs_y_n.to(index_type)[None, :] * stride_y_n
++    )
++    mask = mask_m[:, None] & mask_n[None, :]
++    tl.store(YPtrs, out, mask=mask)
+diff --git a/aiter/ops/triton/_triton_kernels/moe/moe_routing/routing.py b/aiter/ops/triton/_triton_kernels/moe/moe_routing/routing.py
+index fabc2ad63c..2fd44be549 100644
+--- a/aiter/ops/triton/_triton_kernels/moe/moe_routing/routing.py
++++ b/aiter/ops/triton/_triton_kernels/moe/moe_routing/routing.py
+@@ -39,13 +39,14 @@ def _routing_compute_indx(
+     BLOCK_M: tl.constexpr,
+     EVEN_M: tl.constexpr,
+     N_EXPTS_ACT: tl.constexpr,
++    N_EXPTS_ACT_PAD: tl.constexpr,
+ ):
+ 
+-    tl.static_assert(N_EXPTS_ACT * BLOCK_M <= 32768)
++    tl.static_assert(N_EXPTS_ACT_PAD * BLOCK_M <= 32768)
+ 
+-    local_offs = tl.arange(0, N_EXPTS_ACT * BLOCK_M)
++    local_offs = tl.arange(0, N_EXPTS_ACT_PAD * BLOCK_M)
+     offs = pid_m * BLOCK_M * N_EXPTS_ACT + local_offs
+-    if EVEN_M:
++    if EVEN_M and N_EXPTS_ACT == N_EXPTS_ACT_PAD:
+         expert = tl.load(ExptIndx + offs).to(tl.uint32)
+     else:
+         expert = tl.load(ExptIndx + offs, mask=(offs < n_gates), other=-1).to(tl.uint32)
+@@ -56,8 +57,7 @@ def _routing_compute_indx(
+     expert = kv_pairs >> 16
+     offs = pid_m * BLOCK_M * N_EXPTS_ACT + (kv_pairs & 0xFFFF)
+ 
+-    if EVEN_M:
+-        mask = expert != 0xFFFF
++    if EVEN_M and N_EXPTS_ACT == N_EXPTS_ACT_PAD:
+         gate_scal = tl.load(ExptScal + offs)
+ 
+         # compute run lengths in expert-sorted order:
+@@ -102,13 +102,14 @@ def _routing_compute_indx_fused(
+     BLOCK_M: tl.constexpr,
+     EVEN_M: tl.constexpr,
+     N_EXPTS_ACT: tl.constexpr,
++    N_EXPTS_ACT_PAD: tl.constexpr,
+ ):
+ 
+-    tl.static_assert(N_EXPTS_ACT * BLOCK_M <= 32768)
++    tl.static_assert(N_EXPTS_ACT_PAD * BLOCK_M <= 32768)
+ 
+-    local_offs = tl.arange(0, N_EXPTS_ACT * BLOCK_M)
++    local_offs = tl.arange(0, N_EXPTS_ACT_PAD * BLOCK_M)
+     offs = local_offs
+-    if EVEN_M:
++    if EVEN_M and N_EXPTS_ACT == N_EXPTS_ACT_PAD:
+         expert = tl.load(ExptIndx + offs).to(tl.uint32)
+     else:
+         expert = tl.load(ExptIndx + offs, mask=(offs < n_gates), other=-1).to(tl.uint32)
+@@ -119,7 +120,7 @@ def _routing_compute_indx_fused(
+     expert = kv_pairs >> 16
+     offs = kv_pairs & 0xFFFF
+ 
+-    if EVEN_M:
++    if EVEN_M and N_EXPTS_ACT == N_EXPTS_ACT_PAD:
+         gate_scal = tl.load(ExptScal + offs)
+ 
+         # compute run lengths in expert-sorted order:
+@@ -164,6 +165,7 @@ def _combined_routing(
+     BLOCK_M: tl.constexpr,
+     EVEN_M: tl.constexpr,
+     N_EXPTS_ACT: tl.constexpr,
++    N_EXPTS_ACT_PAD: tl.constexpr,
+     ExpertHist,
+     n_expts_tot,
+     TokenStart,
+@@ -211,6 +213,7 @@ def _combined_routing(
+             BLOCK_M,
+             EVEN_M,
+             N_EXPTS_ACT,
++            N_EXPTS_ACT_PAD,
+         )
+ 
+ 
+@@ -230,6 +233,7 @@ def _combined_routing_fused(
+     BLOCK_M: tl.constexpr,
+     EVEN_M: tl.constexpr,
+     N_EXPTS_ACT: tl.constexpr,
++    N_EXPTS_ACT_PAD: tl.constexpr,
+     N_EXPTS_TOT: tl.constexpr,
+     ExpertHist,
+     TokenStart,
+@@ -288,4 +292,5 @@ def _combined_routing_fused(
+             BLOCK_M,
+             EVEN_M,
+             N_EXPTS_ACT,
++            N_EXPTS_ACT_PAD,
+         )
+diff --git a/aiter/ops/triton/_triton_kernels/moe/moe_routing/topk.py b/aiter/ops/triton/_triton_kernels/moe/moe_routing/topk.py
+index 336171cf64..b75562b091 100644
+--- a/aiter/ops/triton/_triton_kernels/moe/moe_routing/topk.py
++++ b/aiter/ops/triton/_triton_kernels/moe/moe_routing/topk.py
+@@ -26,17 +26,6 @@ def key_to_fpval(x):
+     return x ^ tl.where((x & tm) == 0, fm, tm)
+ 
+ 
+-# stable top-k tie-breaks to value with smaller index
+-@triton.jit
+-def indx_to_key(indx, N_EXPTS_PAD: tl.constexpr):
+-    return N_EXPTS_PAD - indx
+-
+-
+-@triton.jit
+-def key_to_indx(indx, N_EXPTS_PAD: tl.constexpr):
+-    return N_EXPTS_PAD - indx
+-
+-
+ @triton.jit
+ def streaming_topk(
+     X,
+@@ -46,6 +35,7 @@ def streaming_topk(
+     mask_m,
+     N_EXPTS_PAD: tl.constexpr,
+     N_EXPTS_ACT: tl.constexpr,
++    N_EXPTS_ACT_PAD: tl.constexpr,
+     BLOCK_N: tl.constexpr,
+ ):
+     x_nbits: tl.constexpr = X.dtype.element_ty.primitive_bitwidth
+@@ -68,8 +58,8 @@ def streaming_topk(
+     X_ptrs = X + offs_m[:, None] * stride_xm + offs_x_n[None, :]
+     x = tl.load(X_ptrs, mask=(mask_m & mask_n), other=float("-inf"))
+     x = fpval_to_key(x.to(x_utype, bitcast=True))
+-    x = (x.to(x_ultype) << 16) | indx_to_key(offs_x_n, N_EXPTS_PAD)[None, :]
+-    acc = tl.topk(x, N_EXPTS_ACT, dim=1)
++    x = (x.to(x_ultype) << 16) | offs_x_n[None, :]
++    acc = tl.topk(x, N_EXPTS_ACT_PAD, dim=1)
+ 
+     # subsequent iterations:
+     for _i in (tl.static_range if loop_iterations <= 4 else range)(loop_iterations):
+@@ -78,20 +68,24 @@ def streaming_topk(
+         offs_x_n -= BLOCK_N
+         x = tl.load(X_ptrs, mask=mask_m, other=float("-inf"))
+         x = fpval_to_key(x.to(x_utype, bitcast=True))
+-        x = (x.to(x_ultype) << 16) | indx_to_key(offs_x_n, N_EXPTS_PAD)[None, :]
+-        acc = tl.maximum(acc, tl.topk(x, N_EXPTS_ACT, dim=1))
++        x = (x.to(x_ultype) << 16) | offs_x_n[None, :]
++        acc = tl.maximum(acc, tl.topk(x, N_EXPTS_ACT_PAD, dim=1))
+ 
+     # rotate expert index into upper 16 bits:
+     # 0000vvvvvvvviiii --> iiii0000vvvvvvvv
+     acc = (acc << (y_nbits - 16)) | (acc >> 16)
++    if N_EXPTS_ACT != N_EXPTS_ACT_PAD:
++        mask_expts_act = tl.arange(0, N_EXPTS_ACT_PAD)[None, :] < N_EXPTS_ACT
++        acc = tl.where(mask_expts_act, acc, N_EXPTS_PAD << (y_nbits - 16))
+     # sort in ascending order of expert (descending order of key)
+-    acc = tl.sort(acc, dim=1, descending=True)
++    acc = tl.sort(acc, dim=1)
+     # iiii0000vvvvvvvv --> 0000iiii:
+-    y_indices_raw = (acc >> (y_nbits - 16)).to(tl.uint32)
+-    y_indices = key_to_indx(y_indices_raw, N_EXPTS_PAD)
++    y_indices = (acc >> (y_nbits - 16)).to(tl.uint32)
+     # iiii0000vvvvvvvv --> vvvvvvvv:
+     y_values_raw = acc.to(x_utype)
+     y_values = key_to_fpval(y_values_raw).to(x_dtype, bitcast=True)
++    if N_EXPTS_ACT != N_EXPTS_ACT_PAD:
++        y_values = tl.where(y_indices == N_EXPTS_PAD, float("-inf"), y_values)
+ 
+     return y_values, y_indices
+ 
+@@ -103,7 +97,6 @@ def _topk(
+     Yv,
+     Yi,
+     stride_ym,  # topk values/indices
+-    USE_PROVIDED_INDX: tl.constexpr,
+     Bits,
+     stride_rm,
+     stride_rn,  # bitmatrix
+@@ -120,6 +113,7 @@ def _topk(
+     BLOCK_M: tl.constexpr,
+     N_EXPTS_PAD: tl.constexpr,
+     N_EXPTS_ACT: tl.constexpr,
++    N_EXPTS_ACT_PAD: tl.constexpr,
+     BLOCK_N: tl.constexpr,
+ ):
+ 
+@@ -145,24 +139,19 @@ def _topk(
+ 
+     # load logits
+     offs_m = pid * BLOCK_M + tl.arange(0, BLOCK_M)
+-    offs_y_n = tl.arange(0, N_EXPTS_ACT)
++    offs_y_n = tl.arange(0, N_EXPTS_ACT_PAD)
+     mask_m = offs_m[:, None] < n_rows
+-    if USE_PROVIDED_INDX:
+-        Yi_ptrs = Yi + offs_m[:, None] * stride_ym + offs_y_n[None, :]
+-        y_indices = tl.load(Yi_ptrs, mask=mask_m)
+-        Xv_ptrs = X + offs_m[:, None] * stride_xm + y_indices
+-        y_values = tl.load(Xv_ptrs, mask=mask_m)
+-    else:
+-        y_values, y_indices = streaming_topk(
+-            X,
+-            stride_xm,
+-            n_expts_tot,
+-            offs_m,
+-            mask_m,  #
+-            N_EXPTS_PAD,
+-            N_EXPTS_ACT,
+-            BLOCK_N,
+-        )
++    y_values, y_indices = streaming_topk(
++        X,
++        stride_xm,
++        n_expts_tot,
++        offs_m,
++        mask_m,
++        N_EXPTS_PAD,
++        N_EXPTS_ACT,
++        N_EXPTS_ACT_PAD,
++        BLOCK_N,
++    )
+ 
+     # normalize selected values
+     if APPLY_SOFTMAX:
+@@ -172,10 +161,14 @@ def _topk(
+ 
+     # write back
+     Yv_ptrs = Yv + offs_m[:, None] * stride_ym + offs_y_n[None, :]
+-    tl.store(Yv_ptrs, y_values, mask=mask_m)
+-    if not USE_PROVIDED_INDX:
+-        Yi_ptrs = Yi + offs_m[:, None] * stride_ym + offs_y_n[None, :]
+-        tl.store(Yi_ptrs, y_indices, mask=mask_m)
++    if N_EXPTS_ACT != N_EXPTS_ACT_PAD:
++        mask_n = offs_y_n[None, :] < N_EXPTS_ACT
++        mask = mask_m & mask_n
++    else:
++        mask = mask_m
++    tl.store(Yv_ptrs, y_values, mask=mask)
++    Yi_ptrs = Yi + offs_m[:, None] * stride_ym + offs_y_n[None, :]
++    tl.store(Yi_ptrs, y_indices, mask=mask)
+ 
+     # pack into bitmatrix
+     y_div = y_indices // 32
+diff --git a/aiter/ops/triton/_triton_kernels/moe/quant_moe.py b/aiter/ops/triton/_triton_kernels/moe/quant_moe.py
+index 121d76f362..1f280f4585 100644
+--- a/aiter/ops/triton/_triton_kernels/moe/quant_moe.py
++++ b/aiter/ops/triton/_triton_kernels/moe/quant_moe.py
+@@ -415,3 +415,250 @@ def _upcast_from_mxfp(
+     out_tensor = tl.where(scale == 0xFF, float("nan"), out_tensor)
+     out_tensor = out_tensor.reshape([BLOCK_SIZE_OUT_DIM, BLOCK_SIZE_QUANT_DIM])
+     tl.store(out_ptr + out_offsets, out_tensor, mask=full_mask_out)
++
++
++@triton.jit
++def _smoothquant_fuse_quant_kernel(
++    # Input tensors
++    X_ptr,  # bf16 input [M, K]
++    stride_x_m,
++    stride_x_k,
++    SmoothScale_ptr,  # fp32 smooth scale [K] - one per column
++    # Output tensors
++    Y_ptr,  # int8 output [M, K]
++    stride_y_m,
++    stride_y_k,
++    RowScale_ptr,  # fp32 per-row scale [M]
++    stride_row_scale,
++    # Dimensions
++    M,
++    K,
++    # Block sizes
++    BLOCK_M: tl.constexpr,
++    BLOCK_K: tl.constexpr,
++):
++    """
++    Fused smoothquant quantization kernel.
++
++    Performs:
++    1. Multiply bf16 input by fp32 smooth scale (per column)
++    2. Compute per-row max absolute value
++    3. Calculate per-row quantization scale
++    4. Quantize to int8
++
++    Args:
++        X_ptr: Input tensor in bf16 [M, K]
++        SmoothScale_ptr: Smooth scale vector in fp32 [K]
++        Y_ptr: Output tensor in int8 [M, K]
++        RowScale_ptr: Per-row quantization scales in fp32 [M]
++    """
++    # Program ID
++    pid_m = tl.program_id(0)
++
++    # Row offset
++    row_start = pid_m * BLOCK_M
++
++    # Initialize per-row max values
++    row_max = tl.zeros([BLOCK_M], dtype=tl.float32)
++
++    # First pass: apply smooth scale and compute row max
++    for k_start in range(0, K, BLOCK_K):
++        # Compute offsets
++        offs_m = row_start + tl.arange(0, BLOCK_M)
++        offs_k = k_start + tl.arange(0, BLOCK_K)
++
++        # Create masks
++        mask_m = offs_m < M
++        mask_k = offs_k < K
++        mask = mask_m[:, None] & mask_k[None, :]
++
++        # Load input values
++        x_ptrs = X_ptr + offs_m[:, None] * stride_x_m + offs_k[None, :] * stride_x_k
++        x = tl.load(x_ptrs, mask=mask, other=0.0)
++
++        # Load smooth scales for this K block
++        smooth_scale = tl.load(SmoothScale_ptr + offs_k, mask=mask_k, other=1.0)
++
++        # Apply smooth scale: x_smooth = x * smooth_scale (broadcast over M)
++        x_fp32 = x.to(tl.float32) * smooth_scale[None, :]
++
++        # Update row max with absolute values
++        abs_x = tl.abs(x_fp32)
++        # Max across K dimension for each row
++        block_max = tl.max(abs_x, axis=1)
++        row_max = tl.maximum(row_max, block_max)
++
++    # Compute per-row quantization scale
++    # scale = max_val / 127.0 (int8 max)
++    INT8_MAX: tl.constexpr = 127.0
++    eps = 1e-12  # Small epsilon to avoid division by zero
++    row_scale = row_max / INT8_MAX + eps
++
++    # Store row scales
++    offs_m = row_start + tl.arange(0, BLOCK_M)
++    mask_m = offs_m < M
++    scale_ptrs = RowScale_ptr + offs_m * stride_row_scale
++    tl.store(scale_ptrs, row_scale, mask=mask_m)
++
++    # Second pass: quantize values using computed scales
++    for k_start in range(0, K, BLOCK_K):
++        # Compute offsets
++        offs_k = k_start + tl.arange(0, BLOCK_K)
++
++        # Create masks
++        mask_k = offs_k < K
++        mask = mask_m[:, None] & mask_k[None, :]
++
++        # Load input values again
++        x_ptrs = X_ptr + offs_m[:, None] * stride_x_m + offs_k[None, :] * stride_x_k
++        x = tl.load(x_ptrs, mask=mask, other=0.0)
++
++        # Load smooth scales
++        smooth_scale = tl.load(SmoothScale_ptr + offs_k, mask=mask_k, other=1.0)
++
++        # Apply smooth scale
++        x_fp32 = x.to(tl.float32) * smooth_scale[None, :]
++
++        # Quantize: x_int8 = round(x_fp32 / row_scale)
++        x_scaled = x_fp32 / row_scale[:, None]
++
++        # Clamp to int8 range and round
++        x_clamped = tl.minimum(tl.maximum(x_scaled, -127.0), 127.0)
++        # Use standard rounding: add 0.5 and truncate for positive, subtract 0.5 for negative
++        x_rounded = tl.where(
++            x_clamped >= 0,
++            (x_clamped + 0.5).to(tl.int32),
++            (x_clamped - 0.5).to(tl.int32),
++        )
++        x_int8 = x_rounded.to(tl.int8)
++
++        # Store quantized values
++        y_ptrs = Y_ptr + offs_m[:, None] * stride_y_m + offs_k[None, :] * stride_y_k
++        tl.store(y_ptrs, x_int8, mask=mask)
++
++
++@triton.jit
++def _smoothquant_fuse_quant_kernel_single_pass(
++    # Input tensors
++    X_ptr,  # bf16 input [M, K]
++    stride_x_m,
++    stride_x_k,
++    SmoothScale_ptr,  # fp32 smooth scale [K] - one per column
++    # Output tensors
++    Y_ptr,  # int8 output [M, K]
++    stride_y_m,
++    stride_y_k,
++    RowScale_ptr,  # fp32 per-row scale [M]
++    stride_row_scale,
++    # Dimensions
++    M,
++    K,
++    # Block sizes
++    BLOCK_M: tl.constexpr,
++    BLOCK_K: tl.constexpr,
++):
++    """
++    Single-pass smoothquant quantization kernel for small K dimensions.
++
++    Loads entire rows into registers, applies smooth scaling, computes row max,
++    and quantizes in a single pass. More efficient when K fits in shared memory.
++    """
++    pid_m = tl.program_id(0)
++    row_start = pid_m * BLOCK_M
++
++    offs_m = row_start + tl.arange(0, BLOCK_M)
++    offs_k = tl.arange(0, BLOCK_K)
++
++    mask_m = offs_m < M
++    mask_k = offs_k < K
++    mask = mask_m[:, None] & mask_k[None, :]
++
++    # Load entire block
++    x_ptrs = X_ptr + offs_m[:, None] * stride_x_m + offs_k[None, :] * stride_x_k
++    x = tl.load(x_ptrs, mask=mask, other=0.0)
++
++    # Load smooth scales
++    smooth_scale = tl.load(SmoothScale_ptr + offs_k, mask=mask_k, other=1.0)
++
++    # Apply smooth scale
++    x_fp32 = x.to(tl.float32) * smooth_scale[None, :]
++
++    # Compute per-row max
++    abs_x = tl.abs(x_fp32)
++    # Set masked values to 0 for max computation
++    abs_x = tl.where(mask, abs_x, 0.0)
++    row_max = tl.max(abs_x, axis=1)
++
++    # Compute scale
++    INT8_MAX: tl.constexpr = 127.0
++    eps = 1e-12
++    row_scale = row_max / INT8_MAX + eps
++
++    # Store row scales
++    scale_ptrs = RowScale_ptr + offs_m * stride_row_scale
++    tl.store(scale_ptrs, row_scale, mask=mask_m)
++
++    # Quantize
++    x_scaled = x_fp32 / row_scale[:, None]
++    x_clamped = tl.minimum(tl.maximum(x_scaled, -127.0), 127.0)
++    # Use standard rounding: add 0.5 and truncate for positive, subtract 0.5 for negative
++    x_rounded = tl.where(
++        x_clamped >= 0, (x_clamped + 0.5).to(tl.int32), (x_clamped - 0.5).to(tl.int32)
++    )
++    x_int8 = x_rounded.to(tl.int8)
++
++    # Store quantized values
++    y_ptrs = Y_ptr + offs_m[:, None] * stride_y_m + offs_k[None, :] * stride_y_k
++    tl.store(y_ptrs, x_int8, mask=mask)
++
++
++@triton.jit
++def _dequant_int8_to_fp32_kernel(
++    # Input tensors
++    X_ptr,  # int8 input [M, N]
++    stride_x_m,
++    stride_x_n,
++    Scale_ptr,  # fp32 scale [M]
++    stride_scale,
++    # Output tensor
++    Y_ptr,  # fp32 output [M, N]
++    stride_y_m,
++    stride_y_n,
++    # Dimensions
++    M,
++    N,
++    # Block sizes
++    BLOCK_M: tl.constexpr,
++    BLOCK_N: tl.constexpr,
++):
++    """
++    Dequantize int8 tensor to fp32 using per-row scales.
++
++    Y = X.to(fp32) * scale
++    """
++    pid_m = tl.program_id(0)
++    pid_n = tl.program_id(1)
++
++    row_start = pid_m * BLOCK_M
++    col_start = pid_n * BLOCK_N
++
++    offs_m = row_start + tl.arange(0, BLOCK_M)
++    offs_n = col_start + tl.arange(0, BLOCK_N)
++
++    mask_m = offs_m < M
++    mask_n = offs_n < N
++    mask = mask_m[:, None] & mask_n[None, :]
++
++    # Load int8 values
++    x_ptrs = X_ptr + offs_m[:, None] * stride_x_m + offs_n[None, :] * stride_x_n
++    x = tl.load(x_ptrs, mask=mask, other=0)
++
++    # Load scales
++    scale = tl.load(Scale_ptr + offs_m * stride_scale, mask=mask_m, other=1.0)
++
++    # Dequantize
++    y = x.to(tl.float32) * scale[:, None]
++
++    # Store result
++    y_ptrs = Y_ptr + offs_m[:, None] * stride_y_m + offs_n[None, :] * stride_y_n
++    tl.store(y_ptrs, y, mask=mask)
+diff --git a/aiter/ops/triton/moe/moe_op_gemm_int8_smoothquant.py b/aiter/ops/triton/moe/moe_op_gemm_int8_smoothquant.py
+new file mode 100644
+index 0000000000..dbc51ec378
+--- /dev/null
++++ b/aiter/ops/triton/moe/moe_op_gemm_int8_smoothquant.py
+@@ -0,0 +1,467 @@
++# adapted from triton_kernels package
++# original code https://github.com/triton-lang/triton/blob/main/python/triton_kernels/triton_kernels/matmul_ogs.py
++
++import itertools
++import torch
++import triton
++from aiter.ops.triton.moe.moe_routing.routing import RoutingData
++from aiter.ops.triton.utils.device_info import get_num_sms
++from aiter.ops.triton._triton_kernels.moe.moe_op_gemm_int8_smoothquant import (
++    _moe_gemm_int8_smoothquant,
++    _reduce_grouped,
++)
++
++# -----------------------------------------------------------------------------
++#                    Matrix Multiplication + Outer Gather/Scatter
++# -----------------------------------------------------------------------------
++
++
++def can_overflow_int32(tensor: torch.Tensor):
++    max_int32 = (1 << 31) - 1
++    offset = 0
++    for i in range(tensor.ndim):
++        offset += (tensor.shape[i] - 1) * tensor.stride(i)
++    return offset > max_int32
++
++
++def should_upcast_indices(*args):
++    return any(tensor is not None and can_overflow_int32(tensor) for tensor in args)
++
++
++def preshuffle_weights(w: torch.Tensor) -> torch.Tensor:
++    """
++    Preshuffle int8 weight from (E, K, N) to MFMA-friendly layout (E, N//16, K*16).
++
++    Matches the shuffle_weight pattern from aiter.ops.shuffle for INT8:
++      layout=(16, 16), BK=32, K_lane=16, BN=16
++
++    The transformation:
++      1. Transpose to (E, N, K)
++      2. View as (E, N//16, 16, K//32, 2, 16) - decompose into MFMA tile blocks
++      3. Permute to (E, N//16, K//32, 2, 16, 16) - reorder for register layout
++      4. View as (E, N//16, K*16) - flatten K dimension
++
++    Args:
++        w: int8 weight tensor of shape (E, K, N) where
++           - E = number of experts
++           - K = input dimension (must be divisible by 32)
++           - N = output dimension (must be divisible by 16)
++
++    Returns:
++        Preshuffled weight tensor of shape (E, K * 16, N // 16)
++    """
++    assert w.dtype == torch.int8, f"Expected int8 weights, got {w.dtype}"
++    assert w.ndim == 3, f"Expected 3D weight tensor (E, K, N), got {w.ndim}D"
++    E, K, N = w.shape
++    assert K % 32 == 0, f"K ({K}) must be divisible by 32 for MFMA preshuffling"
++    assert N % 16 == 0, f"N ({N}) must be divisible by 16 for MFMA preshuffling"
++
++    # Transpose to (E, N, K)
++    w = w.transpose(1, 2)
++
++    # Preshuffle
++    w = w.view(E, N // 16, 16, K // 32, 2, 16)
++    w = w.permute(0, 1, 3, 4, 2, 5).contiguous()
++
++    # Reshape to (E, N // 16, K * 16)
++    w = w.view(E, N // 16, K * 16)
++
++    # Transpose back to (E, K, N)
++    w = w.transpose(1, 2)
++
++    return w
++
++
++def allocate_output(
++    M,
++    N,
++    out_dtype,
++    reduction_n_matmul,
++    reduction_n_reduction,
++    routing_data,
++    gather_indx,
++    scatter_indx,
++    block_m,
++    split_k,
++    device,
++):
++    # final output
++    if routing_data.n_expts_act == 1 or scatter_indx is None:
++        y_rows = M
++    else:
++        y_rows = (
++            scatter_indx.shape[0] // routing_data.n_expts_act
++        )  # compressed number of rows
++    matmul_shape = (split_k, M, N // reduction_n_matmul)
++    final_shape = (y_rows, N // reduction_n_matmul // reduction_n_reduction)
++    matmul_output = torch.empty(matmul_shape, device=device, dtype=out_dtype)
++    if scatter_indx is not None or split_k > 1:
++        final_output = torch.empty(final_shape, device=device, dtype=out_dtype)
++    else:
++        final_output = None
++    return matmul_output, final_output
++
++
++def get_kernel_config(m, n, k, routing_data):
++    block_m = routing_data.block_m
++    group_m = 1
++    w_cache_modifier = ".cg" if block_m <= 32 else None
++    split_k = 1
++    num_cus = get_num_sms()
++
++    if block_m == 16:
++        block_n = 64
++        block_k = 256
++        num_warps = 4
++        num_stages = 2
++        kpack = 2
++
++        grid_m = routing_data.n_blocks(m, block_m)
++        grid_n = triton.cdiv(n, block_n)
++        grid = grid_m * grid_n * split_k
++        while block_n >= 64 and grid < num_cus:
++            block_n = block_n // 2
++            grid_m = routing_data.n_blocks(m, block_m)
++            grid_n = triton.cdiv(n, block_n)
++            grid = grid_m * grid_n * split_k
++    else:
++        block_n = 128
++        block_k = 128
++        num_warps = 8
++        num_stages = 2
++        kpack = 1
++
++    ret = {
++        "block_m": block_m,
++        "block_n": block_n,
++        "block_k": block_k,
++        "num_warps": num_warps,
++        "num_stages": num_stages,
++        "group_m": group_m,
++        "w_cache_modifier": w_cache_modifier,
++        "split_k": split_k,
++        "waves_per_eu": 0,
++        "matrix_instr_nonkdim": 16,
++        "kpack": kpack,
++    }
++    return ret
++
++
++def reduce_grouped(
++    x: torch.Tensor,
++    indx: torch.Tensor,
++    out: torch.Tensor,
++    alpha=1.0,
++    limit=1.0,
++    reduction_n=1,
++    apply_activation: bool = False,
++    out_dtype: torch.dtype = None,
++    add_residual: bool = False,
++):
++    """
++    In-place grouped row reduction.
++
++    Arguments
++    - x: Tensor[AnyFloat] of shape [(num_groups * K), N]
++    - indx: Tensor[Int] of shape [num_groups, K]
++
++    Description
++    For each group g in [0, num_groups), this routine sums the K rows of `x`
++    specified by `indx[g, :]` and overwrites the row corresponding to the first
++    valid (non-negative) index with the per-group sum. Accumulation is performed
++    in float32 for numerical stability, and the result is written back in the
++    dtype of `x`.
++
++    Behavior and edge cases
++    - Invalid (-1) entries are skipped during accumulation and do not generate
++      memory traffic. If a group has no valid entries, nothing is written for
++      that group.
++    - Reduction is performed tile-by-tile along the N dimension within a single
++      kernel launch (persistent along N) to minimize launch overhead.
++
++    Performance notes
++    - Memory traffic per group is approximately (valid_rows_read + 1) * N * sizeof(x),
++      plus index reads. With no invalid entries, this becomes (K + 1) reads/writes
++      of length N per group.
++
++    Returns
++    - The input tensor `x` (modified in place).
++    """
++    if indx is None and x.shape[0] == 1:
++        return x.squeeze(0)
++
++    if indx is not None:
++        num_groups = indx.shape[0]
++    else:
++        num_groups = x.shape[-2]
++    K = 1 if indx is None else indx.shape[1]
++    out_dtype = x.dtype if out_dtype is None else out_dtype
++    assert x.shape[-1] % reduction_n == 0
++    BLOCK_N = 512
++    num_blocks = triton.cdiv(x.shape[-1], BLOCK_N)
++
++    _reduce_grouped[(num_blocks, num_groups)](
++        x,
++        x.stride(0),
++        x.stride(1),
++        x.stride(2),
++        out,
++        out.stride(0),
++        out.stride(1),
++        indx,
++        x.shape[0],
++        x.shape[-1],
++        alpha,
++        limit,
++        reduction_n,
++        BLOCK_N=BLOCK_N,
++        EVEN_N=(x.shape[-1] % BLOCK_N == 0),
++        K=K,
++        num_warps=2,
++        ADD_RESIDUAL=add_residual,
++        APPLY_ACTIVATION=apply_activation,
++    )
++    return out
++
++
++# -----------------------------------------------------------------------------
++# Triton Implementation
++# -----------------------------------------------------------------------------
++
++
++def moe_gemm_int8_smoothquant(
++    x: torch.Tensor,
++    w: torch.Tensor,
++    x_scale: torch.Tensor,
++    w_scale: torch.Tensor,
++    bias: torch.Tensor = None,
++    routing_data: RoutingData = None,
++    gather_indx: torch.Tensor = None,
++    scatter_indx: torch.Tensor = None,
++    gammas: torch.Tensor = None,
++    preshuffled: bool = False,
++    out_dtype: torch.dtype = torch.bfloat16,
++    apply_activation: bool = False,
++    add_residual: bool = False,
++    alpha: float = 1.0,
++    limit: float = 1.0,
++):
++    """
++    Performs MoE matrix multiplication with int8 quantized inputs:
++    Y = (X @ W) * x_scale * w_scale
++
++    Gated Activation (apply_activation=True):
++        Input W must have shape [E, K, 2N] (double-width for gating)
++        Output shape: [M, N] (dimension reduced by half)
++
++        Then applies gated activation:
++            silu(x[:N], alpha) * x[N:]
++
++    Args:
++        add_residual: If True, adds 1 to the linear component
++            silu(x[:N], alpha) * (x[N:] + 1)
++        apply_activation: If False, no activation applied (alpha set to 0 internally)
++    """
++    assert x.dtype == torch.int8, f"Expected int8 activations, got {x.dtype}"
++    assert w.dtype == torch.int8, f"Expected int8 weights, got {w.dtype}"
++    assert x_scale.dtype == torch.float32, f"Expected fp32 x_scale, got {x_scale.dtype}"
++    assert w_scale.dtype == torch.float32, f"Expected fp32 w_scale, got {w_scale.dtype}"
++
++    # determine shapes
++    M = x.shape[-2] if gather_indx is None else gather_indx.shape[0]
++    K, N = x.shape[-1], w.shape[-1]
++    if preshuffled:
++        N *= 16
++    # compute optimization flags
++    config = get_kernel_config(M, N, K, routing_data)
++    if apply_activation:
++        if config["split_k"] > 1:
++            reduction_n_matmul = 1
++            reduction_n_reduction = 2
++        else:
++            reduction_n_matmul = 2
++            reduction_n_reduction = 1
++    else:
++        reduction_n_matmul = 1
++        reduction_n_reduction = 1
++        alpha = 0
++    # allocate output memory
++    y, y_final = allocate_output(
++        M,
++        N,
++        out_dtype,
++        reduction_n_matmul,
++        reduction_n_reduction,
++        routing_data,
++        gather_indx,
++        scatter_indx,
++        config["block_m"],
++        config["split_k"],
++        x.device,
++    )
++    stride_bias = None if bias is None else bias.stride(0)
++    # moe metadata
++    expt_data = routing_data.expt_data
++    expt_hist = None if expt_data is None else expt_data.hist
++    expt_hist_sum = None if expt_data is None else expt_data.token_offs_pad[-1]
++    expt_token_offs_raw = None if expt_data is None else expt_data.token_offs_raw
++    expt_block_pid_map = None if expt_data is None else expt_data.block_pid_map
++    # spmd grid
++    grid_m = routing_data.n_blocks(M, config["block_m"])
++    grid_n = triton.cdiv(N, config["block_n"])
++    grid = grid_m * grid_n * config["split_k"]
++    # launch kernel
++    _moe_gemm_int8_smoothquant[(grid,)](
++        y,
++        y.stride(0),
++        y.stride(1),
++        y.stride(2),
++        x,
++        x.stride(0),
++        x.stride(1),
++        x_scale,
++        x_scale.stride(0) if x_scale.ndim > 0 else 0,
++        w,
++        w.stride(0),
++        w.stride(1),
++        w.stride(2),
++        w_scale,
++        w_scale.stride(0),
++        w_scale.stride(1) if w_scale.ndim > 1 else 0,
++        bias,
++        stride_bias,
++        gammas,
++        N,
++        K,
++        gather_indx,
++        expt_hist,
++        expt_token_offs_raw,
++        expt_hist_sum,
++        expt_block_pid_map,
++        grid_m,
++        grid_n,
++        alpha,
++        limit,
++        reduction_n_matmul,
++        (alpha != 0) and (config["split_k"] == 1),  # APPLY_ACTIVATION
++        add_residual,
++        routing_data.n_expts_act,
++        config["block_m"],
++        config["block_n"],
++        config["block_k"],
++        config["group_m"],
++        PRESHUFFLED=preshuffled,
++        EVEN_K=K % config["block_k"] == 0,
++        MASK_K_LIMIT=K % config["block_k"],
++        SPLIT_K=config["split_k"],
++        W_CACHE_MODIFIER=config["w_cache_modifier"],
++        num_warps=config["num_warps"],
++        num_stages=config["num_stages"],
++        UPCAST_INDICES=should_upcast_indices(x, w, y),
++        waves_per_eu=config["waves_per_eu"],
++        matrix_instr_nonkdim=config["matrix_instr_nonkdim"],
++        kpack=config["kpack"],
++    )
++    # Build grouped reduction inputs in a uniform way
++    group_indx = (
++        None
++        if scatter_indx is None
++        else scatter_indx.view(-1, routing_data.n_expts_act)
++    )
++    y_final = reduce_grouped(
++        y,
++        group_indx,
++        y_final,
++        alpha,
++        limit,
++        reduction_n_reduction,
++        apply_activation=(alpha != 0)
++        and (config["split_k"] > 1),  # apply activation if split_k > 1
++        out_dtype=out_dtype,
++        add_residual=add_residual,
++    )
++
++    return y_final
++
++
++# -----------------------------------------------------------------------------
++# Reference Implementation
++# -----------------------------------------------------------------------------
++
++
++def swiglu_torch(a, alpha, limit, add_residual=False):
++    a_gelu = a[..., ::2]
++    if limit is not None:
++        a_gelu = a_gelu.clamp(max=limit)
++    a_linear = a[..., 1::2]
++    if limit is not None:
++        a_linear = a_linear.clamp(min=-limit, max=limit)
++
++    out_gelu = a_gelu * torch.sigmoid(alpha * a_gelu)
++    if add_residual:
++        out = out_gelu * (a_linear + 1)
++    else:
++        out = out_gelu * a_linear
++    return out
++
++
++def moe_gemm_smoothquant_torch(
++    x: torch.Tensor,
++    x_scale: torch.Tensor,
++    w: torch.Tensor,
++    w_scale: torch.Tensor,
++    bias: torch.Tensor = None,
++    routing_data: RoutingData = None,
++    gather_indx: torch.Tensor = None,
++    scatter_indx: torch.Tensor = None,
++    gammas: torch.Tensor = None,
++    apply_activation: bool = False,
++    add_residual: bool = False,
++    alpha: float = 1.0,
++    limit: float = 1.0,
++):
++    if bias is not None and bias.ndim == 1:
++        bias = bias.view(1, *bias.shape)
++    if w.ndim == 2:
++        w = w.view(1, *w.shape)
++
++    n_expts_act = routing_data.n_expts_act
++    # memory offsets
++    if routing_data.n_expts_tot > 1:
++        sizes = routing_data.expt_hist
++        off = torch.zeros(sizes.shape[0] + 1, dtype=torch.int32, device=x.device)
++        off[1:] = torch.cumsum(sizes, 0)
++        offs = list(itertools.pairwise(off))
++    else:
++        offs = [[0, x.shape[0]] for _ in range(w.shape[0])]
++    # compute
++    n_rows = x.shape[0] if gather_indx is None else gather_indx.shape[0]
++    n_cols = w.shape[-1] // 2 if apply_activation else w.shape[-1]
++    y = torch.zeros((n_rows, n_cols), device=x.device, dtype=torch.float32)
++    for i, (lo, hi) in enumerate(offs):
++        if gather_indx is None:
++            idx = torch.arange(lo, hi, device=x.device)
++        else:
++            idx = gather_indx[lo:hi] // n_expts_act
++        out = (
++            torch.matmul(x[idx, :].float(), w[i].float())
++            * x_scale[idx, None]
++            * w_scale[i, None, :]
++        )
++        if bias is not None:
++            out = out + bias[i, :]
++        if apply_activation:
++            out = swiglu_torch(out, alpha, limit, add_residual)
++        if gammas is not None:
++            out = out * gammas[lo:hi, None]
++        y[lo:hi, :] = out
++    if scatter_indx is None:
++        return y
++    # accumulate output from all experts
++    n_rows_out = y.shape[0] // n_expts_act
++    out = torch.zeros((n_rows_out, y.shape[-1]), dtype=torch.float32, device=x.device)
++    src_idx = scatter_indx.view(-1, n_expts_act)
++    for i in range(n_rows_out):
++        out[i, :] = y[src_idx[i], :].sum(0)
++
++    return out
+diff --git a/aiter/ops/triton/moe/moe_routing/routing.py b/aiter/ops/triton/moe/moe_routing/routing.py
+index 36d14f6950..b59221a479 100644
+--- a/aiter/ops/triton/moe/moe_routing/routing.py
++++ b/aiter/ops/triton/moe/moe_routing/routing.py
+@@ -71,6 +71,7 @@ def sort_tokens(expt_scal, expt_indx, n_expts_tot, bitmatrix, block_m, HIST_BLOC
+     dtype = expt_scal.dtype
+     n_tokens, n_expts_act = expt_scal.shape
+     n_gates = n_tokens * n_expts_act
++    n_expts_act_pad = triton.next_power_of_2(n_expts_act)
+ 
+     hist, partial_hist = bitmatrix.sum(partials_block_size=HIST_BLOCK_M)
+     hist = hist[:n_expts_tot]
+@@ -103,6 +104,7 @@ def sort_tokens(expt_scal, expt_indx, n_expts_tot, bitmatrix, block_m, HIST_BLOC
+         HIST_BLOCK_M,
+         n_tokens % HIST_BLOCK_M == 0,
+         n_expts_act,  # constants
++        n_expts_act_pad,
+         hist,
+         n_expts_tot,
+         token_offs_raw,
+@@ -136,6 +138,7 @@ def sort_tokens_fused(
+     dtype = expt_scal.dtype
+     n_tokens, n_expts_act = expt_scal.shape
+     n_gates = n_tokens * n_expts_act
++    n_expts_act_pad = triton.next_power_of_2(n_expts_act)
+ 
+     hist = bitmatrix.scratchpad
+     hist = hist[:n_expts_tot]
+@@ -169,6 +172,7 @@ def sort_tokens_fused(
+         HIST_BLOCK_M,
+         n_tokens % HIST_BLOCK_M == 0,
+         n_expts_act,  # constants
++        n_expts_act_pad,
+         n_expts_tot,
+         hist,
+         token_offs_raw,
+@@ -235,7 +239,7 @@ def _compute_expt_data_internal(n_expts_tot, n_gates, block_m, device):
+ # --------------------------
+ 
+ 
+-def routing(logits, n_expts_act, sm_first=False, expt_indx=None):
++def routing(logits, n_expts_act, sm_first=False):
+     HIST_BLOCK_M = 32
+ 
+     from .topk import topk
+@@ -246,7 +250,6 @@ def routing(logits, n_expts_act, sm_first=False, expt_indx=None):
+         logits,
+         n_expts_act,
+         apply_softmax=not sm_first,
+-        y_indx=expt_indx,
+         HIST_BLOCK_M=HIST_BLOCK_M,
+     )
+ 
+@@ -324,16 +327,12 @@ def compute_expt_data_torch(hist, n_expts_tot, n_gates, block_m):
+     return ExptData(hist, token_offs_raw, token_offs_pad, block_pid_map)
+ 
+ 
+-def routing_torch(logits, n_expts_act, sm_first=False, expt_indx=None):
+-    has_user_provided_indx = expt_indx is not None
++def routing_torch(logits, n_expts_act, sm_first=False):
+     n_gates_pad = logits.shape[0] * n_expts_act
+ 
+-    def topk(vals, k, expt_indx):
++    def topk(vals, k):
+         # topk of experts
+-        if has_user_provided_indx:
+-            tk_indx = expt_indx
+-        else:
+-            tk_indx = torch.argsort(-vals, dim=1, stable=True)[:, :k]
++        tk_indx = torch.argsort(vals, dim=1, stable=True)[:, -k:]
+         tk_indx = tk_indx.long()
+         tk_val = torch.take_along_dim(vals, tk_indx, dim=1)
+         tk_indx = tk_indx.int()
+@@ -342,13 +341,12 @@ def topk(vals, k, expt_indx):
+     _, n_expts_tot = logits.shape
+     if sm_first:
+         logits = torch.softmax(logits, dim=-1)
+-    expt_scal, expt_indx = topk(logits, n_expts_act, expt_indx)
++    expt_scal, expt_indx = topk(logits, n_expts_act)
+     if not sm_first:
+         expt_scal = torch.softmax(expt_scal, dim=-1)
+     # sort each token's selections by expert
+-    if not has_user_provided_indx:
+-        expt_indx, sort_indices = torch.sort(expt_indx, dim=1)
+-        expt_scal = torch.gather(expt_scal, 1, sort_indices)
++    expt_indx, sort_indices = torch.sort(expt_indx, dim=1)
++    expt_scal = torch.gather(expt_scal, 1, sort_indices)
+     # flatten topk data
+     expt_scal = expt_scal.reshape(-1)
+     expt_indx = expt_indx.reshape(-1).to(torch.int32)
+diff --git a/aiter/ops/triton/moe/moe_routing/topk.py b/aiter/ops/triton/moe/moe_routing/topk.py
+index 98fade4651..c9c43e1ba1 100644
+--- a/aiter/ops/triton/moe/moe_routing/topk.py
++++ b/aiter/ops/triton/moe/moe_routing/topk.py
+@@ -1,15 +1,17 @@
++import triton
+ import torch
+ from aiter.ops.triton._triton_kernels.moe.moe_routing.topk import _topk
+ from aiter.ops.triton.moe.moe_routing.bitmatrix import Bitmatrix
+ 
+ 
+-def topk(
+-    x, k, apply_softmax=True, dim=1, return_bitmatrix=True, y_indx=None, HIST_BLOCK_M=32
+-):
++def topk(x, k, apply_softmax=True, dim=1, return_bitmatrix=True, HIST_BLOCK_M=32):
+     x_shape = [x.shape[0], x.shape[1]]
+-    cdiv = lambda a, b: (a + b - 1) // b
++
++    def cdiv(a, b):
++        return (a + b - 1) // b
++
+     BLOCK_M = 32
+-    BLOCK_N = 128
++    BLOCK_N = 128  # triton.next_power_of_2(x_shape[1])  # 128
+     BLOCK_S = 128
+     BLOCK_SP = 128
+     assert len(x.shape) == 2
+@@ -21,11 +23,8 @@ def topk(
+     # scratchpad tensors
+     # NOTE: these are not returned
+     y_vals = torch.empty((n_rows, k), dtype=x.dtype, device=dev)
+-    if y_indx is not None:
+-        use_provided_indx = True
+-    else:
+-        y_indx = torch.empty((n_rows, k), dtype=torch.int16, device=dev)
+-        use_provided_indx = False
++    y_indx = torch.empty((n_rows, k), dtype=torch.int16, device=dev)
++    k_pow2 = triton.next_power_of_2(k)
+     # create bitmatrix in transposed memory layout:
+     n_cols_pad = cdiv(n_cols, BLOCK_N) * BLOCK_N
+     n_cols_words = n_cols_pad // 32
+@@ -49,10 +48,9 @@ def topk(
+     _topk[(pids,)](
+         x,
+         x.stride(0),  # inputs
+-        y_vals,
++        y_vals,  # output [topk]
+         y_indx,
+         y_vals.stride(0),
+-        use_provided_indx,  # output [topk]
+         bitmatrix,
+         bitmatrix.stride(0),
+         bitmatrix.stride(1),  # output [bitmatrix]
+@@ -70,6 +68,7 @@ def topk(
+         APPLY_SOFTMAX=apply_softmax,
+         N_EXPTS_PAD=n_cols_pad,
+         N_EXPTS_ACT=k,  # constants
++        N_EXPTS_ACT_PAD=k_pow2,
+         num_warps=8,
+     )
+     bitmatrix_shape = [n_rows, n_cols_words * 32]
+diff --git a/aiter/ops/triton/moe/quant_moe.py b/aiter/ops/triton/moe/quant_moe.py
+index 20a3c306d3..e57721f8b3 100644
+--- a/aiter/ops/triton/moe/quant_moe.py
++++ b/aiter/ops/triton/moe/quant_moe.py
+@@ -5,7 +5,10 @@
+     _downcast_to_static_fp8,
+     _downcast_to_mxfp,
+     _upcast_from_mxfp,
++    _smoothquant_fuse_quant_kernel,
++    _smoothquant_fuse_quant_kernel_single_pass,
+ )
++from aiter.ops.triton.utils._triton.arch_info import get_arch
+ 
+ 
+ def downcast_to_static_fp8_3d(x: torch.Tensor, scale: torch.Tensor):
+@@ -21,7 +24,11 @@ def downcast_to_static_fp8_3d(x: torch.Tensor, scale: torch.Tensor):
+ 
+ def downcast_to_static_fp8(x: torch.Tensor, scale: torch.Tensor):
+     M, N = x.shape
+-    y = torch.empty((M, N), dtype=torch.float8_e4m3fn, device="cuda")
++    if get_arch() != "gfx942":
++        dtype = torch.float8_e4m3fn
++    else:
++        dtype = torch.float8_e4m3fnuz
++    y = torch.empty((M, N), dtype=dtype, device="cuda")
+ 
+     BLOCK_M = min(triton.next_power_of_2(M), 128)
+     if M <= 4096:
+@@ -75,7 +82,11 @@ def downcast_to_mxfp(
+     # downcast
+     src_tensor = src_tensor.transpose(axis, src_tensor.ndim - 1)
+     is_fp4 = out_quant_type == torch.uint8
+-    is_fp8 = out_quant_type in (torch.float8_e4m3fn, torch.float8_e5m2)
++    is_fp8 = out_quant_type in (
++        torch.float8_e4m3fn,
++        torch.float8_e4m3fnuz,
++        torch.float8_e5m2,
++    )
+     assert is_fp4 or is_fp8
+     divisor = 2 if is_fp4 else 1
+     L = src_tensor.shape[-1]
+@@ -137,6 +148,7 @@ def upcast_from_mxfp(
+         torch.uint8,
+         torch.float8_e5m2,
+         torch.float8_e4m3fn,
++        torch.float8_e4m3fnuz,
+     }, f"Invalid tensor dtype {tensor.dtype=}"
+     assert scale.dtype == torch.uint8, f"Invalid scale dtype {scale.dtype=}"
+     assert dtype in (torch.float16, torch.bfloat16), f"Invalid output dtype {dtype=}"
+@@ -226,3 +238,122 @@ def dequant_w_blockscale(w, w_scales, group_shape):
+     w = w * scales
+     w = w.view(E, K_pad, N_pad)[:, :K, :N]
+     return w
++
++
++def smoothquant_quantize(
++    x: torch.Tensor,
++    smooth_scale: torch.Tensor,
++) -> tuple[torch.Tensor, torch.Tensor]:
++    """
++    Apply smoothquant quantization to convert bf16/fp16 tensor to int8.
++
++    Args:
++        x: Input tensor in bf16/fp16 [M, K]
++        smooth_scale: Per-column smooth scale in fp32 [K]
++
++    Returns:
++        x_int8: Quantized int8 tensor [M, K]
++        x_scale: Per-row quantization scale in fp32 [M]
++
++    The operation performs:
++    1. x_smooth = x * smooth_scale (per column)
++    2. row_scale = max(abs(x_smooth), dim=1) / 127
++    3. x_int8 = round(x_smooth / row_scale)
++    """
++    assert x.ndim == 2, f"Expected 2D tensor, got {x.ndim}D"
++    assert smooth_scale.ndim == 1, f"Expected 1D smooth_scale, got {smooth_scale.ndim}D"
++    assert (
++        x.shape[1] == smooth_scale.shape[0]
++    ), f"Dimension mismatch: x.shape[1]={x.shape[1]}, smooth_scale.shape[0]={smooth_scale.shape[0]}"
++
++    M, K = x.shape
++    device = x.device
++
++    x_int8 = torch.empty((M, K), dtype=torch.int8, device=device)
++    x_scale = torch.empty((M,), dtype=torch.float32, device=device)
++
++    smooth_scale = smooth_scale.to(torch.float32).contiguous()
++
++    MAX_SINGLE_PASS_K = 1024
++    BLOCK_M = min(triton.next_power_of_2(M), 32)
++
++    if K <= MAX_SINGLE_PASS_K:
++        # Single pass: load entire row at once
++        BLOCK_K = triton.next_power_of_2(K)
++        grid = (triton.cdiv(M, BLOCK_M),)
++
++        _smoothquant_fuse_quant_kernel_single_pass[grid](
++            x,
++            x.stride(0),
++            x.stride(1),
++            smooth_scale,
++            x_int8,
++            x_int8.stride(0),
++            x_int8.stride(1),
++            x_scale,
++            1,
++            M,
++            K,
++            BLOCK_M,
++            BLOCK_K,
++            num_warps=4,
++        )
++    else:
++        BLOCK_K = 256
++        grid = (triton.cdiv(M, BLOCK_M),)
++        _smoothquant_fuse_quant_kernel[grid](
++            x,
++            x.stride(0),
++            x.stride(1),
++            smooth_scale,
++            x_int8,
++            x_int8.stride(0),
++            x_int8.stride(1),
++            x_scale,
++            1,
++            M,
++            K,
++            BLOCK_M,
++            BLOCK_K,
++            num_warps=4,
++        )
++
++    return x_int8, x_scale
++
++
++def quantize_weights_int8(
++    w: torch.Tensor,
++) -> tuple[torch.Tensor, torch.Tensor]:
++    """
++    Quantize weights to int8 with per-output-channel scaling.
++
++    Args:
++        w: Weight tensor in bf16/fp16/fp32 [E, K, N] or [K, N]
++
++    Returns:
++        w_int8: Quantized int8 weights (contiguous)
++        w_scale: Per-output-channel scale [E, N] or [N] (contiguous)
++    """
++    if w.ndim == 2:
++        # [K, N] -> [1, K, N]
++        w = w.unsqueeze(0)
++        squeeze_output = True
++    else:
++        squeeze_output = False
++
++    w_fp32 = w.to(torch.float32)
++    w_abs_max = w_fp32.abs().max(dim=1).values
++    INT8_MAX = 127.0
++    w_scale = w_abs_max / INT8_MAX + 1e-12
++    w_scaled = w_fp32 / w_scale[:, None, :]
++    w_int8 = w_scaled.round().clamp(-127, 127).to(torch.int8)
++
++    # Layout [E, K, N] with N contiguous
++    w_int8 = w_int8.contiguous()
++    w_scale = w_scale.contiguous()
++
++    if squeeze_output:
++        w_int8 = w_int8.squeeze(0)
++        w_scale = w_scale.squeeze(0)
++
++    return w_int8, w_scale
+diff --git a/op_tests/op_benchmarks/triton/bench_moe_gemm_a4w4.py b/op_tests/op_benchmarks/triton/bench_moe_gemm_a4w4.py
+index b1c0444aa5..a5485ec4e8 100644
+--- a/op_tests/op_benchmarks/triton/bench_moe_gemm_a4w4.py
++++ b/op_tests/op_benchmarks/triton/bench_moe_gemm_a4w4.py
+@@ -15,7 +15,7 @@
+ )
+ from aiter.ops.triton.utils._triton.arch_info import get_arch
+ import tempfile
+-from triton_kernels.numerics_details.mxfp import downcast_to_mxfp
++from aiter.ops.triton.moe.quant_moe import downcast_to_mxfp
+ import inspect
+ 
+ 
+diff --git a/op_tests/op_benchmarks/triton/bench_moe_gemm_int8_smoothquant.py b/op_tests/op_benchmarks/triton/bench_moe_gemm_int8_smoothquant.py
+new file mode 100644
+index 0000000000..eb1b8a8bf3
+--- /dev/null
++++ b/op_tests/op_benchmarks/triton/bench_moe_gemm_int8_smoothquant.py
+@@ -0,0 +1,325 @@
++# adapted from triton_kernels package
++# original code https://github.com/triton-lang/triton/blob/main/python/triton_kernels/bench/bench_mlp.py
++
++from itertools import chain
++from pathlib import Path
++import triton.profiler as proton
++import torch
++import argparse
++from aiter.ops.triton.moe.moe_op_gemm_int8_smoothquant import (
++    moe_gemm_int8_smoothquant,
++    preshuffle_weights,
++)
++from aiter.ops.triton.moe.quant_moe import (
++    smoothquant_quantize,
++    quantize_weights_int8,
++)
++from aiter.ops.triton.moe.moe_routing.routing import routing
++from aiter.ops.triton.gemm.basic.gemm_a16w16 import gemm_a16w16
++import tempfile
++import inspect
++
++
++def parse_profile(profile_path, useful_op_regex, reps):
++    """
++    construct a PerfRecord from a (proton) profile path and a regex for useful operations
++    """
++    from triton.profiler import viewer
++
++    gf, _, _, _ = viewer.read(profile_path)
++    # aggregate "useful" flops + bytes
++    useful = gf.filter(
++        f"MATCH ('*', c) WHERE c.'name' =~ '{useful_op_regex}' AND c IS LEAF"
++    ).dataframe
++    bytes = int(useful["bytes"].sum())
++    flops = int(
++        sum(useful[[c for c in ["flops8", "flops16"] if c in useful.columns]].sum())
++    )
++    # take all ops (incl. "not useful" ones) when computing total time
++    allops = gf.filter("MATCH ('*', c) WHERE c IS LEAF").dataframe
++    total_time_ns = allops["time (ns)"].sum()
++    kernel_time_ns = useful["time (ns)"].sum()
++    return {
++        "total_time_ns": total_time_ns,
++        "kernel_time_ns": kernel_time_ns,
++        "flops": flops,
++        "bytes": bytes,
++        "reps": reps,
++    }
++
++
++def compute_roofline(
++    *args, bench_fn, intensity_proxy_name, intensity_proxy_values, out_path, **kwargs
++):
++    # validate input args
++    if not isinstance(intensity_proxy_name, str):
++        raise TypeError(
++            "intensity_proxy must be a string naming a parameter in target_fn"
++        )
++    # determine position of intensity_proxy in target_fn signature
++    sig = inspect.signature(bench_fn)
++    params = list(sig.parameters.values())
++    if intensity_proxy_name not in sig.parameters:
++        raise ValueError(
++            f"Parameter '{intensity_proxy_name}' not found in {bench_fn.__name__} signature"
++        )
++    pos_index = [p.name for p in params].index(intensity_proxy_name)
++
++    # wrapper to inject intensity proxy into target_fn and call it
++    def inject_proxy_and_call(val, args, kwargs):
++        args_list = list(args)
++        args_list.insert(pos_index, val)
++        return bench_fn(*args_list, **kwargs)
++
++    # collect performance data
++    perfs = []
++    print("=========================================")
++    print(f"{out_path   }...")
++    print("=========================================")
++    for val in intensity_proxy_values:
++        perf = inject_proxy_and_call(val, args, kwargs)
++        perfs.append(perf)
++        tflops = perfs[-1]["flops"] / perfs[-1]["kernel_time_ns"] * 1e-3
++        tbps = perfs[-1]["bytes"] / perfs[-1]["kernel_time_ns"] * 1e-3
++        total_latency = perfs[-1]["total_time_ns"] / 1e3 / perfs[-1]["reps"]
++        kernel_latency = perfs[-1]["kernel_time_ns"] / 1e3 / perfs[-1]["reps"]
++        print(
++            f"{intensity_proxy_name}: {val:5d} | Total latency (us): {total_latency:.2f} | Kernel latency (us): {kernel_latency:.2f} | TFLOPS: {tflops:#.4g} | TBPS: {tbps:.2f}"
++        )
++
++
++def bench_mlp_single_weight_init(
++    batch,
++    dim1,
++    dim2,
++    n_expts_tot,
++    n_expts_act,
++    preshuffled,
++    x_dtype,
++    w_dtype,
++    TP,
++    op_regex,
++):
++    rank = 0
++    dev = f"cuda:{rank}"
++
++    assert dim2 % TP == 0, f"{dim2=}, {TP=}, dim2 must be divisible by TP"
++
++    # -- init data --
++    # weights
++    wg = torch.randn((dim1, n_expts_tot), device=dev, dtype=torch.bfloat16)
++    w1 = torch.randn((n_expts_tot, dim1, dim2 // TP), device=dev, dtype=torch.bfloat16)
++    w2 = torch.randn(
++        (n_expts_tot, dim2 // TP // 2, dim1), device=dev, dtype=torch.bfloat16
++    )
++    # biases
++    bg = torch.randn((n_expts_tot,), device=dev, dtype=torch.bfloat16)
++
++    # smoothQuant scales
++    fc1_smooth_scale = torch.randn((dim1,), device=dev, dtype=torch.float32).abs() + 0.1
++    fc2_smooth_scale = (
++        torch.randn((dim2 // TP // 2,), device=dev, dtype=torch.float32).abs() + 0.1
++    )
++
++    # -- numerics --
++    w1_int8, w1_scale = quantize_weights_int8(w1)
++    w2_int8, w2_scale = quantize_weights_int8(w2)
++    w1_int8 = w1_int8.transpose(1, 2).contiguous().transpose(1, 2)
++    w2_int8 = w2_int8.transpose(1, 2).contiguous().transpose(1, 2)
++    if preshuffled:
++        w1_int8 = preshuffle_weights(w1_int8)
++        w2_int8 = preshuffle_weights(w2_int8)
++    # -- benchmark --
++    reps = 100
++    x = torch.randn((batch, dim1), dtype=torch.bfloat16, device=dev)
++    xg = x
++
++    fpath = Path(tempfile.mktemp())
++    proton.start(str(fpath), hook="triton")
++
++    for i in range(reps):
++        logits = gemm_a16w16(xg, wg.T, bg)
++        rdata, gather_indx, scatter_indx = routing(logits, n_expts_act)
++
++        x, x_scale = smoothquant_quantize(x, fc1_smooth_scale)
++        x = moe_gemm_int8_smoothquant(
++            x,
++            w1_int8,
++            x_scale,
++            w1_scale,
++            None,
++            rdata,
++            gather_indx=gather_indx,
++            scatter_indx=None,
++            preshuffled=preshuffled,
++            out_dtype=torch.float32,
++            apply_activation=True,
++            limit=None,
++            add_residual=False,
++        )
++        x, x_scale = smoothquant_quantize(x, fc2_smooth_scale)
++        x = moe_gemm_int8_smoothquant(
++            x,
++            w2_int8,
++            x_scale,
++            w2_scale,
++            None,
++            rdata,
++            gather_indx=None,
++            scatter_indx=scatter_indx,
++            preshuffled=preshuffled,
++            out_dtype=torch.bfloat16,
++            apply_activation=False,
++            add_residual=False,
++        )
++    proton.finalize()
++    return parse_profile(
++        fpath.with_suffix(".hatchet"), useful_op_regex=op_regex, reps=reps
++    )
++
++
++def bench_mlp(
++    batch,
++    dim1,
++    dim2,
++    n_expts_tot,
++    n_expts_act,
++    preshuffled,
++    x_dtype,
++    w_dtype,
++    TP,
++    op_regex,
++    num_weight_inits=1,
++):
++    all_results = []
++    for i in range(num_weight_inits):
++        result = bench_mlp_single_weight_init(
++            batch,
++            dim1,
++            dim2,
++            n_expts_tot,
++            n_expts_act,
++            preshuffled,
++            x_dtype,
++            w_dtype,
++            TP,
++            op_regex,
++        )
++        all_results.append(result)
++
++    num_runs = len(all_results)
++    aggregated = {
++        "total_time_ns": sum(r["total_time_ns"] for r in all_results) / num_runs,
++        "kernel_time_ns": sum(r["kernel_time_ns"] for r in all_results) / num_runs,
++        "flops": sum(r["flops"] for r in all_results) / num_runs,
++        "bytes": sum(r["bytes"] for r in all_results) / num_runs,
++        "reps": all_results[0]["reps"],
++    }
++
++    return aggregated
++
++
++def roofline_mlp(
++    batch_sizes,
++    dim1,
++    dim2,
++    n_expts_tot,
++    n_expts_act,
++    preshuffled,
++    x_dtype,
++    w_dtype,
++    TP,
++    op_regex,
++    num_weight_inits=1,
++    name="",
++):
++    out_path = Path(f"logs/{name}/{x_dtype}x-{w_dtype}w-TP{TP}/")
++    out_path.mkdir(parents=True, exist_ok=True)
++    compute_roofline(
++        dim1,
++        dim2,
++        n_expts_tot,
++        n_expts_act,
++        preshuffled,
++        x_dtype,
++        w_dtype,
++        TP,
++        op_regex,  # fixed args
++        num_weight_inits,
++        bench_fn=bench_mlp,  # function to benchmark
++        intensity_proxy_name="batch",  # intensity proxy name
++        intensity_proxy_values=batch_sizes,  # intensity proxy values to sweep
++        out_path=out_path.with_suffix(".csv"),
++    )  # output path
++
++
++def parse_args():
++    parser = argparse.ArgumentParser(prog="Benchmark MoE Int8 SmoothQuant GEMM")
++    parser.add_argument(
++        "--shape",
++        type=int,
++        nargs="+",
++        metavar=("DIM"),
++        help="Input feature dimensions of MoE layers. Must be two integers.",
++    )
++    parser.add_argument(
++        "--experts",
++        type=int,
++        nargs="+",
++        metavar=("DIM"),
++        help="Number of total and active experts in [total experts, active experts] order.",
++    )
++    parser.add_argument(
++        "--preshuffled",
++        action="store_true",
++        help="Preshuffle weights.",
++    )
++    parser.add_argument(
++        "--op-regex",
++        type=str,
++        default=".*moe_gemm.*",
++        help="Regex to find perf for specific operation by its kernel name.",
++    )
++    parser.add_argument(
++        "--num-weight-inits",
++        type=int,
++        default=1,
++        help="Number of different weight initializations to run for more stable results (default: 1). "
++        "Each initialization runs 100 iterations. Use higher values (e.g., 10) for more stable benchmarks.",
++    )
++    args = parser.parse_args()
++    return args
++
++
++if __name__ == "__main__":
++    args = parse_args()
++
++    dim1, dim2 = args.shape
++    total_experts, active_experts = args.experts
++    preshuffled = args.preshuffled
++    batch_ranges_moe = [
++        (1, 2, 1),
++        (2, 5, 2),
++        (8, 18, 8),
++        (32, 65, 32),
++        (128, 257, 128),
++        (1024, 1200, 200),
++        (4096, 8200, 4096),
++    ]
++    batch_sizes_moe = list(chain(*[range(*r) for r in batch_ranges_moe]))
++    quantized_dtypes = [torch.int8, torch.int8]
++
++    roofline_mlp(
++        batch_sizes_moe,
++        dim1,
++        dim2,
++        total_experts,
++        active_experts,
++        preshuffled,
++        quantized_dtypes[0],
++        quantized_dtypes[1],
++        TP=1,
++        op_regex=args.op_regex,
++        num_weight_inits=args.num_weight_inits,
++        name="int8-smoothquant",
++    )
+diff --git a/op_tests/triton_tests/moe/test_moe_gemm_int8_smoothquant.py b/op_tests/triton_tests/moe/test_moe_gemm_int8_smoothquant.py
+new file mode 100644
+index 0000000000..0d03b63471
+--- /dev/null
++++ b/op_tests/triton_tests/moe/test_moe_gemm_int8_smoothquant.py
+@@ -0,0 +1,286 @@
++# adapted from triton_kernels package
++# original code https://github.com/triton-lang/triton/blob/main/python/triton_kernels/tests/test_matmul.py
++
++from dataclasses import dataclass, fields
++import pytest
++import torch
++
++# Routing utilities
++from aiter.ops.triton.moe.moe_routing.routing import routing
++
++# SmoothQuant quantization utilities
++from aiter.ops.triton.moe.quant_moe import (
++    smoothquant_quantize,
++    quantize_weights_int8,
++)
++
++# SmoothQuant MoE utilities
++from aiter.ops.triton.moe.moe_op_gemm_int8_smoothquant import (
++    moe_gemm_int8_smoothquant,
++    moe_gemm_smoothquant_torch,
++    preshuffle_weights,
++)
++
++# ---------------
++# Initialize data
++# ---------------
++
++
++def alloc_rand(shape, device, dtype):
++    if dtype.itemsize == 1:
++        tmp = 2 ** -(torch.randint(4, 8, shape, device=device, dtype=torch.bfloat16))
++        return tmp
++    return torch.randn(shape, device=device, dtype=dtype)
++
++
++def alloc_rand_like(x):
++    return alloc_rand(x.shape, x.device, x.dtype)
++
++
++def init_routing_data(
++    m, n_expts_tot, n_expts_act, do_gather, do_scatter, device="cuda"
++):
++    logits = torch.randn((m, n_expts_tot), dtype=torch.float16, device=device)
++    routing_data, gather_idx, scatter_idx = routing(logits, n_expts_act)
++    routing_data.gate_scal = None
++    gather_idx = gather_idx if do_gather else None
++    scatter_idx = scatter_idx if do_scatter else None
++    # TODO: re-enable
++    # if do_gather and do_scatter and n_expts_act == 1 and n_expt_shards == 1:
++    #     scatter_idx = mask_indx(scatter_idx, n_expts_act)
++    return m, routing_data, gather_idx, scatter_idx
++
++
++def init_compute_data(
++    m,
++    n,
++    k,
++    gindx,
++    sindx,
++    n_expts_tot,
++    n_expts_act,
++    act_dtype,
++    weight_dtype,
++    has_y_gammas,
++    device="cuda",
++):
++    """Initialize computation data for MoE."""
++    torch.manual_seed(0)
++    in_m = m * (n_expts_act if gindx is None else 1)
++    shape_x = (in_m, k)
++    x = alloc_rand(shape_x, device=device, dtype=act_dtype)
++    w = alloc_rand((n_expts_tot, k, n), device=device, dtype=weight_dtype)
++    bias = alloc_rand((n_expts_tot, n), device=device, dtype=torch.float32)
++    smooth_scale = alloc_rand((k,), device=device, dtype=torch.float32).abs() + 0.1
++    if has_y_gammas:
++        gamma = 2 ** torch.randint(
++            -5, 0, (m * n_expts_act,), device=device, dtype=torch.float32
++        )
++    else:
++        gamma = None
++
++    return x, w, bias, smooth_scale, gamma
++
++
++def assert_close(ref, tri, maxtol=None, rmstol=None, description="--", verbose=True):
++    if tri.dtype.itemsize == 1:
++        ref_as_type = ref.to(tri.dtype)
++        if ref.dtype == tri.dtype:
++            assert torch.all(ref_as_type == tri)
++            return
++        ref = ref_as_type
++
++    if ref.numel() == 0:
++        return
++
++    if maxtol is None:
++        maxtol = 2e-2
++    if rmstol is None:
++        rmstol = 4e-3
++    """
++    Compare reference values against obtained values.
++    """
++
++    # cast to float32:
++    ref = ref.to(torch.float32).detach()
++    tri = tri.to(torch.float32).detach()
++    assert (
++        ref.shape == tri.shape
++    ), f"Tensors must have same size {ref.shape=} {tri.shape=}"
++
++    # deal with infinite elements:
++    inf_mask_ref = torch.isinf(ref)
++    inf_mask_tri = torch.isinf(tri)
++    assert torch.equal(
++        inf_mask_ref, inf_mask_tri
++    ), "Tensor must have same infinite elements"
++    refn = torch.where(inf_mask_ref, 0, ref)
++    trin = torch.where(inf_mask_tri, 0, tri)
++
++    # normalise so that RMS calculation doesn't overflow:
++    eps = 1.0e-30
++    multiplier = 1.0 / (torch.max(torch.abs(refn)) + eps)
++    refn *= multiplier
++    trin *= multiplier
++
++    ref_rms = torch.sqrt(torch.square(refn).mean()) + eps
++
++    rel_err = torch.abs(refn - trin) / torch.maximum(ref_rms, torch.abs(refn))
++    max_err = torch.max(rel_err).item()
++    rms_err = torch.sqrt(torch.square(rel_err).mean()).item()
++
++    if verbose:
++        print(
++            "%s maximum relative error = %s (threshold = %s)"
++            % (description, max_err, maxtol)
++        )
++        print(
++            "%s RMS relative error = %s (threshold = %s)"
++            % (description, rms_err, rmstol)
++        )
++
++    if max_err > maxtol:
++        bad_idxs = torch.nonzero(rel_err > maxtol)
++        num_nonzero = bad_idxs.size(0)
++        bad_idxs = bad_idxs[:1000]
++        print(
++            "%d / %d mismatched elements (shape = %s) at coords %s"
++            % (num_nonzero, rel_err.numel(), tuple(rel_err.shape), bad_idxs.tolist())
++        )
++
++        bad_idxs = bad_idxs.unbind(-1)
++        print("ref values: ", ref[tuple(bad_idxs)].cpu())
++        print("tri values: ", tri[tuple(bad_idxs)].cpu())
++
++    assert max_err <= maxtol
++    assert rms_err <= rmstol
++
++
++# ---------------
++# unit tests
++# ---------------
++
++
++@dataclass
++class Case:
++    m: int
++    n: int
++    k: int
++    n_expts_tot: int = 1
++    n_expts_act: int = 1
++    preshuffled: bool = False
++
++
++@pytest.mark.parametrize(
++    ", ".join(f.name for f in fields(Case)),
++    [
++        tuple(getattr(case, f.name) for f in fields(Case))
++        for case in [
++            Case(16, 256, 256, 8, 2),
++            Case(64, 512, 512, 8, 2),
++            Case(128, 1024, 512, 8, 4),
++            Case(256, 2048, 1024, 16, 4),
++            Case(256, 2048, 2048, 32, 2, preshuffled=True),
++            Case(512, 4096, 2048, 128, 8),
++            Case(1024, 7168, 4096, 64, 8),
++            Case(2048, 4096, 7168, 128, 8),
++            Case(300, 400, 400, 8, 2),
++            Case(16, 2560, 4096, 128, 6),
++            Case(32, 2560, 4096, 128, 6, preshuffled=True),
++            Case(128, 2560, 4096, 128, 6),
++            Case(512, 2560, 4096, 128, 6),
++            Case(2048, 2560, 4096, 128, 6),
++            Case(16, 4096, 1280, 128, 6),
++            Case(16, 4096, 1280, 128, 6, preshuffled=True),
++            Case(128, 4096, 1280, 128, 6),
++            Case(512, 4096, 1280, 128, 6),
++            Case(2048, 4096, 1280, 128, 6),
++        ]
++    ],
++)
++@pytest.mark.parametrize(
++    "do_gather, do_scatter",
++    [
++        (False, False),
++        (True, False),
++        (False, True),
++        (True, True),
++    ],
++)
++@pytest.mark.parametrize("has_y_gammas", [False, True])
++@pytest.mark.parametrize("apply_activation", [False, True])
++def test_op(
++    m,
++    n,
++    k,
++    do_gather,
++    do_scatter,
++    has_y_gammas,
++    apply_activation,
++    n_expts_tot,
++    n_expts_act,
++    preshuffled,
++    device="cuda",
++):
++    torch.manual_seed(0)
++
++    m, rdata, gindx, sindx = init_routing_data(
++        m, n_expts_tot, n_expts_act, do_gather, do_scatter, device=device
++    )
++    x_tri, w_tri, bias_tri, smooth_scale, gammas = init_compute_data(
++        m,
++        n,
++        k,
++        gindx,
++        sindx,
++        n_expts_tot,
++        n_expts_act,
++        torch.bfloat16,
++        torch.bfloat16,
++        has_y_gammas,
++        device=device,
++    )
++    bias_ref = bias_tri.clone()
++
++    x_int8_tri, x_scale_tri = smoothquant_quantize(x_tri, smooth_scale)
++    x_int8_ref, x_scale_ref = x_int8_tri.clone(), x_scale_tri.clone()
++
++    w_int8_tri, w_scale_tri = quantize_weights_int8(w_tri)
++    w_int8_ref = w_int8_tri.clone()
++    if preshuffled:
++        w_int8_tri = preshuffle_weights(w_int8_tri)
++
++    out_dtype = torch.bfloat16
++    maxtol = 4e-2
++    rmstol = None
++
++    ref_y = moe_gemm_smoothquant_torch(
++        x_int8_ref,
++        x_scale_ref,
++        w_int8_ref,
++        w_scale_tri,
++        bias_ref,
++        rdata,
++        gindx,
++        sindx,
++        gammas,
++        apply_activation=apply_activation,
++        add_residual=apply_activation,
++    )
++
++    tri_y = moe_gemm_int8_smoothquant(
++        x_int8_tri,
++        w_int8_tri,
++        x_scale_tri,
++        w_scale_tri,
++        bias_tri,
++        rdata,
++        gindx,
++        sindx,
++        gammas,
++        preshuffled,
++        out_dtype,
++        apply_activation=apply_activation,
++        add_residual=apply_activation,
++    )
++    assert_close(ref_y, tri_y, maxtol=maxtol, rmstol=rmstol)
+diff --git a/op_tests/triton_tests/moe/test_moe_routing.py b/op_tests/triton_tests/moe/test_moe_routing.py
+index 0a3cbd98af..8cff9aa092 100644
+--- a/op_tests/triton_tests/moe/test_moe_routing.py
++++ b/op_tests/triton_tests/moe/test_moe_routing.py
+@@ -92,11 +92,11 @@ def init_data(n_tokens, n_expts_tot, dtype=torch.float16, device="cuda"):
+ 
+ @pytest.mark.parametrize("n_tokens", n_tokens)
+ @pytest.mark.parametrize(
+-    "n_expts_tot, n_expts_act", [(128, 4), (128, 32), (1500, 8), (256, 8), (8, 2)]
++    "n_expts_tot, n_expts_act",
++    [(128, 4), (128, 6), (128, 32), (1500, 8), (256, 8), (8, 2)],
+ )
+-@pytest.mark.parametrize("use_expt_indx", [False, True])
+ @pytest.mark.parametrize("sm_first", [True, False])
+-def test_op(n_tokens, n_expts_tot, n_expts_act, sm_first, use_expt_indx):
++def test_op(n_tokens, n_expts_tot, n_expts_act, sm_first):
+     if get_arch() != "gfx950":
+         pytest.skip("MOE stack not fully implemented on non-CDNA4 arch yet.")
+ 
+@@ -109,19 +109,11 @@ def test_op(n_tokens, n_expts_tot, n_expts_act, sm_first, use_expt_indx):
+     tri_logits[n_tokens:, :] = float("inf")  # should not be used
+     ref_logits = tri_logits.clone().detach()
+ 
+-    if use_expt_indx:
+-        rand_idx = lambda: torch.randperm(n_expts_tot, device="cuda", dtype=torch.int64)
+-        tri_expt_indx = torch.stack([rand_idx()[:n_expts_act] for _ in range(n_tokens)])
+-        tri_expt_indx, _ = torch.sort(tri_expt_indx, dim=1)
+-        tri_expt_indx[n_tokens:] = -99999  # should not be used
+-        ref_expt_indx = tri_expt_indx[:n_tokens]
+-    else:
+-        tri_expt_indx = ref_expt_indx = None
+     ref_routing_data, ref_gather, ref_scatter = routing_torch(
+-        ref_logits, n_expts_act, sm_first, ref_expt_indx
++        ref_logits, n_expts_act, sm_first
+     )
+     tri_routing_data, tri_gather, tri_scatter = routing(
+-        tri_logits, n_expts_act, sm_first, tri_expt_indx
++        tri_logits, n_expts_act, sm_first
+     )
+ 
+     def _assert_indx_equal(ref, tri):
+@@ -140,8 +132,8 @@ def _assert_indx_equal(ref, tri):
+     assert_equal(ref_expt_data.token_offs_pad, tri_expt_data.token_offs_pad)
+     assert_equal(ref_expt_data.block_pid_map, tri_expt_data.block_pid_map)
+ 
+-    assert ref_routing_data.n_expts_tot == ref_routing_data.n_expts_tot
+-    assert ref_routing_data.n_expts_act == ref_routing_data.n_expts_act
++    assert ref_routing_data.n_expts_tot == tri_routing_data.n_expts_tot
++    assert ref_routing_data.n_expts_act == tri_routing_data.n_expts_act
+ 
+     _assert_indx_equal(ref_gather, tri_gather)
+     _assert_indx_equal(ref_scatter, tri_scatter)

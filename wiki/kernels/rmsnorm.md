@@ -16,6 +16,7 @@ tags:
 - memory-bound
 confidence: source-reported
 reproducibility: runnable
+artifact_dir: examples/rmsnorm
 kernel_types:
 - rmsnorm
 - elementwise
@@ -260,6 +261,38 @@ and [Triton kernel optimizations](../../sources/blogs/blog-triton-optimizations.
   op becomes latency-bound; raise occupancy
   ([occupancy tuning](../techniques/occupancy-tuning.md)) or batch multiple
   rows per block to amortize launch and reduction overhead.
+
+## Runnable example
+
+A portable, self-checking pure-HIP version of this kernel lives in
+[`examples/rmsnorm/`](../../examples/rmsnorm/). It implements the one-block-per-row
+strategy above — FP32 `Σ x²` accumulation, intra-wave `__shfl_down` reduction,
+cross-wave finalize through LDS, optional `gamma` — and is **wave-size agnostic**
+(uses the `warpSize` builtin), so the same source runs on gfx1201 (wave32) and
+CDNA (wave64). It validates fp32 and fp16-IO paths against a CPU reference.
+
+```bash
+cd examples/rmsnorm
+hipcc --offload-arch=gfx1201 -O3 -std=c++17 rmsnorm.hip.cpp -o rmsnorm && ./rmsnorm
+# (./build.sh gfx942 cross-compiles for CDNA on this box)
+```
+
+Expected output (AMD Radeon RX 9070 XT, gfx1201, ROCm 7.2.3):
+
+```
+Device: AMD Radeon RX 9070 XT  warpSize=32
+---------------------------------------------------------------
+rmsnorm fp32           [ 1024 x  4096] gamma=1  max|err|=2.384e-07  PASS  0.0707 ms  475 GB/s
+rmsnorm fp32 no-gamma  [  512 x  8192] gamma=0  max|err|=2.384e-07  PASS  0.0533 ms  630 GB/s
+rmsnorm fp32 odd-H     [  300 x  4097] gamma=1  max|err|=2.384e-07  PASS
+rmsnorm fp16 IO        [ 1024 x  4096] gamma=1  max|err|=4.884e-04  PASS  0.0588 ms  285 GB/s
+rmsnorm fp16 IO big    [  256 x 16384] gamma=1  max|err|=4.884e-04  PASS  0.0551 ms  305 GB/s
+---------------------------------------------------------------
+ALL TESTS PASSED
+```
+
+(The GB/s numbers use scalar loads — a correctness/portability demo, not a peak
+bandwidth result; vectorize loads as described above for peak.)
 
 ## See also
 

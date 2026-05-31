@@ -16,6 +16,7 @@ tags:
 - fine-grained-quantization
 confidence: source-reported
 reproducibility: snippet
+artifact_dir: examples/fp8-gemm
 kernel_types:
 - fp8-gemm
 - gemm
@@ -233,6 +234,42 @@ bytes per element, at the cost of accuracy — choose the format per layer.
 > scaling, so block scales must be dequantized in software. Porting weights
 > across the two requires re-encoding FP8 — see the
 > [gfx942 → gfx950 migration](../migration/gfx942-to-gfx950.md).
+
+## Runnable example
+
+A worked example lives in [`examples/fp8-gemm/`](../../examples/fp8-gemm/). It
+contains two pieces, kept separate because the FP8 `f8f6f4` path is **CDNA-only
+(MFMA)** while RDNA4 (gfx1201) has WMMA:
+
+1. **`fp8_gemm_cdna.cpp`** — the CDNA FP8 GEMM using the real matrix-core
+   builtins. **Cross-compile-verify only** (it does not run on gfx1201). The
+   build confirms the right instructions are emitted:
+   `v_mfma_scale_f32_16x16x128_f8f6f4` for gfx950 (OCP E4M3, hardware MX) and
+   `v_mfma_f32_16x16x32_fp8_fp8` for gfx942 (FNUZ E4M3, software scaling).
+
+   ```bash
+   # gfx950 (CDNA4, OCP) and gfx942 (CDNA3, FNUZ) — build only:
+   hipcc --offload-arch=gfx950 -c fp8_gemm_cdna.cpp -o fp8_gemm_gfx950.o
+   hipcc --offload-arch=gfx942 -c fp8_gemm_cdna.cpp -o fp8_gemm_gfx942.o
+   ```
+
+2. **`wmma_hgemm.cpp`** — a portable rocWMMA FP16 GEMM with the same tiled
+   matrix-core structure that **builds and runs on gfx1201**, self-checking
+   against a CPU reference, so the directory has a demonstrable running binary:
+
+   ```bash
+   hipcc --offload-arch=gfx1201 -I/opt/rocm/include wmma_hgemm.cpp -o wmma_hgemm
+   ./wmma_hgemm
+   # rocWMMA FP16 GEMM  M=256 N=256 K=256 (warpSize=32)
+   # avg 0.0069 ms/iter   4863.5 GFLOP/s
+   # max abs error = 0.000000
+   # PASS
+   ```
+
+> **FNUZ vs OCP:** gfx942 FP8 is FNUZ (no Inf/−0, K=32 MMA, no hardware MX);
+> gfx950 FP8 is OCP-compliant (K=128 unified `f8f6f4`, E8M0 hardware block
+> scaling). The encodings differ — FP8 weights must be re-encoded when porting
+> across the two. See [`examples/fp8-gemm/README.md`](../../examples/fp8-gemm/README.md).
 
 ## See also
 

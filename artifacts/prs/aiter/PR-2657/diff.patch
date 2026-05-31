@@ -1,0 +1,2424 @@
+diff --git a/aiter/jit/core.py b/aiter/jit/core.py
+index 6310a6dadd..93ff33165f 100644
+--- a/aiter/jit/core.py
++++ b/aiter/jit/core.py
+@@ -26,6 +26,7 @@
+ from torch_guard import torch_compile_guard  # noqa: E402
+ 
+ AITER_REBUILD = int(os.environ.get("AITER_REBUILD", "0"))
++ENABLE_CK = int(os.environ.get("ENABLE_CK", "1")) != 0
+ 
+ aiter_lib = None
+ 
+@@ -780,7 +781,7 @@ def MainFunc():
+             ]
+         if hip_version > Version("6.2.41133"):
+             flags_hip += ["-mllvm -amdgpu-coerce-illegal-types=1"]
+-        if get_gfx() == "gfx950" and int(os.getenv("AITER_FP4x2", "1")) > 0:
++        if get_gfx() != "gfx942" and int(os.getenv("AITER_FP4x2", "1")) > 0:
+             flags_hip += ["-D__Float4_e2m1fn_x2"]
+ 
+         if not torch_exclude:
+diff --git a/aiter/ops/mha.py b/aiter/ops/mha.py
+index 1668441032..ed4b48f04c 100644
+--- a/aiter/ops/mha.py
++++ b/aiter/ops/mha.py
+@@ -6,7 +6,7 @@
+ import torch
+ from torch import Generator, Tensor
+ 
+-from ..jit.core import CK_DIR, AITER_META_DIR, compile_ops
++from ..jit.core import CK_DIR, AITER_META_DIR, ENABLE_CK, compile_ops
+ from ..jit.utils.chip_info import get_gfx
+ from ..jit.utils.torch_guard import torch_compile_guard
+ from ..jit.utils.mha_recipes import (
+@@ -1969,6 +1969,24 @@ def flash_attn_func(
+             The output of softmax (possibly with different scaling). It also encodes the dropout
+             pattern (negative means that location was dropped, nonnegative means it was kept).
+     """
++    if not ENABLE_CK:
++        from .triton.attention.mha import flash_attn_func as flash_attn_func_triton
++
++        return flash_attn_func_triton(
++            q=q,
++            k=k,
++            v=v,
++            dropout_p=dropout_p,
++            softmax_scale=softmax_scale,
++            causal=causal,
++            window_size=window_size,
++            bias=bias,
++            alibi_slopes=alibi_slopes,
++            deterministic=deterministic,
++            return_lse=return_lse,
++            return_attn_probs=return_attn_probs,
++            sink=sink_ptr,
++        )
+     return FlashAttnFunc.apply(
+         q,
+         k,
+@@ -2649,6 +2667,32 @@ def flash_attn_varlen_func(
+             The output of softmax (possibly with different scaling). It also encodes the dropout
+             pattern (negative means that location was dropped, nonnegative means it was kept).
+     """
++    if not ENABLE_CK:
++        from .triton.attention.mha import (
++            flash_attn_varlen_func as flash_attn_varlen_func_triton,
++        )
++
++        return flash_attn_varlen_func_triton(
++            q=q,
++            k=k,
++            v=v,
++            cu_seqlens_q=cu_seqlens_q,
++            cu_seqlens_k=cu_seqlens_k,
++            max_seqlen_q=max_seqlen_q,
++            max_seqlen_k=max_seqlen_k,
++            dropout_p=dropout_p,
++            softmax_scale=softmax_scale,
++            causal=causal,
++            window_size=window_size,
++            bias=bias,
++            alibi_slopes=alibi_slopes,
++            deterministic=deterministic,
++            return_lse=return_lse,
++            return_attn_probs=return_attn_probs,
++            block_table=block_table,
++            out=out,
++            sink=sink_ptr,
++        )
+     return FlashAttnVarlenFunc.apply(
+         q,
+         k,
+@@ -2982,6 +3026,22 @@ def flash_attn_fp8_pertensor_func(
+     softmax_scale=None,
+     sink_ptr=None,
+ ):
++    if not ENABLE_CK and sink_ptr is None:
++        from .triton.attention.mha_v3 import (
++            flash_attn_func as flash_attn_func_v3_triton,
++        )
++
++        return flash_attn_func_v3_triton(
++            q=q,
++            k=k,
++            v=v,
++            softmax_scale=softmax_scale,
++            causal=causal,
++            q_descale=q_descale,
++            k_descale=k_descale,
++            v_descale=v_descale,
++            window_size=(window_size[0], window_size[1]),
++        )
+     if softmax_scale is None:
+         softmax_scale = q.shape[-1] ** (-0.5)
+     head_size_q_og = q.size(3)
+@@ -3032,6 +3092,26 @@ def flash_attn_varlen_fp8_pertensor_func(
+     softmax_scale=None,
+     sink_ptr=None,
+ ):
++    if not ENABLE_CK and sink_ptr is None:
++        from .triton.attention.mha_v3 import (
++            flash_attn_varlen_func as flash_attn_varlen_func_v3_triton,
++        )
++
++        return flash_attn_varlen_func_v3_triton(
++            q=q,
++            k=k,
++            v=v,
++            cu_seqlens_q=cu_seqlens_q,
++            cu_seqlens_k=cu_seqlens_k,
++            max_seqlen_q=max_seqlen_q,
++            max_seqlen_k=max_seqlen_k,
++            softmax_scale=softmax_scale,
++            causal=causal,
++            q_descale=q_descale,
++            k_descale=k_descale,
++            v_descale=v_descale,
++            window_size=(window_size[0], window_size[1]),
++        )
+     if softmax_scale is None:
+         softmax_scale = q.shape[-1] ** (-0.5)
+     head_size_q_og = q.size(-1)
+diff --git a/aiter/ops/triton/__init__.py b/aiter/ops/triton/__init__.py
+index 16f15c8387..bef4ccc506 100644
+--- a/aiter/ops/triton/__init__.py
++++ b/aiter/ops/triton/__init__.py
+@@ -96,6 +96,7 @@
+     "mha_onekernel_bwd": "attention.mha_onekernel_bwd",
+     "mha_v3": "attention.mha_v3",
+     "mha": "attention.mha",
++    "mla_decode": "attention.mla_decode",
+     "mla_decode_rope": "attention.mla_decode_rope",
+     "pa_decode": "attention.pa_decode",
+     "pa_mqa_logits": "attention.pa_mqa_logits",
+diff --git a/aiter/ops/triton/attention/mha.py b/aiter/ops/triton/attention/mha.py
+index 80d55d3d6a..2ce5c0efe8 100644
+--- a/aiter/ops/triton/attention/mha.py
++++ b/aiter/ops/triton/attention/mha.py
+@@ -81,6 +81,10 @@ def _flash_attn_forward(
+         raise ValueError("window_size_right is not supported yet in the Triton Backend")
+     sliding_window = window_size_left if window_size_left >= 0 else 0
+ 
++    # Triton cannot specialize on numpy scalar types; ensure native Python int
++    max_seqlen_q = int(max_seqlen_q)
++    max_seqlen_k = int(max_seqlen_k)
++
+     # FP8
+     IS_FP8 = types._is_fp8(q)
+     FP8_MAX: tl.constexpr = torch.finfo(q.dtype).max
+@@ -110,7 +114,7 @@ def _flash_attn_forward(
+         # Layout is bshd.
+         # q and k are [batch, seq_len, num_head, head_dim_qk].
+         # v is [batch, seq_len, num_head, head_dim_v].
+-        batch, seqlen_q, num_q_heads = q.shape[:-1]
++        batch, seqlen_q, num_q_heads = (int(x) for x in q.shape[:-1])
+         num_k_heads = k.shape[2]
+         q_strides = (q.stride(0), q.stride(2), q.stride(1), q.stride(3))
+         k_strides = (k.stride(0), k.stride(2), k.stride(1), k.stride(3))
+diff --git a/aiter/ops/triton/attention/mla_decode.py b/aiter/ops/triton/attention/mla_decode.py
+new file mode 100644
+index 0000000000..f9c1b8e65f
+--- /dev/null
++++ b/aiter/ops/triton/attention/mla_decode.py
+@@ -0,0 +1,761 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++
++# Adapted from
++# https://github.com/vllm-project/vllm/blob/main/vllm/v1/attention/ops/triton_decode_attention.py
++# which was originally adapted from
++# https://github.com/sgl-project/sglang and
++# https://github.com/ModelTC/lightllm
++
++# Copyright 2025 vLLM Team
++# Copyright 2023-2024 SGLang Team
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#     http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++"""
++Triton MLA decode attention with split-K parallelization and paged KV cache.
++Supports both MHA (kv_group_num==1) and GQA/MQA/MLA (kv_group_num>1).
++"""
++
++import torch
++import triton
++import triton.language as tl
++
++is_hip_ = hasattr(torch.version, "hip") and torch.version.hip is not None
++
++
++@triton.jit
++def tanh(x):
++    return 2 * tl.sigmoid(2 * x) - 1
++
++
++@triton.jit
++def _fwd_kernel_stage1(
++    Q,
++    K_Buffer,
++    V_Buffer,
++    sm_scale,
++    Req_to_tokens,
++    B_Seqlen,
++    Att_Out,
++    stride_req_to_tokens_b,
++    stride_qbs,
++    stride_qh,
++    stride_buf_kbs,
++    stride_buf_kh,
++    stride_buf_vbs,
++    stride_buf_vh,
++    stride_mid_ob,
++    stride_mid_oh,
++    stride_mid_os,
++    k_scale,
++    v_scale,
++    kv_group_num: tl.constexpr,
++    BLOCK_DMODEL: tl.constexpr,
++    BLOCK_DPE: tl.constexpr,
++    BLOCK_DV: tl.constexpr,
++    BLOCK_N: tl.constexpr,
++    NUM_KV_SPLITS: tl.constexpr,
++    PAGE_SIZE: tl.constexpr,
++    logit_cap: tl.constexpr,
++    Lk: tl.constexpr,
++    Lv: tl.constexpr,
++):
++    cur_batch = tl.program_id(0)
++    cur_head = tl.program_id(1)
++    split_kv_id = tl.program_id(2)
++
++    cur_kv_head = cur_head // kv_group_num
++
++    offs_d = tl.arange(0, BLOCK_DMODEL)
++    offs_dv = tl.arange(0, BLOCK_DV)
++    mask_d = offs_d < Lk
++    mask_dv = offs_dv < Lv
++    cur_batch_seq_len = tl.load(B_Seqlen + cur_batch)
++    cur_batch_req_idx = cur_batch
++
++    off_q = cur_batch * stride_qbs + cur_head * stride_qh + offs_d
++    q = tl.load(Q + off_q, mask=mask_d, other=0.0)
++
++    if BLOCK_DPE > 0:
++        offs_dpe = BLOCK_DMODEL + tl.arange(0, BLOCK_DPE)
++        mask_dpe = offs_dpe < Lk
++        off_qpe = cur_batch * stride_qbs + cur_head * stride_qh + offs_dpe
++        qpe = tl.load(Q + off_qpe, mask=mask_dpe, other=0.0)
++
++    kv_len_per_split = tl.cdiv(cur_batch_seq_len, NUM_KV_SPLITS)
++    split_kv_start = kv_len_per_split * split_kv_id
++    split_kv_end = tl.minimum(split_kv_start + kv_len_per_split, cur_batch_seq_len)
++
++    e_max = -float("inf")
++    e_sum = 0.0
++    acc = tl.zeros([BLOCK_DV], dtype=tl.float32)
++
++    if split_kv_end > split_kv_start:
++        ks = tl.load(k_scale)
++        vs = tl.load(v_scale)
++        for start_n in range(split_kv_start, split_kv_end, BLOCK_N):
++            offs_n = start_n + tl.arange(0, BLOCK_N)
++            kv_page_number = tl.load(
++                Req_to_tokens
++                + stride_req_to_tokens_b * cur_batch_req_idx
++                + offs_n // PAGE_SIZE,
++                mask=offs_n < split_kv_end,
++                other=0,
++            )
++            kv_loc = kv_page_number * PAGE_SIZE + offs_n % PAGE_SIZE
++            offs_buf_k = (
++                kv_loc[:, None] * stride_buf_kbs
++                + cur_kv_head * stride_buf_kh
++                + offs_d[None, :]
++            )
++            k = tl.load(
++                K_Buffer + offs_buf_k,
++                mask=(offs_n[:, None] < split_kv_end) & (mask_d[None, :]),
++                other=0.0,
++            )
++            if k.dtype.is_fp8():
++                k = (k.to(tl.float32) * ks).to(q.dtype)
++            qk = tl.sum(q[None, :] * k, 1)
++
++            if BLOCK_DPE > 0:
++                offs_buf_kpe = (
++                    kv_loc[:, None] * stride_buf_kbs
++                    + cur_kv_head * stride_buf_kh
++                    + offs_dpe[None, :]
++                )
++                kpe = tl.load(
++                    K_Buffer + offs_buf_kpe,
++                    mask=(offs_n[:, None] < split_kv_end) & (mask_dpe[None, :]),
++                    other=0.0,
++                )
++                if kpe.dtype.is_fp8():
++                    kpe = (kpe.to(tl.float32) * ks).to(qpe.dtype)
++                qk += tl.sum(qpe[None, :] * kpe, 1)
++
++            qk *= sm_scale
++
++            if logit_cap > 0:
++                qk = logit_cap * tanh(qk / logit_cap)
++
++            qk = tl.where(offs_n < split_kv_end, qk, float("-inf"))
++
++            offs_buf_v = (
++                kv_loc[:, None] * stride_buf_vbs
++                + cur_kv_head * stride_buf_vh
++                + offs_dv[None, :]
++            )
++            v = tl.load(
++                V_Buffer + offs_buf_v,
++                mask=(offs_n[:, None] < split_kv_end) & (mask_dv[None, :]),
++                other=0.0,
++            )
++            if v.dtype.is_fp8():
++                v = (v.to(tl.float32) * vs).to(q.dtype)
++
++            n_e_max = tl.maximum(tl.max(qk, 0), e_max)
++            re_scale = tl.exp(e_max - n_e_max)
++            p = tl.exp(qk - n_e_max)
++            acc *= re_scale
++            acc += tl.sum(p[:, None] * v, 0)
++
++            e_sum = e_sum * re_scale + tl.sum(p, 0)
++            e_max = n_e_max
++
++        offs_mid_o = (
++            cur_batch * stride_mid_ob
++            + cur_head * stride_mid_oh
++            + split_kv_id * stride_mid_os
++            + offs_dv
++        )
++
++        tl.store(
++            Att_Out + offs_mid_o,
++            acc / e_sum,
++            mask=(mask_dv),
++        )
++
++        offs_mid_o_1 = (
++            cur_batch * stride_mid_ob
++            + cur_head * stride_mid_oh
++            + split_kv_id * stride_mid_os
++            + Lv
++        )
++
++        tl.store(
++            Att_Out + offs_mid_o_1,
++            e_max + tl.log(e_sum),
++        )
++
++
++def _decode_att_m_fwd(
++    q,
++    k_buffer,
++    v_buffer,
++    att_out,
++    Req_to_tokens,
++    B_Seqlen,
++    num_kv_splits,
++    sm_scale,
++    page_size,
++    logit_cap,
++    k_scale,
++    v_scale,
++):
++    BLOCK = 64 if not is_hip_ else 8
++
++    NUM_KV_SPLITS = num_kv_splits
++    Lk = k_buffer.shape[-1]
++    Lv = v_buffer.shape[-1]
++
++    batch, head_num = q.shape[0], q.shape[1]
++
++    grid = (batch, head_num, NUM_KV_SPLITS)
++    kv_group_num = q.shape[1] // k_buffer.shape[-2]
++
++    num_warps = 4
++    if kv_group_num != 1:
++        num_warps = 1 if is_hip_ else 2
++
++    # Split key dim into BLOCK_DMODEL + BLOCK_DPE to keep each block
++    # within ROCm Triton compiler limits (avoids PassManager::run failure).
++    if Lk == 576:
++        BLOCK_DMODEL = 512
++        BLOCK_DPE = 64
++        if is_hip_:
++            BLOCK = 4
++            num_warps = 1
++    elif Lk == 288:
++        BLOCK_DMODEL = 256
++        BLOCK_DPE = 32
++    else:
++        BLOCK_DMODEL = triton.next_power_of_2(Lk)
++        BLOCK_DPE = 0
++    BLOCK_DV = triton.next_power_of_2(Lv)
++
++    _fwd_kernel_stage1[grid](
++        q,
++        k_buffer,
++        v_buffer,
++        sm_scale,
++        Req_to_tokens,
++        B_Seqlen,
++        att_out,
++        Req_to_tokens.stride(0),
++        q.stride(0),
++        q.stride(1),
++        k_buffer.stride(-3),
++        k_buffer.stride(-2),
++        v_buffer.stride(-3),
++        v_buffer.stride(-2),
++        att_out.stride(0),
++        att_out.stride(1),
++        att_out.stride(2),
++        k_scale,
++        v_scale,
++        kv_group_num=kv_group_num,
++        BLOCK_DMODEL=BLOCK_DMODEL,
++        BLOCK_DPE=BLOCK_DPE,
++        BLOCK_DV=BLOCK_DV,
++        BLOCK_N=BLOCK,
++        NUM_KV_SPLITS=NUM_KV_SPLITS,
++        PAGE_SIZE=page_size,
++        logit_cap=logit_cap,
++        num_warps=num_warps,
++        num_stages=2,
++        Lk=Lk,
++        Lv=Lv,
++    )
++
++
++@triton.jit
++def _fwd_grouped_kernel_stage1(
++    Q,
++    K_Buffer,
++    V_Buffer,
++    sm_scale,
++    Req_to_tokens,
++    B_Seqlen,
++    Att_Out,
++    stride_req_to_tokens_b,
++    stride_qbs,
++    stride_qh,
++    stride_buf_kbs,
++    stride_buf_kh,
++    stride_buf_vbs,
++    stride_buf_vh,
++    stride_mid_ob,
++    stride_mid_oh,
++    stride_mid_os,
++    k_scale,
++    v_scale,
++    kv_group_num: tl.constexpr,
++    q_head_num: tl.constexpr,
++    BLOCK_DMODEL: tl.constexpr,
++    BLOCK_DPE: tl.constexpr,
++    BLOCK_DV: tl.constexpr,
++    BLOCK_N: tl.constexpr,
++    BLOCK_H: tl.constexpr,
++    NUM_KV_SPLITS: tl.constexpr,
++    PAGE_SIZE: tl.constexpr,
++    logit_cap: tl.constexpr,
++    Lk: tl.constexpr,
++    Lv: tl.constexpr,
++):
++    cur_batch = tl.program_id(0)
++    cur_head_id = tl.program_id(1)
++    cur_kv_head = cur_head_id // tl.cdiv(kv_group_num, BLOCK_H)
++    split_kv_id = tl.program_id(2)
++
++    VALID_BLOCK_H: tl.constexpr = BLOCK_H if kv_group_num > BLOCK_H else kv_group_num
++    cur_head = cur_head_id * VALID_BLOCK_H + tl.arange(0, BLOCK_H)
++    mask_h = cur_head < (cur_head_id + 1) * VALID_BLOCK_H
++    mask_h = mask_h & (cur_head < q_head_num)
++
++    offs_d = tl.arange(0, BLOCK_DMODEL)
++    offs_dv = tl.arange(0, BLOCK_DV)
++    mask_d = offs_d < Lk
++    mask_dv = offs_dv < Lv
++    cur_batch_seq_len = tl.load(B_Seqlen + cur_batch)
++    cur_batch_req_idx = cur_batch
++
++    offs_q = cur_batch * stride_qbs + cur_head[:, None] * stride_qh + offs_d[None, :]
++    q = tl.load(Q + offs_q, mask=(mask_h[:, None]) & (mask_d[None, :]), other=0.0)
++
++    if BLOCK_DPE > 0:
++        offs_dpe = BLOCK_DMODEL + tl.arange(0, BLOCK_DPE)
++        mask_dpe = offs_dpe < Lk
++        off_qpe = (
++            cur_batch * stride_qbs + cur_head[:, None] * stride_qh + offs_dpe[None, :]
++        )
++        qpe = tl.load(
++            Q + off_qpe, mask=(mask_h[:, None]) & (mask_dpe[None, :]), other=0.0
++        )
++
++    kv_len_per_split = tl.cdiv(cur_batch_seq_len, NUM_KV_SPLITS)
++    split_kv_start = kv_len_per_split * split_kv_id
++    split_kv_end = tl.minimum(split_kv_start + kv_len_per_split, cur_batch_seq_len)
++
++    e_max = tl.zeros([BLOCK_H], dtype=tl.float32) - float("inf")
++    e_sum = tl.zeros([BLOCK_H], dtype=tl.float32)
++    acc = tl.zeros([BLOCK_H, BLOCK_DV], dtype=tl.float32)
++
++    if split_kv_end > split_kv_start:
++        ks = tl.load(k_scale)
++        vs = tl.load(v_scale)
++        for start_n in range(split_kv_start, split_kv_end, BLOCK_N):
++            offs_n = start_n + tl.arange(0, BLOCK_N)
++            kv_page_number = tl.load(
++                Req_to_tokens
++                + stride_req_to_tokens_b * cur_batch_req_idx
++                + offs_n // PAGE_SIZE,
++                mask=offs_n < split_kv_end,
++                other=0,
++            )
++            kv_loc = kv_page_number * PAGE_SIZE + offs_n % PAGE_SIZE
++            offs_buf_k = (
++                kv_loc[None, :] * stride_buf_kbs
++                + cur_kv_head * stride_buf_kh
++                + offs_d[:, None]
++            )
++            k = tl.load(
++                K_Buffer + offs_buf_k,
++                mask=(offs_n[None, :] < split_kv_end) & (mask_d[:, None]),
++                other=0.0,
++            )
++            if k.dtype.is_fp8():
++                k = (k.to(tl.float32) * ks).to(q.dtype)
++            qk = tl.dot(q, k.to(q.dtype))
++            if BLOCK_DPE > 0:
++                offs_buf_kpe = (
++                    kv_loc[None, :] * stride_buf_kbs
++                    + cur_kv_head * stride_buf_kh
++                    + offs_dpe[:, None]
++                )
++                kpe = tl.load(
++                    K_Buffer + offs_buf_kpe,
++                    mask=(offs_n[None, :] < split_kv_end) & (mask_dpe[:, None]),
++                    other=0.0,
++                )
++                if kpe.dtype.is_fp8():
++                    kpe = (kpe.to(tl.float32) * ks).to(qpe.dtype)
++                qk += tl.dot(qpe, kpe.to(qpe.dtype))
++            qk *= sm_scale
++
++            if logit_cap > 0:
++                qk = logit_cap * tanh(qk / logit_cap)
++
++            qk = tl.where(
++                mask_h[:, None] & (offs_n[None, :] < split_kv_end), qk, float("-inf")
++            )
++
++            offs_buf_v = (
++                kv_loc[:, None] * stride_buf_vbs
++                + cur_kv_head * stride_buf_vh
++                + offs_dv[None, :]
++            )
++            v = tl.load(
++                V_Buffer + offs_buf_v,
++                mask=(offs_n[:, None] < split_kv_end) & (mask_dv[None, :]),
++                other=0.0,
++            )
++            if v.dtype.is_fp8():
++                v = (v.to(tl.float32) * vs).to(q.dtype)
++
++            n_e_max = tl.maximum(tl.max(qk, 1), e_max)
++            re_scale = tl.exp(e_max - n_e_max)
++            p = tl.exp(qk - n_e_max[:, None])
++            acc *= re_scale[:, None]
++            acc += tl.dot(p.to(v.dtype), v)
++
++            e_sum = e_sum * re_scale + tl.sum(p, 1)
++            e_max = n_e_max
++
++        offs_mid_o = (
++            cur_batch * stride_mid_ob
++            + cur_head[:, None] * stride_mid_oh
++            + split_kv_id * stride_mid_os
++            + offs_dv[None, :]
++        )
++
++        tl.store(
++            Att_Out + offs_mid_o,
++            acc / e_sum[:, None],
++            mask=(mask_h[:, None]) & (mask_dv[None, :]),
++        )
++
++        offs_mid_o_1 = (
++            cur_batch * stride_mid_ob
++            + cur_head * stride_mid_oh
++            + split_kv_id * stride_mid_os
++            + Lv
++        )
++
++        tl.store(
++            Att_Out + offs_mid_o_1,
++            e_max + tl.log(e_sum),
++            mask=mask_h,
++        )
++
++
++def _decode_grouped_att_m_fwd(
++    q,
++    k_buffer,
++    v_buffer,
++    att_out,
++    Req_to_tokens,
++    B_Seqlen,
++    num_kv_splits,
++    sm_scale,
++    page_size,
++    logit_cap,
++    k_scale,
++    v_scale,
++):
++    BLOCK = 32
++    Lk = k_buffer.shape[-1]
++    Lv = v_buffer.shape[-1]
++
++    # Work around shmem limit on MI3xx
++    if is_hip_ and Lk >= 576:
++        BLOCK = 16
++
++    if Lk == 576:
++        BLOCK_DMODEL = 512
++        BLOCK_DPE = 64
++    elif Lk == 288:
++        BLOCK_DMODEL = 256
++        BLOCK_DPE = 32
++    else:
++        BLOCK_DMODEL = triton.next_power_of_2(Lk)
++        BLOCK_DPE = 0
++    BLOCK_DV = triton.next_power_of_2(Lv)
++
++    batch, head_num = q.shape[0], q.shape[1]
++    kv_group_num = q.shape[1] // k_buffer.shape[-2]
++
++    BLOCK_H = 16
++    # Reduce BLOCK_H for large key dims on ROCm to avoid exceeding
++    # shared-memory / register limits (PassManager::run failure).
++    if is_hip_ and BLOCK_DMODEL >= 512:
++        BLOCK_H = 4
++
++    NUM_KV_SPLITS = num_kv_splits
++    grid = (
++        batch,
++        triton.cdiv(head_num, min(BLOCK_H, kv_group_num)),
++        NUM_KV_SPLITS,
++    )
++
++    extra_kargs = {}
++    num_stages = 2
++    num_warps = 4
++    if is_hip_:
++        extra_kargs = {"waves_per_eu": 1, "matrix_instr_nonkdim": 16, "kpack": 2}
++        num_stages = 1
++        if BLOCK_DMODEL >= 512:
++            num_warps = 2
++
++    _fwd_grouped_kernel_stage1[grid](
++        q,
++        k_buffer,
++        v_buffer,
++        sm_scale,
++        Req_to_tokens,
++        B_Seqlen,
++        att_out,
++        Req_to_tokens.stride(0),
++        q.stride(0),
++        q.stride(1),
++        k_buffer.stride(-3),
++        k_buffer.stride(-2),
++        v_buffer.stride(-3),
++        v_buffer.stride(-2),
++        att_out.stride(0),
++        att_out.stride(1),
++        att_out.stride(2),
++        k_scale,
++        v_scale,
++        kv_group_num=kv_group_num,
++        q_head_num=head_num,
++        BLOCK_DMODEL=BLOCK_DMODEL,
++        BLOCK_DPE=BLOCK_DPE,
++        BLOCK_DV=BLOCK_DV,
++        BLOCK_N=BLOCK,
++        BLOCK_H=BLOCK_H,
++        NUM_KV_SPLITS=NUM_KV_SPLITS,
++        PAGE_SIZE=page_size,
++        logit_cap=logit_cap,
++        num_warps=num_warps,
++        num_stages=num_stages,
++        Lk=Lk,
++        Lv=Lv,
++        **extra_kargs,
++    )
++
++
++@triton.jit
++def _fwd_kernel_stage2(
++    Mid_O,
++    o,
++    lse,
++    B_Seqlen,
++    stride_mid_ob,
++    stride_mid_oh,
++    stride_mid_os,
++    stride_obs,
++    stride_oh,
++    stride_lse_bs,
++    NUM_KV_SPLITS: tl.constexpr,
++    BLOCK_DV: tl.constexpr,
++    Lv: tl.constexpr,
++):
++    cur_batch = tl.program_id(0)
++    cur_head = tl.program_id(1)
++
++    cur_batch_seq_len = tl.load(B_Seqlen + cur_batch)
++
++    offs_d = tl.arange(0, BLOCK_DV)
++    mask_d = offs_d < Lv
++
++    e_sum = 0.0
++    e_max = -float("inf")
++    acc = tl.zeros([BLOCK_DV], dtype=tl.float32)
++
++    offs_v = cur_batch * stride_mid_ob + cur_head * stride_mid_oh + offs_d
++    offs_logic = cur_batch * stride_mid_ob + cur_head * stride_mid_oh + Lv
++
++    for split_kv_id in range(0, NUM_KV_SPLITS):
++        kv_len_per_split = tl.cdiv(cur_batch_seq_len, NUM_KV_SPLITS)
++        split_kv_start = kv_len_per_split * split_kv_id
++        split_kv_end = tl.minimum(split_kv_start + kv_len_per_split, cur_batch_seq_len)
++
++        if split_kv_end > split_kv_start:
++            tv = tl.load(
++                Mid_O + offs_v + split_kv_id * stride_mid_os, mask=mask_d, other=0.0
++            )
++            tlogic = tl.load(Mid_O + offs_logic + split_kv_id * stride_mid_os)
++            n_e_max = tl.maximum(tlogic, e_max)
++
++            old_scale = tl.exp(e_max - n_e_max)
++            acc *= old_scale
++            exp_logic = tl.exp(tlogic - n_e_max)
++            acc += exp_logic * tv
++
++            e_sum = e_sum * old_scale + exp_logic
++            e_max = n_e_max
++
++    tl.store(
++        o + cur_batch * stride_obs + cur_head * stride_oh + offs_d,
++        acc / e_sum,
++        mask=mask_d,
++    )
++    lse_val = e_max + tl.log(e_sum)
++    tl.store(
++        lse + cur_batch * stride_lse_bs + cur_head,
++        lse_val,
++    )
++
++
++def _decode_softmax_reducev_fwd(
++    logits,
++    q,
++    o,
++    lse,
++    v_buffer,
++    b_seq_len,
++    num_kv_splits,
++):
++    batch, head_num = q.shape[0], q.shape[1]
++    Lv = v_buffer.shape[-1]
++    BLOCK_DV = triton.next_power_of_2(Lv)
++
++    NUM_KV_SPLITS = num_kv_splits
++
++    extra_kargs = {}
++    if is_hip_:
++        extra_kargs = {"waves_per_eu": 4, "matrix_instr_nonkdim": 16, "kpack": 2}
++
++    grid = (batch, head_num)
++    _fwd_kernel_stage2[grid](
++        logits,
++        o,
++        lse,
++        b_seq_len,
++        logits.stride(0),
++        logits.stride(1),
++        logits.stride(2),
++        o.stride(0),
++        o.stride(1),
++        lse.stride(0),
++        NUM_KV_SPLITS=NUM_KV_SPLITS,
++        BLOCK_DV=BLOCK_DV,
++        Lv=Lv,
++        num_warps=4,
++        num_stages=2,
++        **extra_kargs,
++    )
++
++
++@triton.jit
++def _csr_to_dense_kernel(
++    kv_indices,
++    kv_indptr,
++    dense_table,
++    stride_dense_b,
++    BLOCK_N: tl.constexpr,
++):
++    """Scatter CSR kv_indices into a dense [B, max_ctx] block table."""
++    cur_batch = tl.program_id(0)
++    block_id = tl.program_id(1)
++
++    start = tl.load(kv_indptr + cur_batch)
++    end = tl.load(kv_indptr + cur_batch + 1)
++
++    offs = block_id * BLOCK_N + tl.arange(0, BLOCK_N)
++    src_idx = start + offs
++    mask = offs < (end - start)
++
++    vals = tl.load(kv_indices + src_idx, mask=mask, other=0)
++    tl.store(
++        dense_table + cur_batch * stride_dense_b + offs,
++        vals,
++        mask=mask,
++    )
++
++
++def csr_to_dense_block_table(kv_indices, kv_indptr, dense_table, max_ctx, bs):
++    """Convert CSR (kv_indices + kv_indptr) to dense [B, max_ctx] block table on GPU."""
++    BLOCK_N = 128
++    grid = (bs, triton.cdiv(max_ctx, BLOCK_N))
++    _csr_to_dense_kernel[grid](
++        kv_indices,
++        kv_indptr,
++        dense_table,
++        dense_table.stride(0),
++        BLOCK_N=BLOCK_N,
++    )
++
++
++def decode_attention_fwd(
++    q,
++    k_buffer,
++    v_buffer,
++    o,
++    lse,
++    req_to_token,
++    b_seq_len,
++    attn_logits,
++    num_kv_splits,
++    sm_scale,
++    page_size=1,
++    logit_cap=0.0,
++    k_scale=None,
++    v_scale=None,
++):
++    assert num_kv_splits == attn_logits.shape[2]
++
++    if k_scale is None:
++        k_scale = torch.tensor(1.0, dtype=torch.float32, device=q.device)
++    if v_scale is None:
++        v_scale = torch.tensor(1.0, dtype=torch.float32, device=q.device)
++
++    kv_group_num = q.shape[1] // v_buffer.shape[-2]
++    Lk = k_buffer.shape[-1]
++
++    # On ROCm, the grouped kernel uses tl.dot which fails compilation when
++    # BLOCK_DMODEL >= 512 (MLA's 576-dim keys).  Fall back to the per-head
++    # kernel that uses element-wise multiply + tl.sum instead.
++    use_grouped = kv_group_num != 1 and not (is_hip_ and Lk >= 576)
++
++    if not use_grouped:
++        # MHA, or MLA on ROCm (per-head path)
++        _decode_att_m_fwd(
++            q,
++            k_buffer,
++            v_buffer,
++            attn_logits,
++            req_to_token,
++            b_seq_len,
++            num_kv_splits,
++            sm_scale,
++            page_size,
++            logit_cap,
++            k_scale,
++            v_scale,
++        )
++    else:
++        # GQA/MQA/MLA (grouped-head path)
++        _decode_grouped_att_m_fwd(
++            q,
++            k_buffer,
++            v_buffer,
++            attn_logits,
++            req_to_token,
++            b_seq_len,
++            num_kv_splits,
++            sm_scale,
++            page_size,
++            logit_cap,
++            k_scale,
++            v_scale,
++        )
++
++    _decode_softmax_reducev_fwd(
++        attn_logits,
++        q,
++        o,
++        lse,
++        v_buffer,
++        b_seq_len,
++        num_kv_splits,
++    )
+diff --git a/aiter/ops/triton/attention/unified_attention.py b/aiter/ops/triton/attention/unified_attention.py
+index fb8c8748d6..df8c2fa6d8 100644
+--- a/aiter/ops/triton/attention/unified_attention.py
++++ b/aiter/ops/triton/attention/unified_attention.py
+@@ -168,7 +168,7 @@ def unified_attention(
+     total_num_q_blocks = q.shape[0] // BLOCK_Q + num_seqs
+     target_num_prgms = cu_count * 4
+     num_2d_prgms = total_num_q_blocks * num_kv_heads
+-    ALL_DECODE = max_seqlen_q == 1
++    ALL_DECODE = int(max_seqlen_q) == 1
+     # if batch contains a prefill
+     if use_2d_kernel(
+         head_size,
+diff --git a/aiter/ops/triton/configs/gemm/gfx1250-BATCHED_GEMM-A16W16.json b/aiter/ops/triton/configs/gemm/gfx1250-BATCHED_GEMM-A16W16.json
+new file mode 100644
+index 0000000000..b96bf629e9
+--- /dev/null
++++ b/aiter/ops/triton/configs/gemm/gfx1250-BATCHED_GEMM-A16W16.json
+@@ -0,0 +1,22 @@
++{
++    "M_GEQ_4096": {
++        "BLOCK_SIZE_M": 256,
++        "BLOCK_SIZE_N": 256,
++        "BLOCK_SIZE_K": 64,
++        "GROUP_SIZE_M": 4,
++        "num_warps": 8,
++        "num_stages": 2,
++        "waves_per_eu": 2,
++        "matrix_instr_nonkdim": 16
++    },
++    "any": {
++        "BLOCK_SIZE_M": 128,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 32,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 8,
++        "num_stages": 2,
++        "waves_per_eu": 2,
++        "matrix_instr_nonkdim": 16
++    }
++}
+diff --git a/aiter/ops/triton/configs/gemm/gfx1250-BATCHED_GEMM-A8W8-A_PER_TOKEN_GROUP_PREQUANT_W_PER_BATCHED_TENSOR_QUANT.json b/aiter/ops/triton/configs/gemm/gfx1250-BATCHED_GEMM-A8W8-A_PER_TOKEN_GROUP_PREQUANT_W_PER_BATCHED_TENSOR_QUANT.json
+new file mode 100644
+index 0000000000..43f7876e18
+--- /dev/null
++++ b/aiter/ops/triton/configs/gemm/gfx1250-BATCHED_GEMM-A8W8-A_PER_TOKEN_GROUP_PREQUANT_W_PER_BATCHED_TENSOR_QUANT.json
+@@ -0,0 +1,68 @@
++{
++    "M_LEQ_16": {
++        "BLOCK_SIZE_M": 16,
++        "BLOCK_SIZE_N": 128,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 8,
++        "num_stages": 2,
++        "waves_per_eu": 2,
++        "matrix_instr_nonkdim": 16,
++        "kpack": 1,
++        "cache_modifier": ".cg"
++    },
++    "M_LEQ_32": {
++        "BLOCK_SIZE_M": 32,
++        "BLOCK_SIZE_N": 128,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 8,
++        "num_stages": 2,
++        "waves_per_eu": 2,
++        "matrix_instr_nonkdim": 16,
++        "kpack": 1,
++        "cache_modifier": ".cg"
++    },
++    "M_LEQ_64": {
++        "BLOCK_SIZE_M": 32,
++        "BLOCK_SIZE_N": 128,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 8,
++        "num_stages": 2,
++        "waves_per_eu": 2,
++        "matrix_instr_nonkdim": 16,
++        "kpack": 1,
++        "cache_modifier": ".cg"
++    },
++    "M_LEQ_128": {
++        "BLOCK_SIZE_M": 32,
++        "BLOCK_SIZE_N": 128,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 8,
++        "num_stages": 2,
++        "waves_per_eu": 2,
++        "matrix_instr_nonkdim": 16,
++        "kpack": 1,
++        "cache_modifier": ".cg"
++    },
++    "M_LEQ_256": {
++        "BLOCK_SIZE_M": 32,
++        "BLOCK_SIZE_N": 128,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 8,
++        "num_stages": 2,
++        "waves_per_eu": 2,
++        "matrix_instr_nonkdim": 16,
++        "kpack": 1,
++        "cache_modifier": ".cg"
++    },
++    "any": {
++        "BLOCK_SIZE_M": 32,
++        "BLOCK_SIZE_N": 128,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 8,
++        "num_stages": 2,
++        "waves_per_eu": 2,
++        "matrix_instr_nonkdim": 16,
++        "kpack": 1,
++        "cache_modifier": ".cg"
++    }
++}
+diff --git a/aiter/ops/triton/configs/gemm/gfx1250-BATCHED_GEMM-A8W8.json b/aiter/ops/triton/configs/gemm/gfx1250-BATCHED_GEMM-A8W8.json
+new file mode 100644
+index 0000000000..b96bf629e9
+--- /dev/null
++++ b/aiter/ops/triton/configs/gemm/gfx1250-BATCHED_GEMM-A8W8.json
+@@ -0,0 +1,22 @@
++{
++    "M_GEQ_4096": {
++        "BLOCK_SIZE_M": 256,
++        "BLOCK_SIZE_N": 256,
++        "BLOCK_SIZE_K": 64,
++        "GROUP_SIZE_M": 4,
++        "num_warps": 8,
++        "num_stages": 2,
++        "waves_per_eu": 2,
++        "matrix_instr_nonkdim": 16
++    },
++    "any": {
++        "BLOCK_SIZE_M": 128,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 32,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 8,
++        "num_stages": 2,
++        "waves_per_eu": 2,
++        "matrix_instr_nonkdim": 16
++    }
++}
+diff --git a/aiter/ops/triton/configs/gemm/gfx1250-BATCHED_GEMM-AFP4WFP4.json b/aiter/ops/triton/configs/gemm/gfx1250-BATCHED_GEMM-AFP4WFP4.json
+new file mode 100644
+index 0000000000..fb69cf643b
+--- /dev/null
++++ b/aiter/ops/triton/configs/gemm/gfx1250-BATCHED_GEMM-AFP4WFP4.json
+@@ -0,0 +1,80 @@
++{
++    "M_LEQ_16": {
++        "BLOCK_SIZE_M": 16,
++        "BLOCK_SIZE_N": 64,
++        "BLOCK_SIZE_K": 256,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 2,
++        "waves_per_eu": 6,
++        "matrix_instr_nonkdim": 16,
++        "kpack": 1,
++        "cache_modifier": ".cg",
++        "NUM_KSPLIT": 1
++    },
++    "M_LEQ_32": {
++        "BLOCK_SIZE_M": 32,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 256,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 2,
++        "waves_per_eu": 4,
++        "matrix_instr_nonkdim": 16,
++        "kpack": 1,
++        "cache_modifier": ".cg",
++        "NUM_KSPLIT": 1
++    },
++    "M_LEQ_64": {
++        "BLOCK_SIZE_M": 64,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 256,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 2,
++        "waves_per_eu": 4,
++        "matrix_instr_nonkdim": 16,
++        "kpack": 1,
++        "cache_modifier": ".cg",
++        "NUM_KSPLIT": 1
++    },
++    "M_LEQ_128": {
++        "BLOCK_SIZE_M": 128,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 256,
++        "GROUP_SIZE_M": 2,
++        "num_warps": 4,
++        "num_stages": 2,
++        "waves_per_eu": 4,
++        "matrix_instr_nonkdim": 16,
++        "kpack": 1,
++        "cache_modifier": ".cg",
++        "NUM_KSPLIT": 1
++    },
++    "M_LEQ_256": {
++        "BLOCK_SIZE_M": 128,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 256,
++        "GROUP_SIZE_M": 2,
++        "num_warps": 4,
++        "num_stages": 2,
++        "waves_per_eu": 4,
++        "matrix_instr_nonkdim": 16,
++        "kpack": 1,
++        "cache_modifier": ".cg",
++        "NUM_KSPLIT": 1
++    },
++    "any": {
++        "BLOCK_SIZE_M": 256,
++        "BLOCK_SIZE_N": 256,
++        "BLOCK_SIZE_K": 256,
++        "GROUP_SIZE_M": 64,
++        "num_warps": 8,
++        "num_stages": 2,
++        "waves_per_eu": 1,
++        "matrix_instr_nonkdim": 16,
++        "kpack": 1,
++        "cache_modifier": null,
++        "NUM_KSPLIT": 1
++    }
++}
+diff --git a/aiter/ops/triton/configs/gemm/gfx1250-BATCHED_GEMM_PREQUANT-AFP4WFP4.json b/aiter/ops/triton/configs/gemm/gfx1250-BATCHED_GEMM_PREQUANT-AFP4WFP4.json
+new file mode 100644
+index 0000000000..a0a550dcab
+--- /dev/null
++++ b/aiter/ops/triton/configs/gemm/gfx1250-BATCHED_GEMM_PREQUANT-AFP4WFP4.json
+@@ -0,0 +1,80 @@
++{
++    "M_LEQ_16": {
++        "BLOCK_SIZE_M": 16,
++        "BLOCK_SIZE_N": 64,
++        "BLOCK_SIZE_K": 256,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 2,
++        "waves_per_eu": 6,
++        "matrix_instr_nonkdim": 16,
++        "kpack": 1,
++        "cache_modifier": ".cg",
++        "NUM_KSPLIT": 4
++    },
++    "M_LEQ_32": {
++        "BLOCK_SIZE_M": 32,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 256,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 2,
++        "waves_per_eu": 4,
++        "matrix_instr_nonkdim": 16,
++        "kpack": 1,
++        "cache_modifier": ".cg",
++        "NUM_KSPLIT": 4
++    },
++    "M_LEQ_64": {
++        "BLOCK_SIZE_M": 64,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 256,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 2,
++        "waves_per_eu": 4,
++        "matrix_instr_nonkdim": 16,
++        "kpack": 1,
++        "cache_modifier": ".cg",
++        "NUM_KSPLIT": 4
++    },
++    "M_LEQ_128": {
++        "BLOCK_SIZE_M": 128,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 256,
++        "GROUP_SIZE_M": 2,
++        "num_warps": 4,
++        "num_stages": 2,
++        "waves_per_eu": 4,
++        "matrix_instr_nonkdim": 16,
++        "kpack": 1,
++        "cache_modifier": ".cg",
++        "NUM_KSPLIT": 4
++    },
++    "M_LEQ_256": {
++        "BLOCK_SIZE_M": 128,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 256,
++        "GROUP_SIZE_M": 2,
++        "num_warps": 4,
++        "num_stages": 2,
++        "waves_per_eu": 4,
++        "matrix_instr_nonkdim": 16,
++        "kpack": 1,
++        "cache_modifier": ".cg",
++        "NUM_KSPLIT": 1
++    },
++    "any": {
++        "BLOCK_SIZE_M": 256,
++        "BLOCK_SIZE_N": 256,
++        "BLOCK_SIZE_K": 256,
++        "GROUP_SIZE_M": 64,
++        "num_warps": 8,
++        "num_stages": 2,
++        "waves_per_eu": 1,
++        "matrix_instr_nonkdim": 16,
++        "kpack": 1,
++        "cache_modifier": null,
++        "NUM_KSPLIT": 1
++    }
++}
+diff --git a/aiter/ops/triton/configs/gemm/gfx1250-FF-A16W16-fused.json b/aiter/ops/triton/configs/gemm/gfx1250-FF-A16W16-fused.json
+new file mode 100644
+index 0000000000..c1c8cdce3e
+--- /dev/null
++++ b/aiter/ops/triton/configs/gemm/gfx1250-FF-A16W16-fused.json
+@@ -0,0 +1,50 @@
++{
++    "M_LEQ_4": {
++        "BLOCK_SIZE_M": 16,
++        "BLOCK_SIZE_N": 256,
++        "BLOCK_SIZE_K": 256,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 8,
++        "num_stages": 2,
++        "waves_per_eu": 3,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": ".cg",
++        "kpack": 1
++    },
++    "M_LEQ_8": {
++        "BLOCK_SIZE_M": 16,
++        "BLOCK_SIZE_N": 256,
++        "BLOCK_SIZE_K": 256,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 8,
++        "num_stages": 2,
++        "waves_per_eu": 2,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": ".cg",
++        "kpack": 1
++    },
++    "M_LEQ_64": {
++        "BLOCK_SIZE_M": 64,
++        "BLOCK_SIZE_N": 256,
++        "BLOCK_SIZE_K": 256,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 8,
++        "num_stages": 1,
++        "waves_per_eu": 2,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": ".cg",
++        "kpack": 1
++    },
++    "any": {
++        "BLOCK_SIZE_M": 64,
++        "BLOCK_SIZE_N": 256,
++        "BLOCK_SIZE_K": 256,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 8,
++        "num_stages": 1,
++        "waves_per_eu": 2,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": null,
++        "kpack": 1
++    }
++}
+\ No newline at end of file
+diff --git a/aiter/ops/triton/configs/gemm/gfx1250-FUSED-GEMM-A8W8_BLOCKSCALE-A16W16.json b/aiter/ops/triton/configs/gemm/gfx1250-FUSED-GEMM-A8W8_BLOCKSCALE-A16W16.json
+new file mode 100644
+index 0000000000..9fb4bf4ec6
+--- /dev/null
++++ b/aiter/ops/triton/configs/gemm/gfx1250-FUSED-GEMM-A8W8_BLOCKSCALE-A16W16.json
+@@ -0,0 +1,14 @@
++{
++    "any": {
++        "BLOCK_SIZE_M": 32,
++        "BLOCK_SIZE_N": 64,
++        "BLOCK_SIZE_K": 128,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 2,
++        "waves_per_eu": 2,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": ".cg",
++        "NUM_KSPLIT": 1
++    }
++}
+diff --git a/aiter/ops/triton/configs/gemm/gfx1250-FUSED-GEMM-AFP4WFP4-A16W16.json b/aiter/ops/triton/configs/gemm/gfx1250-FUSED-GEMM-AFP4WFP4-A16W16.json
+new file mode 100644
+index 0000000000..3811ccc061
+--- /dev/null
++++ b/aiter/ops/triton/configs/gemm/gfx1250-FUSED-GEMM-AFP4WFP4-A16W16.json
+@@ -0,0 +1,14 @@
++{
++    "any": {
++        "BLOCK_SIZE_M": 32,
++        "BLOCK_SIZE_N": 64,
++        "BLOCK_SIZE_K": 256,
++        "GROUP_SIZE_M": 4,
++        "num_warps": 2,
++        "num_stages": 2,
++        "waves_per_eu": 1,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": ".cg",
++        "NUM_KSPLIT": 1
++    }
++}
+diff --git a/aiter/ops/triton/configs/gemm/gfx1250-FUSED-GEMM-AFP4WFP4_PRESHUFFLED-A16W16.json b/aiter/ops/triton/configs/gemm/gfx1250-FUSED-GEMM-AFP4WFP4_PRESHUFFLED-A16W16.json
+new file mode 100644
+index 0000000000..d0bdd5bc66
+--- /dev/null
++++ b/aiter/ops/triton/configs/gemm/gfx1250-FUSED-GEMM-AFP4WFP4_PRESHUFFLED-A16W16.json
+@@ -0,0 +1,38 @@
++{
++    "M_LEQ_8": {
++        "BLOCK_SIZE_M": 16,
++        "BLOCK_SIZE_N": 16,
++        "BLOCK_SIZE_K": 256,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 2,
++        "num_stages": 2,
++        "waves_per_eu": 1,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": ".cg",
++        "NUM_KSPLIT": 1
++    },
++    "M_LEQ_16": {
++        "BLOCK_SIZE_M": 16,
++        "BLOCK_SIZE_N": 16,
++        "BLOCK_SIZE_K": 256,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 2,
++        "num_stages": 2,
++        "waves_per_eu": 1,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": ".cg",
++        "NUM_KSPLIT": 1
++    },
++    "any": {
++        "BLOCK_SIZE_M": 32,
++        "BLOCK_SIZE_N": 64,
++        "BLOCK_SIZE_K": 256,
++        "GROUP_SIZE_M": 4,
++        "num_warps": 2,
++        "num_stages": 2,
++        "waves_per_eu": 1,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": ".cg",
++        "NUM_KSPLIT": 1
++    }
++}
+\ No newline at end of file
+diff --git a/aiter/ops/triton/configs/gemm/gfx1250-GEMM-A16W16-ATOMIC.json b/aiter/ops/triton/configs/gemm/gfx1250-GEMM-A16W16-ATOMIC.json
+new file mode 100644
+index 0000000000..44271f5634
+--- /dev/null
++++ b/aiter/ops/triton/configs/gemm/gfx1250-GEMM-A16W16-ATOMIC.json
+@@ -0,0 +1,15 @@
++{
++    "any": {
++        "BLOCK_SIZE_M": 256,
++        "BLOCK_SIZE_N": 256,
++        "BLOCK_SIZE_K": 64,
++        "GROUP_SIZE_M": 4,
++        "NUM_KSPLIT": 1,
++        "cache_modifier": null,
++        "num_warps": 8,
++        "num_stages": 2,
++        "waves_per_eu": 2,
++        "matrix_instr_nonkdim": 32,
++        "kpack": 1
++    }
++}
+diff --git a/aiter/ops/triton/configs/gemm/gfx1250-GEMM-A16W16-gated.json b/aiter/ops/triton/configs/gemm/gfx1250-GEMM-A16W16-gated.json
+new file mode 100644
+index 0000000000..67448543a2
+--- /dev/null
++++ b/aiter/ops/triton/configs/gemm/gfx1250-GEMM-A16W16-gated.json
+@@ -0,0 +1,74 @@
++{
++    "M_LEQ_64": {
++        "BLOCK_SIZE_M": 64,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 256,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 8,
++        "num_stages": 2,
++        "waves_per_eu": 3,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": ".cg",
++        "kpack": 1
++    },
++    "M_LEQ_128": {
++        "BLOCK_SIZE_M": 128,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 256,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 8,
++        "num_stages": 2,
++        "waves_per_eu": 3,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": ".cg",
++        "kpack": 1
++    },
++    "M_LEQ_256": {
++        "BLOCK_SIZE_M": 256,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 128,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 8,
++        "num_stages": 2,
++        "waves_per_eu": 2,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": ".cg",
++        "kpack": 1
++    },
++    "M_LEQ_512": {
++        "BLOCK_SIZE_M": 256,
++        "BLOCK_SIZE_N": 256,
++        "BLOCK_SIZE_K": 64,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 8,
++        "num_stages": 2,
++        "waves_per_eu": 2,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": ".cg",
++        "kpack": 1
++    },
++    "M_LEQ_2048": {
++        "BLOCK_SIZE_M": 256,
++        "BLOCK_SIZE_N": 256,
++        "BLOCK_SIZE_K": 64,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 8,
++        "num_stages": 2,
++        "waves_per_eu": 2,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": null,
++        "kpack": 1
++    },
++    "any": {
++        "BLOCK_SIZE_M": 256,
++        "BLOCK_SIZE_N": 256,
++        "BLOCK_SIZE_K": 64,
++        "GROUP_SIZE_M": 16,
++        "num_warps": 8,
++        "num_stages": 2,
++        "waves_per_eu": 2,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": null,
++        "kpack": 1
++    }
++}
+diff --git a/aiter/ops/triton/configs/gemm/gfx1250-GEMM-A16W16.json b/aiter/ops/triton/configs/gemm/gfx1250-GEMM-A16W16.json
+new file mode 100644
+index 0000000000..e593e2b10c
+--- /dev/null
++++ b/aiter/ops/triton/configs/gemm/gfx1250-GEMM-A16W16.json
+@@ -0,0 +1,80 @@
++{
++    "M_LEQ_64": {
++        "BLOCK_SIZE_M": 16,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 64,
++        "GROUP_SIZE_M": 6,
++        "num_warps": 4,
++        "num_stages": 3,
++        "waves_per_eu": 3,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": null,
++        "NUM_KSPLIT": 1,
++        "kpack": 1
++    },
++    "M_LEQ_128": {
++        "BLOCK_SIZE_M": 64,
++        "BLOCK_SIZE_N": 64,
++        "BLOCK_SIZE_K": 128,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 2,
++        "waves_per_eu": 3,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": null,
++        "NUM_KSPLIT": 1,
++        "kpack": 1
++    },
++    "M_LEQ_256": {
++        "BLOCK_SIZE_M": 128,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 32,
++        "GROUP_SIZE_M": 4,
++        "num_warps": 4,
++        "num_stages": 3,
++        "waves_per_eu": 3,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": null,
++        "NUM_KSPLIT": 1,
++        "kpack": 1
++    },
++    "M_LEQ_512": {
++        "BLOCK_SIZE_M": 256,
++        "BLOCK_SIZE_N": 256,
++        "BLOCK_SIZE_K": 32,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 8,
++        "num_stages": 3,
++        "waves_per_eu": 2,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": ".cg",
++        "NUM_KSPLIT": 1,
++        "kpack": 1
++    },
++    "M_LEQ_2048": {
++        "BLOCK_SIZE_M": 256,
++        "BLOCK_SIZE_N": 256,
++        "BLOCK_SIZE_K": 32,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 8,
++        "num_stages": 3,
++        "waves_per_eu": 2,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": null,
++        "NUM_KSPLIT": 1,
++        "kpack": 1
++    },
++    "any": {
++        "BLOCK_SIZE_M": 256,
++        "BLOCK_SIZE_N": 256,
++        "BLOCK_SIZE_K": 32,
++        "GROUP_SIZE_M": 6,
++        "num_warps": 8,
++        "num_stages": 3,
++        "waves_per_eu": 2,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": null,
++        "NUM_KSPLIT": 1,
++        "kpack": 1
++    }
++}
+diff --git a/aiter/ops/triton/configs/gemm/gfx1250-GEMM-A16W8_BLOCKSCALE.json b/aiter/ops/triton/configs/gemm/gfx1250-GEMM-A16W8_BLOCKSCALE.json
+new file mode 100644
+index 0000000000..97c355f55b
+--- /dev/null
++++ b/aiter/ops/triton/configs/gemm/gfx1250-GEMM-A16W8_BLOCKSCALE.json
+@@ -0,0 +1,14 @@
++{
++    "any": {
++        "BLOCK_SIZE_M": 128,
++        "BLOCK_SIZE_N": 256,
++        "BLOCK_SIZE_K": 128,
++        "GROUP_SIZE_M": 8,
++        "num_warps": 8,
++        "num_stages": 2,
++        "waves_per_eu": 1,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": null,
++        "NUM_KSPLIT": 1
++    }
++}
+diff --git a/aiter/ops/triton/configs/gemm/gfx1250-GEMM-A16W8_BLOCKSCALE_PRESHUFFLED.json b/aiter/ops/triton/configs/gemm/gfx1250-GEMM-A16W8_BLOCKSCALE_PRESHUFFLED.json
+new file mode 100644
+index 0000000000..97c355f55b
+--- /dev/null
++++ b/aiter/ops/triton/configs/gemm/gfx1250-GEMM-A16W8_BLOCKSCALE_PRESHUFFLED.json
+@@ -0,0 +1,14 @@
++{
++    "any": {
++        "BLOCK_SIZE_M": 128,
++        "BLOCK_SIZE_N": 256,
++        "BLOCK_SIZE_K": 128,
++        "GROUP_SIZE_M": 8,
++        "num_warps": 8,
++        "num_stages": 2,
++        "waves_per_eu": 1,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": null,
++        "NUM_KSPLIT": 1
++    }
++}
+diff --git a/aiter/ops/triton/configs/gemm/gfx1250-GEMM-A16WFP4.json b/aiter/ops/triton/configs/gemm/gfx1250-GEMM-A16WFP4.json
+new file mode 100644
+index 0000000000..5234de77bc
+--- /dev/null
++++ b/aiter/ops/triton/configs/gemm/gfx1250-GEMM-A16WFP4.json
+@@ -0,0 +1,86 @@
++{
++    "M_LEQ_8": {
++        "BLOCK_SIZE_M": 16,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 512,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 1,
++        "waves_per_eu": 2,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": ".cg",
++        "NUM_KSPLIT": 1
++    },
++    "M_LEQ_16": {
++        "BLOCK_SIZE_M": 16,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 512,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 1,
++        "waves_per_eu": 2,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": ".cg",
++        "NUM_KSPLIT": 1
++    },
++    "M_LEQ_32": {
++        "BLOCK_SIZE_M": 16,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 512,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 8,
++        "num_stages": 1,
++        "waves_per_eu": 2,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": ".cg",
++        "NUM_KSPLIT": 1
++    },
++    "M_LEQ_64": {
++        "BLOCK_SIZE_M": 16,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 512,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 8,
++        "num_stages": 1,
++        "waves_per_eu": 2,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": ".cg",
++        "NUM_KSPLIT": 1
++    },
++    "M_LEQ_128": {
++        "BLOCK_SIZE_M": 16,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 512,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 8,
++        "num_stages": 1,
++        "waves_per_eu": 2,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": ".cg",
++        "NUM_KSPLIT": 1
++    },
++    "M_LEQ_256": {
++        "BLOCK_SIZE_M": 16,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 512,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 8,
++        "num_stages": 1,
++        "waves_per_eu": 2,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": ".cg",
++        "NUM_KSPLIT": 1
++    },
++    "any": {
++        "BLOCK_SIZE_M": 16,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 512,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 8,
++        "num_stages": 1,
++        "waves_per_eu": 2,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": null,
++        "NUM_KSPLIT": 1
++    }
++}
+\ No newline at end of file
+diff --git a/aiter/ops/triton/configs/gemm/gfx1250-GEMM-A16WFP4_PRESHUFFLED.json b/aiter/ops/triton/configs/gemm/gfx1250-GEMM-A16WFP4_PRESHUFFLED.json
+new file mode 100644
+index 0000000000..01951d60ce
+--- /dev/null
++++ b/aiter/ops/triton/configs/gemm/gfx1250-GEMM-A16WFP4_PRESHUFFLED.json
+@@ -0,0 +1,14 @@
++{
++    "any": {
++        "BLOCK_SIZE_M": 32,
++        "BLOCK_SIZE_N": 64,
++        "BLOCK_SIZE_K": 512,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 8,
++        "num_stages": 1,
++        "waves_per_eu": 2,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": null,
++        "NUM_KSPLIT": 1
++    }
++}
+diff --git a/aiter/ops/triton/configs/gemm/gfx1250-GEMM-A8W8.json b/aiter/ops/triton/configs/gemm/gfx1250-GEMM-A8W8.json
+new file mode 100644
+index 0000000000..4f38cf580f
+--- /dev/null
++++ b/aiter/ops/triton/configs/gemm/gfx1250-GEMM-A8W8.json
+@@ -0,0 +1,14 @@
++{
++    "any": {
++        "BLOCK_SIZE_M": 64,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 128,
++        "GROUP_SIZE_M": 4,
++        "num_warps": 8,
++        "num_stages": 2,
++        "waves_per_eu": 2,
++        "matrix_instr_nonkdim": 16,
++        "kpack": 1,
++        "NUM_KSPLIT": 1
++    }
++}
+diff --git a/aiter/ops/triton/configs/gemm/gfx1250-GEMM-A8W8_BLOCKSCALE.json b/aiter/ops/triton/configs/gemm/gfx1250-GEMM-A8W8_BLOCKSCALE.json
+new file mode 100644
+index 0000000000..21cff21414
+--- /dev/null
++++ b/aiter/ops/triton/configs/gemm/gfx1250-GEMM-A8W8_BLOCKSCALE.json
+@@ -0,0 +1,14 @@
++{
++    "any": {
++        "BLOCK_SIZE_M": 128,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 128,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 2,
++        "waves_per_eu": 2,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": ".ca",
++        "NUM_KSPLIT": 1
++    }
++}
+diff --git a/aiter/ops/triton/configs/gemm/gfx1250-GEMM-A8W8_BLOCKSCALE_PRESHUFFLED.json b/aiter/ops/triton/configs/gemm/gfx1250-GEMM-A8W8_BLOCKSCALE_PRESHUFFLED.json
+new file mode 100644
+index 0000000000..16b7be67bb
+--- /dev/null
++++ b/aiter/ops/triton/configs/gemm/gfx1250-GEMM-A8W8_BLOCKSCALE_PRESHUFFLED.json
+@@ -0,0 +1,14 @@
++{
++    "any": {
++        "BLOCK_SIZE_M": 16,
++        "BLOCK_SIZE_N": 64,
++        "BLOCK_SIZE_K": 128,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 2,
++        "waves_per_eu": 2,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": null,
++        "NUM_KSPLIT": 1
++    }
++}
+\ No newline at end of file
+diff --git a/aiter/ops/triton/configs/gemm/gfx1250-GEMM-A8W8_PER_TOKEN_SCALE.json b/aiter/ops/triton/configs/gemm/gfx1250-GEMM-A8W8_PER_TOKEN_SCALE.json
+new file mode 100644
+index 0000000000..694727842a
+--- /dev/null
++++ b/aiter/ops/triton/configs/gemm/gfx1250-GEMM-A8W8_PER_TOKEN_SCALE.json
+@@ -0,0 +1,14 @@
++{
++    "any": {
++        "BLOCK_SIZE_M": 128,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 128,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 2,
++        "waves_per_eu": 2,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": null,
++        "NUM_KSPLIT": 1
++    }
++}
+diff --git a/aiter/ops/triton/configs/gemm/gfx1250-GEMM-A8WFP4.json b/aiter/ops/triton/configs/gemm/gfx1250-GEMM-A8WFP4.json
+new file mode 100644
+index 0000000000..cd4cbd2ff8
+--- /dev/null
++++ b/aiter/ops/triton/configs/gemm/gfx1250-GEMM-A8WFP4.json
+@@ -0,0 +1,80 @@
++{
++    "M_LEQ_16": {
++        "BLOCK_SIZE_M": 16,
++        "BLOCK_SIZE_N": 64,
++        "BLOCK_SIZE_K": 256,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 2,
++        "waves_per_eu": 6,
++        "matrix_instr_nonkdim": 16,
++        "kpack": 1,
++        "cache_modifier": ".cg",
++        "NUM_KSPLIT": 4
++    },
++    "M_LEQ_32": {
++        "BLOCK_SIZE_M": 32,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 256,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 2,
++        "waves_per_eu": 4,
++        "matrix_instr_nonkdim": 16,
++        "kpack": 1,
++        "cache_modifier": ".cg",
++        "NUM_KSPLIT": 4
++    },
++    "M_LEQ_64": {
++        "BLOCK_SIZE_M": 64,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 256,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 2,
++        "waves_per_eu": 4,
++        "matrix_instr_nonkdim": 16,
++        "kpack": 1,
++        "cache_modifier": ".cg",
++        "NUM_KSPLIT": 4
++    },
++    "M_LEQ_128": {
++        "BLOCK_SIZE_M": 128,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 256,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 2,
++        "waves_per_eu": 4,
++        "matrix_instr_nonkdim": 16,
++        "kpack": 1,
++        "cache_modifier": ".cg",
++        "NUM_KSPLIT": 4
++    },
++    "M_LEQ_256": {
++        "BLOCK_SIZE_M": 128,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 256,
++        "GROUP_SIZE_M": 2,
++        "num_warps": 4,
++        "num_stages": 2,
++        "waves_per_eu": 4,
++        "matrix_instr_nonkdim": 16,
++        "kpack": 1,
++        "cache_modifier": ".cg",
++        "NUM_KSPLIT": 1
++    },
++    "any": {
++        "BLOCK_SIZE_M": 256,
++        "BLOCK_SIZE_N": 256,
++        "BLOCK_SIZE_K": 256,
++        "GROUP_SIZE_M": 32,
++        "num_warps": 8,
++        "num_stages": 2,
++        "waves_per_eu": 1,
++        "matrix_instr_nonkdim": 32,
++        "kpack": 1,
++        "cache_modifier": null,
++        "NUM_KSPLIT": 1
++    }
++}
+diff --git a/aiter/ops/triton/configs/gemm/gfx1250-GEMM-AFP4WFP4.json b/aiter/ops/triton/configs/gemm/gfx1250-GEMM-AFP4WFP4.json
+new file mode 100644
+index 0000000000..07a2036905
+--- /dev/null
++++ b/aiter/ops/triton/configs/gemm/gfx1250-GEMM-AFP4WFP4.json
+@@ -0,0 +1,74 @@
++{
++    "M_LEQ_16": {
++        "BLOCK_SIZE_M": 16,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 256,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 2,
++        "waves_per_eu": 3,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": null,
++        "NUM_KSPLIT": 16
++    },
++    "M_LEQ_32": {
++        "BLOCK_SIZE_M": 32,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 256,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 2,
++        "waves_per_eu": 3,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": ".cg",
++        "NUM_KSPLIT": 1
++    },
++    "M_LEQ_64": {
++        "BLOCK_SIZE_M": 64,
++        "BLOCK_SIZE_N": 256,
++        "BLOCK_SIZE_K": 256,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 3,
++        "waves_per_eu": 2,
++        "matrix_instr_nonkdim": 32,
++        "cache_modifier": null,
++        "NUM_KSPLIT": 1
++    },
++    "M_LEQ_128": {
++        "BLOCK_SIZE_M": 128,
++        "BLOCK_SIZE_N": 256,
++        "BLOCK_SIZE_K": 256,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 3,
++        "waves_per_eu": 2,
++        "matrix_instr_nonkdim": 32,
++        "cache_modifier": null,
++        "NUM_KSPLIT": 1
++    },
++    "M_LEQ_256": {
++        "BLOCK_SIZE_M": 128,
++        "BLOCK_SIZE_N": 256,
++        "BLOCK_SIZE_K": 256,
++        "GROUP_SIZE_M": 2,
++        "num_warps": 4,
++        "num_stages": 3,
++        "waves_per_eu": 2,
++        "matrix_instr_nonkdim": 32,
++        "cache_modifier": null,
++        "NUM_KSPLIT": 1
++    },
++    "any": {
++        "BLOCK_SIZE_M": 256,
++        "BLOCK_SIZE_N": 256,
++        "BLOCK_SIZE_K": 256,
++        "GROUP_SIZE_M": 2,
++        "num_warps": 8,
++        "num_stages": 2,
++        "waves_per_eu": 1,
++        "matrix_instr_nonkdim": 32,
++        "cache_modifier": null,
++        "NUM_KSPLIT": 1
++    }
++}
+diff --git a/aiter/ops/triton/configs/gemm/gfx1250-GEMM-AFP4WFP4_PRESHUFFLED.json b/aiter/ops/triton/configs/gemm/gfx1250-GEMM-AFP4WFP4_PRESHUFFLED.json
+new file mode 100644
+index 0000000000..945db80750
+--- /dev/null
++++ b/aiter/ops/triton/configs/gemm/gfx1250-GEMM-AFP4WFP4_PRESHUFFLED.json
+@@ -0,0 +1,86 @@
++{
++    "M_LEQ_8": {
++        "BLOCK_SIZE_M": 16,
++        "BLOCK_SIZE_N": 64,
++        "BLOCK_SIZE_K": 256,
++        "GROUP_SIZE_M": 4,
++        "num_warps": 2,
++        "num_stages": 2,
++        "waves_per_eu": 1,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": null,
++        "NUM_KSPLIT": 1
++    },
++    "M_LEQ_31": {
++        "BLOCK_SIZE_M": 16,
++        "BLOCK_SIZE_N": 64,
++        "BLOCK_SIZE_K": 256,
++        "GROUP_SIZE_M": 4,
++        "num_warps": 2,
++        "num_stages": 2,
++        "waves_per_eu": 1,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": null,
++        "NUM_KSPLIT": 1
++    },
++    "M_LEQ_32": {
++        "BLOCK_SIZE_M": 32,
++        "BLOCK_SIZE_N": 64,
++        "BLOCK_SIZE_K": 256,
++        "GROUP_SIZE_M": 4,
++        "num_warps": 2,
++        "num_stages": 2,
++        "waves_per_eu": 1,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": null,
++        "NUM_KSPLIT": 1
++    },
++    "M_LEQ_64": {
++        "BLOCK_SIZE_M": 32,
++        "BLOCK_SIZE_N": 64,
++        "BLOCK_SIZE_K": 256,
++        "GROUP_SIZE_M": 4,
++        "num_warps": 2,
++        "num_stages": 2,
++        "waves_per_eu": 1,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": null,
++        "NUM_KSPLIT": 1
++    },
++    "M_LEQ_128": {
++        "BLOCK_SIZE_M": 32,
++        "BLOCK_SIZE_N": 64,
++        "BLOCK_SIZE_K": 256,
++        "GROUP_SIZE_M": 4,
++        "num_warps": 2,
++        "num_stages": 2,
++        "waves_per_eu": 1,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": null,
++        "NUM_KSPLIT": 1
++    },
++    "M_LEQ_256": {
++        "BLOCK_SIZE_M": 32,
++        "BLOCK_SIZE_N": 64,
++        "BLOCK_SIZE_K": 256,
++        "GROUP_SIZE_M": 4,
++        "num_warps": 2,
++        "num_stages": 2,
++        "waves_per_eu": 1,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": null,
++        "NUM_KSPLIT": 1
++    },
++    "any": {
++        "BLOCK_SIZE_M": 32,
++        "BLOCK_SIZE_N": 64,
++        "BLOCK_SIZE_K": 256,
++        "GROUP_SIZE_M": 4,
++        "num_warps": 2,
++        "num_stages": 2,
++        "waves_per_eu": 1,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": null,
++        "NUM_KSPLIT": 1
++    }
++}
+\ No newline at end of file
+diff --git a/aiter/ops/triton/configs/gemm/gfx1250-GEMM_PREQUANT-AFP4WFP4.json b/aiter/ops/triton/configs/gemm/gfx1250-GEMM_PREQUANT-AFP4WFP4.json
+new file mode 100644
+index 0000000000..689eb50235
+--- /dev/null
++++ b/aiter/ops/triton/configs/gemm/gfx1250-GEMM_PREQUANT-AFP4WFP4.json
+@@ -0,0 +1,74 @@
++{
++    "M_LEQ_8": {
++        "BLOCK_SIZE_M": 16,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 512,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 1,
++        "waves_per_eu": 2,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": ".cg",
++        "NUM_KSPLIT": 4
++    },
++    "M_LEQ_32": {
++        "BLOCK_SIZE_M": 16,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 512,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 8,
++        "num_stages": 1,
++        "waves_per_eu": 2,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": ".cg",
++        "NUM_KSPLIT": 4
++    },
++    "M_LEQ_64": {
++        "BLOCK_SIZE_M": 16,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 512,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 8,
++        "num_stages": 1,
++        "waves_per_eu": 2,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": ".cg",
++        "NUM_KSPLIT": 4
++    },
++    "M_LEQ_128": {
++        "BLOCK_SIZE_M": 16,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 512,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 8,
++        "num_stages": 1,
++        "waves_per_eu": 2,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": ".cg",
++        "NUM_KSPLIT": 4
++    },
++    "M_LEQ_256": {
++        "BLOCK_SIZE_M": 16,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 512,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 8,
++        "num_stages": 1,
++        "waves_per_eu": 2,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": ".cg",
++        "NUM_KSPLIT": 4
++    },
++    "any": {
++        "BLOCK_SIZE_M": 16,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 512,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 8,
++        "num_stages": 1,
++        "waves_per_eu": 2,
++        "matrix_instr_nonkdim": 16,
++        "cache_modifier": null,
++        "NUM_KSPLIT": 4
++    }
++}
+\ No newline at end of file
+diff --git a/aiter/ops/triton/configs/gfx1250-EXTEND_ATTENTION.json b/aiter/ops/triton/configs/gfx1250-EXTEND_ATTENTION.json
+new file mode 100644
+index 0000000000..ae7090f8db
+--- /dev/null
++++ b/aiter/ops/triton/configs/gfx1250-EXTEND_ATTENTION.json
+@@ -0,0 +1,22 @@
++{
++  "default": {
++      "BLOCK_M": 128,
++      "BLOCK_N": 64,
++      "waves_per_eu": 2,
++      "num_warps": 4,
++      "num_ctas": 1,
++      "num_stages": 1,
++      "matrix_instr_nonkdim": 16,
++      "kpack": 1
++  },
++  "large_head_or_fp32": {
++      "BLOCK_M": 32,
++      "BLOCK_N": 32,
++      "waves_per_eu": 0,
++      "num_warps": 4,
++      "num_ctas": 1,
++      "num_stages": 1,
++      "matrix_instr_nonkdim": 16,
++      "kpack": 1
++  } 
++}
+diff --git a/aiter/ops/triton/configs/gfx1250-GMM.json b/aiter/ops/triton/configs/gfx1250-GMM.json
+new file mode 100644
+index 0000000000..2be62fed2b
+--- /dev/null
++++ b/aiter/ops/triton/configs/gfx1250-GMM.json
+@@ -0,0 +1,51 @@
++{
++    "gmm": {
++        "default": {
++            "BLOCK_SIZE_M": 256,
++            "BLOCK_SIZE_K": 64,
++            "BLOCK_SIZE_N": 256,
++            "GROUP_SIZE": 1,
++            "GRID_DIM": 256,
++            "num_warps": 8,
++            "num_stages": 1
++        }
++    },
++    "ptgmm": {
++        "default": {
++            "BLOCK_SIZE_M": 64,
++            "BLOCK_SIZE_K": 256,
++            "BLOCK_SIZE_N": 256,
++            "GROUP_SIZE": 1,
++            "GRID_DIM": 256,
++            "num_warps": 8,
++            "num_stages": 1
++        },
++        "accumulate": {
++            "BLOCK_SIZE_M": 64,
++            "BLOCK_SIZE_K": 128,
++            "BLOCK_SIZE_N": 128,
++            "GROUP_SIZE": 1,
++            "GRID_DIM": 256,
++            "num_warps": 8,
++            "num_stages": 1
++        }
++    },
++    "nptgmm": {
++        "default": {
++            "BLOCK_SIZE_M": 64,
++            "BLOCK_SIZE_K": 256,
++            "BLOCK_SIZE_N": 256,
++            "GROUP_SIZE": 1,
++            "num_warps": 8,
++            "num_stages": 1
++        },
++        "accumulate": {
++            "BLOCK_SIZE_M": 64,
++            "BLOCK_SIZE_K": 128,
++            "BLOCK_SIZE_N": 128,
++            "GROUP_SIZE": 1,
++            "num_warps": 8,
++            "num_stages": 1
++        }
++    }
++}
+\ No newline at end of file
+diff --git a/aiter/ops/triton/configs/gfx1250-MHA-DEFAULT.json b/aiter/ops/triton/configs/gfx1250-MHA-DEFAULT.json
+new file mode 100644
+index 0000000000..9fcdb3037d
+--- /dev/null
++++ b/aiter/ops/triton/configs/gfx1250-MHA-DEFAULT.json
+@@ -0,0 +1,81 @@
++{
++  "fwd": {
++    "dropout_or_fp32": {
++      "BLOCK_M": 32,
++      "BLOCK_N": 32,
++      "PRELOAD_V": true,
++      "waves_per_eu": 1,
++      "num_warps": 2,
++      "num_ctas": 1,
++      "num_stages": 1
++    },
++    "default": {
++      "BLOCK_M": 128,
++      "BLOCK_N": 64,
++      "PRELOAD_V": true,
++      "waves_per_eu": 2,
++      "num_warps": 4,
++      "num_ctas": 1,
++      "num_stages": 1
++    },
++    "pe": {
++      "BLOCK_M": 128,
++      "BLOCK_N": 32,
++      "PRELOAD_V": true,
++      "waves_per_eu": 2,
++      "num_warps": 4,
++      "num_ctas": 1,
++      "num_stages": 3
++    },
++    "pe_dropout_or_fp32": {
++      "BLOCK_M": 256,
++      "BLOCK_N": 64,
++      "PRELOAD_V": true,
++      "waves_per_eu": 2,
++      "num_warps": 8,
++      "num_ctas": 1,
++      "num_stages": 1
++    }
++  },
++  "bkwd_fused" : {
++    "preprocess_kernel": {
++      "PRE_BLOCK": 128
++    }, 
++    "dkdvdq_kernel_N64" : {
++        "BLOCK_M": 16,
++        "BLOCK_N": 64,
++        "num_warps": 8,
++        "num_stages": 1,
++        "waves_per_eu": 2,
++        "BLK_SLICE_FACTOR": 1,
++        "matrix_instr_nonkdim": 16
++    }, 
++    "dkdvdq_kernel_N128" : {
++        "BLOCK_M": 16,
++        "BLOCK_N": 128,
++        "num_warps": 8,
++        "num_stages": 1,
++        "waves_per_eu": 2,
++        "BLK_SLICE_FACTOR": 1,
++        "matrix_instr_nonkdim": 16
++    }
++  },
++  "bkwd_onekernel" : {
++    "preprocess_kernel": {
++      "PRE_BLOCK": 128
++    }, 
++    "onekernel" : {
++        "BLOCK_M1": 32,
++        "BLOCK_N1": 128,
++        "BLOCK_M2": 128,
++        "BLOCK_N2": 32,
++        "BLK_SLICE_FACTOR": 2,
++        "waves_per_eu": 1,
++        "matrix_instr_nonkdim": 16,
++        "num_warps": 4,
++        "num_ctas": 1,
++        "num_stages": 1
++    }
++  }
++
++}
+\ No newline at end of file
+diff --git a/aiter/ops/triton/configs/gfx1250-MLA_DECODE_ROPE-DEFAULT.json b/aiter/ops/triton/configs/gfx1250-MLA_DECODE_ROPE-DEFAULT.json
+new file mode 100644
+index 0000000000..f28f3c960a
+--- /dev/null
++++ b/aiter/ops/triton/configs/gfx1250-MLA_DECODE_ROPE-DEFAULT.json
+@@ -0,0 +1,23 @@
++{
++    "fwd_grouped_kernel_stage1_rope": {
++        "BLOCK_N": 32,
++        "BLOCK_H": 16,
++        "num_warps": 8,
++        "num_stages": 3,
++        "waves_per_eu": 0,
++        "matrix_instr_nonkdim": 16
++    },
++    "fwd_grouped_kernel_stage1_rope_fp32": {
++        "BLOCK_N": 32,
++        "BLOCK_H": 16,
++        "num_warps": 8,
++        "num_stages": 1,
++        "waves_per_eu": 0,
++        "matrix_instr_nonkdim": 16
++    },
++    "fwd_kernel_stage2": {
++        "num_stages": 2,
++        "waves_per_eu": 0,
++        "matrix_instr_nonkdim": 16
++    }
++}
+\ No newline at end of file
+diff --git a/aiter/rotary_embedding.py b/aiter/rotary_embedding.py
+index 29d55cbec2..5aff6a9c11 100644
+--- a/aiter/rotary_embedding.py
++++ b/aiter/rotary_embedding.py
+@@ -358,7 +358,8 @@ def forward_triton(
+ 
+         self.cos_cache = self.cos_cache.to(query.device, dtype=query.dtype)
+         self.sin_cache = self.sin_cache.to(query.device, dtype=query.dtype)
+-        cos, sin = self.cos_cache, self.sin_cache
++        cos = self.cos_cache.view(self.cos_cache.shape[0], -1)
++        sin = self.sin_cache.view(self.sin_cache.shape[0], -1)
+ 
+         rotate_style = 0 if self.is_neox_style else 1
+ 
+diff --git a/aiter/tuned_gemm.py b/aiter/tuned_gemm.py
+index 209de35bfe..eb4aaef62f 100644
+--- a/aiter/tuned_gemm.py
++++ b/aiter/tuned_gemm.py
+@@ -126,9 +126,14 @@ def get_GEMM_A16W16_config(
+ 
+     if config is None:
+         default_config = {}
+-        if bpreshuffle:
++        gfx = get_gfx()
++        # gfx12: no ASM/skinny/hipblaslt kernels, use torch
++        if gfx.startswith("gfx12"):
++            default_config["libtype"] = "torch"
++            default_config["solidx"] = 0
++        elif bpreshuffle:
+             default_config["bpreshuffle"] = True
+-            if get_gfx() == "gfx942":
++            if gfx == "gfx942":
+                 default_config["libtype"] = "hipblaslt"
+                 default_config["solidx"] = -1
+                 default_config["kernelName"] = ""
+@@ -273,13 +278,18 @@ def gemm_a16w16(
+             config=flydsl_config,
+         )
+ 
+-    if config is not None and config["libtype"] == "asm":
++    gfx = get_gfx()
++    _no_asm = gfx.startswith("gfx12")
++    if config is not None and config["libtype"] == "asm" and not _no_asm:
+         kernelName = config["kernelName"]
+         splitK = config["splitK"]
+         out = asm_gemm(inp_view, B, bias, otype, splitK, kernelName, bpreshuffle)
+     else:
+-        solution_idx = config["solidx"]
+-        solfunc = solMap[config["libtype"]]
++        libtype = config["libtype"]
++        if _no_asm and libtype in ("asm", "skinny", "hipblaslt"):
++            libtype = "torch"
++        solution_idx = config["solidx"] if libtype == config.get("libtype") else 0
++        solfunc = solMap[libtype]
+         out = solfunc(
+             inp_view,
+             B,

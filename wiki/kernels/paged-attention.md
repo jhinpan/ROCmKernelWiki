@@ -15,7 +15,8 @@ tags:
 - triton
 - hip
 confidence: source-reported
-reproducibility: snippet
+reproducibility: runnable
+artifact_dir: examples/paged-attention
 kernel_types:
 - paged-attention
 - attention
@@ -217,6 +218,37 @@ attacks the numerator directly. The compute side (the QKᵀ and PV MFMAs) only
 becomes relevant for large GQA groups and long head dims — see the
 [FlashAttention-2 algorithm](../../sources/docs/doc-flash-attention-2.md) and the
 [CK-tile flash kernel](flash-attention-ck.md) for the prefill counterpart.
+
+## Runnable example
+
+A portable, self-checking **pure-HIP** paged-attention decode reference lives in
+[`examples/paged-attention/`](../../examples/paged-attention/). It implements the
+single-query-step decode described above — block-table page-table indirection,
+ragged sequences with partial tail blocks, GQA (`GROUP` query heads per KV head),
+and the numerically-stable online-softmax recurrence — in fp32, and verifies
+every output element against a CPU reference. Decode is bandwidth-bound (no large
+GEMM at `q_len=1`), so the reference uses generic HIP (LDS reduction + FMA) and
+runs natively on **gfx1201 (RDNA4)** as well as CDNA.
+
+```bash
+cd examples/paged-attention
+hipcc --offload-arch=gfx1201 -O3 paged_attention.cpp -o paged_attention && ./paged_attention
+```
+
+Expected output (captured on a Radeon RX 9070 XT, gfx1201, ROCm 7.2.3):
+
+```
+paged-attention decode (fp32, portable HIP, gfx1201)
+  num_seqs=3  num_q_heads=8  num_kv_heads=2  GROUP=4
+  HEAD_DIM=64  BLOCK_SIZE=16  seq_lens={40,17,64}
+  kernel time: 0.0471 ms/iter (avg of 200)
+  max abs error vs CPU: 8.941e-08
+PASS
+```
+
+The production AITER/vLLM kernels add FP8 KV cache, 128-bit vectorized KV loads,
+flash-decoding chunk-parallel split with a reduction pass, and MFMA/WMMA tiling
+for large GQA groups — see the notes above.
 
 ## See also
 

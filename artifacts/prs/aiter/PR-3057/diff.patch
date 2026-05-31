@@ -1,0 +1,1191 @@
+diff --git a/aiter/ops/triton/_triton_kernels/fusions/fused_clamp_act_mul.py b/aiter/ops/triton/_triton_kernels/fusions/fused_clamp_act_mul.py
+new file mode 100644
+index 0000000000..f5887fdcb5
+--- /dev/null
++++ b/aiter/ops/triton/_triton_kernels/fusions/fused_clamp_act_mul.py
+@@ -0,0 +1,123 @@
++# SPDX-License-Identifier: MIT
++# Copyright (C) 2024-2026, Advanced Micro Devices, Inc. All rights reserved.
++
++"""Fused SwiGLU clamp + SiLU * up + optional token weights + optional per-row FP8 group quant (128).
++
++Each program handles one row (token). ``inp`` is ``[M, 2 * N]`` with gate in the first
++``N`` columns and up in the second ``N`` (same layout as ``torch.chunk(2, dim=-1)``).
++Gate clamp matches DeepSeek-V4 reference: ``clamp(gate, max=limit)`` only; up uses
++``clamp(up, min=-limit, max=limit)``. When ``HAS_QUANT`` is False the result is written
++directly to ``out`` in its native dtype and no scales are produced.
++"""
++
++import triton
++import triton.language as tl
++
++from aiter.ops.triton._triton_kernels.activation import _apply_activation_from_str
++
++from aiter.ops.triton._triton_kernels.quant.fused_fp8_quant import _fp8_quant_op
++from aiter.ops.triton.utils._triton.kernel_repr import make_kernel_repr
++
++_fused_clamp_silu_mul_repr = make_kernel_repr(
++    "_fused_clamp_silu_mul_kernel",
++    [
++        "BLOCK_SIZE_N",
++        "QUANT_BLOCK_SIZE",
++        "HAVE_WEIGHTS",
++        "WEIGHT_BROADCAST",
++        "HAVE_SWIGLU_CLAMP",
++        "HAS_QUANT",
++    ],
++)
++
++
++@triton.jit(repr=_fused_clamp_silu_mul_repr)
++def _fused_clamp_silu_mul_kernel(
++    inp_ptr,
++    out_ptr,
++    scale_ptr,
++    weights_ptr,
++    M,
++    n_half,
++    inp_stride_m,
++    inp_stride_n,
++    out_stride_m,
++    out_stride_n,
++    scale_stride_m,
++    scale_stride_n,
++    weights_stride_m,
++    weights_stride_n,
++    swiglu_limit,
++    BLOCK_SIZE_N: tl.constexpr,
++    QUANT_BLOCK_SIZE: tl.constexpr,
++    DTYPE_MAX: tl.constexpr,
++    DTYPE_MIN: tl.constexpr,
++    HAVE_WEIGHTS: tl.constexpr,
++    WEIGHT_BROADCAST: tl.constexpr,
++    HAVE_SWIGLU_CLAMP: tl.constexpr,
++    HAS_QUANT: tl.constexpr,
++    ACTIVATION: tl.constexpr,
++):
++    m_pid = tl.program_id(0)
++    n_offs = tl.arange(0, BLOCK_SIZE_N)
++    mask = n_offs < n_half
++
++    gate = tl.load(
++        inp_ptr + m_pid * inp_stride_m + n_offs * inp_stride_n,
++        mask=mask,
++        other=0.0,
++        cache_modifier=".cg",
++    ).to(tl.float32)
++    up = tl.load(
++        inp_ptr + m_pid * inp_stride_m + (n_half + n_offs) * inp_stride_n,
++        mask=mask,
++        other=0.0,
++        cache_modifier=".cg",
++    ).to(tl.float32)
++
++    if HAVE_SWIGLU_CLAMP:
++        up = tl.clamp(up, -swiglu_limit, swiglu_limit)
++        gate = tl.minimum(gate, swiglu_limit)
++
++    out = _apply_activation_from_str(gate, ACTIVATION) * up
++
++    if HAVE_WEIGHTS:
++        if WEIGHT_BROADCAST:
++            w = tl.load(weights_ptr + m_pid * weights_stride_m).to(tl.float32)
++            out = out * w
++        else:
++            w = tl.load(
++                weights_ptr + m_pid * weights_stride_m + n_offs * weights_stride_n,
++                mask=mask,
++                other=0.0,
++                cache_modifier=".cg",
++            ).to(tl.float32)
++            out = out * w
++
++    if HAS_QUANT:
++        out_q, block_scales = _fp8_quant_op(
++            out, 1, BLOCK_SIZE_N, QUANT_BLOCK_SIZE, DTYPE_MAX, DTYPE_MIN
++        )
++        out_q = tl.ravel(out_q)
++        block_scales = tl.ravel(block_scales)
++
++        tl.store(
++            out_ptr + m_pid * out_stride_m + n_offs * out_stride_n,
++            out_q.to(out_ptr.dtype.element_ty),
++            mask=mask,
++        )
++
++        num_bs = tl.cdiv(n_half, QUANT_BLOCK_SIZE)
++        NUM_QB: tl.constexpr = BLOCK_SIZE_N // QUANT_BLOCK_SIZE
++        g_offs = tl.arange(0, NUM_QB)
++        tl.store(
++            scale_ptr + m_pid * scale_stride_m + g_offs * scale_stride_n,
++            block_scales.to(scale_ptr.dtype.element_ty),
++            mask=g_offs < num_bs,
++        )
++    else:
++        tl.store(
++            out_ptr + m_pid * out_stride_m + n_offs * out_stride_n,
++            out.to(out_ptr.dtype.element_ty),
++            mask=mask,
++        )
+diff --git a/aiter/ops/triton/_triton_kernels/fusions/fused_reduce_qk_norm_rope_swa_write.py b/aiter/ops/triton/_triton_kernels/fusions/fused_reduce_qk_norm_rope_swa_write.py
+new file mode 100644
+index 0000000000..4008b25616
+--- /dev/null
++++ b/aiter/ops/triton/_triton_kernels/fusions/fused_reduce_qk_norm_rope_swa_write.py
+@@ -0,0 +1,289 @@
++# SPDX-License-Identifier: MIT
++# Copyright (C) 2024-2026, Advanced Micro Devices, Inc. All rights reserved.
++
++"""Fused split-K reduce + per-head weighted RMSNorm + RoPE (tail) on Q,
++per-row weighted RMSNorm + RoPE (tail) on KV (+ optional SWA KV write).
++
++Grid: ``(cdiv(M, BLOCK_SIZE_M), num_local_heads + 1)``. Each program tile
++handles ``BLOCK_SIZE_M`` tokens. Programs with ``pid_h < num_local_heads``
++load a query head tile ``[NUM_SPLITK, BLOCK_SIZE_M, HEAD_DIM]`` from
++``q_in``, reduce over the split-K axis, apply per-head weighted batched
++RMSNorm, store the (pre-RoPE) head into ``q_out``, then call the batched
++RoPE on the last ``rope_head_dim`` elements. Programs with
++``pid_h == num_local_heads`` load the full ``[BLOCK_SIZE_M, HEAD_DIM]``
++kv tile, apply weighted batched RMSNorm over ``head_dim``, store the
++normed nope part back into ``kv``, then extract the tail with the same
++reshape+sum trick used for q, apply RoPE, write the result to the kv
++tail, and optionally scatter both parts into ``swa_kv``.
++
++``q_in`` layout (driven by API helper):
++- 2D: ``[M, N]`` — ``q_in_splitk_stride`` = 0, ``NUM_SPLITK`` = 1.
++- 3D: ``[num_splitk, M, N]`` — ``q_in_splitk_stride`` = ``q_in.stride(0)``,
++  ``NUM_SPLITK`` = ``num_splitk``.
++"""
++
++import triton
++import triton.language as tl
++
++from aiter.ops.triton.utils._triton.kernel_repr import make_kernel_repr
++from aiter.ops.triton.rope.rope import _get_neox_rotated_x, _get_gptj_rotated_x
++
++
++@triton.jit
++def _batched_rmsnorm_op(row, weight, n_cols, epsilon):
++    """Per-row RMSNorm over the last axis of a [BLOCK_M, N] tile (row in fp32)."""
++    row_norm = row * row
++    row_norm = tl.sum(row_norm, axis=-1)
++    norm_factor = tl.math.rsqrt((row_norm / n_cols) + epsilon)
++    if weight is not None:
++        rms_norm = row * norm_factor[:, None] * weight[None, :]
++    else:
++        rms_norm = row * norm_factor[:, None]
++    return rms_norm
++
++
++@triton.jit
++def _batched_unit_rope(
++    x_pe,
++    cos,
++    sin,
++    d_pe_offs,
++    IS_NEOX: tl.constexpr,
++    BLOCK_M: tl.constexpr,
++    BLOCK_D_pe: tl.constexpr,
++    BLOCK_D_HALF_pe: tl.constexpr,
++):
++    """RoPE on a [BLOCK_M, BLOCK_D_pe] tile; cos/sin are [BLOCK_M, BLOCK_D_pe]."""
++    if IS_NEOX:
++        x_rotated_mask = (d_pe_offs < BLOCK_D_HALF_pe)[None, :]
++        x_pe_rotated = _get_neox_rotated_x(
++            x_pe, x_rotated_mask, BLOCK_M, BLOCK_D_pe, BLOCK_D_HALF_pe
++        )
++    else:
++        x_rotated_mask = (d_pe_offs % 2 == 0)[None, :]
++        x_pe_rotated = _get_gptj_rotated_x(
++            x_pe, x_rotated_mask, BLOCK_M, BLOCK_D_pe, BLOCK_D_HALF_pe
++        )
++
++    return x_pe * cos + x_pe_rotated * sin
++
++
++_fused_reduce_qk_norm_rope_swa_write_repr = make_kernel_repr(
++    "_fused_reduce_qk_norm_rope_swa_write_kernel",
++    [
++        "BLOCK_SIZE_M",
++        "HEAD_DIM",
++        "ROPE_DIM",
++        "NUM_LOCAL_HEADS",
++        "NUM_SPLITK",
++        "HAS_SWA",
++        "IS_NEOX",
++        "REUSE_FREQS_FRONT_PART",
++    ],
++)
++
++
++@triton.jit(repr=_fused_reduce_qk_norm_rope_swa_write_repr)
++def _fused_reduce_qk_norm_rope_swa_write_kernel(
++    q_in_ptr,
++    q_out_ptr,
++    kv_ptr,
++    q_norm_weight_ptr,
++    kv_norm_weight_ptr,
++    positions_ptr,
++    cos_ptr,
++    sin_ptr,
++    swa_write_active_ptr,
++    batch_id_per_token_ptr,
++    state_slot_per_seq_ptr,
++    swa_kv_ptr,
++    M,
++    q_in_splitk_stride,
++    q_in_m_stride,
++    q_in_d_stride,
++    stride_qm,
++    stride_qh,
++    stride_qd,
++    stride_kv_m,
++    stride_kv_d,
++    cos_stride_t,
++    cos_stride_d,
++    swa_kv_slot_stride,
++    swa_kv_pos_stride,
++    win,
++    q_eps,
++    kv_eps,
++    BLOCK_SIZE_M: tl.constexpr,
++    HEAD_DIM: tl.constexpr,
++    ROPE_DIM: tl.constexpr,
++    NUM_LOCAL_HEADS: tl.constexpr,
++    NUM_SPLITK: tl.constexpr,
++    HAS_SWA: tl.constexpr,
++    IS_NEOX: tl.constexpr,
++    REUSE_FREQS_FRONT_PART: tl.constexpr,
++):
++    pid_m = tl.program_id(0).to(tl.int64)
++    pid_h = tl.program_id(1).to(tl.int64)
++    NOPE_DIM: tl.constexpr = HEAD_DIM - ROPE_DIM
++    NUM_PE_CHUNKS: tl.constexpr = HEAD_DIM // ROPE_DIM
++
++    m_offs = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M).to(tl.int64)
++    m_mask = m_offs < M
++
++    offs_d_full = tl.arange(0, HEAD_DIM)
++    nope_d_mask = offs_d_full < NOPE_DIM
++
++    d_pe_offs = tl.arange(0, ROPE_DIM).to(tl.int64)
++    if REUSE_FREQS_FRONT_PART:
++        if IS_NEOX:
++            d_cos_offs = d_pe_offs
++            d_cos_offs = tl.where(
++                (d_cos_offs >= (ROPE_DIM // 2)) & (d_cos_offs < ROPE_DIM),
++                d_cos_offs - (ROPE_DIM // 2),
++                d_cos_offs,
++            ).to(d_cos_offs.dtype)
++        else:
++            d_cos_offs = d_pe_offs // 2
++    else:
++        d_cos_offs = d_pe_offs
++
++    if pid_h < NUM_LOCAL_HEADS:
++        head_id = pid_h.to(tl.int32)
++        offs_n = head_id * HEAD_DIM + offs_d_full
++
++        splitk_offs = tl.arange(0, NUM_SPLITK).to(tl.int64)
++        q_ptrs = (
++            q_in_ptr
++            + splitk_offs[:, None, None] * q_in_splitk_stride
++            + m_offs[None, :, None] * q_in_m_stride
++            + offs_n[None, None, :] * q_in_d_stride
++        )
++        q_tile = tl.load(
++            q_ptrs,
++            mask=m_mask[None, :, None],
++            other=0.0,
++        ).to(
++            tl.float32
++        )  # [NUM_SPLITK, BLOCK_SIZE_M, HEAD_DIM]
++        q_acc = tl.sum(q_tile, axis=0)  # [BLOCK_SIZE_M, HEAD_DIM]
++
++        if q_norm_weight_ptr is not None:
++            w_q = tl.load(q_norm_weight_ptr + offs_d_full).to(tl.float32)
++        else:
++            w_q = None
++        q_out_normed = _batched_rmsnorm_op(q_acc, w_q, HEAD_DIM, q_eps)
++
++        q_base_ptrs = q_out_ptr + m_offs[:, None] * stride_qm + pid_h * stride_qh
++        tl.store(
++            q_base_ptrs + offs_d_full[None, :] * stride_qd,
++            q_out_normed.to(q_out_ptr.dtype.element_ty),
++            mask=m_mask[:, None] & nope_d_mask[None, :],
++        )
++
++        # Slice the trailing ROPE_DIM elements: only the last chunk is nonzero.
++        q_pe = tl.where(
++            (offs_d_full >= NOPE_DIM)[None, :], q_out_normed, 0.0
++        )  # [BLOCK_SIZE_M, HEAD_DIM]
++        q_pe = q_pe.reshape(BLOCK_SIZE_M, NUM_PE_CHUNKS, ROPE_DIM)
++        q_pe = tl.sum(q_pe, axis=1)  # [BLOCK_SIZE_M, ROPE_DIM]
++
++        pos = tl.load(positions_ptr + m_offs, mask=m_mask, other=0)  # [BLOCK_SIZE_M]
++        cos_offs = pos[:, None] * cos_stride_t + d_cos_offs[None, :] * cos_stride_d
++        cos = tl.load(cos_ptr + cos_offs, mask=m_mask[:, None], other=0)
++        sin = tl.load(sin_ptr + cos_offs, mask=m_mask[:, None], other=0)
++
++        q_pe_ptrs = q_base_ptrs + (NOPE_DIM + d_pe_offs[None, :]) * stride_qd
++        q_pe = _batched_unit_rope(
++            q_pe,
++            cos,
++            sin,
++            d_pe_offs,
++            IS_NEOX,
++            BLOCK_SIZE_M,
++            ROPE_DIM,
++            ROPE_DIM // 2,
++        )
++        tl.store(
++            q_pe_ptrs,
++            q_pe.to(q_out_ptr.dtype.element_ty),
++            mask=m_mask[:, None],
++        )
++        return
++
++    if HAS_SWA:
++        src_id = tl.load(
++            swa_write_active_ptr + m_offs, mask=m_mask, other=-1
++        )  # [BLOCK_SIZE_M]
++    else:
++        src_id = m_offs.to(tl.int32)
++    src_mask = m_mask & (src_id >= 0)
++
++    pos = tl.load(positions_ptr + src_id, mask=src_mask, other=0)
++    cos_offs = pos[:, None] * cos_stride_t + d_cos_offs[None, :] * cos_stride_d
++    cos = tl.load(cos_ptr + cos_offs, mask=src_mask[:, None], other=0)
++    sin = tl.load(sin_ptr + cos_offs, mask=src_mask[:, None], other=0)
++
++    kv_base_ptrs = kv_ptr + src_id[:, None].to(tl.int64) * stride_kv_m
++    kv_full_ptrs = kv_base_ptrs + offs_d_full[None, :] * stride_kv_d
++    kv_pe_ptrs = kv_base_ptrs + (NOPE_DIM + d_pe_offs[None, :]) * stride_kv_d
++
++    # Load the entire kv row (nope + pe) so we can RMSNorm over head_dim.
++    kv_full = tl.load(kv_full_ptrs, mask=src_mask[:, None], other=0.0).to(tl.float32)
++
++    if kv_norm_weight_ptr is not None:
++        w_kv = tl.load(kv_norm_weight_ptr + offs_d_full).to(tl.float32)
++    else:
++        w_kv = None
++    kv_normed = _batched_rmsnorm_op(
++        kv_full, w_kv, HEAD_DIM, kv_eps
++    )  # [BLOCK_SIZE_M, HEAD_DIM]
++
++    # Store the normed nope portion back into kv.
++    tl.store(
++        kv_full_ptrs,
++        kv_normed.to(kv_ptr.dtype.element_ty),
++        mask=src_mask[:, None] & nope_d_mask[None, :],
++    )
++
++    # Extract pe via the same reshape+sum trick used for q.
++    kv_pe = tl.where(
++        (offs_d_full >= NOPE_DIM)[None, :], kv_normed, 0.0
++    )  # [BLOCK_SIZE_M, HEAD_DIM]
++    kv_pe = kv_pe.reshape(BLOCK_SIZE_M, NUM_PE_CHUNKS, ROPE_DIM)
++    kv_pe = tl.sum(kv_pe, axis=1)  # [BLOCK_SIZE_M, ROPE_DIM]
++
++    kv_pe = _batched_unit_rope(
++        kv_pe,
++        cos,
++        sin,
++        d_pe_offs,
++        IS_NEOX,
++        BLOCK_SIZE_M,
++        ROPE_DIM,
++        ROPE_DIM // 2,
++    )
++    tl.store(
++        kv_pe_ptrs,
++        kv_pe.to(kv_ptr.dtype.element_ty),
++        mask=src_mask[:, None],
++    )
++
++    if HAS_SWA:
++        bid = tl.load(batch_id_per_token_ptr + src_id, mask=src_mask, other=0)
++        slot = tl.load(state_slot_per_seq_ptr + bid, mask=src_mask, other=0)
++        ring_idx = pos % win
++        swa_kv_ptrs = (
++            swa_kv_ptr
++            + slot[:, None].to(tl.int64) * swa_kv_slot_stride
++            + ring_idx[:, None].to(tl.int64) * swa_kv_pos_stride
++        )
++        tl.store(
++            swa_kv_ptrs + offs_d_full[None, :],
++            kv_normed.to(swa_kv_ptr.dtype.element_ty),
++            mask=src_mask[:, None] & nope_d_mask[None, :],
++        )
++        tl.store(
++            swa_kv_ptrs + NOPE_DIM + d_pe_offs[None, :],
++            kv_pe.to(swa_kv_ptr.dtype.element_ty),
++            mask=src_mask[:, None],
++        )
+diff --git a/aiter/ops/triton/_triton_kernels/quant/fused_mxfp4_quant.py b/aiter/ops/triton/_triton_kernels/quant/fused_mxfp4_quant.py
+index 6a39ab5899..9e2d0e019e 100644
+--- a/aiter/ops/triton/_triton_kernels/quant/fused_mxfp4_quant.py
++++ b/aiter/ops/triton/_triton_kernels/quant/fused_mxfp4_quant.py
+@@ -9,8 +9,10 @@ def _rmsmorm_op(row, weight, n_cols, epsilon):
+     row_norm = row * row
+     row_norm = tl.sum(row_norm, axis=-1)
+     norm_factor = tl.math.rsqrt((row_norm / n_cols) + epsilon)
+-
+-    rms_norm = row * norm_factor[:, None] * weight
++    if weight is not None:
++        rms_norm = row * norm_factor[:, None] * weight
++    else:
++        rms_norm = row * norm_factor[:, None]
+     return rms_norm
+ 
+ 
+diff --git a/aiter/ops/triton/fusions/fused_clamp_act_mul.py b/aiter/ops/triton/fusions/fused_clamp_act_mul.py
+new file mode 100644
+index 0000000000..0b1b8a1a63
+--- /dev/null
++++ b/aiter/ops/triton/fusions/fused_clamp_act_mul.py
+@@ -0,0 +1,171 @@
++# SPDX-License-Identifier: MIT
++# Copyright (C) 2024-2026, Advanced Micro Devices, Inc. All rights reserved.
++
++from __future__ import annotations
++
++from typing import Literal, Optional
++
++import torch
++import triton
++
++from aiter.ops.triton._triton_kernels.fusions.fused_clamp_act_mul import (
++    _fused_clamp_silu_mul_kernel,
++)
++from aiter.ops.triton.utils.logger import AiterTritonLogger
++
++_LOGGER = AiterTritonLogger()
++
++
++def fused_clamp_act_mul(
++    inp: torch.Tensor,
++    out: Optional[torch.Tensor] = None,
++    scale: Optional[torch.Tensor] = None,
++    swiglu_limit: float = 0,
++    activation: Literal["silu", "gelu", "gelu_tanh"] = "silu",
++    weights: Optional[torch.Tensor] = None,
++    dtype_quant: torch.dtype | None = None,
++    transpose_scale: bool = False,
++):
++    """
++    Fused clamp (SwiGLU-style) + act(gate) * up + optional weights, with optional FP8 group quant.
++
++    Args:
++        inp: ``[M, D]`` with ``D = 2 * N``, contiguous; first ``N`` columns are gate,
++            second ``N`` are up (same as ``chunk(2, dim=-1)`` on gate-up GEMM output).
++        out: pre-allocated ``[M, N]`` output tensor. If ``None``, allocated internally
++            with dtype = ``dtype_quant`` when quantizing, else ``inp.dtype``.
++        scale: pre-allocated ``[M, (N + 127) // 128]`` float32 block scales. Only used
++            and returned when ``dtype_quant`` is not ``None``.
++        swiglu_limit: if ``> 0``, apply reference clamps; if ``<= 0``, skip clamping.
++        weights: optional ``[M, 1]`` (broadcast) or ``[M, N]`` row weights, multiplied
++            into ``silu(gate) * up`` (same as reference ``weights * x``).
++        dtype_quant: if ``None``, no quantization; output is written in ``inp.dtype``
++            (or the dtype of a pre-allocated ``out``) and ``scale`` is unused. Otherwise
++            the result is FP8-group-quantized with ``dtype_quant`` and per-128 scales.
++
++    Constraints:
++        ``N`` must be a power of two, ``N >= 128``, and ``N % 128 == 0`` so each row
++        uses one ``_fp8_quant_op`` tile (``BLOCK_SIZE_M=1``, ``BLOCK_SIZE_N=N``).
++    """
++    assert inp.dim() == 2
++    M, D = inp.shape
++    assert D % 2 == 0
++    n_half = D // 2
++
++    HAS_QUANT = dtype_quant is not None
++
++    if HAS_QUANT:
++        if out is None:
++            out = torch.empty((M, n_half), dtype=dtype_quant, device=inp.device)
++        else:
++            assert out.shape == (M, n_half)
++            if out.dtype != dtype_quant:
++                _LOGGER.info(
++                    "fused_clamp_act_mul: dtype_quant=%s ignored; using out.dtype=%s",
++                    dtype_quant,
++                    out.dtype,
++                )
++        num_blocks = (n_half + 127) // 128
++        if scale is None:
++            if transpose_scale:
++                scale = torch.empty(
++                    (num_blocks, M), dtype=torch.float32, device=inp.device
++                )
++            else:
++                scale = torch.empty(
++                    (M, num_blocks), dtype=torch.float32, device=inp.device
++                )
++        else:
++            if transpose_scale:
++                assert scale.shape == (num_blocks, M)
++            else:
++                assert scale.shape == (M, num_blocks)
++    else:
++        if out is None:
++            out = torch.empty((M, n_half), dtype=inp.dtype, device=inp.device)
++        else:
++            assert out.shape == (M, n_half)
++
++    assert n_half >= 128
++    assert n_half % 128 == 0
++
++    BLOCK_SIZE_N = triton.next_power_of_2(n_half)
++
++    HAVE_WEIGHTS = weights is not None
++    if HAVE_WEIGHTS:
++        assert weights.is_cuda and weights.is_contiguous()
++        assert weights.shape[0] == M
++        if weights.shape[1] == 1:
++            WEIGHT_BROADCAST = True
++        else:
++            assert weights.shape[1] == n_half
++            WEIGHT_BROADCAST = False
++    else:
++        WEIGHT_BROADCAST = False
++
++    if HAS_QUANT:
++        DTYPE_MAX = (
++            torch.finfo(out.dtype).max
++            if torch.is_floating_point(out)
++            else float(torch.iinfo(out.dtype).max)
++        )
++    else:
++        DTYPE_MAX = 0.0
++
++    if BLOCK_SIZE_N <= 512:
++        num_warps = 1
++    elif BLOCK_SIZE_N <= 2048:
++        num_warps = 4
++    else:
++        num_warps = 8
++
++    HAVE_SWIGLU_CLAMP = swiglu_limit > 0
++
++    if HAS_QUANT:
++        if transpose_scale:
++            scale_row_stride = scale.stride(1)
++            scale_col_stride = scale.stride(0)
++            num_bs_cols = scale.shape[0]
++        else:
++            scale_row_stride = scale.stride(0)
++            scale_col_stride = scale.stride(1)
++            num_bs_cols = scale.shape[1]
++        scale_arg = scale
++    else:
++        scale_row_stride = 0
++        scale_col_stride = 0
++        scale_arg = inp  # placeholder, unused when HAS_QUANT is False
++
++    _fused_clamp_silu_mul_kernel[(M,)](
++        inp,
++        out,
++        scale_arg,
++        weights if HAVE_WEIGHTS else inp,
++        M,
++        n_half,
++        inp.stride(0),
++        inp.stride(1),
++        out.stride(0),
++        out.stride(1),
++        scale_row_stride,
++        scale_col_stride,
++        weights.stride(0) if HAVE_WEIGHTS else 0,
++        weights.stride(1) if HAVE_WEIGHTS else 0,
++        swiglu_limit,
++        BLOCK_SIZE_N=BLOCK_SIZE_N,
++        QUANT_BLOCK_SIZE=128,
++        DTYPE_MAX=DTYPE_MAX,
++        DTYPE_MIN=-DTYPE_MAX,
++        HAVE_WEIGHTS=HAVE_WEIGHTS,
++        WEIGHT_BROADCAST=WEIGHT_BROADCAST,
++        HAVE_SWIGLU_CLAMP=HAVE_SWIGLU_CLAMP,
++        HAS_QUANT=HAS_QUANT,
++        ACTIVATION=activation,
++        num_warps=num_warps,
++    )
++
++    if HAS_QUANT:
++        if transpose_scale:
++            scale = scale.view(M, num_bs_cols)
++        return out, scale
++    return out
+diff --git a/aiter/ops/triton/fusions/fused_reduce_qk_norm_rope_swa_write.py b/aiter/ops/triton/fusions/fused_reduce_qk_norm_rope_swa_write.py
+new file mode 100644
+index 0000000000..b04d79478c
+--- /dev/null
++++ b/aiter/ops/triton/fusions/fused_reduce_qk_norm_rope_swa_write.py
+@@ -0,0 +1,191 @@
++# SPDX-License-Identifier: MIT
++# Copyright (C) 2024-2026, Advanced Micro Devices, Inc. All rights reserved.
++
++from typing import Optional
++
++import torch
++import triton
++
++from aiter.ops.triton._triton_kernels.fusions.fused_reduce_qk_norm_rope_swa_write import (
++    _fused_reduce_qk_norm_rope_swa_write_kernel,
++)
++from aiter.ops.triton.utils.logger import AiterTritonLogger
++
++_LOGGER = AiterTritonLogger()
++
++
++def _pick_block_size_m(M: int, num_local_heads: int, num_splitk: int) -> int:
++    """Pick BLOCK_SIZE_M for the fused reduce/norm/rope kernel.
++
++    Each program loads ``[NUM_SPLITK, BLOCK_SIZE_M, HEAD_DIM]`` of fp32 q-tile,
++    so register pressure scales with ``num_splitk * BLOCK_SIZE_M``. Wide head
++    grids (large ``num_local_heads``) amortize per-program constant work
++    (cos/sin offset prep, etc.) better with larger BM; small head grids need
++    more M-tiles for occupancy, which favors smaller BM.
++    """
++    # Register-pressure cap from the splitk fp32 q-tile.
++    if num_splitk >= 4:
++        cap = 4
++    elif num_splitk >= 2:
++        cap = 8
++    else:
++        cap = 16
++
++    if num_local_heads >= 64:
++        target = 16
++    elif num_local_heads >= 16:
++        target = 8
++    else:
++        target = 4
++
++    bm = min(target, cap)
++
++    # Shrink to a power-of-two not exceeding M so tiny inputs don't pay tail
++    # masking overhead for the whole tile.
++    while bm > 1 and bm > M:
++        bm //= 2
++
++    num_warps = 4
++    waves_per_eu = 1
++
++    return bm, num_warps, waves_per_eu
++
++
++def fused_reduce_qk_norm_rope_swa_write(
++    q: torch.Tensor,
++    kv: torch.Tensor,
++    q_norm_weight: Optional[torch.Tensor],
++    kv_norm_weight: Optional[torch.Tensor],
++    q_rms_eps: float,
++    kv_rms_eps: float,
++    rope_head_dim: int,
++    cos_cache: torch.Tensor,
++    sin_cache: torch.Tensor,
++    positions: torch.Tensor,
++    q_out: Optional[torch.Tensor] = None,
++    is_neox: bool = False,
++    write_indices: Optional[torch.Tensor] = None,
++    batch_id_per_token: Optional[torch.Tensor] = None,
++    state_slot_mapping: Optional[torch.Tensor] = None,
++    swa_kv: Optional[torch.Tensor] = None,
++    win: int = 128,
++    dtype: torch.dtype = torch.bfloat16,
++) -> torch.Tensor:
++    """Fused split-K reduce + per-head weighted RMSNorm + RoPE tail on Q,
++    weighted RMSNorm + RoPE tail on KV (+ optional SWA).
++
++    Replaces the (split-K reduce → q-norm → q-rope → kv-norm → kv-rope → swa-write)
++    post-GEMM chain.
++
++    Shapes:
++        ``q``: ``[M, N]`` or ``[num_splitk, M, N]`` where ``N = num_local_heads * head_dim``.
++            The 3D form lets the caller pass an unreduced split-K GEMM output; the kernel
++            sums across ``num_splitk`` while loading.
++        ``kv``: ``[M, head_dim]`` updated in-place (RMSNorm over head_dim + RoPE on tail).
++        ``q_norm_weight``: ``[head_dim]`` (or None for weight-free RMSNorm).
++        ``kv_norm_weight``: ``[head_dim]`` (or None for weight-free RMSNorm).
++        ``cos_cache`` / ``sin_cache``: ``[max_position, 1, 1, rope_head_dim // 2]``.
++        ``positions``: ``[M]`` int32/int64 indices into cos/sin rows.
++
++    Optional SWA: pass ``swa_kv``, ``win``, ``write_indices`` (``[M]`` int32), ``batch_id_per_token``,
++    ``state_slot_mapping`` — same semantics as ``state_writes.swa_write``.
++    """
++    assert q.is_cuda and kv.is_cuda
++    head_dim = kv.shape[1]
++
++    if q.dim() == 3:
++        num_splitk, M, N = q.shape
++        q_in_splitk_stride = q.stride(0)
++        q_in_m_stride = q.stride(1)
++        q_in_d_stride = q.stride(2)
++    elif q.dim() == 2:
++        M, N = q.shape
++        num_splitk = 1
++        q_in_splitk_stride = 0
++        q_in_m_stride = q.stride(0)
++        q_in_d_stride = q.stride(1)
++    else:
++        raise ValueError(f"q must be 2D or 3D, got shape {q.shape}")
++
++    assert N % head_dim == 0, f"N={N} must be divisible by head_dim={head_dim}"
++    num_local_heads = N // head_dim
++    assert kv.shape[0] == M, f"kv {tuple(kv.shape)} vs M={M}"
++    assert rope_head_dim <= head_dim
++    assert cos_cache.shape[-1] == rope_head_dim // 2
++    assert sin_cache.shape == cos_cache.shape
++
++    if q_out is None:
++        q_out = torch.empty(
++            (M, num_local_heads, head_dim), dtype=dtype, device=q.device
++        )
++    else:
++        assert q_out.shape == (M, num_local_heads, head_dim)
++
++    cos_stride_t = cos_cache.stride(0)
++    cos_stride_d = cos_cache.stride(-1)
++
++    HAS_SWA = (
++        swa_kv is not None
++        and write_indices is not None
++        and batch_id_per_token is not None
++        and state_slot_mapping is not None
++    )
++    if HAS_SWA:
++        assert (
++            swa_kv.dim() == 3 and swa_kv.shape[1] == win and swa_kv.shape[2] == head_dim
++        )
++        assert write_indices.shape == (M,)
++        assert batch_id_per_token.shape[0] >= M
++        assert state_slot_mapping.dim() == 1
++
++    _LOGGER.info(
++        "FUSED_REDUCE_QK_NORM_ROPE_SWA_WRITE "
++        f"M={M} num_splitk={num_splitk} heads={num_local_heads} "
++        f"D={head_dim} rd={rope_head_dim} HAS_SWA={HAS_SWA}"
++    )
++
++    BLOCK_SIZE_M, num_warps, waves_per_eu = _pick_block_size_m(
++        M, num_local_heads, num_splitk
++    )
++    grid = (triton.cdiv(M, BLOCK_SIZE_M), num_local_heads + 1)
++    _fused_reduce_qk_norm_rope_swa_write_kernel[grid](
++        q,
++        q_out,
++        kv,
++        q_norm_weight,
++        kv_norm_weight,
++        positions,
++        cos_cache,
++        sin_cache,
++        write_indices,
++        batch_id_per_token,
++        state_slot_mapping,
++        swa_kv,
++        M,
++        q_in_splitk_stride,
++        q_in_m_stride,
++        q_in_d_stride,
++        q_out.stride(0),
++        q_out.stride(1),
++        q_out.stride(2),
++        kv.stride(0),
++        kv.stride(1),
++        cos_stride_t,
++        cos_stride_d,
++        swa_kv.stride(0) if HAS_SWA else 0,
++        swa_kv.stride(1) if HAS_SWA else 0,
++        win,
++        q_rms_eps,
++        kv_rms_eps,
++        HEAD_DIM=head_dim,
++        ROPE_DIM=rope_head_dim,
++        NUM_LOCAL_HEADS=num_local_heads,
++        NUM_SPLITK=num_splitk,
++        HAS_SWA=HAS_SWA,
++        IS_NEOX=is_neox,
++        REUSE_FREQS_FRONT_PART=True,
++        BLOCK_SIZE_M=BLOCK_SIZE_M,
++        num_warps=num_warps,
++        waves_per_eu=waves_per_eu,
++    )
++    return q_out
+diff --git a/op_tests/triton_tests/fusions/test_fused_clamp_act_mul.py b/op_tests/triton_tests/fusions/test_fused_clamp_act_mul.py
+new file mode 100644
+index 0000000000..7d0e0c4ff2
+--- /dev/null
++++ b/op_tests/triton_tests/fusions/test_fused_clamp_act_mul.py
+@@ -0,0 +1,103 @@
++import torch
++import torch.nn.functional as F
++import pytest
++
++import aiter
++from aiter.ops.triton.fusions.fused_clamp_act_mul import (
++    fused_clamp_act_mul,
++)
++from op_tests.triton_tests.quant.test_fused_fp8_quant import (
++    per_token_fp8_group_quant,
++    upcast,
++)
++
++
++def _torch_reference(inp, swiglu_limit, weights, dtype_quant):
++    gate, up = inp.chunk(2, dim=-1)
++    if swiglu_limit > 0:
++        up = torch.clamp(up, min=-swiglu_limit, max=swiglu_limit)
++        gate = torch.clamp(gate, max=swiglu_limit)
++    y = F.silu(gate) * up
++    if weights is not None:
++        y = weights * y
++    if dtype_quant is None:
++        return y.to(inp.dtype)
++    return per_token_fp8_group_quant(y.float(), dtype_quant, 128)
++
++
++@pytest.mark.parametrize("M", [1, 2, 4, 8, 32])
++@pytest.mark.parametrize("D", [2048, 3072])
++@pytest.mark.parametrize("swiglu_limit", [0.0, 7.0])
++@pytest.mark.parametrize("transpose_scale", [True, False])
++@pytest.mark.parametrize(
++    "with_weights,weight_broadcast",
++    [(False, False), (True, True), (True, False)],
++)
++@pytest.mark.parametrize("dtype_quant", [aiter.dtypes.fp8, None])
++def test_fused_clamp_act_mul(
++    M, D, swiglu_limit, transpose_scale, with_weights, weight_broadcast, dtype_quant
++):
++    torch.manual_seed(42)
++    N = D // 2
++    if with_weights:
++        if weight_broadcast:
++            w = torch.randn(M, 1, device="cuda", dtype=torch.float32) * 0.5
++        else:
++            w = torch.randn(M, N, device="cuda", dtype=torch.float32) * 0.1
++    else:
++        w = None
++
++    inp = torch.randn(M, D, device="cuda", dtype=torch.bfloat16)
++
++    if dtype_quant is not None:
++        out_buf = torch.empty((M, N), dtype=dtype_quant, device="cuda")
++        if transpose_scale:
++            scale = torch.empty(
++                ((N + 127) // 128), M, dtype=torch.float32, device="cuda"
++            )
++        else:
++            scale = torch.empty(
++                (M, (N + 127) // 128), dtype=torch.float32, device="cuda"
++            )
++
++        out_q, scale = fused_clamp_act_mul(
++            inp,
++            out_buf,
++            scale,
++            swiglu_limit,
++            weights=w,
++            activation="silu",
++            dtype_quant=dtype_quant,
++            transpose_scale=transpose_scale,
++        )
++
++        ref_q, ref_s = _torch_reference(inp, swiglu_limit, w, dtype_quant)
++
++        if transpose_scale:
++            scale = scale.view(((N + 127) // 128), M).T.contiguous()
++        out_triton = upcast(out_q, scale, torch.bfloat16)
++        ref_triton = upcast(ref_q, ref_s, torch.bfloat16)
++
++        torch.testing.assert_close(
++            out_triton,
++            ref_triton,
++            atol=0.1,
++            rtol=0.1,
++        )
++    else:
++        # transpose_scale is irrelevant when not quantizing; skip the redundant
++        # duplicate parametrization to keep the matrix small.
++        if transpose_scale:
++            pytest.skip("transpose_scale is only meaningful when dtype_quant is set")
++
++        out = fused_clamp_act_mul(
++            inp,
++            swiglu_limit=swiglu_limit,
++            weights=w,
++            activation="silu",
++            dtype_quant=None,
++        )
++        ref = _torch_reference(inp, swiglu_limit, w, None)
++
++        assert out.dtype == inp.dtype
++        torch.testing.assert_close(out, ref, atol=1e-2, rtol=1e-2)
+diff --git a/op_tests/triton_tests/fusions/test_fused_reduce_qk_norm_rope_swa_write.py b/op_tests/triton_tests/fusions/test_fused_reduce_qk_norm_rope_swa_write.py
+new file mode 100644
+index 0000000000..08334b6e4e
+--- /dev/null
++++ b/op_tests/triton_tests/fusions/test_fused_reduce_qk_norm_rope_swa_write.py
+@@ -0,0 +1,249 @@
++# SPDX-License-Identifier: MIT
++# Copyright (C) 2024-2026, Advanced Micro Devices, Inc. All rights reserved.
++
++import pytest
++import torch
++
++from aiter import rope_cached_positions_fwd_inplace
++from aiter.ops.triton.fusions.fused_reduce_qk_norm_rope_swa_write import (
++    fused_reduce_qk_norm_rope_swa_write,
++)
++from op_tests.triton_tests.gemm.basic.test_gemm_a8w8_blockscale import (
++    generate_gemm_a8w8_blockscale_inputs,
++    run_torch as run_torch_gemm_a8w8_blockscale,
++)
++
++
++def _build_cos_sin(
++    rope_dim: int, max_seq: int, dtype: torch.dtype, device: torch.device
++):
++    inv_freq = 1.0 / (
++        10000.0
++        ** (torch.arange(0, rope_dim, 2, device=device, dtype=torch.float32) / rope_dim)
++    )
++    t = torch.arange(max_seq, device=device, dtype=torch.float32)
++    freqs = torch.outer(t, inv_freq)
++    cos = torch.cos(freqs).to(dtype).unsqueeze(-2).unsqueeze(-2)
++    sin = torch.sin(freqs).to(dtype).unsqueeze(-2).unsqueeze(-2)
++    return cos, sin
++
++
++def run_torch(
++    q_in_for_ref: torch.Tensor,
++    kv_pre: torch.Tensor,
++    q_norm_weight,
++    kv_norm_weight,
++    q_rms_eps: float,
++    kv_rms_eps: float,
++    rope_head_dim: int,
++    cos: torch.Tensor,
++    sin: torch.Tensor,
++    positions: torch.Tensor,
++    is_neox: bool,
++    M: int,
++    num_local_heads: int,
++    head_dim: int,
++    write_indices,
++    batch_id_per_token,
++    state_slot_per_seq,
++    swa_kv_ref: torch.Tensor,
++    win: int,
++):
++    """Reference: split-K reduce -> per-head Q RMSNorm + RoPE tail; per-row
++    KV RMSNorm over head_dim + RoPE tail; optional SWA scatter."""
++    dtype = kv_pre.dtype
++
++    def _rms_per_row(x: torch.Tensor, w, eps: float) -> torch.Tensor:
++        v = x.float().pow(2).mean(dim=-1, keepdim=True)
++        return (x.float() * torch.rsqrt(v + eps) * (w if w is not None else 1)).to(
++            x.dtype
++        )
++
++    def _rope_inplace_slice(x_tail: torch.Tensor):
++        rotate_style = 0 if is_neox else 1
++        rope_cached_positions_fwd_inplace(
++            x_tail,
++            cos,
++            sin,
++            positions.view(1, -1),
++            rotate_style=rotate_style,
++            reuse_freqs_front_part=True,
++            nope_first=False,
++        )
++
++    # Q: RMSNorm per head + RoPE on tail.
++    q_ref = q_in_for_ref.to(dtype).view(M, num_local_heads, head_dim)
++    q_ref = _rms_per_row(q_ref, q_norm_weight, q_rms_eps)
++    q_tail = (
++        q_ref[..., -rope_head_dim:]
++        .contiguous()
++        .view(1, M, num_local_heads, rope_head_dim)
++    )
++    _rope_inplace_slice(q_tail)
++    q_ref[..., -rope_head_dim:] = q_tail.view(M, num_local_heads, rope_head_dim)
++
++    # KV: RMSNorm over head_dim + RoPE on tail.
++    kv_ref = kv_pre.clone()
++    kv_ref = _rms_per_row(kv_ref, kv_norm_weight, kv_rms_eps)
++    kv_tail = kv_ref[..., -rope_head_dim:].contiguous().view(1, M, 1, rope_head_dim)
++    _rope_inplace_slice(kv_tail)
++    kv_ref[..., -rope_head_dim:] = kv_tail.view(M, rope_head_dim).clone()
++
++    # Optional SWA scatter using the *normed* kv values.
++    slots = ring_idx = None
++    if write_indices is not None:
++        keep = write_indices >= 0
++        src_ids = write_indices[keep].long()
++        if src_ids.numel() > 0:
++            src_kv = kv_ref[src_ids]
++            src_pos = positions[src_ids]
++            bids = batch_id_per_token[src_ids].long()
++            slots = state_slot_per_seq[bids].long()
++            ring_idx = src_pos % win
++            swa_kv_ref[slots, ring_idx] = src_kv
++
++    return q_ref, kv_ref, slots, ring_idx
++
++
++@pytest.mark.parametrize("M", [1, 2, 4, 8, 32])
++@pytest.mark.parametrize("num_local_heads,q_lora_rank", [(8, 1024), (128, 1536)])
++@pytest.mark.parametrize("rope_head_dim", [64])
++@pytest.mark.parametrize("head_dim", [512])
++@pytest.mark.parametrize("q_norm_eps", [1e-6])
++@pytest.mark.parametrize("kv_norm_eps", [1e-6])
++@pytest.mark.parametrize("is_neox", [True, False])
++@pytest.mark.parametrize("with_swa", [True])
++@pytest.mark.parametrize("num_splitk", [1, 2])
++def test_fused_reduce_qk_norm_rope_swa_write(
++    M: int,
++    num_local_heads: int,
++    q_lora_rank: int,
++    rope_head_dim: int,
++    head_dim: int,
++    q_norm_eps: float,
++    kv_norm_eps: float,
++    is_neox: bool,
++    with_swa: bool,
++    num_splitk: int,
++):
++    torch.manual_seed(0)
++    if not torch.cuda.is_available():
++        pytest.skip("CUDA required")
++
++    N = num_local_heads * head_dim
++    K = q_lora_rank
++    dtype = torch.bfloat16
++    device = torch.device("cuda")
++
++    x, w, _w_shfl, x_scale, _x_scale_shfl, w_scale, _ = (
++        generate_gemm_a8w8_blockscale_inputs(
++            M,
++            N,
++            K,
++            128,
++            128,
++            dtype=dtype,
++            layout="TN",
++            output=False,
++            shuffle=True,
++        )
++    )
++
++    kv_pre = torch.randn(M, head_dim, dtype=dtype, device=device)
++    q_weight = None  # weight-free RMSNorm for Q
++    kv_weight = None  # weight-free RMSNorm for KV
++
++    # Compute the reference full GEMM output (post a8w8 blockscale dequant).
++    y_gemm = run_torch_gemm_a8w8_blockscale(x, w, x_scale, w_scale, torch.float32).to(
++        dtype
++    )
++
++    # Build q_in: 2D [M, N] when num_splitk==1, otherwise 3D [num_splitk, M, N]
++    # whose split-K sum equals y_gemm. Reference q_ref uses the same fp32 sum
++    # the kernel will see, so any bf16 partial-sum noise affects both equally.
++    if num_splitk == 1:
++        q_in = y_gemm  # 2D
++        q_in_for_ref = y_gemm.float()
++    else:
++        partials = (
++            torch.randn(num_splitk - 1, M, N, dtype=torch.float32, device=device) * 0.1
++        )
++        last = y_gemm.float() - partials.sum(dim=0)
++        q_in_fp32 = torch.cat(
++            [partials, last.unsqueeze(0)], dim=0
++        )  # [num_splitk, M, N] fp32
++        q_in = q_in_fp32.to(dtype)  # bf16 partials (what GEMM split-K returns)
++        q_in_for_ref = q_in.float().sum(
++            dim=0
++        )  # what the kernel reads (bf16) summed in fp32
++
++    max_seq = 8192
++    cos, sin = _build_cos_sin(rope_head_dim, max_seq, dtype, device)
++    positions = torch.randperm(max_seq, dtype=torch.int64, device=device)[:M]
++
++    num_slots = M
++    win = 128
++    swa_kv_test = torch.zeros(num_slots, win, head_dim, dtype=dtype, device=device)
++    swa_kv_ref = torch.zeros_like(swa_kv_test)
++
++    write_indices = batch_id = slot_map = None
++    if with_swa:
++        write_indices = torch.randperm(M, dtype=torch.int32, device=device)
++        slot_map = torch.randperm(num_slots, dtype=torch.int32, device=device)[:M]
++        batch_id = torch.randperm(M, dtype=torch.int32, device=device)
++
++    q_ref, kv_ref, slots, ring_idx = run_torch(
++        q_in_for_ref,
++        kv_pre,
++        q_weight,
++        kv_weight,
++        q_norm_eps,
++        kv_norm_eps,
++        rope_head_dim,
++        cos,
++        sin,
++        positions,
++        is_neox,
++        M,
++        num_local_heads,
++        head_dim,
++        write_indices,
++        batch_id,
++        slot_map,
++        swa_kv_ref,
++        win,
++    )
++
++    kv_test = kv_pre.clone()
++    q_out = torch.empty(M, num_local_heads, head_dim, dtype=dtype, device=device)
++
++    fused_reduce_qk_norm_rope_swa_write(
++        q_in,
++        kv_test,
++        q_weight,
++        kv_weight,
++        q_norm_eps,
++        kv_norm_eps,
++        rope_head_dim,
++        cos,
++        sin,
++        positions,
++        q_out=q_out,
++        is_neox=is_neox,
++        write_indices=write_indices,
++        batch_id_per_token=batch_id,
++        state_slot_mapping=slot_map,
++        swa_kv=swa_kv_test,
++        win=win,
++        dtype=dtype,
++    )
++
++    torch.testing.assert_close(q_out, q_ref, rtol=0.05, atol=0.1)
++    torch.testing.assert_close(kv_test, kv_ref, rtol=0.05, atol=0.1)
++    if with_swa:
++        torch.testing.assert_close(
++            swa_kv_test[slots, ring_idx],
++            swa_kv_ref[slots, ring_idx],
++            rtol=0.05,
++            atol=0.1,
++        )
+diff --git a/op_tests/triton_tests/gemm/basic/test_gemm_a8w8_blockscale.py b/op_tests/triton_tests/gemm/basic/test_gemm_a8w8_blockscale.py
+index 9dc65a2b93..a6a966c3cb 100644
+--- a/op_tests/triton_tests/gemm/basic/test_gemm_a8w8_blockscale.py
++++ b/op_tests/triton_tests/gemm/basic/test_gemm_a8w8_blockscale.py
+@@ -113,7 +113,6 @@ def generate_gemm_a8w8_blockscale_inputs(
+         y = torch.empty((M, N), dtype=dtype, device="cuda").cuda()
+ 
+     return x, weight, weight_shuffled, x_scale, x_scale_shuffled, w_scale, y
+-    return x, weight, weight_shuffled, x_scale, x_scale_shuffled, w_scale, y
+ 
+ 
+ @pytest.mark.parametrize(

@@ -82,6 +82,8 @@ export ROCM_WIKI_ROOT=/path/to/ROCmKernelWiki
 - **9 candidate ledgers** in `candidates/` recording the include/defer/exclude
   decision for every scanned PR
 - **6 auto-generated cross-reference indices** under `queries/`
+- **959 real upstream PR diffs** under `artifacts/prs/<repo>/PR-<N>/` (byte-capped, SHA-256-pinned via `PROVENANCE.yaml`) for the highest-signal kernel PRs
+- **12 runnable kernel examples** under `examples/` — compiled with hipcc; portable ones run + self-check on RDNA4/gfx1201, CDNA-MFMA ones cross-compile-verify for gfx942/gfx950
 
 ## Hardware Scope
 

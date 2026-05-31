@@ -1,0 +1,3754 @@
+diff --git a/aiter/ops/triton/_triton_kernels/attention/block_lut.py b/aiter/ops/triton/_triton_kernels/attention/block_lut.py
+new file mode 100644
+index 0000000000..b57159f5bb
+--- /dev/null
++++ b/aiter/ops/triton/_triton_kernels/attention/block_lut.py
+@@ -0,0 +1,104 @@
++# SPDX-License-Identifier: MIT
++# Copyright (C) 2024-2026, Advanced Micro Devices, Inc. All rights reserved.
++
++"""
++Triton kernel to build the block-sparse LUT (kv_block_indices) from a 4D block
++attention mask without using nonzero or argsort.
++"""
++
++import torch
++import triton
++import triton.language as tl
++
++
++@triton.jit()
++def _block_attn_mask_to_lut_kernel(
++    mask_ptr,
++    lut_start_ptr,
++    lut_count_ptr,
++    kv_block_indices_ptr,
++    stride_mask_b,
++    stride_mask_h,
++    stride_mask_qb,
++    stride_mask_kb,
++    num_heads,
++    num_q_blocks,
++    num_kv_blocks,
++    BLOCK_KB: tl.constexpr,
++):
++    """
++    Each program handles one (batch, head, q_block) row. It scans mask[b, h, qb, :]
++    and writes the indices kb where the mask is True into the segment
++    kv_block_indices[lut_start[linear_idx] : lut_start[linear_idx] + lut_count[linear_idx]].
++    """
++    linear_idx = tl.program_id(0)
++    num_entries = num_heads * num_q_blocks
++    # Decode (b, h, qb) from linear_idx = b * (num_heads * num_q_blocks) + h * num_q_blocks + qb
++    b = linear_idx // num_entries
++    remainder = linear_idx % num_entries
++    h = remainder // num_q_blocks
++    qb = remainder % num_q_blocks
++
++    base = tl.load(lut_start_ptr + linear_idx)
++
++    # Running write offset for this program's segment
++    write_offset = 0
++
++    for start_kb in range(0, num_kv_blocks, BLOCK_KB):
++        kb_offs = start_kb + tl.arange(0, BLOCK_KB)
++        in_bounds = kb_offs < num_kv_blocks
++
++        # Row offset for (b, h, qb): mask[b, h, qb, start_kb : start_kb+BLOCK_KB]
++        row_base = b * stride_mask_b + h * stride_mask_h + qb * stride_mask_qb
++        mask_ptrs = mask_ptr + row_base + kb_offs * stride_mask_kb
++        # Load mask chunk; bool loads as uint8/int8, non-zero = True
++        mask_chunk = tl.load(mask_ptrs, mask=in_bounds, other=0)
++
++        # Vectorized: mask_vals is 1 where we write, 0 otherwise
++        mask_vals = (mask_chunk != 0).to(tl.int32)
++        # Only count in-bounds positions
++        mask_vals = tl.where(in_bounds, mask_vals, 0)
++        cumsum = tl.cumsum(mask_vals, axis=0)
++        # Store positions for this chunk: base + (cumsum - 1) where mask_vals
++        store_offsets = base + write_offset + cumsum - 1
++        chunk_kb = (start_kb + tl.arange(0, BLOCK_KB)).to(tl.int32)
++        tl.store(
++            kv_block_indices_ptr + store_offsets,
++            chunk_kb,
++            mask=mask_vals != 0,
++        )
++        write_offset = write_offset + tl.sum(mask_vals)
++
++    # No return; kv_block_indices is written in place
++
++
++def block_attn_mask_to_lut_kernel(
++    block_attn_mask: torch.Tensor,
++    lut_start: torch.Tensor,
++    lut_count: torch.Tensor,
++    kv_block_indices: torch.Tensor,
++    BLOCK_KB: int = 128,
++):
++    """
++    Launch the LUT-fill kernel. Caller must ensure block_attn_mask is 4D
++    (batch, num_heads, num_q_blocks, num_kv_blocks) and kv_block_indices has
++    length lut_count.sum().
++    """
++    batch, num_heads, num_q_blocks, num_kv_blocks = block_attn_mask.shape
++    num_programs = batch * num_heads * num_q_blocks
++
++    grid = (num_programs,)
++    _block_attn_mask_to_lut_kernel[grid](
++        block_attn_mask,
++        lut_start,
++        lut_count,
++        kv_block_indices,
++        stride_mask_b=block_attn_mask.stride(0),
++        stride_mask_h=block_attn_mask.stride(1),
++        stride_mask_qb=block_attn_mask.stride(2),
++        stride_mask_kb=block_attn_mask.stride(3),
++        num_heads=num_heads,
++        num_q_blocks=num_q_blocks,
++        num_kv_blocks=num_kv_blocks,
++        BLOCK_KB=BLOCK_KB,
++    )
+diff --git a/aiter/ops/triton/_triton_kernels/attention/fav3_sage_attention.py b/aiter/ops/triton/_triton_kernels/attention/fav3_sage_attention.py
+index b25848e8c9..1c5bacd304 100755
+--- a/aiter/ops/triton/_triton_kernels/attention/fav3_sage_attention.py
++++ b/aiter/ops/triton/_triton_kernels/attention/fav3_sage_attention.py
+@@ -204,6 +204,306 @@ def _sage_fwd_no_mask(
+     return acc, l_i, m_i
+ 
+ 
++@triton.jit
++def _sage_fwd_blocksparse_nomask(
++    acc,
++    l_i,
++    m_i,
++    q,
++    k_base_ptrs,
++    v_base_ptrs,
++    bias_base_ptrs,
++    stride_kn,
++    stride_vk,
++    stride_bn,
++    stride_sn,
++    stride_sm,
++    start_m,
++    seqlen_k,
++    seqlen_q,
++    dropout_p,
++    philox_seed,
++    philox_offset_base,
++    sd_mask,
++    stride_sz,
++    stride_sh,
++    off_z,
++    off_h_q,
++    offs_m,
++    offs_d_qk,
++    offs_d_v,
++    alibi_slope,
++    q_descale,
++    k_descale_offset,
++    stride_ksblk,
++    kv_block_indices,
++    lut_start_val,
++    n_blocks,
++    BLOCK_M: tl.constexpr,
++    BLOCK_N: tl.constexpr,
++    PRE_LOAD_V: tl.constexpr,
++    ENABLE_DROPOUT: tl.constexpr,
++    PADDED_HEAD_QK: tl.constexpr,
++    PADDED_HEAD_V: tl.constexpr,
++    ACTUAL_BLOCK_DMODEL_QK: tl.constexpr,
++    ACTUAL_BLOCK_DMODEL_V: tl.constexpr,
++    USE_ALIBI: tl.constexpr,
++    USE_EXP2: tl.constexpr,
++    USE_BIAS: tl.constexpr,
++    RETURN_SCORES: tl.constexpr,
++    ACCUMULATOR_TYPE,
++):
++    for i in range(n_blocks):
++        start_b = tl.load(kv_block_indices + lut_start_val + i)
++        start_n = start_b * BLOCK_N
++        k_ptrs = k_base_ptrs + start_n * stride_kn
++        v_ptrs = v_base_ptrs + start_n * stride_vk
++        kv_offs_n = start_n + tl.arange(0, BLOCK_N)
++        k_descale_ptr_cur = k_descale_offset + start_b * stride_ksblk
++        if PADDED_HEAD_QK:
++            k_mask = offs_d_qk[:, None] < ACTUAL_BLOCK_DMODEL_QK
++            k = tl.load(k_ptrs, mask=k_mask, other=0.0)
++        else:
++            k = tl.load(k_ptrs)
++        k_descale = tl.load(k_descale_ptr_cur)
++        if PRE_LOAD_V:
++            if PADDED_HEAD_V:
++                v_mask = offs_d_v[None, :] < ACTUAL_BLOCK_DMODEL_V
++                v = tl.load(v_ptrs, mask=v_mask, other=0.0)
++            else:
++                v = tl.load(v_ptrs)
++        qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=ACCUMULATOR_TYPE)
++        qk += tl.dot(q, k) * (q_descale * k_descale)
++        qk_scaled = qk
++        if USE_ALIBI:
++            q_offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
++            alibi_block = compute_alibi_block(
++                alibi_slope, seqlen_q, seqlen_k, q_offs_m, kv_offs_n
++            )
++            qk_scaled += alibi_block
++        qk_mask = (offs_m[:, None] < seqlen_q) & (kv_offs_n[None, :] < seqlen_k)
++
++        if USE_BIAS:
++            bias_ptrs = bias_base_ptrs + start_n * stride_bn
++            bias = tl.load(bias_ptrs, mask=qk_mask, other=0.0)
++            qk_scaled += bias
++
++        m_ij = tl.maximum(m_i, tl.max(qk_scaled, 1))
++
++        if USE_BIAS:
++            q_shifted = tl.where(
++                m_ij[:, None] == float("-inf"), float("-inf"), qk_scaled - m_ij[:, None]
++            )
++        else:
++            q_shifted = qk_scaled - m_ij[:, None]
++
++        if USE_EXP2:
++            p = tl.math.exp2(q_shifted)
++        else:
++            p = tl.math.exp(q_shifted)
++        l_ij = tl.sum(p, 1)
++        if ENABLE_DROPOUT:
++            philox_base = philox_offset_base + off_z * stride_sz + off_h_q * stride_sh
++            philox_ptrs = (
++                philox_base
++                + offs_m[:, None] * stride_sm
++                + kv_offs_n[None, :] * stride_sn
++            )
++            rng_output = tl.rand(philox_seed, philox_ptrs)
++            dropout_mask = rng_output > dropout_p
++            if RETURN_SCORES:
++                sd_mask_value = tl.where(dropout_mask, p, -p)
++                sd_mask_base = sd_mask + off_z * stride_sz + off_h_q * stride_sh
++                sd_mask_ptrs = (
++                    sd_mask_base
++                    + offs_m[:, None] * stride_sm
++                    + kv_offs_n[None, :] * stride_sn
++                )
++                sd_store_mask = (offs_m[:, None] < seqlen_q) & (
++                    kv_offs_n[None, :] < seqlen_k
++                )
++                tl.store(sd_mask_ptrs, sd_mask_value, mask=sd_store_mask)
++            p = tl.where(dropout_mask, p, 0.0)
++        elif RETURN_SCORES:
++            sd_mask_base = sd_mask + off_z * stride_sz + off_h_q * stride_sh
++            sd_mask_ptrs = (
++                sd_mask_base
++                + offs_m[:, None] * stride_sm
++                + kv_offs_n[None, :] * stride_sn
++            )
++            sd_store_mask = (offs_m[:, None] < seqlen_q) & (
++                kv_offs_n[None, :] < seqlen_k
++            )
++            tl.store(sd_mask_ptrs, p, mask=sd_store_mask)
++        if USE_BIAS:
++            m_diff = tl.where(m_ij == float("-inf"), float("-inf"), m_i - m_ij)
++        else:
++            m_diff = m_i - m_ij
++        if USE_EXP2:
++            alpha = tl.math.exp2(m_diff)
++        else:
++            alpha = tl.math.exp(m_diff)
++        acc = acc * alpha[:, None]
++        if not PRE_LOAD_V:
++            if PADDED_HEAD_V:
++                v_mask = offs_d_v[None, :] < ACTUAL_BLOCK_DMODEL_V
++                v = tl.load(v_ptrs, mask=v_mask, other=0.0)
++            else:
++                v = tl.load(v_ptrs)
++        l_i = l_i * alpha + l_ij
++        m_i = m_ij
++        acc += tl.dot((p).to(v.type.element_ty), v, out_dtype=tl.float32)
++    return acc, l_i, m_i
++
++
++@triton.jit
++def _sage_fwd_blocksparse_mask(
++    acc,
++    l_i,
++    m_i,
++    q,
++    k_base_ptrs,
++    v_base_ptrs,
++    bias_base_ptrs,
++    stride_kn,
++    stride_vk,
++    stride_bn,
++    stride_sn,
++    stride_sm,
++    start_m,
++    seqlen_k,
++    seqlen_q,
++    dropout_p,
++    philox_seed,
++    philox_offset_base,
++    sd_mask,
++    stride_sz,
++    stride_sh,
++    off_z,
++    off_h_q,
++    offs_m,
++    offs_d_qk,
++    offs_d_v,
++    alibi_slope,
++    q_descale,
++    k_descale_offset,
++    stride_ksblk,
++    kv_block_indices,
++    lut_start_val,
++    n_blocks,
++    BLOCK_M: tl.constexpr,
++    BLOCK_N: tl.constexpr,
++    PRE_LOAD_V: tl.constexpr,
++    ENABLE_DROPOUT: tl.constexpr,
++    PADDED_HEAD_QK: tl.constexpr,
++    PADDED_HEAD_V: tl.constexpr,
++    ACTUAL_BLOCK_DMODEL_QK: tl.constexpr,
++    ACTUAL_BLOCK_DMODEL_V: tl.constexpr,
++    USE_ALIBI: tl.constexpr,
++    USE_EXP2: tl.constexpr,
++    USE_BIAS: tl.constexpr,
++    RETURN_SCORES: tl.constexpr,
++    ACCUMULATOR_TYPE,
++):
++    for i in range(n_blocks):
++        start_b = tl.load(kv_block_indices + lut_start_val + i)
++        start_n = start_b * BLOCK_N
++        k_ptrs = k_base_ptrs + start_n * stride_kn
++        v_ptrs = v_base_ptrs + start_n * stride_vk
++        kv_offs_n = start_n + tl.arange(0, BLOCK_N)
++        k_descale_ptr_cur = k_descale_offset + start_b * stride_ksblk
++        k_n_mask = kv_offs_n[None, :] < seqlen_k
++        if PADDED_HEAD_QK:
++            k_mask = (offs_d_qk[:, None] < ACTUAL_BLOCK_DMODEL_QK) & k_n_mask
++        else:
++            k_mask = k_n_mask
++        k = tl.load(k_ptrs, mask=k_mask, other=0.0)
++        k_descale = tl.load(k_descale_ptr_cur)
++        if PRE_LOAD_V:
++            v_n_mask = kv_offs_n[:, None] < seqlen_k
++            if PADDED_HEAD_V:
++                v_mask = v_n_mask & (offs_d_v[None, :] < ACTUAL_BLOCK_DMODEL_V)
++            else:
++                v_mask = v_n_mask
++            v = tl.load(v_ptrs, mask=v_mask, other=0.0)
++        qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=ACCUMULATOR_TYPE)
++        qk += tl.dot(q, k) * (q_descale * k_descale)
++        qk_scaled = qk
++        if USE_ALIBI:
++            q_offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
++            alibi_block = compute_alibi_block(
++                alibi_slope, seqlen_q, seqlen_k, q_offs_m, kv_offs_n
++            )
++            qk_scaled += alibi_block
++        qk_mask = (offs_m[:, None] < seqlen_q) & (kv_offs_n[None, :] < seqlen_k)
++        if USE_BIAS:
++            bias_ptrs = bias_base_ptrs + start_n * stride_bn
++            bias = tl.load(bias_ptrs, mask=qk_mask, other=0.0)
++            qk_scaled += bias
++        qk_scaled = tl.where(
++            qk_mask, qk_scaled, float("-inf")
++        )  # mask padding before softmax
++        m_ij = tl.maximum(m_i, tl.max(qk_scaled, 1))
++        q_shifted = tl.where(
++            m_ij[:, None] == float("-inf"), float("-inf"), qk_scaled - m_ij[:, None]
++        )
++        if USE_EXP2:
++            p = tl.math.exp2(q_shifted)
++        else:
++            p = tl.math.exp(q_shifted)
++        l_ij = tl.sum(p, 1)
++        if ENABLE_DROPOUT:
++            philox_base = philox_offset_base + off_z * stride_sz + off_h_q * stride_sh
++            philox_ptrs = (
++                philox_base
++                + offs_m[:, None] * stride_sm
++                + kv_offs_n[None, :] * stride_sn
++            )
++            rng_output = tl.rand(philox_seed, philox_ptrs)
++            dropout_mask = rng_output > dropout_p
++            if RETURN_SCORES:
++                sd_mask_value = tl.where(dropout_mask, p, -p)
++                sd_mask_base = sd_mask + off_z * stride_sz + off_h_q * stride_sh
++                sd_mask_ptrs = (
++                    sd_mask_base
++                    + offs_m[:, None] * stride_sm
++                    + kv_offs_n[None, :] * stride_sn
++                )
++                sd_store_mask = (offs_m[:, None] < seqlen_q) & (
++                    kv_offs_n[None, :] < seqlen_k
++                )
++                tl.store(sd_mask_ptrs, sd_mask_value, mask=sd_store_mask)
++            p = tl.where(dropout_mask, p, 0.0)
++        elif RETURN_SCORES:
++            sd_mask_base = sd_mask + off_z * stride_sz + off_h_q * stride_sh
++            sd_mask_ptrs = (
++                sd_mask_base
++                + offs_m[:, None] * stride_sm
++                + kv_offs_n[None, :] * stride_sn
++            )
++            sd_store_mask = (offs_m[:, None] < seqlen_q) & (
++                kv_offs_n[None, :] < seqlen_k
++            )
++            tl.store(sd_mask_ptrs, p, mask=sd_store_mask)
++        m_diff = tl.where(m_ij == float("-inf"), float("-inf"), m_i - m_ij)
++        if USE_EXP2:
++            alpha = tl.math.exp2(m_diff)
++        else:
++            alpha = tl.math.exp(m_diff)
++        acc = acc * alpha[:, None]
++        if not PRE_LOAD_V:
++            v_n_mask = kv_offs_n[:, None] < seqlen_k
++            if PADDED_HEAD_V:
++                v_mask = v_n_mask & (offs_d_v[None, :] < ACTUAL_BLOCK_DMODEL_V)
++            else:
++                v_mask = v_n_mask
++            v = tl.load(v_ptrs, mask=v_mask, other=0.0)
++        l_i = l_i * alpha + l_ij
++        m_i = m_ij
++        acc += tl.dot((p).to(v.type.element_ty), v, out_dtype=tl.float32)
++    return acc, l_i, m_i
++
++
+ @triton.jit
+ def _sage_fwd_mask(
+     acc,
+@@ -907,6 +1207,10 @@ def sage_fwd(
+     cu_seqlens_k,
+     seqused_q,
+     seqused_k,  # Add seqused parameters
++    kv_block_indices,
++    lut_start,
++    lut_count,
++    num_q_blocks,
+     dropout_p,
+     philox_seed,
+     philox_offset_base,
+@@ -933,6 +1237,7 @@ def sage_fwd(
+     USE_ALIBI: tl.constexpr,
+     USE_EXP2: tl.constexpr,
+     USE_SEQUSED: tl.constexpr,
++    USE_BLOCK_SPARSE: tl.constexpr,
+ ):
+     # set params
+     ACCUMULATOR_TYPE = tl.float32  # for q*k product
+@@ -1011,29 +1316,44 @@ def sage_fwd(
+         seqlen_k = MAX_SEQLENS_K
+ 
+     # figure out masking pattern
+-    (
+-        n_front_skip_blocks,
+-        n_front_masked_blocks,
+-        n_full_blocks,
+-        n_back_masked_blocks,
+-        n_extra_tokens,
+-    ) = compute_block_masking(
+-        seqlen_k,
+-        seqlen_q,
+-        start_m,
+-        IS_CAUSAL,
+-        USE_SLIDING_WINDOW,
+-        WINDOW_SIZE_LEFT,
+-        WINDOW_SIZE_RIGHT,
+-        BLOCK_M,
+-        BLOCK_N,
+-    )
++    if USE_BLOCK_SPARSE:
++        n_extra_tokens = compute_padding_info(seqlen_k, BLOCK_N)
++        lut_idx = off_z * (HQ * num_q_blocks) + off_h_q * num_q_blocks + start_m
++        n_blocks = tl.load(lut_count + lut_idx)
++        has_any_range = n_blocks > 0
++    else:
++        (
++            n_front_skip_blocks,
++            n_front_masked_blocks,
++            n_full_blocks,
++            n_back_masked_blocks,
++            n_extra_tokens,
++        ) = compute_block_masking(
++            seqlen_k,
++            seqlen_q,
++            start_m,
++            IS_CAUSAL,
++            USE_SLIDING_WINDOW,
++            WINDOW_SIZE_LEFT,
++            WINDOW_SIZE_RIGHT,
++            BLOCK_M,
++            BLOCK_N,
++        )
++        has_any_range = True  # unused in this branch
+ 
+     # ============================================================
+     #          PROGRAM EARLY EXIT (All K Blocks Skipped)
+     # ============================================================
+-    total_visible_blocks = n_front_masked_blocks + n_full_blocks + n_back_masked_blocks
+-    if total_visible_blocks == 0:
++    if not USE_BLOCK_SPARSE:
++        total_visible_blocks = (
++            n_front_masked_blocks + n_full_blocks + n_back_masked_blocks
++        )
++    # Early exit: no K blocks to process
++    if USE_BLOCK_SPARSE:
++        _no_blocks = not has_any_range
++    else:
++        _no_blocks = total_visible_blocks == 0
++    if _no_blocks:
+         """
+         No K blocks visible - write zeros and exit.
+         """
+@@ -1135,81 +1455,204 @@ def sage_fwd(
+         q_ptrs_mask = q_ptrs_mask & (offs_d_qk[None, :] < ACTUAL_BLOCK_DMODEL_QK)
+     q = tl.load(q_ptrs, mask=q_ptrs_mask, other=0.0)
+ 
+-    # ========== Process MASKED K Blocks in the front ==========
+-    # NOTE: we use USE_SLIDING_WINDOW as guard because the compiler will crash other wise. front masking is only for sliding window so that is fine.
+-    if n_front_masked_blocks > 0 and USE_SLIDING_WINDOW:
+-        block_min = n_front_skip_blocks * BLOCK_N
+-        block_max = (n_front_skip_blocks + n_front_masked_blocks) * BLOCK_N
++    # ========== Process K Blocks: either three-phase (causal/window) or block-sparse ranges ==========
++    if not USE_BLOCK_SPARSE:
++        # ========== Process MASKED K Blocks in the front ==========
++        # NOTE: we use USE_SLIDING_WINDOW as guard because the compiler will crash other wise. front masking is only for sliding window so that is fine.
++        if n_front_masked_blocks > 0 and USE_SLIDING_WINDOW:
++            block_min = n_front_skip_blocks * BLOCK_N
++            block_max = (n_front_skip_blocks + n_front_masked_blocks) * BLOCK_N
++
++            k_descale_ptr = k_descale_offset + n_front_skip_blocks * stride_ksblk
++
++            acc, l_i, m_i = _sage_fwd_mask(
++                acc,
++                l_i,
++                m_i,
++                q,
++                k_ptrs,
++                v_ptrs,
++                bias_ptrs,
++                stride_kn,
++                stride_vk,
++                stride_bn,
++                stride_sn,
++                stride_sm,
++                start_m,
++                seqlen_k,
++                seqlen_q,
++                dropout_p,
++                philox_seed,
++                philox_offset_base,
++                SD_MASK,
++                stride_sz,
++                stride_sh,
++                off_z,
++                off_h_q,
++                offs_m,
++                offs_n,
++                offs_d_qk,
++                offs_d_v,
++                block_min,  # Start of front masked blocks
++                block_max,  # End of front masked blocks
++                0,  # n_extra_tokens (0 for front blocks, only relevant for last block)
++                alibi_slope,
++                q_descale,
++                k_descale_ptr,
++                stride_ksblk,
++                IS_CAUSAL,
++                BLOCK_M,
++                BLOCK_N,
++                PRE_LOAD_V,
++                ENABLE_DROPOUT,
++                PADDED_HEAD_QK,
++                PADDED_HEAD_V,
++                ACTUAL_BLOCK_DMODEL_QK,
++                ACTUAL_BLOCK_DMODEL_V,
++                USE_ALIBI=USE_ALIBI,
++                USE_EXP2=USE_EXP2,
++                RETURN_SCORES=RETURN_SCORES,
++                USE_SLIDING_WINDOW=USE_SLIDING_WINDOW,
++                WINDOW_SIZE_LEFT=WINDOW_SIZE_LEFT,
++                WINDOW_SIZE_RIGHT=WINDOW_SIZE_RIGHT,
++                ACCUMULATOR_TYPE=ACCUMULATOR_TYPE,
++            )
+ 
+-        k_descale_ptr = k_descale_offset + n_front_skip_blocks * stride_ksblk
++        # ========== Process FULL K Blocks (Fast Path) ==========
++        if n_full_blocks > 0:
++            block_min = (n_front_skip_blocks + n_front_masked_blocks) * BLOCK_N
++            block_max = (
++                n_front_skip_blocks + n_front_masked_blocks + n_full_blocks
++            ) * BLOCK_N
+ 
+-        acc, l_i, m_i = _sage_fwd_mask(
+-            acc,
+-            l_i,
+-            m_i,
+-            q,
+-            k_ptrs,
+-            v_ptrs,
+-            bias_ptrs,
+-            stride_kn,
+-            stride_vk,
+-            stride_bn,
+-            stride_sn,
+-            stride_sm,
+-            start_m,
+-            seqlen_k,
+-            seqlen_q,
+-            dropout_p,
+-            philox_seed,
+-            philox_offset_base,
+-            SD_MASK,
+-            stride_sz,
+-            stride_sh,
+-            off_z,
+-            off_h_q,
+-            offs_m,
+-            offs_n,
+-            offs_d_qk,
+-            offs_d_v,
+-            block_min,  # Start of front masked blocks
+-            block_max,  # End of front masked blocks
+-            0,  # n_extra_tokens (0 for front blocks, only relevant for last block)
+-            alibi_slope,
+-            q_descale,
+-            k_descale_ptr,
+-            stride_ksblk,
+-            IS_CAUSAL,
+-            BLOCK_M,
+-            BLOCK_N,
+-            PRE_LOAD_V,
+-            USE_BIAS,
+-            ENABLE_DROPOUT,
+-            PADDED_HEAD_QK,
+-            PADDED_HEAD_V,
+-            ACTUAL_BLOCK_DMODEL_QK,
+-            ACTUAL_BLOCK_DMODEL_V,
+-            USE_ALIBI=USE_ALIBI,
+-            USE_EXP2=USE_EXP2,
+-            RETURN_SCORES=RETURN_SCORES,
+-            USE_SLIDING_WINDOW=USE_SLIDING_WINDOW,
+-            WINDOW_SIZE_LEFT=WINDOW_SIZE_LEFT,
+-            WINDOW_SIZE_RIGHT=WINDOW_SIZE_RIGHT,
+-            ACCUMULATOR_TYPE=ACCUMULATOR_TYPE,
+-        )
++            k_descale_ptr = (
++                k_descale_offset
++                + (n_front_skip_blocks + n_front_masked_blocks) * stride_ksblk
++            )
+ 
+-    # ========== Process FULL K Blocks (Fast Path) ==========
+-    if n_full_blocks > 0:
+-        block_min = (n_front_skip_blocks + n_front_masked_blocks) * BLOCK_N
+-        block_max = (
+-            n_front_skip_blocks + n_front_masked_blocks + n_full_blocks
+-        ) * BLOCK_N
++            acc, l_i, m_i = _sage_fwd_no_mask(
++                acc,
++                l_i,
++                m_i,
++                q,
++                k_ptrs,
++                v_ptrs,
++                bias_ptrs,
++                stride_kn,
++                stride_vk,
++                stride_bn,
++                stride_sn,
++                stride_sm,
++                start_m,
++                seqlen_k,
++                seqlen_q,
++                dropout_p,
++                philox_seed,
++                philox_offset_base,
++                SD_MASK,
++                stride_sz,
++                stride_sh,
++                off_z,
++                off_h_q,
++                offs_m,
++                offs_d_qk,
++                offs_d_v,
++                block_min,  # Start of range: 0
++                block_max,  # End of range: n_full_blocks * BLOCK_N
++                alibi_slope,
++                q_descale,
++                k_descale_ptr,
++                stride_ksblk,
++                BLOCK_M,
++                BLOCK_N,
++                PRE_LOAD_V,
++                USE_BIAS,
++                ENABLE_DROPOUT,
++                PADDED_HEAD_QK,
++                PADDED_HEAD_V,
++                ACTUAL_BLOCK_DMODEL_QK,
++                ACTUAL_BLOCK_DMODEL_V,
++                USE_ALIBI=USE_ALIBI,
++                USE_EXP2=USE_EXP2,
++                RETURN_SCORES=RETURN_SCORES,
++                ACCUMULATOR_TYPE=ACCUMULATOR_TYPE,
++            )
+ 
+-        k_descale_ptr = (
+-            k_descale_offset
+-            + (n_front_skip_blocks + n_front_masked_blocks) * stride_ksblk
+-        )
++        # ========== Process MASKED K Blocks in the back ==========
++        if n_back_masked_blocks > 0:
++            block_min = (
++                n_front_skip_blocks + n_front_masked_blocks + n_full_blocks
++            ) * BLOCK_N
++            block_max = (
++                n_front_skip_blocks
++                + n_front_masked_blocks
++                + n_full_blocks
++                + n_back_masked_blocks
++            ) * BLOCK_N
++
++            k_descale_ptr = (
++                k_descale_offset
++                + (n_front_skip_blocks + n_front_masked_blocks + n_full_blocks)
++                * stride_ksblk
++            )
+ 
+-        acc, l_i, m_i = _sage_fwd_no_mask(
++            acc, l_i, m_i = _sage_fwd_mask(
++                acc,
++                l_i,
++                m_i,
++                q,
++                k_ptrs,
++                v_ptrs,
++                bias_ptrs,
++                stride_kn,
++                stride_vk,
++                stride_bn,
++                stride_sn,
++                stride_sm,
++                start_m,
++                seqlen_k,
++                seqlen_q,
++                dropout_p,
++                philox_seed,
++                philox_offset_base,
++                SD_MASK,
++                stride_sz,
++                stride_sh,
++                off_z,
++                off_h_q,
++                offs_m,
++                offs_n,
++                offs_d_qk,
++                offs_d_v,
++                block_min,  # Start of range: n_full_blocks * BLOCK_N
++                block_max,  # End of range: n_visible_k_blocks * BLOCK_N
++                n_extra_tokens,  # Padding tokens in last block
++                alibi_slope,
++                q_descale,
++                k_descale_ptr,
++                stride_ksblk,
++                IS_CAUSAL,  # Use actual causal flag
++                BLOCK_M,
++                BLOCK_N,
++                PRE_LOAD_V,
++                USE_BIAS,
++                ENABLE_DROPOUT,
++                PADDED_HEAD_QK,
++                PADDED_HEAD_V,
++                ACTUAL_BLOCK_DMODEL_QK,
++                ACTUAL_BLOCK_DMODEL_V,
++                USE_ALIBI=USE_ALIBI,
++                USE_EXP2=USE_EXP2,
++                RETURN_SCORES=RETURN_SCORES,
++                USE_SLIDING_WINDOW=USE_SLIDING_WINDOW,
++                WINDOW_SIZE_LEFT=WINDOW_SIZE_LEFT,
++                WINDOW_SIZE_RIGHT=WINDOW_SIZE_RIGHT,
++                ACCUMULATOR_TYPE=ACCUMULATOR_TYPE,
++            )
++    else:
++        # ========== USE_BLOCK_SPARSE: nomask then mask (last block) ==========
++        lut_start_val = tl.load(lut_start + lut_idx)
++        acc, l_i, m_i = _sage_fwd_blocksparse_nomask(
+             acc,
+             l_i,
+             m_i,
+@@ -1236,16 +1679,16 @@ def sage_fwd(
+             offs_m,
+             offs_d_qk,
+             offs_d_v,
+-            block_min,  # Start of range: 0
+-            block_max,  # End of range: n_full_blocks * BLOCK_N
+             alibi_slope,
+             q_descale,
+-            k_descale_ptr,
++            k_descale_offset,
+             stride_ksblk,
++            kv_block_indices,
++            lut_start_val,
++            n_blocks - 1,
+             BLOCK_M,
+             BLOCK_N,
+             PRE_LOAD_V,
+-            USE_BIAS,
+             ENABLE_DROPOUT,
+             PADDED_HEAD_QK,
+             PADDED_HEAD_V,
+@@ -1253,29 +1696,15 @@ def sage_fwd(
+             ACTUAL_BLOCK_DMODEL_V,
+             USE_ALIBI=USE_ALIBI,
+             USE_EXP2=USE_EXP2,
++            USE_BIAS=USE_BIAS,
+             RETURN_SCORES=RETURN_SCORES,
+             ACCUMULATOR_TYPE=ACCUMULATOR_TYPE,
+         )
+-
+-    # ========== Process MASKED K Blocks in the back ==========
+-    if n_back_masked_blocks > 0:
+-        block_min = (
+-            n_front_skip_blocks + n_front_masked_blocks + n_full_blocks
+-        ) * BLOCK_N
+-        block_max = (
+-            n_front_skip_blocks
+-            + n_front_masked_blocks
+-            + n_full_blocks
+-            + n_back_masked_blocks
+-        ) * BLOCK_N
+-
+-        k_descale_ptr = (
+-            k_descale_offset
+-            + (n_front_skip_blocks + n_front_masked_blocks + n_full_blocks)
+-            * stride_ksblk
+-        )
+-
+-        acc, l_i, m_i = _sage_fwd_mask(
++        invalid_q_rows = offs_m >= seqlen_q
++        m_i = tl.where(invalid_q_rows, float("-inf"), m_i)
++        l_i = tl.where(invalid_q_rows, 1.0, l_i)
++        acc = tl.where(invalid_q_rows[:, None], 0.0, acc)
++        acc, l_i, m_i = _sage_fwd_blocksparse_mask(
+             acc,
+             l_i,
+             m_i,
+@@ -1300,21 +1729,18 @@ def sage_fwd(
+             off_z,
+             off_h_q,
+             offs_m,
+-            offs_n,
+             offs_d_qk,
+             offs_d_v,
+-            block_min,  # Start of range: n_full_blocks * BLOCK_N
+-            block_max,  # End of range: n_visible_k_blocks * BLOCK_N
+-            n_extra_tokens,  # Padding tokens in last block
+             alibi_slope,
+             q_descale,
+-            k_descale_ptr,
++            k_descale_offset,
+             stride_ksblk,
+-            IS_CAUSAL,  # Use actual causal flag
++            kv_block_indices,
++            lut_start_val + (n_blocks - 1),
++            1,
+             BLOCK_M,
+             BLOCK_N,
+             PRE_LOAD_V,
+-            USE_BIAS,
+             ENABLE_DROPOUT,
+             PADDED_HEAD_QK,
+             PADDED_HEAD_V,
+@@ -1322,28 +1748,20 @@ def sage_fwd(
+             ACTUAL_BLOCK_DMODEL_V,
+             USE_ALIBI=USE_ALIBI,
+             USE_EXP2=USE_EXP2,
++            USE_BIAS=USE_BIAS,
+             RETURN_SCORES=RETURN_SCORES,
+-            USE_SLIDING_WINDOW=USE_SLIDING_WINDOW,
+-            WINDOW_SIZE_LEFT=WINDOW_SIZE_LEFT,
+-            WINDOW_SIZE_RIGHT=WINDOW_SIZE_RIGHT,
+             ACCUMULATOR_TYPE=ACCUMULATOR_TYPE,
+         )
+ 
+     # ============================================================
+     #                        EPILOGUE
+     # ============================================================
+-    # This helps the compiler do Newton Raphson on l_i vs on acc which is much larger.
+-    # Instead of directly computing 1/l_i which can be inf,
+-    # we check for the invalid case first
+-    if USE_SLIDING_WINDOW:
+-        # For rows where m_i is still -inf, no keys were valid
+-        # Set l_i to 1.0 to avoid division by zero (acc is already 0)
+-        invalid_mask = m_i == float("-inf")
+-        l_i_safe = tl.where(invalid_mask, 1.0, l_i)
+-        l_recip = 1 / l_i_safe[:, None]
+-    else:
+-        invalid_mask = None
+-        l_recip = 1 / l_i[:, None]
++    # For rows where m_i is still -inf, no keys were valid. Use l_i_safe to avoid
++    # 1/l_i = inf and log(l_i) = -inf (and to guard l_i underflow) in all paths.
++    invalid_mask = m_i == float("-inf")
++    l_i_safe = tl.where(invalid_mask, 1.0, l_i)
++    l_i_safe = tl.maximum(l_i_safe, 1e-7)
++    l_recip = 1 / l_i_safe[:, None]
+ 
+     v_descale = tl.load(
+         v_descale_ptr,
+@@ -1352,6 +1770,8 @@ def sage_fwd(
+     )
+ 
+     acc = acc * l_recip * v_descale
++    z = 0.0
++    acc = tl.where(invalid_mask[:, None], z.to(acc.type.element_ty), acc)
+     if ENABLE_DROPOUT:
+         dropout_scale = 1 / (1 - dropout_p)
+         acc = acc * dropout_scale
+@@ -1365,23 +1785,13 @@ def sage_fwd(
+             # mi_base2 = m_i * RCP_LN2
+             mi_base2 = m_i
+             # For invalid rows, log(l_i) would be -inf, but we want LSE to be -inf
+-            # So we handle this case explicitly
+-            if USE_SLIDING_WINDOW:
+-                log_l_i = tl.where(invalid_mask, 0.0, tl.math.log2(l_i))
+-                softmax_lse = mi_base2 + log_l_i
+-                # Ensure invalid rows have LSE = -inf
+-                softmax_lse = tl.where(invalid_mask, float("-inf"), softmax_lse)
+-            else:
+-                softmax_lse = mi_base2 + tl.math.log2(l_i)
++            log_l_i = tl.where(invalid_mask, 0.0, tl.math.log2(l_i_safe))
++            softmax_lse = tl.where(invalid_mask, float("-inf"), mi_base2 + log_l_i)
+             # convert back to natural units
+             softmax_lse *= LN2
+         else:
+-            if USE_SLIDING_WINDOW:
+-                log_l_i = tl.where(invalid_mask, 0.0, tl.math.log(l_i))
+-                softmax_lse = m_i + log_l_i
+-                softmax_lse = tl.where(invalid_mask, float("-inf"), softmax_lse)
+-            else:
+-                softmax_lse = m_i + tl.math.log(l_i)
++            log_l_i = tl.where(invalid_mask, 0.0, tl.math.log(l_i_safe))
++            softmax_lse = tl.where(invalid_mask, float("-inf"), m_i + log_l_i)
+ 
+     # handle masking edge cases
+     if USE_SLIDING_WINDOW:
+diff --git a/aiter/ops/triton/_triton_kernels/attention/fav3_sage_attention_mxfp4.py b/aiter/ops/triton/_triton_kernels/attention/fav3_sage_attention_mxfp4.py
+index f47f18549a..e6b1d1609d 100644
+--- a/aiter/ops/triton/_triton_kernels/attention/fav3_sage_attention_mxfp4.py
++++ b/aiter/ops/triton/_triton_kernels/attention/fav3_sage_attention_mxfp4.py
+@@ -359,6 +359,221 @@ def _sage_fwd_mask_mxfp4(
+     return acc, l_i, m_i
+ 
+ 
++@triton.jit
++def _sage_fwd_blocksparse_nomask_mxfp4(
++    acc,
++    l_i,
++    m_i,
++    q,
++    k_base_ptrs,
++    v_base_ptrs,
++    bias_base_ptrs,
++    stride_kn,
++    stride_vk,
++    stride_bn,
++    seqlen_k,
++    seqlen_q,
++    offs_m,
++    offs_d_k,
++    offs_d_v,
++    q_descale,
++    k_descale_base_ptrs,
++    stride_ksn,
++    kv_block_indices,
++    lut_start_val,
++    n_blocks,
++    BLOCK_M: tl.constexpr,
++    BLOCK_N: tl.constexpr,
++    PRE_LOAD_V: tl.constexpr,
++    PADDED_HEAD_QK: tl.constexpr,
++    PADDED_HEAD_V: tl.constexpr,
++    ACTUAL_BLOCK_DMODEL_QK: tl.constexpr,
++    ACTUAL_BLOCK_DMODEL_V: tl.constexpr,
++    Q_DTYPE_STR: tl.constexpr,
++    K_DTYPE_STR: tl.constexpr,
++    ACCUMULATOR_TYPE: tl.constexpr,
++    USE_BIAS: tl.constexpr,
++):
++    for i in range(n_blocks):
++        start_b = tl.load(kv_block_indices + lut_start_val + i)
++        start_n = start_b * BLOCK_N
++        k_ptrs = k_base_ptrs + start_n * stride_kn
++        v_ptrs = v_base_ptrs + start_n * stride_vk
++        k_descale_ptrs = k_descale_base_ptrs + start_n * stride_ksn
++        kv_offs_n = start_n + tl.arange(0, BLOCK_N)
++
++        if PADDED_HEAD_QK:
++            k_mask = offs_d_k[:, None] < ACTUAL_BLOCK_DMODEL_QK
++            k = tl.load(k_ptrs, mask=k_mask, other=0.0)
++        else:
++            k = tl.load(k_ptrs)
++
++        k_descale = tl.load(k_descale_ptrs)
++
++        if PRE_LOAD_V:
++            if PADDED_HEAD_V:
++                v_mask = offs_d_v[None, :] < ACTUAL_BLOCK_DMODEL_V
++                v = tl.load(v_ptrs, mask=v_mask, other=0.0)
++            else:
++                v = tl.load(v_ptrs)
++
++        qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=ACCUMULATOR_TYPE)
++        qk = tl.dot_scaled(
++            q, q_descale, Q_DTYPE_STR, k, k_descale, K_DTYPE_STR, fast_math=True, acc=qk
++        )
++
++        if USE_BIAS:
++            bias_mask = kv_offs_n < seqlen_k
++            bias = tl.load(
++                bias_base_ptrs + start_n * stride_bn, mask=bias_mask, other=0.0
++            )
++            qk += bias[None, :]
++
++        m_ij = tl.maximum(m_i, tl.max(qk, 1))
++
++        if USE_BIAS:
++            q_shifted = tl.where(
++                m_ij[:, None] == float("-inf"), float("-inf"), qk - m_ij[:, None]
++            )
++        else:
++            q_shifted = qk - m_ij[:, None]
++
++        p = tl.math.exp2(q_shifted)
++        l_ij = tl.sum(p, 1)
++
++        if USE_BIAS:
++            m_diff = tl.where(m_ij == float("-inf"), float("-inf"), m_i - m_ij)
++        else:
++            m_diff = m_i - m_ij
++
++        alpha = tl.math.exp2(m_diff)
++        acc = acc * alpha[:, None]
++
++        if not PRE_LOAD_V:
++            if PADDED_HEAD_V:
++                v_mask = offs_d_v[None, :] < ACTUAL_BLOCK_DMODEL_V
++                v = tl.load(v_ptrs, mask=v_mask, other=0.0)
++            else:
++                v = tl.load(v_ptrs)
++
++        l_i = l_i * alpha + l_ij
++        m_i = m_ij
++        acc += tl.dot(p.to(v.type.element_ty), v, out_dtype=tl.float32)
++
++    return acc, l_i, m_i
++
++
++@triton.jit
++def _sage_fwd_blocksparse_mask_mxfp4(
++    acc,
++    l_i,
++    m_i,
++    q,
++    k_base_ptrs,
++    v_base_ptrs,
++    bias_base_ptrs,
++    stride_kn,
++    stride_vk,
++    stride_bn,
++    seqlen_k,
++    seqlen_q,
++    offs_m,
++    offs_n,
++    offs_d_k,
++    offs_d_v,
++    q_descale,
++    k_descale_base_ptrs,
++    stride_ksn,
++    kv_block_indices,
++    lut_start_val,
++    n_blocks,
++    IS_CAUSAL: tl.constexpr,
++    BLOCK_M: tl.constexpr,
++    BLOCK_N: tl.constexpr,
++    PRE_LOAD_V: tl.constexpr,
++    PADDED_HEAD_QK: tl.constexpr,
++    PADDED_HEAD_V: tl.constexpr,
++    ACTUAL_BLOCK_DMODEL_QK: tl.constexpr,
++    ACTUAL_BLOCK_DMODEL_V: tl.constexpr,
++    Q_DTYPE_STR: tl.constexpr,
++    K_DTYPE_STR: tl.constexpr,
++    ACCUMULATOR_TYPE: tl.constexpr,
++    USE_BIAS: tl.constexpr,
++):
++    seqlen_delta_qk = seqlen_k - seqlen_q
++    for i in range(n_blocks):
++        start_b = tl.load(kv_block_indices + lut_start_val + i)
++        start_n = start_b * BLOCK_N
++        k_ptrs = k_base_ptrs + start_n * stride_kn
++        v_ptrs = v_base_ptrs + start_n * stride_vk
++        k_descale_ptrs = k_descale_base_ptrs + start_n * stride_ksn
++        kv_offs_n = start_n + tl.arange(0, BLOCK_N)
++
++        k_mask = kv_offs_n[None, :] < seqlen_k
++        if PADDED_HEAD_QK:
++            k_mask &= offs_d_k[:, None] < ACTUAL_BLOCK_DMODEL_QK
++
++        k = tl.load(k_ptrs, mask=k_mask, other=0.0)
++        k_descale = tl.load(
++            k_descale_ptrs, mask=kv_offs_n[:, None] < seqlen_k, other=0.0
++        )
++
++        if PRE_LOAD_V:
++            v_mask = kv_offs_n[:, None] < seqlen_k
++            if PADDED_HEAD_V:
++                v_mask &= offs_d_v[None, :] < ACTUAL_BLOCK_DMODEL_V
++            v = tl.load(v_ptrs, mask=v_mask, other=0.0)
++
++        qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=ACCUMULATOR_TYPE)
++
++        # Padding mask: mask out positions beyond seqlen_k
++        boundary_mask = kv_offs_n[None, :] < seqlen_k
++        qk = tl.where(boundary_mask, qk, float("-inf"))
++
++        qk = tl.dot_scaled(
++            q, q_descale, Q_DTYPE_STR, k, k_descale, K_DTYPE_STR, fast_math=True, acc=qk
++        )
++
++        if IS_CAUSAL:
++            qk = tl.where(
++                offs_m[:, None] >= (start_n + offs_n - seqlen_delta_qk)[None, :],
++                qk,
++                float("-inf"),
++            )
++
++        if USE_BIAS:
++            bias_mask = kv_offs_n < seqlen_k
++            bias = tl.load(
++                bias_base_ptrs + start_n * stride_bn, mask=bias_mask, other=0.0
++            )
++            qk += bias[None, :]
++
++        m_ij = tl.maximum(m_i, tl.max(qk, 1))
++
++        q_shifted = tl.where(
++            m_ij[:, None] == float("-inf"), float("-inf"), qk - m_ij[:, None]
++        )
++
++        p = tl.math.exp2(q_shifted)
++        l_ij = tl.sum(p, 1)
++
++        m_diff = tl.where(m_ij == float("-inf"), float("-inf"), m_i - m_ij)
++        alpha = tl.math.exp2(m_diff)
++        acc = acc * alpha[:, None]
++
++        if not PRE_LOAD_V:
++            v_mask = kv_offs_n[:, None] < seqlen_k
++            if PADDED_HEAD_V:
++                v_mask &= offs_d_v[None, :] < ACTUAL_BLOCK_DMODEL_V
++            v = tl.load(v_ptrs, mask=v_mask, other=0.0)
++
++        l_i = l_i * alpha + l_ij
++        m_i = m_ij
++        acc += tl.dot(p.to(v.type.element_ty), v, out_dtype=tl.float32)
++
++    return acc, l_i, m_i
++
++
+ @triton.jit
+ def sage_fwd_mxfp4(
+     Q,
+@@ -395,6 +610,9 @@ def sage_fwd_mxfp4(
+     stride_bn,
+     cu_seqlens_q,
+     cu_seqlens_k,
++    kv_block_indices,
++    lut_start,
++    lut_count,
+     Q_DTYPE_STR: tl.constexpr,
+     K_DTYPE_STR: tl.constexpr,
+     HQ: tl.constexpr,
+@@ -411,6 +629,7 @@ def sage_fwd_mxfp4(
+     BLOCK_N: tl.constexpr,
+     PRE_LOAD_V: tl.constexpr,
+     USE_BIAS: tl.constexpr,
++    USE_BLOCK_SPARSE: tl.constexpr,
+ ):
+     # Constants
+     Q_HEAD_DIV: tl.constexpr = 2 if Q_DTYPE_STR == "e2m1" else 1
+@@ -447,12 +666,33 @@ def sage_fwd_mxfp4(
+         seqlen_q, seqlen_k = MAX_SEQLENS_Q, MAX_SEQLENS_K
+ 
+     # Masking logic
+-    mask_info = compute_block_masking(
+-        seqlen_k, seqlen_q, start_m.to(tl.int32), IS_CAUSAL, BLOCK_M, BLOCK_N
+-    )  # need to turn start_m to int32 for consistent return values
+-    n_front_skip, n_front_masked, n_full, n_back_masked, n_extra = mask_info
+-
+-    if (n_front_masked + n_full + n_back_masked) == 0:
++    if USE_BLOCK_SPARSE:
++        num_q_blocks = (seqlen_q + BLOCK_M - 1) // BLOCK_M
++        n_extra = compute_padding_info(seqlen_k, BLOCK_N)
++        lut_idx = off_z * (HQ * num_q_blocks) + off_h_q * num_q_blocks + start_m
++        n_blocks = tl.load(lut_count + lut_idx)
++        has_any_range = n_blocks > 0
++    else:
++        mask_info = compute_block_masking(
++            seqlen_k, seqlen_q, start_m.to(tl.int32), IS_CAUSAL, BLOCK_M, BLOCK_N
++        )  # need to turn start_m to int32 for consistent return values
++        n_front_skip, n_front_masked, n_full, n_back_masked, n_extra = mask_info
++        has_any_range = True
++
++    # ============================================================
++    #          PROGRAM EARLY EXIT (All K Blocks Skipped)
++    # ============================================================
++    if not USE_BLOCK_SPARSE:
++        total_visible_blocks = n_front_masked + n_full + n_back_masked
++    # Early exit: no K blocks to process
++    if USE_BLOCK_SPARSE:
++        _no_blocks = not has_any_range
++    else:
++        _no_blocks = total_visible_blocks == 0
++    if _no_blocks:
++        """
++        No K blocks visible - write zeros and exit.
++        """
+         o_ptr = (
+             Out
+             + off_z * stride_oz
+@@ -460,11 +700,15 @@ def sage_fwd_mxfp4(
+             + (q_start + offs_m[:, None]) * stride_om
+             + offs_d_v[None, :]
+         )
++        o_mask = offs_m[:, None] < seqlen_q
++        if PADDED_HEAD_V:
++            o_mask &= offs_d_v[None, :] < ACTUAL_BLOCK_DMODEL_V
+         tl.store(
+             o_ptr,
+-            tl.zeros([BLOCK_M, BLOCK_DMODEL_V], dtype=Out.dtype.element_ty),
+-            mask=(offs_m[:, None] < seqlen_q),
++            tl.zeros([BLOCK_M, BLOCK_DMODEL_V], dtype=Out.type.element_ty),
++            mask=o_mask,
+         )
++
+         return
+ 
+     # Pointers
+@@ -526,10 +770,86 @@ def sage_fwd_mxfp4(
+     l_i = tl.full([BLOCK_M], 1.0, dtype=ACC_TYPE)
+     acc = tl.zeros([BLOCK_M, BLOCK_DMODEL_V], dtype=ACC_TYPE)
+ 
+-    if n_full > 0:
+-        b_min = (n_front_skip + n_front_masked) * BLOCK_N
+-        b_max = b_min + n_full * BLOCK_N
+-        acc, l_i, m_i = _sage_fwd_no_mask_mxfp4(
++    if not USE_BLOCK_SPARSE:
++        if n_full > 0:
++            b_min = (n_front_skip + n_front_masked) * BLOCK_N
++            b_max = b_min + n_full * BLOCK_N
++            acc, l_i, m_i = _sage_fwd_no_mask_mxfp4(
++                acc,
++                l_i,
++                m_i,
++                q,
++                k_ptrs,
++                v_ptrs,
++                bias_ptrs,
++                stride_kn,
++                stride_vk,
++                stride_bn,
++                seqlen_k,
++                seqlen_q,
++                offs_m,
++                offs_d_k,
++                offs_d_v,
++                b_min,
++                b_max,
++                q_descale,
++                kd_ptrs,
++                stride_ksn,
++                BLOCK_M,
++                BLOCK_N,
++                PRE_LOAD_V,
++                PADDED_HEAD_QK,
++                PADDED_HEAD_V,
++                ACTUAL_BLOCK_DMODEL_QK,
++                ACTUAL_BLOCK_DMODEL_V,
++                Q_DTYPE_STR,
++                K_DTYPE_STR,
++                ACC_TYPE,
++                USE_BIAS,
++            )
++
++        if n_back_masked > 0:
++            b_min = (n_front_skip + n_front_masked + n_full) * BLOCK_N
++            b_max = b_min + n_back_masked * BLOCK_N
++            acc, l_i, m_i = _sage_fwd_mask_mxfp4(
++                acc,
++                l_i,
++                m_i,
++                q,
++                k_ptrs,
++                v_ptrs,
++                bias_ptrs,
++                stride_kn,
++                stride_vk,
++                stride_bn,
++                seqlen_k,
++                seqlen_q,
++                offs_m,
++                offs_n,
++                offs_d_k,
++                offs_d_v,
++                b_min,
++                b_max,
++                n_extra,
++                q_descale,
++                kd_ptrs,
++                stride_ksn,
++                IS_CAUSAL,
++                BLOCK_M,
++                BLOCK_N,
++                PRE_LOAD_V,
++                PADDED_HEAD_QK,
++                PADDED_HEAD_V,
++                ACTUAL_BLOCK_DMODEL_QK,
++                ACTUAL_BLOCK_DMODEL_V,
++                Q_DTYPE_STR,
++                K_DTYPE_STR,
++                ACC_TYPE,
++                USE_BIAS,
++            )
++    else:
++        lut_start_val = tl.load(lut_start + lut_idx)
++        acc, l_i, m_i = _sage_fwd_blocksparse_nomask_mxfp4(
+             acc,
+             l_i,
+             m_i,
+@@ -545,11 +865,12 @@ def sage_fwd_mxfp4(
+             offs_m,
+             offs_d_k,
+             offs_d_v,
+-            b_min,
+-            b_max,
+             q_descale,
+             kd_ptrs,
+             stride_ksn,
++            kv_block_indices,
++            lut_start_val,
++            n_blocks - 1,
+             BLOCK_M,
+             BLOCK_N,
+             PRE_LOAD_V,
+@@ -562,11 +883,11 @@ def sage_fwd_mxfp4(
+             ACC_TYPE,
+             USE_BIAS,
+         )
+-
+-    if n_back_masked > 0:
+-        b_min = (n_front_skip + n_front_masked + n_full) * BLOCK_N
+-        b_max = b_min + n_back_masked * BLOCK_N
+-        acc, l_i, m_i = _sage_fwd_mask_mxfp4(
++        invalid_q_rows = offs_m >= seqlen_q
++        m_i = tl.where(invalid_q_rows, float("-inf"), m_i)
++        l_i = tl.where(invalid_q_rows, 1.0, l_i)
++        acc = tl.where(invalid_q_rows[:, None], 0.0, acc)
++        acc, l_i, m_i = _sage_fwd_blocksparse_mask_mxfp4(
+             acc,
+             l_i,
+             m_i,
+@@ -583,13 +904,13 @@ def sage_fwd_mxfp4(
+             offs_n,
+             offs_d_k,
+             offs_d_v,
+-            b_min,
+-            b_max,
+-            n_extra,
+             q_descale,
+             kd_ptrs,
+             stride_ksn,
+-            IS_CAUSAL,
++            kv_block_indices,
++            lut_start_val + (n_blocks - 1),
++            1,
++            False,  # IS_CAUSAL is not supported for block sparse
+             BLOCK_M,
+             BLOCK_N,
+             PRE_LOAD_V,
+diff --git a/aiter/ops/triton/attention/fav3_sage.py b/aiter/ops/triton/attention/fav3_sage.py
+index d64bd5c279..b2017cd96b 100644
+--- a/aiter/ops/triton/attention/fav3_sage.py
++++ b/aiter/ops/triton/attention/fav3_sage.py
+@@ -24,7 +24,7 @@ def get_sage_fwd_configs():
+             "BLOCK_N": 128,
+             "waves_per_eu": 2,
+             "PRE_LOAD_V": False,
+-            "num_stages": 4,
++            "num_stages": 5,
+             "num_warps": 8,
+         }
+     elif arch == "gfx942":
+@@ -76,6 +76,7 @@ def forward(
+         return_lse: bool = True,
+         layout: str = "bshd",
+         config: Optional[dict] = None,
++        block_lut: Optional[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]] = None,
+     ):
+         # 1. Dimension Mapping & Config Setup
+         bshd_map = [0, 1, 2, 3] if layout == "bshd" else [0, 2, 1, 3]
+@@ -86,6 +87,21 @@ def forward(
+             config = get_sage_fwd_configs()
+ 
+         BLKQ, BLKK = config["BLOCK_M"], config["BLOCK_N"]
++        num_q_blocks = (seqlen_q + BLKQ - 1) // BLKQ
++        num_k_blocks = (seqlen_k + BLKK - 1) // BLKK
++
++        if block_lut is not None:
++            kv_block_indices, lut_start, lut_count = block_lut
++            use_block_sparse = True
++            if causal or window_size != (-1, -1):
++                raise NotImplementedError(
++                    "The Triton block-sparse attention path selected by block_lut "
++                    "does not support causal or sliding-window masking; "
++                    "require causal=False and window_size=(-1, -1)."
++                )
++        else:
++            kv_block_indices = lut_start = lut_count = None
++            use_block_sparse = False
+ 
+         # 2. Validation: Early Exit for unsupported features
+         if attention_chunk not in (0, 1):
+@@ -149,21 +165,14 @@ def forward(
+             return_lse,
+             layout,
+             config,
++            kv_block_indices=kv_block_indices,
++            lut_start=lut_start,
++            lut_count=lut_count,
++            use_block_sparse=use_block_sparse,
+         )
+ 
+-        # 6. Context Saving for Backward
+         if return_lse:
+-            ctx.save_for_backward(
+-                q_int8, k_int8, v_fp8, out, softmax_lse, q_descale, k_descale
+-            )
+-            ctx.softmax_scale = softmax_scale
+-            ctx.causal = causal
+-            ctx.window_size = window_size
+-            ctx.softcap = softcap
+-            ctx.deterministic = deterministic
+-            ctx.sm_margin = sm_margin
+-            ctx.input_dtype = q.dtype
+-            ctx.layout = layout
++            return out, softmax_lse
+ 
+         return out
+ 
+@@ -183,6 +192,7 @@ def backward(ctx, dout: torch.Tensor):
+             None,  # return_lse
+             None,  # layout
+             None,  # config
++            None,  # block_lut
+         )
+ 
+ 
+@@ -197,9 +207,10 @@ def fav3_sage_wrapper_func(
+     softcap: float = 0.0,
+     deterministic: bool = False,
+     sm_margin: int = 0,
+-    inference_mode: bool = True,
++    return_lse: bool = False,
+     layout: str = "bshd",
+     config: Optional[dict] = None,
++    block_lut: Optional[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]] = None,
+ ):
+     """
+     SageAttention v1 high-precision entry point.
+@@ -227,10 +238,13 @@ def fav3_sage_wrapper_func(
+         pack_gqa: GQA packing flag (not yet supported)
+         deterministic: Whether to use deterministic backward (not yet supported)
+         sm_margin: SM margin parameter (not yet supported)
+-        inference_mode: do not return softmax_lse
++        return_lse: return softmax_lse if True, otherwise return None
+         layout: bshd or bhsd layout for the inputs
+         config: Optional kernel configuration dict with keys BLOCK_M, BLOCK_N,
+                 waves_per_eu, PRE_LOAD_V, num_stages, num_warps
++        block_lut: Optional ragged LUT for block-sparse attention,
++                (kv_block_indices, lut_start, lut_count) from block_attn_mask_to_ragged_lut.
++                When None, dense attention is used.
+ 
+     Returns:
+         out: Output tensor [batch, seqlen, num_q_heads, head_dim] or [batch, num_q_heads, seqlen, head_dim] (FP32)
+@@ -262,8 +276,6 @@ def fav3_sage_wrapper_func(
+             "sm_margin != 0 not supported in Sage Attention v1 API"
+         )
+ 
+-    return_lse = not inference_mode
+-
+     return _FAv3SageWrapperFunc.apply(
+         q,
+         k,
+@@ -278,6 +290,7 @@ def fav3_sage_wrapper_func(
+         return_lse,
+         layout,
+         config,
++        block_lut,
+     )
+ 
+ 
+@@ -297,6 +310,10 @@ def fav3_sage_func(
+     return_lse: bool = False,
+     layout: str = "bshd",
+     config: Optional[dict] = None,
++    kv_block_indices: Optional[torch.Tensor] = None,
++    lut_start: Optional[torch.Tensor] = None,
++    lut_count: Optional[torch.Tensor] = None,
++    use_block_sparse: bool = False,
+ ):
+     """
+     SageAttention v1.
+@@ -316,7 +333,7 @@ def fav3_sage_func(
+         pack_gqa: GQA packing flag (not yet supported)
+         deterministic: Whether to use deterministic backward (not yet supported)
+         sm_margin: SM margin parameter (not yet supported)
+-        inference_model: do not return softmax_lse
++        return_lse: return softmax_lse if True, otherwise return None
+         layout: bshd or bhsd layout for the inputs
+         config: Optional kernel configuration dict with keys BLOCK_M, BLOCK_N,
+                 waves_per_eu, PRE_LOAD_V, num_stages, num_warps
+@@ -399,6 +416,23 @@ def fav3_sage_func(
+     window_size_left, window_size_right = int(window_size[0]), int(window_size[1])
+     use_sliding_window = window_size_left != -1 or window_size_right != -1
+ 
++    if use_block_sparse:
++        if kv_block_indices is None or lut_start is None or lut_count is None:
++            raise ValueError(
++                "kv_block_indices, lut_start, and lut_count must be provided "
++                "when use_block_sparse=True"
++            )
++        if causal:
++            raise NotImplementedError(
++                "The Triton block-sparse attention path selected by block_lut "
++                "does not support causal masking."
++                "require causal=False."
++            )
++    else:
++        kv_block_indices = torch.zeros(1, dtype=torch.int32, device=q.device)
++        lut_start = torch.zeros(1, dtype=torch.int32, device=q.device)
++        lut_count = torch.zeros(1, dtype=torch.int32, device=q.device)
++
+     # --- 7. Kernel Launch ---
+     def grid(META):
+         return (triton.cdiv(seqlen_q, META["BLOCK_M"]), nheads_q, batch)
+@@ -456,6 +490,10 @@ def grid(META):
+         None,
+         None,
+         None,
++        kv_block_indices,
++        lut_start,
++        lut_count,
++        num_q_blocks,
+         dropout_p=0.0,
+         philox_seed=None,
+         philox_offset_base=None,
+@@ -479,6 +517,7 @@ def grid(META):
+         USE_EXP2=True,
+         RETURN_SCORES=False,
+         USE_SEQUSED=False,
++        USE_BLOCK_SPARSE=use_block_sparse,
+         **config,
+     )
+ 
+diff --git a/aiter/ops/triton/attention/fav3_sage_attention_mxfp4_wrapper.py b/aiter/ops/triton/attention/fav3_sage_attention_mxfp4_wrapper.py
+index 5fcc952ae1..fe5c64ba07 100644
+--- a/aiter/ops/triton/attention/fav3_sage_attention_mxfp4_wrapper.py
++++ b/aiter/ops/triton/attention/fav3_sage_attention_mxfp4_wrapper.py
+@@ -2,7 +2,7 @@
+ # Copyright (C) 2024-2026, Advanced Micro Devices, Inc. All rights reserved.
+ 
+ from __future__ import annotations
+-from typing import Optional
++from typing import Optional, Tuple
+ import torch
+ import triton
+ from aiter.ops.triton._triton_kernels.attention.fav3_sage_attention import map_dims
+@@ -50,6 +50,7 @@ def forward(
+         config: Optional[dict] = None,
+         R: torch.Tensor = None,
+         BLOCK_R: int = 128,
++        block_lut: Optional[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]] = None,
+     ):
+         bshd_map = [0, 1, 2, 3] if layout == "bshd" else [0, 2, 1, 3]
+         bhsd_map = [0, 2, 1, 3] if layout == "bshd" else [0, 1, 2, 3]
+@@ -106,6 +107,19 @@ def forward(
+         assert tuple(qd_mapped) == expected_q_ds, "q_descale mismatch"
+         assert tuple(kd_mapped) == expected_k_ds, "k_descale mismatch"
+ 
++        if block_lut is not None:
++            kv_block_indices, lut_start, lut_count = block_lut
++            use_block_sparse = True
++            if causal:
++                raise NotImplementedError(
++                    "The Triton block-sparse attention path selected by block_lut "
++                    "does not support causal masking."
++                    "require causal=False."
++                )
++        else:
++            kv_block_indices = lut_start = lut_count = None
++            use_block_sparse = False
++
+         out = fav3_sage_mxfp4_func(
+             q=q_quantized,
+             k=k_quantized,
+@@ -117,6 +131,10 @@ def forward(
+             causal=causal,
+             layout=layout,
+             config=config,
++            kv_block_indices=kv_block_indices,
++            lut_start=lut_start,
++            lut_count=lut_count,
++            use_block_sparse=use_block_sparse,
+         )
+ 
+         return out
+@@ -139,6 +157,7 @@ def fav3_sage_mxfp4_wrapper(
+     config: Optional[dict] = None,
+     R: torch.Tensor = None,
+     BLOCK_R: int = 128,
++    block_lut: Optional[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]] = None,
+ ):
+     """High-precision entry point for MXFP4 SageAttention."""
+     for tensor, name in zip([q, k, v], ["q", "k", "v"]):
+@@ -149,7 +168,17 @@ def fav3_sage_mxfp4_wrapper(
+         ], f"Expected high-precision for {name}, got {tensor.dtype}"
+ 
+     return _FAv3SageMXFP4WrapperFunc.apply(
+-        q, k, v, causal, layout, q_smooth, hadamard_rotation, config, R, BLOCK_R
++        q,
++        k,
++        v,
++        causal,
++        layout,
++        q_smooth,
++        hadamard_rotation,
++        config,
++        R,
++        BLOCK_R,
++        block_lut,
+     )
+ 
+ 
+@@ -164,6 +193,10 @@ def fav3_sage_mxfp4_func(
+     causal: bool = False,
+     layout: str = "bshd",
+     config: Optional[dict] = None,
++    kv_block_indices: Optional[torch.Tensor] = None,
++    lut_start: Optional[torch.Tensor] = None,
++    lut_count: Optional[torch.Tensor] = None,
++    use_block_sparse: bool = False,
+ ):
+     """Direct MXFP4 kernel execution with unused parameters removed."""
+     bshd_map = [0, 1, 2, 3] if layout == "bshd" else [0, 2, 1, 3]
+@@ -212,6 +245,24 @@ def fav3_sage_mxfp4_func(
+     padded_d_qk = max(16, 1 << (head_size_qk - 1).bit_length())
+     padded_d_v = max(16, 1 << (head_size_v - 1).bit_length())
+ 
++    # Block sparse logic
++    if use_block_sparse:
++        if kv_block_indices is None or lut_start is None or lut_count is None:
++            raise ValueError(
++                "kv_block_indices, lut_start, and lut_count must be provided "
++                "when use_block_sparse=True"
++            )
++        if causal:
++            raise NotImplementedError(
++                "The Triton block-sparse attention path selected by block_lut "
++                "does not support causal masking."
++                "require causal=False."
++            )
++    else:
++        kv_block_indices = torch.zeros(1, dtype=torch.int32, device=q.device)
++        lut_start = torch.zeros(1, dtype=torch.int32, device=q.device)
++        lut_count = torch.zeros(1, dtype=torch.int32, device=q.device)
++
+     def grid(META):
+         return (triton.cdiv(seqlen_q, META["BLOCK_M"]), nheads_q, batch)
+ 
+@@ -250,6 +301,9 @@ def grid(META):
+         stride_bn=stride_bn,  # Bias strides
+         cu_seqlens_q=None,
+         cu_seqlens_k=None,
++        kv_block_indices=kv_block_indices,
++        lut_start=lut_start,
++        lut_count=lut_count,
+         Q_DTYPE_STR="e2m1",
+         K_DTYPE_STR="e2m1",
+         HQ=nheads_q,
+@@ -263,6 +317,7 @@ def grid(META):
+         BLOCK_DMODEL_QK=padded_d_qk,
+         BLOCK_DMODEL_V=padded_d_v,
+         USE_BIAS=USE_BIAS,
++        USE_BLOCK_SPARSE=use_block_sparse,
+         **config,
+     )
+ 
+diff --git a/aiter/ops/triton/attention/utils.py b/aiter/ops/triton/attention/utils.py
+new file mode 100644
+index 0000000000..5d16fef2d6
+--- /dev/null
++++ b/aiter/ops/triton/attention/utils.py
+@@ -0,0 +1,72 @@
++# SPDX-License-Identifier: MIT
++# Copyright (C) 2024-2026, Advanced Micro Devices, Inc. All rights reserved.
++
++from __future__ import annotations
++from typing import Optional, Tuple
++import torch
++
++from aiter.ops.triton._triton_kernels.attention.block_lut import (
++    block_attn_mask_to_lut_kernel,
++)
++
++
++def block_attn_mask_to_ragged_lut(
++    block_attn_mask: torch.Tensor,
++    num_heads: Optional[int] = None,
++    return_none_if_dense: bool = False,
++    BLOCK_KB: int = 128,
++) -> Optional[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
++    """
++    Convert a dense block attention mask to a ragged look-up table of KV block
++    indices per (batch, head, q_block). Used for block-sparse attention with no
++    per-iteration branching in the kernel.
++
++    block_attn_mask: Either (batch, num_q_blocks, num_kv_blocks) boolean for
++        same mask for all heads, or (batch, num_heads, num_q_blocks, num_kv_blocks)
++        for per-head masks. True = may attend, False = must not attend.
++    num_heads: Required when block_attn_mask is 3D (number of Q heads). Ignored when 4D.
++    return_none_if_dense: If True and the mask is all True (dense), return None so the
++        caller can pass block_lut=None to fav3_sage_wrapper_func and use the dense path.
++        Avoids building a very large LUT that can trigger munmap_chunk on MI300X/ROCm.
++    Returns:
++        kv_block_indices: 1D int32, concatenation of all KV block index lists.
++        lut_start: 1D int32, length batch * num_heads * num_q_blocks. Index
++            idx = batch_idx * (num_heads * num_q_blocks) + head_idx * num_q_blocks + q_block_idx.
++        lut_count: 1D int32, same length as lut_start.
++        When return_none_if_dense is True and the mask is all True, returns None instead.
++    """
++    device = block_attn_mask.device
++
++    # 3D -> 4D: expand and fall through to 4D path
++    if block_attn_mask.dim() == 3:
++        if num_heads is None:
++            raise ValueError("num_heads must be provided when block_attn_mask is 3D")
++        batch, num_q_blocks, num_kv_blocks = block_attn_mask.shape
++        if return_none_if_dense and block_attn_mask.all():
++            return None
++        block_attn_mask = block_attn_mask.unsqueeze(1).expand(
++            batch, num_heads, num_q_blocks, num_kv_blocks
++        )
++
++    # 4D: (batch, num_heads, num_q_blocks, num_kv_blocks) — GPU vectorized path
++    batch, num_heads, num_q_blocks, num_kv_blocks = block_attn_mask.shape
++    if return_none_if_dense and block_attn_mask.all():
++        return None
++
++    counts = block_attn_mask.to(torch.int32).sum(dim=-1)
++    lut_count = counts.reshape(-1)
++    lut_start = torch.cumsum(lut_count, dim=0) - lut_count
++
++    # NOTE: Overallocating the LUT is a waste of memory, but the
++    # alternative lut_count.sum(), will cause graph break with torch compile.
++    max_count = batch * num_heads * num_q_blocks * num_kv_blocks
++    kv_block_indices = torch.empty(max_count, dtype=torch.int32, device=device)
++    block_attn_mask_to_lut_kernel(
++        block_attn_mask,
++        lut_start,
++        lut_count,
++        kv_block_indices,
++        BLOCK_KB=BLOCK_KB,
++    )
++
++    return kv_block_indices, lut_start, lut_count
+diff --git a/aiter/test_mha_common.py b/aiter/test_mha_common.py
+index 02aea1ce83..d001ffffc6 100644
+--- a/aiter/test_mha_common.py
++++ b/aiter/test_mha_common.py
+@@ -379,6 +379,128 @@ def construct_local_mask(
+         )
+ 
+ 
++def block_attn_mask_to_token_mask(
++    block_attn_mask,
++    seqlen_q,
++    seqlen_k,
++    BLOCK_M,
++    BLOCK_N,
++    device,
++):
++    """
++    Build a token-level attention mask from a block-level mask.
++
++    block_attn_mask: 3D (batch, num_q_blocks, num_kv_blocks) or
++        4D (batch, num_heads, num_q_blocks, num_kv_blocks) boolean.
++        True = may attend, False = must not attend.
++    Returns:
++        3D: (batch_size, seqlen_q, seqlen_k) boolean, True = may attend.
++        4D: (batch_size, num_heads, seqlen_q, seqlen_k) boolean, True = may attend.
++    """
++    nd = block_attn_mask.dim()
++    assert nd in (3, 4), "block_attn_mask must be 3D or 4D"
++    q_block_idx = (
++        torch.arange(seqlen_q, device=device)
++        .div(BLOCK_M, rounding_mode="floor")
++        .clamp(max=block_attn_mask.shape[nd - 2] - 1)
++    )
++    k_block_idx = (
++        torch.arange(seqlen_k, device=device)
++        .div(BLOCK_N, rounding_mode="floor")
++        .clamp(max=block_attn_mask.shape[nd - 1] - 1)
++    )
++    if nd == 3:
++        attn_mask = block_attn_mask[:, q_block_idx, :][
++            :, :, k_block_idx
++        ]  # (B, seqlen_q, seqlen_k)
++        return attn_mask
++    # 4D: (B, H, num_q_blocks, num_kv_blocks)
++    attn_mask = block_attn_mask[:, :, q_block_idx, :][
++        :, :, :, k_block_idx
++    ]  # (B, H, seqlen_q, seqlen_k)
++    return attn_mask
++
++
++def attention_ref_block_sparse(
++    q,
++    k,
++    v,
++    block_attn_mask,
++    BLOCK_M,
++    BLOCK_N,
++    query_padding_mask=None,
++    key_padding_mask=None,
++    attn_bias=None,
++    dropout_p=0.0,
++    dropout_mask=None,
++    softcap=0.0,
++    upcast=True,
++):
++    """
++    Reference attention with block-wise sparsity: only (q_block, kv_block) pairs
++    with block_attn_mask[b, qb, kb] == True are allowed to attend.
++
++    q, k, v: same as attention_ref (batch, seqlen_q, nheads, head_dim) in bshd.
++    block_attn_mask: 3D (batch, num_q_blocks, num_kv_blocks) or
++        4D (batch, num_heads, num_q_blocks, num_kv_blocks) boolean.
++    Returns: (output, attention_scores, lse) like attention_ref.
++    """
++    assert block_attn_mask.dim() in (3, 4), "block_attn_mask must be 3D or 4D"
++    dtype_og = q.dtype
++    if upcast:
++        q, k, v = q.float(), k.float(), v.float()
++    seqlen_q, seqlen_k = q.shape[1], k.shape[1]
++
++    # Check that the number of keys matches the number of values.
++    assert seqlen_k == v.shape[1]
++
++    k = repeat(k, "b s h d -> b s (h g) d", g=q.shape[2] // k.shape[2])
++    v = repeat(v, "b s h d -> b s (h g) d", g=q.shape[2] // v.shape[2])
++    d = q.shape[-1]
++    scores = torch.einsum("bthd,bshd->bhts", q / math.sqrt(d), k)
++    # Apply block-sparse mask: token_mask True = disallow -> -inf
++    allow_mask = block_attn_mask_to_token_mask(
++        block_attn_mask, seqlen_q, seqlen_k, BLOCK_M, BLOCK_N, q.device
++    )
++    token_mask = ~allow_mask  # True = disallow
++    if block_attn_mask.dim() == 3:
++        scores.masked_fill_(rearrange(token_mask, "b t s -> b 1 t s"), float("-inf"))
++    else:
++        scores.masked_fill_(token_mask, float("-inf"))
++    if key_padding_mask is not None:
++        scores.masked_fill_(
++            rearrange(~key_padding_mask, "b s -> b 1 1 s"), float("-inf")
++        )
++    if attn_bias is not None:
++        scores = scores + attn_bias
++    lse = torch.logsumexp(scores, dim=-1).to(v.dtype)
++    attention = torch.softmax(scores, dim=-1).to(v.dtype)
++    all_masked = token_mask.all(
++        dim=-1
++    )  # (batch, seqlen_q) or (batch, num_heads, seqlen_q)
++    if block_attn_mask.dim() == 3:
++        attention = attention.masked_fill(rearrange(all_masked, "b t -> b 1 t 1"), 0.0)
++    else:
++        attention = attention.masked_fill_(all_masked.unsqueeze(-1), 0.0)
++    if query_padding_mask is not None:
++        attention = attention.masked_fill(
++            rearrange(~query_padding_mask, "b s -> b 1 s 1"), 0.0
++        )
++    dropout_scaling = 1.0 / (1 - dropout_p)
++    if dropout_mask is not None:
++        attention_drop = attention.masked_fill(~dropout_mask, 0.0)
++    else:
++        attention_drop = attention
++    output = torch.einsum("bhts,bshd->bthd", attention_drop, v * dropout_scaling)
++    if query_padding_mask is not None:
++        output.masked_fill_(rearrange(~query_padding_mask, "b s -> b s 1 1"), 0.0)
++    return (
++        output.to(dtype=dtype_og),
++        attention.to(dtype=dtype_og),
++        lse.to(dtype=dtype_og),
++    )
++
++
+ def attention_ref(
+     q,
+     k,
+diff --git a/op_tests/op_benchmarks/triton/bench_fav3_sage.py b/op_tests/op_benchmarks/triton/bench_fav3_sage.py
+index c7d232cbb3..98237adcfa 100644
+--- a/op_tests/op_benchmarks/triton/bench_fav3_sage.py
++++ b/op_tests/op_benchmarks/triton/bench_fav3_sage.py
+@@ -1,5 +1,7 @@
+ from __future__ import annotations
+-from typing import Literal, Optional, Tuple, List, Dict, Any
++from typing import Literal, Optional, Tuple, List, Dict, Any, Union
++import csv
++import json
+ import torch
+ import os
+ import glob
+@@ -16,6 +18,7 @@
+ 
+ from aiter.test_mha_common import (
+     attention_ref,
++    attention_ref_block_sparse,
+ )
+ from op_tests.op_benchmarks.triton.utils.argparse import get_parser
+ from op_tests.op_benchmarks.triton.utils.benchmark_utils import (
+@@ -28,7 +31,9 @@
+ 
+ from aiter.ops.triton.attention.fav3_sage import (
+     fav3_sage_wrapper_func,
++    get_sage_fwd_configs,
+ )
++from aiter.ops.triton.attention.utils import block_attn_mask_to_ragged_lut
+ from op_tests.triton_tests.attention.test_fav3_sage import compare_accuracy
+ 
+ CAUSAL = False
+@@ -98,6 +103,167 @@ def load_captured_inputs(input_dir: str) -> List[Dict[str, Any]]:
+     return inputs
+ 
+ 
++def _mask_array_to_tensor(
++    mask_arr: List, device: torch.device
++) -> Tuple[torch.Tensor, int, int, int]:
++    """Convert a mask array (2D or 3D list) to tensor and infer BATCH, num_q_blocks, num_kv_blocks."""
++    if not mask_arr:
++        raise ValueError("mask array is empty")
++    depth = _array_ndim(mask_arr)
++    if depth == 2:
++        # list of rows -> (num_q_blocks, num_kv_blocks), batch=1
++        t = torch.tensor(mask_arr, dtype=torch.bool, device=device)
++        nqb, nkb = t.shape
++        t = t.unsqueeze(0)  # (1, num_q_blocks, num_kv_blocks)
++        return t, 1, nqb, nkb
++    elif depth == 3:
++        t = torch.tensor(mask_arr, dtype=torch.bool, device=device)
++        b, nqb, nkb = t.shape
++        return t, b, nqb, nkb
++    else:
++        raise ValueError(f"mask must be 2D or 3D, got {depth}D")
++
++
++def _array_ndim(arr) -> int:
++    """Return nesting depth of list (2 for [[...]], 3 for [[[...]]])."""
++    if not isinstance(arr, list):
++        return 0
++    if not arr:
++        return 1
++    return 1 + _array_ndim(arr[0])
++
++
++def load_block_mask_from_json(
++    path: Optional[str],
++    device: torch.device,
++) -> Union[
++    None,
++    Tuple[torch.Tensor, int, int, int],
++    List[Tuple[torch.Tensor, int, int, int]],
++]:
++    """
++    Load block mask(s) from a JSON file.
++
++    Returns:
++        - None if path is None/empty or file has no mask data.
++        - If top-level key "masks" (list): list of (mask_tensor, BATCH, num_q_blocks, num_kv_blocks).
++        - If top-level key "mask" (single): one tuple (mask_tensor, BATCH, num_q_blocks, num_kv_blocks).
++    """
++    if not path or not path.strip():
++        return None
++    path = path.strip()
++    if not os.path.isfile(path):
++        raise FileNotFoundError(f"Block mask file not found: {path}")
++    with open(path) as f:
++        data = json.load(f)
++    if not data:
++        return None
++    if "masks" in data:
++        out = []
++        for item in data["masks"]:
++            if "mask" not in item:
++                raise ValueError("Each element in 'masks' must have a 'mask' key")
++            mask_t, batch, nqb, nkb = _mask_array_to_tensor(item["mask"], device)
++            if "num_q_blocks" in item and item["num_q_blocks"] != nqb:
++                raise ValueError(
++                    f"num_q_blocks mismatch: inferred {nqb}, got {item['num_q_blocks']}"
++                )
++            if "num_kv_blocks" in item and item["num_kv_blocks"] != nkb:
++                raise ValueError(
++                    f"num_kv_blocks mismatch: inferred {nkb}, got {item['num_kv_blocks']}"
++                )
++            out.append((mask_t, batch, nqb, nkb))
++        return out
++    if "mask" in data:
++        mask_t, batch, nqb, nkb = _mask_array_to_tensor(data["mask"], device)
++        if "num_q_blocks" in data and data["num_q_blocks"] != nqb:
++            raise ValueError(
++                f"num_q_blocks mismatch: inferred {nqb}, got {data['num_q_blocks']}"
++            )
++        if "num_kv_blocks" in data and data["num_kv_blocks"] != nkb:
++            raise ValueError(
++                f"num_kv_blocks mismatch: inferred {nkb}, got {data['num_kv_blocks']}"
++            )
++        return (mask_t, batch, nqb, nkb)
++    return None
++
++
++def make_block_attn_mask(
++    args,
++    BATCH: int,
++    N_CTX_Q: int,
++    N_CTX_K: int,
++    device: torch.device,
++) -> Optional[torch.Tensor]:
++    """
++    Build block_attn_mask for single-shape benchmark flow.
++
++    Returns None if neither block_sparsity nor block_mask_file is set, or if file contains "masks" list (use list flow instead).
++    """
++    assert args.hq > 0, "hq must be greater than 0"
++    assert args.hq is not None, "hq must be set"
++    if not getattr(args, "block_sparsity", None) and not getattr(
++        args, "block_mask_file", None
++    ):
++        return None
++    if getattr(args, "block_mask_file", None):
++        loaded = load_block_mask_from_json(args.block_mask_file, device)
++        if loaded is None:
++            return None
++        if isinstance(loaded, list):
++            # List-of-masks flow: this helper is not used; caller uses the list.
++            return None
++        mask_t, batch, nqb, nkb = loaded
++        config = get_sage_fwd_configs()
++        BLOCK_M, BLOCK_N = config["BLOCK_M"], config["BLOCK_N"]
++        expected_nqb = (N_CTX_Q + BLOCK_M - 1) // BLOCK_M
++        expected_nkb = (N_CTX_K + BLOCK_N - 1) // BLOCK_N
++        if batch != BATCH or nqb != expected_nqb or nkb != expected_nkb:
++            raise ValueError(
++                f"Block mask shape (batch={batch}, num_q_blocks={nqb}, num_kv_blocks={nkb}) "
++                f"does not match benchmark (BATCH={BATCH}, N_CTX_Q={N_CTX_Q} -> {expected_nqb} q blocks, N_CTX_K={N_CTX_K} -> {expected_nkb} kv blocks)"
++            )
++        if batch == 1 and BATCH > 1:
++            mask_t = mask_t.expand(BATCH, -1, -1).clone()
++        # Ensure 4D (batch, num_heads, num_q_blocks, num_kv_blocks)
++        if mask_t.dim() == 3:
++            mask_t = mask_t.unsqueeze(1).expand(BATCH, args.hq, nqb, nkb).clone()
++        return mask_t
++    # Only block_sparsity set: random mask (4D)
++    config = get_sage_fwd_configs()
++    BLOCK_M, BLOCK_N = config["BLOCK_M"], config["BLOCK_N"]
++    num_q_blocks = (N_CTX_Q + BLOCK_M - 1) // BLOCK_M
++    num_kv_blocks = (N_CTX_K + BLOCK_N - 1) // BLOCK_N
++    return (
++        torch.rand(BATCH, args.hq, num_q_blocks, num_kv_blocks, device=device)
++        > args.block_sparsity
++    ).to(torch.bool)
++
++
++def sparse_flops_from_lut(
++    block_lut: Tuple[torch.Tensor, torch.Tensor, torch.Tensor],
++    BATCH: int,
++    N_CTX_Q: int,
++    N_CTX_K: int,
++    HQ: int,
++    D_HEAD: int,
++    D_HEAD_V: int,
++) -> Tuple[float, float]:
++    """Return (sparse_flops, total_flops_dense). Uses config BLOCK_M, BLOCK_N."""
++    kv_block_indices, lut_start, lut_count = block_lut
++    num_sparse_pairs = lut_count.sum().item()
++    config = get_sage_fwd_configs()
++    BLOCK_M, BLOCK_N = config["BLOCK_M"], config["BLOCK_N"]
++    num_q_blocks = (N_CTX_Q + BLOCK_M - 1) // BLOCK_M
++    num_kv_blocks = (N_CTX_K + BLOCK_N - 1) // BLOCK_N
++    num_dense_pairs = BATCH * HQ * num_q_blocks * num_kv_blocks
++    total_flops_dense = 2.0 * BATCH * HQ * N_CTX_Q * N_CTX_K * (D_HEAD + D_HEAD_V)
++    if num_dense_pairs == 0:
++        return 0.0, total_flops_dense
++    sparse_flops = total_flops_dense * (num_sparse_pairs / num_dense_pairs)
++    return sparse_flops, total_flops_dense
++
++
+ def fp8_quantize(q, k, v, scale=None):
+     quant_dtype = aiter.dtypes.fp8
+     # Computing "dynamic" scale before quantization improves thpt a small amount (~1-2%) for the (1, 75352, 5, 128) shape
+@@ -301,8 +467,8 @@ def fav3_sage_forward_func(
+     k: torch.Tensor,
+     v: torch.Tensor,
+     causal: bool,
+-    inference_mode: bool,  # not return softmax_lse
+     layout: Literal["bshd", "bhsd"],
++    block_lut: Optional[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]] = None,
+ ):
+     head_dim = q.shape[-1]
+     softmax_scale = head_dim**-0.5
+@@ -313,8 +479,9 @@ def fav3_sage_forward_func(
+         v,
+         softmax_scale,
+         causal=False,
+-        inference_mode=True,
++        return_lse=False,
+         layout=layout,
++        block_lut=block_lut,
+     )
+ 
+ 
+@@ -345,6 +512,10 @@ def create_benchmark_configs(args):
+         "bandwidth(GB/s)",
+         "arithmetic_intensity(FLOP/byte)",
+     ]
++    if getattr(args, "block_sparsity", None) is not None or getattr(
++        args, "block_mask_file", None
++    ):
++        line_vals.append("throughput_sparse(TFLOPS)")
+ 
+     # if comparing to reference, or specific metric provided, adjust line_vals accordingly
+     if args.compare_to_ref or (args.metric and args.metric != "all"):
+@@ -358,6 +529,7 @@ def create_benchmark_configs(args):
+                 "throughput": "throughput(TFLOPS)",
+                 "bandwidth": "bandwidth(GB/s)",
+                 "arithmetic_intensity": "arithmetic_intensity(FLOP/byte)",
++                "throughput_sparse": "throughput_sparse(TFLOPS)",
+             }
+             line_vals = [metric_map[args.metric]]
+ 
+@@ -377,6 +549,67 @@ def create_benchmark_configs(args):
+     return configs
+ 
+ 
++def create_benchmark_configs_masks(
++    args,
++    masks_list: List[Tuple[torch.Tensor, int, int, int]],
++):
++    """Create Benchmark configs for list-of-masks flow: one x_val per mask index."""
++    dtype = arg_to_torch_dtype[args.dtype]
++    hk = args.hq if not args.hk else args.hk
++    head_size = 128 if not args.d else args.d
++    head_size_v = head_size if not args.dv else args.dv
++    layout = args.layout if args.layout else "bshd"
++    causal = False
++
++    x_names = ["MASK_IDX"]
++    x_vals_list = [(i,) for i in range(len(masks_list))]
++    extra_args = {
++        "masks": masks_list,
++        "D_HEAD": head_size,
++        "D_HEAD_V": head_size_v,
++        "dtype": dtype,
++        "layout": layout,
++        "causal": causal,
++        "args": args,
++        "HQ": args.hq,
++        "HK": hk,
++    }
++    line_vals = [
++        "time(ms)",
++        "throughput(TFLOPS)",
++        "bandwidth(GB/s)",
++        "arithmetic_intensity(FLOP/byte)",
++        "throughput_sparse(TFLOPS)",
++    ]
++    if args.compare_to_ref or (args.metric and args.metric != "all"):
++        if args.compare_to_ref:
++            line_vals = ["time(ms)"]
++        else:
++            metric_map = {
++                "time": "time(ms)",
++                "throughput": "throughput(TFLOPS)",
++                "bandwidth": "bandwidth(GB/s)",
++                "arithmetic_intensity": "arithmetic_intensity(FLOP/byte)",
++                "throughput_sparse": "throughput_sparse(TFLOPS)",
++            }
++            line_vals = [metric_map[args.metric]]
++
++    configs = [
++        triton.testing.Benchmark(
++            x_names=x_names,
++            x_vals=x_vals_list,
++            line_arg="provider",
++            line_vals=line_vals,
++            line_names=line_vals,
++            styles=[("red", "-"), ("green", "-"), ("yellow", "-"), ("blue", "-")],
++            ylabel="",
++            plot_name=get_caller_name_no_ext() + "_masks",
++            args=extra_args,
++        )
++    ]
++    return configs
++
++
+ def create_benchmark_configs_from_captured(inputs: List[Dict[str, Any]], args):
+     """
+     Create triton.testing.Benchmark configurations from captured inputs.
+@@ -401,12 +634,17 @@ def create_benchmark_configs_from_captured(inputs: List[Dict[str, Any]], args):
+             "bandwidth(GB/s)",
+             "arithmetic_intensity(FLOP/byte)",
+         ]
++        if getattr(args, "block_sparsity", None) is not None or getattr(
++            args, "block_mask_file", None
++        ):
++            line_vals.append("throughput_sparse(TFLOPS)")
+     else:
+         metric_map = {
+             "time": "time(ms)",
+             "throughput": "throughput(TFLOPS)",
+             "bandwidth": "bandwidth(GB/s)",
+             "arithmetic_intensity": "arithmetic_intensity(FLOP/byte)",
++            "throughput_sparse": "throughput_sparse(TFLOPS)",
+         }
+         line_vals = [metric_map.get(args.metric, "throughput(TFLOPS)")]
+ 
+@@ -439,15 +677,17 @@ def primary_output(result):
+     return result
+ 
+ 
+-def attn_forward_func(q, k, v, func_name, softmax_scale, k_smooth, layout, dtype):
++def attn_forward_func(
++    q, k, v, func_name, softmax_scale, k_smooth, layout, dtype, block_lut=None
++):
+     if func_name == "fav3_sage":  # fav3 sage hybrid
+         fn = fav3_sage_forward_func(
+             q,
+             k,
+             v,
+             causal=False,
+-            inference_mode=True,
+             layout=layout,
++            block_lut=block_lut,
+         )
+     else:
+         q, k, v = layout_preprocess(q, k, v, layout=layout, target_layout="bshd")
+@@ -488,7 +728,15 @@ def fn():
+     return fn
+ 
+ 
+-def bench_kernel(q, k, v, args, provider):
++def bench_kernel(
++    q,
++    k,
++    v,
++    args,
++    provider,
++    block_lut: Optional[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]] = None,
++    block_attn_mask: Optional[torch.Tensor] = None,
++):
+     # Default softmax scale
+     if args.layout == "bshd":
+         BATCH, N_CTX_Q, HQ, D_HEAD = q.shape
+@@ -500,11 +748,13 @@ def bench_kernel(q, k, v, args, provider):
+     softmax_scale = 1.0 / (D_HEAD**0.5)
+     k_smooth = args.k_smooth
+ 
+-    # FLOPS calculation variables
++    # FLOPS calculation variables (same OPS definition as plan)
+     total_flops = 0.0
+     total_flops += 2.0 * BATCH * HQ * N_CTX_Q * N_CTX_K * (D_HEAD + D_HEAD_V)
+     bench_func_name = ""
+-    if args.fav3_fp8:
++    if block_lut is not None:
++        bench_func_name = "fav3_sage"
++    elif args.fav3_fp8:
+         bench_func_name = "fav3_fp8"
+     elif args.aiter_fp8:
+         bench_func_name = "aiter_fp8"
+@@ -522,8 +772,11 @@ def bench_kernel(q, k, v, args, provider):
+         k_smooth=k_smooth,
+         layout=args.layout,
+         dtype=arg_to_torch_dtype[args.dtype],
++        block_lut=block_lut,
+     )
+-    ms = triton.testing.do_bench(fn)
++    rep = getattr(args, "rep", 100)
++    warmup = getattr(args, "warmup", 25)
++    ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)
+ 
+     if args.compare_to_ref:
+         current_output = fn()
+@@ -535,23 +788,48 @@ def bench_kernel(q, k, v, args, provider):
+                 0, 2, 1, 3
+             )  # we do comparison in BSHD
+ 
+-        reference_primary = primary_output(
+-            attn_forward_func(
+-                q,
+-                k,
+-                v,
+-                func_name=args.ref,
+-                softmax_scale=softmax_scale,
+-                k_smooth=k_smooth,
+-                layout=args.layout,
+-                dtype=arg_to_torch_dtype[args.dtype],
+-            )()
+-        )
++        if block_attn_mask is not None and args.ref != "fav3_sage":
++            q_bshd, k_bshd, v_bshd = layout_preprocess(
++                q, k, v, layout=args.layout, target_layout="bshd"
++            )
++            config = get_sage_fwd_configs()
++            BLOCK_M, BLOCK_N = config["BLOCK_M"], config["BLOCK_N"]
++            ref_out = attention_ref_block_sparse(
++                q_bshd,
++                k_bshd,
++                v_bshd,
++                block_attn_mask,
++                BLOCK_M,
++                BLOCK_N,
++                dropout_p=0.0,
++                dropout_mask=None,
++                upcast=True,
++            )
++            reference_primary = ref_out[0]
++        else:
++            ref_block_lut = (
++                block_attn_mask_to_ragged_lut(block_attn_mask)
++                if args.ref == "fav3_sage" and block_attn_mask is not None
++                else None
++            )
++            reference_primary = primary_output(
++                attn_forward_func(
++                    q,
++                    k,
++                    v,
++                    func_name=args.ref,
++                    softmax_scale=softmax_scale,
++                    k_smooth=k_smooth,
++                    layout=args.layout,
++                    dtype=arg_to_torch_dtype[args.dtype],
++                    block_lut=ref_block_lut,
++                )()
++            )
+ 
+-        if args.ref == "fav3_sage" and args.layout == "bhsd":
+-            reference_primary = reference_primary.permute(
+-                0, 2, 1, 3
+-            )  # we do comparison in BSHD
++            if args.ref == "fav3_sage" and args.layout == "bhsd":
++                reference_primary = reference_primary.permute(
++                    0, 2, 1, 3
++                )  # we do comparison in BSHD
+ 
+         compare_accuracy(current_primary, reference_primary)
+         check_attention_outputs(current_primary, reference_primary, fp8=False)
+@@ -573,9 +851,19 @@ def bench_kernel(q, k, v, args, provider):
+     mem_write = o_size
+     mem = mem_read + mem_write
+ 
++    # Sparsity-adjusted throughput when block_lut is present
++    sparse_flops = None
++    if block_lut is not None:
++        sparse_flops, _ = sparse_flops_from_lut(
++            block_lut, BATCH, N_CTX_Q, N_CTX_K, HQ, D_HEAD, D_HEAD_V
++        )
++
+     # return ms
+     if "ms" in provider:
+         return ms
++    elif "throughput_sparse(TFLOPS)" in provider:
++        flops = sparse_flops if sparse_flops is not None else total_flops
++        return flops / ms * 1e-9
+     elif "TFLOPS" in provider:
+         return total_flops / ms * 1e-9
+     elif "GB/s" in provider:  # GB/s
+@@ -616,7 +904,27 @@ def bench_mha_captured(
+         k = inp["k"].to(device)
+         v = inp["v"].to(device)
+ 
+-        return bench_kernel(q, k, v, args, provider)
++        if args.layout == "bshd":
++            BATCH, N_CTX_Q, _, _ = q.shape
++            _, N_CTX_K, _, _ = v.shape
++        else:
++            BATCH, _, N_CTX_Q, _ = q.shape
++            _, _, N_CTX_K, _ = v.shape
++        block_attn_mask = make_block_attn_mask(args, BATCH, N_CTX_Q, N_CTX_K, device)
++        block_lut = (
++            block_attn_mask_to_ragged_lut(block_attn_mask)
++            if block_attn_mask is not None
++            else None
++        )
++        return bench_kernel(
++            q,
++            k,
++            v,
++            args,
++            provider,
++            block_lut=block_lut,
++            block_attn_mask=block_attn_mask,
++        )
+ 
+     args.layout = "bhsd"  # captured inputs are in BHSD format
+     logger.info(
+@@ -665,11 +973,241 @@ def bench_mha(
+         # permute does not move data so this doesnt affect the performance
+         q, k, v = layout_preprocess(q, k, v, layout="bhsd", target_layout=layout)
+ 
+-        return bench_kernel(q, k, v, args, provider)
++        block_attn_mask = make_block_attn_mask(args, BATCH, N_CTX_Q, N_CTX_K, device)
++        block_lut = (
++            block_attn_mask_to_ragged_lut(block_attn_mask, return_none_if_dense=True)
++            if block_attn_mask is not None
++            else None
++        )
++        return bench_kernel(
++            q,
++            k,
++            v,
++            args,
++            provider,
++            block_lut=block_lut,
++            block_attn_mask=block_attn_mask,
++        )
+ 
+     bench_mha.run(save_path="." if args.o else None, print_data=True)
+ 
+ 
++def run_benchmark_block_sparse_repetitions(args):
++    """
++    When --block_sparsity and --n_repetitions are set: run n_repetitions times with
++    a new random block mask each time, report throughput statistics (median, Q1, Q3, p10, p90).
++    """
++    torch.manual_seed(20)
++    device = "cuda"
++    dtype = arg_to_torch_dtype[args.dtype]
++    layout = args.layout
++    hk = args.hq if not args.hk else args.hk
++    BATCH, HQ, N_CTX_Q, N_CTX_K = args.b, args.hq, args.sq, args.sk
++    if not args.sk:
++        N_CTX_K = args.sq
++    D_HEAD = 128 if not args.d else args.d
++    D_HEAD_V = D_HEAD if not args.dv else args.dv
++
++    q = torch.randn((BATCH, HQ, N_CTX_Q, D_HEAD), device=device, dtype=dtype)
++    k = torch.randn((BATCH, hk, N_CTX_K, D_HEAD), device=device, dtype=dtype)
++    v = torch.randn((BATCH, hk, N_CTX_K, D_HEAD_V), device=device, dtype=dtype)
++    q.requires_grad = False
++    k.requires_grad = False
++    v.requires_grad = False
++    q, k, v = layout_preprocess(q, k, v, layout="bhsd", target_layout=layout)
++
++    total_flops = 2.0 * BATCH * HQ * N_CTX_Q * N_CTX_K * (D_HEAD + D_HEAD_V)
++    config = get_sage_fwd_configs()
++    BLOCK_M, BLOCK_N = config["BLOCK_M"], config["BLOCK_N"]
++    num_q_blocks = (N_CTX_Q + BLOCK_M - 1) // BLOCK_M
++    num_kv_blocks = (N_CTX_K + BLOCK_N - 1) // BLOCK_N
++
++    # JIT warmup: compile kernel before timed runs so reported ms is not inflated.
++    _warmup_mask = (
++        torch.rand(BATCH, HQ, num_q_blocks, num_kv_blocks, device=device)
++        > args.block_sparsity
++    ).to(torch.bool)
++    _warmup_lut = block_attn_mask_to_ragged_lut(_warmup_mask)
++    bench_kernel(
++        q, k, v, args, "time(ms)", block_lut=_warmup_lut, block_attn_mask=_warmup_mask
++    )
++
++    n_rep = args.n_repetitions
++    throughputs_tflops = []
++    latencies_ms = []
++    effective_tflops_list = []
++    for _ in range(n_rep):
++        block_attn_mask = (
++            torch.rand(BATCH, HQ, num_q_blocks, num_kv_blocks, device=device)
++            > args.block_sparsity
++        ).to(torch.bool)
++        block_lut = block_attn_mask_to_ragged_lut(block_attn_mask)
++        ms = bench_kernel(
++            q,
++            k,
++            v,
++            args,
++            "time(ms)",
++            block_lut=block_lut,
++            block_attn_mask=block_attn_mask,
++        )
++        latencies_ms.append(ms)
++        ops_per_sec = total_flops / (ms * 1e-3)
++        tflops = ops_per_sec / 1e12
++        throughputs_tflops.append(tflops)
++        sparse_flops, _ = sparse_flops_from_lut(
++            block_lut, BATCH, N_CTX_Q, N_CTX_K, HQ, D_HEAD, D_HEAD_V
++        )
++        effective_tflops = (sparse_flops / (ms * 1e-3)) / 1e12
++        effective_tflops_list.append(effective_tflops)
++
++    t = torch.tensor(throughputs_tflops)
++    median_tflops = torch.quantile(t, 0.5).item()
++    q1_tflops = torch.quantile(t, 0.25).item()
++    q3_tflops = torch.quantile(t, 0.75).item()
++    p10_tflops = torch.quantile(t, 0.1).item()
++    p90_tflops = torch.quantile(t, 0.9).item()
++
++    t_lat = torch.tensor(latencies_ms)
++    median_latency_ms = torch.quantile(t_lat, 0.5).item()
++    q1_latency_ms = torch.quantile(t_lat, 0.25).item()
++    q3_latency_ms = torch.quantile(t_lat, 0.75).item()
++    p10_latency_ms = torch.quantile(t_lat, 0.1).item()
++    p90_latency_ms = torch.quantile(t_lat, 0.9).item()
++
++    t_eff = torch.tensor(effective_tflops_list)
++    median_effective_tflops = torch.quantile(t_eff, 0.5).item()
++    q1_effective_tflops = torch.quantile(t_eff, 0.25).item()
++    q3_effective_tflops = torch.quantile(t_eff, 0.75).item()
++    p10_effective_tflops = torch.quantile(t_eff, 0.1).item()
++    p90_effective_tflops = torch.quantile(t_eff, 0.9).item()
++
++    summary = (
++        f"block_sparsity={args.block_sparsity}, n_repetitions={n_rep}: "
++        f"median_TFLOPS={median_tflops:.4f}, Q1={q1_tflops:.4f}, Q3={q3_tflops:.4f}, "
++        f"p10={p10_tflops:.4f}, p90={p90_tflops:.4f} | "
++        f"median_latency_ms={median_latency_ms:.4f}, Q1={q1_latency_ms:.4f}, Q3={q3_latency_ms:.4f}, "
++        f"p10={p10_latency_ms:.4f}, p90={p90_latency_ms:.4f} | "
++        f"median_effective_TFLOPS={median_effective_tflops:.4f}, Q1={q1_effective_tflops:.4f}, "
++        f"Q3={q3_effective_tflops:.4f}, p10={p10_effective_tflops:.4f}, p90={p90_effective_tflops:.4f}"
++    )
++    logger.info(summary)
++    print(summary)
++
++    if args.o:
++        csv_path = "bench_fav3_sage_block_sparse_repetitions.csv"
++        file_exists = os.path.isfile(csv_path)
++        with open(csv_path, "a", newline="") as f:
++            writer = csv.writer(f)
++            row = [
++                BATCH,
++                HQ,
++                N_CTX_Q,
++                N_CTX_K,
++                D_HEAD,
++                D_HEAD_V,
++                args.block_sparsity,
++                n_rep,
++                median_tflops,
++                q1_tflops,
++                q3_tflops,
++                p10_tflops,
++                p90_tflops,
++                median_latency_ms,
++                q1_latency_ms,
++                q3_latency_ms,
++                p10_latency_ms,
++                p90_latency_ms,
++                median_effective_tflops,
++                q1_effective_tflops,
++                q3_effective_tflops,
++                p10_effective_tflops,
++                p90_effective_tflops,
++            ]
++            if not file_exists:
++                writer.writerow(
++                    [
++                        "BATCH",
++                        "HQ",
++                        "N_CTX_Q",
++                        "N_CTX_K",
++                        "D_HEAD",
++                        "D_HEAD_V",
++                        "block_sparsity",
++                        "n_repetitions",
++                        "median_TFLOPS",
++                        "q1_TFLOPS",
++                        "q3_TFLOPS",
++                        "p10_TFLOPS",
++                        "p90_TFLOPS",
++                        "median_latency_ms",
++                        "q1_latency_ms",
++                        "q3_latency_ms",
++                        "p10_latency_ms",
++                        "p90_latency_ms",
++                        "median_effective_TFLOPS",
++                        "q1_effective_TFLOPS",
++                        "q3_effective_TFLOPS",
++                        "p10_effective_TFLOPS",
++                        "p90_effective_TFLOPS",
++                    ]
++                )
++            writer.writerow(row)
++        logger.info(f"Wrote CSV row to {csv_path}")
++
++
++def run_benchmark_masks_list(
++    args,
++    masks_list: List[Tuple[torch.Tensor, int, int, int]],
++):
++    """Run benchmark for each mask in the list; each mask defines (BATCH, N_CTX_Q, N_CTX_K) from its shape."""
++    torch.manual_seed(20)
++    device = "cuda"
++    config = get_sage_fwd_configs()
++    BLOCK_M, BLOCK_N = config["BLOCK_M"], config["BLOCK_N"]
++
++    @triton.testing.perf_report(create_benchmark_configs_masks(args, masks_list))
++    def bench_mha_masks(
++        MASK_IDX,
++        masks,
++        D_HEAD,
++        D_HEAD_V,
++        dtype,
++        layout,
++        causal,
++        args,
++        HQ,
++        HK,
++        provider,
++        device=device,
++    ):
++        assert not causal
++        mask_tensor, BATCH, num_q_blocks, num_kv_blocks = masks[MASK_IDX]
++        if mask_tensor.dim() == 3:
++            mask_tensor = (
++                mask_tensor.unsqueeze(1)
++                .expand(BATCH, HQ, num_q_blocks, num_kv_blocks)
++                .clone()
++            )
++        N_CTX_Q = num_q_blocks * BLOCK_M
++        N_CTX_K = num_kv_blocks * BLOCK_N
++
++        q = torch.randn((BATCH, HQ, N_CTX_Q, D_HEAD), device=device, dtype=dtype)
++        k = torch.randn((BATCH, HK, N_CTX_K, D_HEAD), device=device, dtype=dtype)
++        v = torch.randn((BATCH, HK, N_CTX_K, D_HEAD_V), device=device, dtype=dtype)
++        q.requires_grad = False
++        k.requires_grad = False
++        v.requires_grad = False
++        q, k, v = layout_preprocess(q, k, v, layout="bhsd", target_layout=layout)
++
++        block_lut = block_attn_mask_to_ragged_lut(mask_tensor)
++        return bench_kernel(
++            q, k, v, args, provider, block_lut=block_lut, block_attn_mask=mask_tensor
++        )
++
++    bench_mha_masks.run(save_path="." if args.o else None, print_data=True)
++
++
+ def supported_layouts():
+     layouts = (
+         "bshd: Q, K, V are individual tensors of [batch, seqlen_q/k, num_heads, head_size]. "
+@@ -778,6 +1316,37 @@ def parse_args():
+         default="./captured_inputs",
+         help="Directory containing captured input .pt files",
+     )
++    # Block-wise sparsity
++    parser.add_argument(
++        "--block_sparsity",
++        type=float,
++        default=None,
++        help="Fraction of (q_block, kv_block) pairs disallowed (0=dense, 0.5=50%% masked). Uses random mask.",
++    )
++    parser.add_argument(
++        "--block_mask_file",
++        type=str,
++        default=None,
++        help="Path to JSON file with user-defined block mask. Takes precedence over --block_sparsity.",
++    )
++    parser.add_argument(
++        "--n_repetitions",
++        type=int,
++        default=None,
++        help="When --block_sparsity is set: run this many times with new random mask each time; report throughput stats. Ignored with --block_mask_file.",
++    )
++    parser.add_argument(
++        "--rep",
++        type=int,
++        default=100,
++        help="Repetition time in ms for triton.testing.do_bench.",
++    )
++    parser.add_argument(
++        "--warmup",
++        type=int,
++        default=25,
++        help="Warmup time in ms for triton.testing.do_bench.",
++    )
+     return parser.parse_args()
+ 
+ 
+@@ -801,6 +1370,38 @@ def main():
+ 
+     if not args.dv:
+         args.dv = args.d
++
++    # Block-sparse: restrict to fav3_sage and validate
++    block_sparse = args.block_sparsity is not None or getattr(
++        args, "block_mask_file", None
++    )
++    if block_sparse:
++        args.fav3_sage = True
++        args.fav3_fp8 = args.aiter_fp8 = args.aiter_bf16 = False
++        if args.block_sparsity is not None:
++            if not (0 <= args.block_sparsity <= 1):
++                raise ValueError(
++                    f"--block_sparsity must be in [0, 1], got {args.block_sparsity}"
++                )
++        if getattr(args, "block_mask_file", None):
++            if not os.path.isfile(args.block_mask_file.strip()):
++                raise FileNotFoundError(
++                    f"Block mask file not found: {args.block_mask_file}"
++                )
++            loaded_masks = load_block_mask_from_json(
++                args.block_mask_file, torch.device("cuda")
++            )
++            if loaded_masks is None:
++                raise ValueError(
++                    "block_mask_file is empty or has no 'mask' / 'masks' key"
++                )
++            if isinstance(loaded_masks, list):
++                assert (
++                    args.hq and args.d
++                ), "For --block_mask_file with list of masks provide -hq and -d"
++                run_benchmark_masks_list(args, loaded_masks)
++                return 0
++
+     assert (
+         args.b and args.hq and args.sq and args.d and args.dv
+     ), "If not running on captured (--load_captured) please provide \
+@@ -811,6 +1412,15 @@ def main():
+         args.dtype in arg_to_torch_dtype
+     ), "Only fp16, bf16 and f32 types currently supported."
+ 
++    # Block-sparsity with n_repetitions: throughput stats path
++    if (
++        args.block_sparsity is not None
++        and getattr(args, "n_repetitions", None) is not None
++        and not getattr(args, "block_mask_file", None)
++    ):
++        run_benchmark_block_sparse_repetitions(args)
++        return 0
++
+     if args.print_vgpr:
+         print("Retrieving VGPR usage for Triton kernels...")
+ 
+diff --git a/op_tests/op_benchmarks/triton/bench_fav3_sage_mxfp4.py b/op_tests/op_benchmarks/triton/bench_fav3_sage_mxfp4.py
+index e5d69ac44b..fdb6a74fa6 100644
+--- a/op_tests/op_benchmarks/triton/bench_fav3_sage_mxfp4.py
++++ b/op_tests/op_benchmarks/triton/bench_fav3_sage_mxfp4.py
+@@ -1,5 +1,6 @@
+ from __future__ import annotations
+ from typing import List, Dict, Any
++import csv
+ import torch
+ import os
+ import glob
+@@ -15,6 +16,10 @@
+     fav3_sage_mxfp4_func,
+ )
+ 
++from aiter.ops.triton.attention.utils import (
++    block_attn_mask_to_ragged_lut,
++)
++
+ from aiter.ops.triton.quant.sage_attention_quant_wrappers import (
+     sage_quant_mxfp4,
+ )
+@@ -23,12 +28,23 @@
+     create_hadamard_matrix,
+ )
+ 
++from aiter.test_mha_common import (
++    attention_ref,
++    attention_ref_block_sparse,
++)
+ from op_tests.triton_tests.attention.test_fav3_sage import (
+     compare_accuracy,
++    check_attention_outputs,
+     input_helper,
+ )
+-from op_tests.op_benchmarks.triton.bench_fav3_sage import fav2_forward_func
+-from op_tests.op_benchmarks.triton.utils.benchmark_utils import print_vgpr
++from op_tests.op_benchmarks.triton.bench_fav3_sage import (
++    fav2_forward_func,
++    sparse_flops_from_lut,
++)
++from op_tests.op_benchmarks.triton.utils.benchmark_utils import (
++    print_vgpr,
++    get_caller_name_no_ext,
++)
+ 
+ # Configuration
+ logging.getLogger().setLevel(logging.INFO)
+@@ -49,7 +65,16 @@ def layout_preprocess(q, k, v, layout: str, target_layout: str = "bshd"):
+     return q, k, v
+ 
+ 
+-def bench_kernel(q, k, v, args, provider):
++def primary_output(result):
++    """Return the main tensor output produced by a kernel."""
++    if isinstance(result, torch.Tensor):
++        return result
++    if isinstance(result, (list, tuple)) and len(result) > 0:
++        return result[0]
++    return result
++
++
++def bench_kernel(q, k, v, args, provider, block_lut=None, block_attn_mask=None):
+     """Main benchmarking logic for a single configuration."""
+     if args.layout == "bshd":
+         BATCH, N_CTX_Q, HQ, D_HEAD = q.shape
+@@ -73,6 +98,7 @@ def fn():
+                 q_smooth=args.qsmooth,
+                 hadamard_rotation=args.hadamard_rotate,
+                 R=R,
++                block_lut=block_lut,
+             )
+ 
+     else:
+@@ -102,6 +128,13 @@ def fn():
+             q_smoothing=args.qsmooth,
+         )
+ 
++        if block_lut is not None:
++            kv_block_indices, lut_start_t, lut_count_t = block_lut
++            use_block_sparse = True
++        else:
++            kv_block_indices = lut_start_t = lut_count_t = None
++            use_block_sparse = False
++
+         def fn():
+             return fav3_sage_mxfp4_func(
+                 q=q_quantized,
+@@ -114,47 +147,182 @@ def fn():
+                 causal=args.causal,
+                 layout=args.layout,
+                 config=config,
++                kv_block_indices=kv_block_indices,
++                lut_start=lut_start_t,
++                lut_count=lut_count_t,
++                use_block_sparse=use_block_sparse,
+             )
+ 
+-    ms = triton.testing.do_bench(fn)
+-    # print("kernel (ms)", ms)
++    rep = getattr(args, "rep", 100)
++    warmup = getattr(args, "warmup", 25)
++    ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)
++
++    if getattr(args, "compare_to_ref", False):
++        current_output = fn()
++        assert current_output is not None
++        current_primary = primary_output(current_output)
++
++        if args.layout == "bhsd":
++            current_primary = current_primary.permute(0, 2, 1, 3)
++
++        ref_name = getattr(args, "ref", None) or "torch"
++        if block_attn_mask is not None:
++            if ref_name != "torch":
++                raise ValueError(
++                    f"Reference kernel {ref_name} not supported for block sparsity"
++                )
++
++            q_bshd, k_bshd, v_bshd = layout_preprocess(
++                q, k, v, layout=args.layout, target_layout="bshd"
++            )
++            config = get_sage_fwd_configs_mxfp4()
++            ref_out = attention_ref_block_sparse(
++                q_bshd,
++                k_bshd,
++                v_bshd,
++                block_attn_mask,
++                config["BLOCK_M"],
++                config["BLOCK_N"],
++                dropout_p=0.0,
++                dropout_mask=None,
++                upcast=True,
++            )
++            reference_primary = ref_out[0]
++        else:
++            q_ref, k_ref, v_ref = layout_preprocess(
++                q, k, v, layout=args.layout, target_layout="bshd"
++            )
++            sm_scale = D_HEAD**-0.5
++
++            if ref_name == "fav2":
++                ref_out = fav2_forward_func(
++                    q_ref,
++                    k_ref,
++                    v_ref,
++                    dropout_p=0.0,
++                    softmax_scale=sm_scale,
++                    causal=False,
++                    return_lse=False,
++                    return_attn_probs=False,
++                )()
++            else:
++                ref_out = attention_ref(
++                    q_ref,
++                    k_ref,
++                    v_ref,
++                    dropout_p=0.0,
++                    dropout_mask=None,
++                    causal=False,
++                )
++
++            reference_primary = primary_output(ref_out)
++        compare_accuracy(current_primary, reference_primary)
++        check_attention_outputs(current_primary, reference_primary, fp8=False)
+ 
+-    # Metrics calculation (MXFP4 treats elements as 0.5 bytes in memory traffic for Q/K)
+     total_flops = 2.0 * BATCH * HQ * N_CTX_Q * N_CTX_K * (D_HEAD + D_HEAD_V)
+ 
++    if block_lut is not None:
++        sparse_flops, _ = sparse_flops_from_lut(
++            block_lut, BATCH, N_CTX_Q, N_CTX_K, HQ, D_HEAD, D_HEAD_V
++        )
++    else:
++        sparse_flops = 0
++
++    q_element_size = q.element_size()
++    k_element_size = k.element_size()
++    v_element_size = v.element_size()
++
++    total_num_tokens_q = BATCH * N_CTX_Q
++    total_num_tokens_k = BATCH * N_CTX_K
++    q_size = total_num_tokens_q * HQ * D_HEAD * q_element_size
++    k_size = total_num_tokens_k * HK * D_HEAD * k_element_size
++    v_size = total_num_tokens_k * HK * D_HEAD_V * v_element_size
++    o_size = total_num_tokens_q * HQ * D_HEAD_V * q_element_size
++    mem = q_size + k_size + v_size + o_size
++
+     if "ms" in provider:
+         return ms
+-    if "TFLOPS" in provider:
++    elif "throughput_sparse(TFLOPS)" in provider:
++        return sparse_flops / ms * 1e-9
++    elif "TFLOPS" in provider:
+         return total_flops / ms * 1e-9
++    elif "GB/s" in provider:
++        return mem / ms * 1e-6
+     return ms
+ 
+ 
+-def run_benchmark(args):
+-    torch.manual_seed(20)
+-
+-    # Define benchmark configs
++def create_benchmark_configs(args):
++    dtype = arg_to_torch_dtype[args.dtype]
+     hk = args.hq if not args.hk else args.hk
+     sk = args.sq if not args.sk else args.sk
++    head_size = 128 if not args.d else args.d
++    head_size_v = head_size if not args.dv else args.dv
++    layout = args.layout if args.layout else "bshd"
++    x_names = ["BATCH", "HQ", "HK", "N_CTX_Q", "N_CTX_K"]
++    causal = False
++
++    configs = []
++    plot_name = get_caller_name_no_ext()
++    extra_args = {
++        "D_HEAD": head_size,
++        "D_HEAD_V": head_size_v,
++        "dtype": dtype,
++        "layout": layout,
++        "causal": causal,
++    }
+     x_vals_list = [(args.b, args.hq, hk, args.sq, sk)]
+-
+-    @triton.testing.perf_report(
++    unit = ""
++    line_vals = [
++        "time(ms)",
++        "throughput(TFLOPS)",
++        "bandwidth(GB/s)",
++    ]
++    if getattr(args, "block_sparsity", None) is not None or getattr(
++        args, "block_mask_file", None
++    ):
++        line_vals.append("throughput_sparse(TFLOPS)")
++
++    # if comparing to reference, or specific metric provided, adjust line_vals accordingly
++    if args.compare_to_ref or (args.metric and args.metric != "all"):
++        if args.compare_to_ref:
++            line_vals = [
++                "time(ms)"
++            ]  # avoid redundant runs of other metrics when comparing to reference. default to time only.
++        else:
++            metric_map = {
++                "time": "time(ms)",
++                "throughput": "throughput(TFLOPS)",
++                "bandwidth": "bandwidth(GB/s)",
++                "throughput_sparse": "throughput_sparse(TFLOPS)",
++            }
++            line_vals = [metric_map[args.metric]]
++
++    configs.append(
+         triton.testing.Benchmark(
+-            x_names=["BATCH", "HQ", "HK", "N_CTX_Q", "N_CTX_K"],
++            x_names=x_names,
+             x_vals=x_vals_list,
+             line_arg="provider",
+-            line_vals=["time(ms)", "throughput(TFLOPS)"],
+-            line_names=["time(ms)", "throughput(TFLOPS)"],
+-            styles=[("blue", "-"), ("green", "-")],
+-            ylabel="Metric Value",
+-            plot_name="MXFP4_Attention_Performance",
+-            args={
+-                "D_HEAD": args.d,
+-                "D_HEAD_V": args.dv,
+-                "dtype": arg_to_torch_dtype[args.dtype],
+-                "layout": args.layout,
+-            },
++            line_vals=line_vals,
++            line_names=line_vals,
++            styles=[
++                ("red", "-"),
++                ("green", "-"),
++                ("yellow", "-"),
++                ("blue", "-"),
++                ("cyan", "-"),
++            ],
++            ylabel=unit,
++            plot_name=plot_name,
++            args=extra_args,
+         )
+     )
++    return configs
++
++
++def run_benchmark(args):
++    torch.manual_seed(20)
++
++    @triton.testing.perf_report(create_benchmark_configs(args))
+     def bench_mha(
+         BATCH,
+         HQ,
+@@ -165,6 +333,7 @@ def bench_mha(
+         D_HEAD_V,
+         dtype,
+         layout,
++        causal,
+         provider,
+         device="cuda",
+     ):
+@@ -173,9 +342,192 @@ def bench_mha(
+         v = torch.randn((BATCH, HK, N_CTX_K, D_HEAD_V), device=device, dtype=dtype)
+ 
+         q, k, v = layout_preprocess(q, k, v, layout="bhsd", target_layout=layout)
+-        return bench_kernel(q, k, v, args, provider)
+ 
+-    bench_mha.run(save_path=None, print_data=True)
++        block_lut = None
++        block_attn_mask = None
++        if getattr(args, "block_sparsity", None) is not None:
++            config = get_sage_fwd_configs_mxfp4()
++            BLOCK_M, BLOCK_N = config["BLOCK_M"], config["BLOCK_N"]
++            num_q_blocks = (N_CTX_Q + BLOCK_M - 1) // BLOCK_M
++            num_kv_blocks = (N_CTX_K + BLOCK_N - 1) // BLOCK_N
++            block_attn_mask = (
++                torch.rand(BATCH, HQ, num_q_blocks, num_kv_blocks, device=device)
++                > args.block_sparsity
++            ).to(torch.bool)
++            block_lut = block_attn_mask_to_ragged_lut(block_attn_mask)
++
++        return bench_kernel(
++            q,
++            k,
++            v,
++            args,
++            provider,
++            block_lut=block_lut,
++            block_attn_mask=block_attn_mask,
++        )
++
++    bench_mha.run(save_path="." if getattr(args, "o", False) else None, print_data=True)
++
++
++def run_benchmark_block_sparse_repetitions(args):
++    """
++    When -block_sparsity and --n_repetitions are set: run n_repetitions times with
++    a new random block mask each time, report throughput statistics (median, Q1, Q3, p10, p90).
++    """
++    torch.manual_seed(20)
++    device = "cuda"
++    dtype = arg_to_torch_dtype[args.dtype]
++    layout = args.layout
++    hk = args.hk
++    BATCH, HQ, N_CTX_Q, N_CTX_K = args.b, args.hq, args.sq, args.sk
++    D_HEAD = args.d
++    D_HEAD_V = args.dv
++
++    q = torch.randn((BATCH, HQ, N_CTX_Q, D_HEAD), device=device, dtype=dtype)
++    k = torch.randn((BATCH, hk, N_CTX_K, D_HEAD), device=device, dtype=dtype)
++    v = torch.randn((BATCH, hk, N_CTX_K, D_HEAD_V), device=device, dtype=dtype)
++    q.requires_grad = False
++    k.requires_grad = False
++    v.requires_grad = False
++    q, k, v = layout_preprocess(q, k, v, layout="bhsd", target_layout=layout)
++
++    config = get_sage_fwd_configs_mxfp4()
++    BLOCK_M, BLOCK_N = config["BLOCK_M"], config["BLOCK_N"]
++    num_q_blocks = (N_CTX_Q + BLOCK_M - 1) // BLOCK_M
++    num_kv_blocks = (N_CTX_K + BLOCK_N - 1) // BLOCK_N
++
++    # JIT warmup: compile kernel before timed runs so reported ms is not inflated.
++    _warmup_mask = (
++        torch.rand(BATCH, HQ, num_q_blocks, num_kv_blocks, device=device)
++        > args.block_sparsity
++    ).to(torch.bool)
++    _warmup_lut = block_attn_mask_to_ragged_lut(_warmup_mask)
++    bench_kernel(
++        q, k, v, args, "time(ms)", block_lut=_warmup_lut, block_attn_mask=_warmup_mask
++    )
++
++    n_rep = args.n_repetitions
++    throughputs_tflops = []
++    latencies_ms = []
++    effective_tflops_list = []
++    for _ in range(n_rep):
++        block_attn_mask = (
++            torch.rand(BATCH, HQ, num_q_blocks, num_kv_blocks, device=device)
++            > args.block_sparsity
++        ).to(torch.bool)
++        block_lut = block_attn_mask_to_ragged_lut(block_attn_mask)
++        ms = bench_kernel(
++            q,
++            k,
++            v,
++            args,
++            "time(ms)",
++            block_lut=block_lut,
++            block_attn_mask=block_attn_mask,
++        )
++        sparse_flops, total_flops = sparse_flops_from_lut(
++            block_lut, BATCH, N_CTX_Q, N_CTX_K, HQ, D_HEAD, D_HEAD_V
++        )
++        latencies_ms.append(ms)
++        ops_per_sec = total_flops / (ms * 1e-3)
++        tflops = ops_per_sec / 1e12
++        throughputs_tflops.append(tflops)
++        effective_tflops = (sparse_flops / (ms * 1e-3)) / 1e12
++        effective_tflops_list.append(effective_tflops)
++
++    t = torch.tensor(throughputs_tflops)
++    median_tflops = torch.quantile(t, 0.5).item()
++    q1_tflops = torch.quantile(t, 0.25).item()
++    q3_tflops = torch.quantile(t, 0.75).item()
++    p10_tflops = torch.quantile(t, 0.1).item()
++    p90_tflops = torch.quantile(t, 0.9).item()
++
++    t_lat = torch.tensor(latencies_ms)
++    median_latency_ms = torch.quantile(t_lat, 0.5).item()
++    q1_latency_ms = torch.quantile(t_lat, 0.25).item()
++    q3_latency_ms = torch.quantile(t_lat, 0.75).item()
++    p10_latency_ms = torch.quantile(t_lat, 0.1).item()
++    p90_latency_ms = torch.quantile(t_lat, 0.9).item()
++
++    t_eff = torch.tensor(effective_tflops_list)
++    median_effective_tflops = torch.quantile(t_eff, 0.5).item()
++    q1_effective_tflops = torch.quantile(t_eff, 0.25).item()
++    q3_effective_tflops = torch.quantile(t_eff, 0.75).item()
++    p10_effective_tflops = torch.quantile(t_eff, 0.1).item()
++    p90_effective_tflops = torch.quantile(t_eff, 0.9).item()
++
++    summary = (
++        f"block_sparsity={args.block_sparsity}, n_repetitions={n_rep}: "
++        f"median_TFLOPS={median_tflops:.4f}, Q1={q1_tflops:.4f}, Q3={q3_tflops:.4f}, "
++        f"p10={p10_tflops:.4f}, p90={p90_tflops:.4f} | "
++        f"median_latency_ms={median_latency_ms:.4f}, Q1={q1_latency_ms:.4f}, Q3={q3_latency_ms:.4f}, "
++        f"p10={p10_latency_ms:.4f}, p90={p90_latency_ms:.4f} | "
++        f"median_effective_TFLOPS={median_effective_tflops:.4f}, Q1={q1_effective_tflops:.4f}, "
++        f"Q3={q3_effective_tflops:.4f}, p10={p10_effective_tflops:.4f}, p90={p90_effective_tflops:.4f}"
++    )
++    logger.info(summary)
++    print(summary)
++
++    if getattr(args, "o", False):
++        csv_path = "bench_fav3_sage_mxfp4_block_sparse_repetitions.csv"
++        file_exists = os.path.isfile(csv_path)
++        with open(csv_path, "a", newline="") as f:
++            writer = csv.writer(f)
++            row = [
++                BATCH,
++                HQ,
++                N_CTX_Q,
++                N_CTX_K,
++                D_HEAD,
++                D_HEAD_V,
++                args.block_sparsity,
++                n_rep,
++                median_tflops,
++                q1_tflops,
++                q3_tflops,
++                p10_tflops,
++                p90_tflops,
++                median_latency_ms,
++                q1_latency_ms,
++                q3_latency_ms,
++                p10_latency_ms,
++                p90_latency_ms,
++                median_effective_tflops,
++                q1_effective_tflops,
++                q3_effective_tflops,
++                p10_effective_tflops,
++                p90_effective_tflops,
++            ]
++            if not file_exists:
++                writer.writerow(
++                    [
++                        "BATCH",
++                        "HQ",
++                        "N_CTX_Q",
++                        "N_CTX_K",
++                        "D_HEAD",
++                        "D_HEAD_V",
++                        "block_sparsity",
++                        "n_repetitions",
++                        "median_TFLOPS",
++                        "q1_TFLOPS",
++                        "q3_TFLOPS",
++                        "p10_TFLOPS",
++                        "p90_TFLOPS",
++                        "median_latency_ms",
++                        "q1_latency_ms",
++                        "q3_latency_ms",
++                        "p10_latency_ms",
++                        "p90_latency_ms",
++                        "median_effective_TFLOPS",
++                        "q1_effective_TFLOPS",
++                        "q3_effective_TFLOPS",
++                        "p10_effective_TFLOPS",
++                        "p90_effective_TFLOPS",
++                    ]
++                )
++            writer.writerow(row)
++        logger.info(f"Wrote CSV row to {csv_path}")
+ 
+ 
+ def parse_args():
+@@ -233,6 +585,54 @@ def parse_args():
+         action="store_true",
+         help="Include quantization overhead to bench.",
+     )
++    parser.add_argument(
++        "--block_sparsity",
++        type=float,
++        default=None,
++        help="Fraction of (q_block, kv_block) pairs disallowed (0=dense, 0.5=50%% masked). Uses random mask.",
++    )
++    parser.add_argument(
++        "--n_repetitions",
++        type=int,
++        default=None,
++        help="When -block_sparsity is set: run this many times with new random mask each time; report throughput stats.",
++    )
++    parser.add_argument(
++        "--compare_to_ref",
++        action="store_true",
++        help="Execute the reference kernel (-ref) and assert outputs match.",
++    )
++    parser.add_argument(
++        "-ref",
++        type=str,
++        default=None,
++        help="Reference kernel for --compare_to_ref: torch (default) or fav2.",
++    )
++    parser.add_argument(
++        "-metric",
++        nargs="?",
++        const="throughput",
++        choices=["all", "time", "throughput", "bandwidth"],
++        default=None,
++        help="Metrics for the kernel benchmark.",
++    )
++    parser.add_argument(
++        "-o",
++        action="store_true",
++        help="Write performance results to CSV file",
++    )
++    parser.add_argument(
++        "--rep",
++        type=int,
++        default=100,
++        help="Repetition time in ms for triton.testing.do_bench.",
++    )
++    parser.add_argument(
++        "--warmup",
++        type=int,
++        default=25,
++        help="Warmup time in ms for triton.testing.do_bench.",
++    )
+ 
+     return parser.parse_args()
+ 
+@@ -351,6 +751,12 @@ def main():
+ 
+     assert args.BLOCK_R <= args.d, "Rotation block size should be <= d"
+ 
++    if getattr(args, "block_sparsity", None) is not None:
++        if not (0 <= args.block_sparsity <= 1):
++            raise ValueError(
++                f"-block_sparsity must be in [0, 1], got {args.block_sparsity}"
++            )
++
+     if args.print_vgpr:
+         print("Retrieving VGPR usage for Triton kernels...")
+         print_vgpr(lambda: run_benchmark(args), "MXFP4_Attention_Performance")
+@@ -362,6 +768,14 @@ def main():
+         else:
+             test_accuracy_with_shape(args)
+ 
++    # Block-sparsity with n_repetitions: throughput stats path
++    if (
++        args.block_sparsity is not None
++        and getattr(args, "n_repetitions", None) is not None
++    ):
++        run_benchmark_block_sparse_repetitions(args)
++        return 0
++
+     run_benchmark(args)
+ 
+ 
+diff --git a/op_tests/triton_tests/attention/test_fav3_sage.py b/op_tests/triton_tests/attention/test_fav3_sage.py
+index 57adc328fa..90d39b6d82 100644
+--- a/op_tests/triton_tests/attention/test_fav3_sage.py
++++ b/op_tests/triton_tests/attention/test_fav3_sage.py
+@@ -1,5 +1,5 @@
+ # SPDX-License-Identifier: MIT
+-# Copyright (C) 2024-2025, Advanced Micro Devices, Inc. All rights reserved.
++# Copyright (C) 2024-2026, Advanced Micro Devices, Inc. All rights reserved.
+ import torch
+ import pytest
+ import logging
+@@ -7,11 +7,17 @@
+ import math
+ from aiter.test_mha_common import (
+     attention_ref,
++    attention_ref_block_sparse,
+ )
++from aiter.ops.triton.attention.fav3_sage import (
++    fav3_sage_wrapper_func,
++    get_sage_fwd_configs,
++)
++from aiter.ops.triton.attention.utils import block_attn_mask_to_ragged_lut
+ import aiter.ops.triton.utils._triton.arch_info as arch_info
+-from aiter.ops.triton.attention.fav3_sage import fav3_sage_wrapper_func
+ from aiter.ops.triton.attention.fav3_sage_attention_mxfp4_wrapper import (
+     fav3_sage_mxfp4_wrapper,
++    get_sage_fwd_configs_mxfp4,
+ )
+ 
+ logging.basicConfig(level=logging.DEBUG)
+@@ -231,7 +237,7 @@ def test_sage(
+         v,
+         softmax_scale,
+         causal=False,
+-        inference_mode=True,
++        return_lse=False,
+         layout=layout,
+     )
+ 
+@@ -267,6 +273,186 @@ def test_sage(
+     )
+ 
+ 
++@pytest.mark.parametrize("BATCH", [1, 4])
++@pytest.mark.parametrize(
++    "SEQLEN_Q, SEQLEN_K",
++    [(128, 128), (64, 128)],
++)
++@pytest.mark.parametrize("NUM_Q_HEADS, NUM_K_HEADS", [(2, 2), (16, 16)])
++@pytest.mark.parametrize("HEAD_SZ", [128])
++@pytest.mark.parametrize("layout", ["bshd"])
++def test_sage_block_sparse_none(
++    BATCH: int,
++    SEQLEN_Q: int,
++    SEQLEN_K: int,
++    NUM_Q_HEADS: int,
++    NUM_K_HEADS: int,
++    HEAD_SZ: int,
++    layout: str,
++    dtype=torch.bfloat16,
++):
++    """With block_lut=None, output must match non-sparse path (backward compat)."""
++    torch.cuda.empty_cache()
++    softmax_scale = 1.0 / math.sqrt(HEAD_SZ)
++    q, k, v = input_helper(
++        BATCH,
++        NUM_Q_HEADS,
++        NUM_K_HEADS,
++        SEQLEN_Q,
++        SEQLEN_K,
++        HEAD_SZ,
++        HEAD_SZ,
++        dtype,
++        layout,
++    )
++    triton_out = fav3_sage_wrapper_func(
++        q,
++        k,
++        v,
++        softmax_scale,
++        causal=False,
++        return_lse=False,
++        layout=layout,
++        block_lut=None,
++    )
++    triton_out_full = fav3_sage_wrapper_func(
++        q, k, v, softmax_scale, causal=False, return_lse=False, layout=layout
++    )
++    check_attention_outputs(
++        triton_out,
++        triton_out_full,
++        fp8=True,
++        atol=ATOL_fp8,
++        rtol=RTOL_fp8,
++        max_diff_percentage=0.5,
++    )
++
++
++@pytest.mark.parametrize("BATCH", [1, 2])
++@pytest.mark.parametrize(
++    "SEQLEN_Q, SEQLEN_K",
++    [(256, 256)],
++)
++@pytest.mark.parametrize("NUM_Q_HEADS, NUM_K_HEADS", [(4, 4)])
++@pytest.mark.parametrize("HEAD_SZ", [128])
++@pytest.mark.parametrize("layout", ["bshd"])
++def test_sage_block_sparse_vs_reference(
++    BATCH: int,
++    SEQLEN_Q: int,
++    SEQLEN_K: int,
++    NUM_Q_HEADS: int,
++    NUM_K_HEADS: int,
++    HEAD_SZ: int,
++    layout: str,
++    dtype=torch.bfloat16,
++):
++    """Block-sparse output matches reference that applies the same block mask."""
++    torch.cuda.empty_cache()
++    config = get_sage_fwd_configs()
++    BLOCK_M, BLOCK_N = config["BLOCK_M"], config["BLOCK_N"]
++    num_q_blocks = (SEQLEN_Q + BLOCK_M - 1) // BLOCK_M
++    num_kv_blocks = (SEQLEN_K + BLOCK_N - 1) // BLOCK_N
++
++    q, k, v = input_helper(
++        BATCH,
++        NUM_Q_HEADS,
++        NUM_K_HEADS,
++        SEQLEN_Q,
++        SEQLEN_K,
++        HEAD_SZ,
++        HEAD_SZ,
++        dtype,
++        layout,
++    )
++    # Diagonal block mask: Q block qb attends only to KV block qb (and qb-1 for a small band)
++    block_attn_mask = torch.zeros(
++        BATCH, num_q_blocks, num_kv_blocks, dtype=torch.bool, device="cuda"
++    )
++    for qb in range(num_q_blocks):
++        for kb in range(num_kv_blocks):
++            if abs(qb - kb) <= 1:
++                block_attn_mask[:, qb, kb] = True
++
++    block_lut = block_attn_mask_to_ragged_lut(block_attn_mask, num_heads=NUM_Q_HEADS)
++    softmax_scale = 1.0 / math.sqrt(HEAD_SZ)
++    triton_out = fav3_sage_wrapper_func(
++        q,
++        k,
++        v,
++        softmax_scale,
++        causal=False,
++        return_lse=False,
++        layout=layout,
++        block_lut=block_lut,
++    )
++
++    torch_out, _, _ = attention_ref_block_sparse(
++        q, k, v, block_attn_mask, BLOCK_M, BLOCK_N
++    )
++    assert triton_out.shape == torch_out.shape
++    check_attention_outputs(
++        triton_out,
++        torch_out,
++        fp8=True,
++        atol=ATOL_fp8,
++        rtol=RTOL_fp8,
++        max_diff_percentage=0.5,
++    )
++
++
++@pytest.mark.parametrize("layout", ["bshd"])
++def test_sage_block_sparse_empty_kv_blocks(layout: str, dtype=torch.bfloat16):
++    """When a Q block has no KV blocks allowed, that block's output is zero."""
++    torch.cuda.empty_cache()
++    BATCH, SEQLEN_Q, SEQLEN_K = 1, 256, 256
++    NUM_Q_HEADS, NUM_K_HEADS, HEAD_SZ = 4, 4, 128
++    config = get_sage_fwd_configs()
++    BLOCK_M, BLOCK_N = config["BLOCK_M"], config["BLOCK_N"]
++    num_q_blocks = (SEQLEN_Q + BLOCK_M - 1) // BLOCK_M
++    num_kv_blocks = (SEQLEN_K + BLOCK_N - 1) // BLOCK_N
++
++    q, k, v = input_helper(
++        BATCH,
++        NUM_Q_HEADS,
++        NUM_K_HEADS,
++        SEQLEN_Q,
++        SEQLEN_K,
++        HEAD_SZ,
++        HEAD_SZ,
++        dtype,
++        layout,
++    )
++    # First Q block attends to nothing; others attend to all KV blocks
++    block_attn_mask = torch.ones(
++        BATCH, num_q_blocks, num_kv_blocks, dtype=torch.bool, device="cuda"
++    )
++    block_attn_mask[:, 0, :] = False
++
++    block_lut = block_attn_mask_to_ragged_lut(block_attn_mask, num_heads=NUM_Q_HEADS)
++    softmax_scale = 1.0 / math.sqrt(HEAD_SZ)
++    triton_out = fav3_sage_wrapper_func(
++        q,
++        k,
++        v,
++        softmax_scale,
++        causal=False,
++        return_lse=False,
++        layout=layout,
++        block_lut=block_lut,
++    )
++    torch_out, _, _ = attention_ref_block_sparse(
++        q, k, v, block_attn_mask, BLOCK_M, BLOCK_N
++    )
++    check_attention_outputs(
++        triton_out,
++        torch_out,
++        fp8=True,
++        atol=ATOL_fp8,
++        rtol=RTOL_fp8,
++        max_diff_percentage=0.5,
++    )
++
++
+ @pytest.mark.parametrize("BATCH", [1, 4, 57, 128])
+ @pytest.mark.parametrize(
+     "SEQLEN_Q, SEQLEN_K",
+@@ -352,3 +538,200 @@ def test_sage_mxfp4(
+         rtol=RTOL_fp8,
+         max_diff_percentage=1.5,
+     )
++
++
++@pytest.mark.parametrize("BATCH", [1, 4])
++@pytest.mark.parametrize("SEQLEN_Q, SEQLEN_K", [(256, 256), (256, 512)])
++@pytest.mark.parametrize("NUM_Q_HEADS, NUM_K_HEADS", [(2, 2), (16, 16)])
++@pytest.mark.parametrize("HEAD_SZ", [128])
++@pytest.mark.parametrize("layout", ["bhsd"])
++def test_sage_mxfp4_block_sparse_none(
++    BATCH: int,
++    SEQLEN_Q: int,
++    SEQLEN_K: int,
++    NUM_Q_HEADS: int,
++    NUM_K_HEADS: int,
++    HEAD_SZ: int,
++    layout: str,
++    dtype=torch.bfloat16,
++):
++    """With block_lut=None, MXFP4 output must match non-sparse path."""
++    if not arch_info.is_fp4_avail():
++        pytest.skip("MXFP4 not supported on this architecture")
++    torch.cuda.empty_cache()
++    torch.manual_seed(20)
++    q, k, v = input_helper(
++        BATCH,
++        NUM_Q_HEADS,
++        NUM_K_HEADS,
++        SEQLEN_Q,
++        SEQLEN_K,
++        HEAD_SZ,
++        HEAD_SZ,
++        dtype,
++        layout,
++    )
++    triton_out = fav3_sage_mxfp4_wrapper(
++        q, k, v, causal=False, layout=layout, hadamard_rotation=True, block_lut=None
++    )
++    triton_out_full = fav3_sage_mxfp4_wrapper(
++        q, k, v, causal=False, layout=layout, hadamard_rotation=True
++    )
++    check_attention_outputs(
++        triton_out,
++        triton_out_full,
++        fp8=True,
++        atol=ATOL_fp8,
++        rtol=RTOL_fp8,
++        max_diff_percentage=0.5,
++    )
++
++
++@pytest.mark.parametrize("BATCH", [1, 2])
++@pytest.mark.parametrize("SEQLEN_Q, SEQLEN_K", [(512, 512)])
++@pytest.mark.parametrize("NUM_Q_HEADS, NUM_K_HEADS", [(4, 4)])
++@pytest.mark.parametrize("HEAD_SZ", [128])
++@pytest.mark.parametrize("layout", ["bhsd"])
++def test_sage_mxfp4_block_sparse_vs_reference(
++    BATCH: int,
++    SEQLEN_Q: int,
++    SEQLEN_K: int,
++    NUM_Q_HEADS: int,
++    NUM_K_HEADS: int,
++    HEAD_SZ: int,
++    layout: str,
++    dtype=torch.bfloat16,
++):
++    """Block-sparse MXFP4 output matches reference that applies the same block mask."""
++    if not arch_info.is_fp4_avail():
++        pytest.skip("MXFP4 not supported on this architecture")
++    torch.cuda.empty_cache()
++    torch.manual_seed(20)
++
++    config = get_sage_fwd_configs_mxfp4()
++    BLOCK_M, BLOCK_N = config["BLOCK_M"], config["BLOCK_N"]
++    num_q_blocks = (SEQLEN_Q + BLOCK_M - 1) // BLOCK_M
++    num_kv_blocks = (SEQLEN_K + BLOCK_N - 1) // BLOCK_N
++
++    q, k, v = input_helper(
++        BATCH,
++        NUM_Q_HEADS,
++        NUM_K_HEADS,
++        SEQLEN_Q,
++        SEQLEN_K,
++        HEAD_SZ,
++        HEAD_SZ,
++        dtype,
++        layout,
++    )
++
++    # Band mask: Q block qb attends to KV blocks within distance 1
++    block_attn_mask = torch.zeros(
++        BATCH, num_q_blocks, num_kv_blocks, dtype=torch.bool, device="cuda"
++    )
++    for qb in range(num_q_blocks):
++        for kb in range(num_kv_blocks):
++            if abs(qb - kb) <= 1:
++                block_attn_mask[:, qb, kb] = True
++
++    block_lut = block_attn_mask_to_ragged_lut(block_attn_mask, num_heads=NUM_Q_HEADS)
++    triton_out = fav3_sage_mxfp4_wrapper(
++        q,
++        k,
++        v,
++        causal=False,
++        layout=layout,
++        hadamard_rotation=True,
++        block_lut=block_lut,
++    )
++
++    # Reference expects bshd
++    if layout == "bhsd":
++        q_ref = q.permute(0, 2, 1, 3).contiguous()
++        k_ref = k.permute(0, 2, 1, 3).contiguous()
++        v_ref = v.permute(0, 2, 1, 3).contiguous()
++    else:
++        q_ref, k_ref, v_ref = q, k, v
++
++    torch_out, _, _ = attention_ref_block_sparse(
++        q_ref, k_ref, v_ref, block_attn_mask, BLOCK_M, BLOCK_N
++    )
++    if layout == "bhsd":
++        torch_out = torch_out.permute(0, 2, 1, 3).contiguous()
++
++    assert triton_out.shape == torch_out.shape
++    check_attention_outputs(
++        triton_out,
++        torch_out,
++        fp8=True,
++        atol=ATOL_fp8,
++        rtol=RTOL_fp8,
++        max_diff_percentage=1.5,
++    )
++
++
++@pytest.mark.parametrize("layout", ["bhsd"])
++def test_sage_mxfp4_block_sparse_empty_kv_blocks(layout: str, dtype=torch.bfloat16):
++    """When a Q block has no KV blocks allowed, that block's output is zero."""
++    if not arch_info.is_fp4_avail():
++        pytest.skip("MXFP4 not supported on this architecture")
++    torch.cuda.empty_cache()
++    torch.manual_seed(20)
++
++    BATCH, SEQLEN_Q, SEQLEN_K = 1, 512, 512
++    NUM_Q_HEADS, NUM_K_HEADS, HEAD_SZ = 4, 4, 128
++    config = get_sage_fwd_configs_mxfp4()
++    BLOCK_M, BLOCK_N = config["BLOCK_M"], config["BLOCK_N"]
++    num_q_blocks = (SEQLEN_Q + BLOCK_M - 1) // BLOCK_M
++    num_kv_blocks = (SEQLEN_K + BLOCK_N - 1) // BLOCK_N
++
++    q, k, v = input_helper(
++        BATCH,
++        NUM_Q_HEADS,
++        NUM_K_HEADS,
++        SEQLEN_Q,
++        SEQLEN_K,
++        HEAD_SZ,
++        HEAD_SZ,
++        dtype,
++        layout,
++    )
++
++    # First Q block attends to nothing; others attend to all KV blocks
++    block_attn_mask = torch.ones(
++        BATCH, num_q_blocks, num_kv_blocks, dtype=torch.bool, device="cuda"
++    )
++    block_attn_mask[:, 0, :] = False
++
++    block_lut = block_attn_mask_to_ragged_lut(block_attn_mask, num_heads=NUM_Q_HEADS)
++    triton_out = fav3_sage_mxfp4_wrapper(
++        q,
++        k,
++        v,
++        causal=False,
++        layout=layout,
++        hadamard_rotation=True,
++        block_lut=block_lut,
++    )
++
++    if layout == "bhsd":
++        q_ref = q.permute(0, 2, 1, 3).contiguous()
++        k_ref = k.permute(0, 2, 1, 3).contiguous()
++        v_ref = v.permute(0, 2, 1, 3).contiguous()
++    else:
++        q_ref, k_ref, v_ref = q, k, v
++
++    torch_out, _, _ = attention_ref_block_sparse(
++        q_ref, k_ref, v_ref, block_attn_mask, BLOCK_M, BLOCK_N
++    )
++    if layout == "bhsd":
++        torch_out = torch_out.permute(0, 2, 1, 3).contiguous()
++
++    check_attention_outputs(
++        triton_out,
++        torch_out,
++        fp8=True,
++        atol=ATOL_fp8,
++        rtol=RTOL_fp8,
++        max_diff_percentage=1.5,
++    )

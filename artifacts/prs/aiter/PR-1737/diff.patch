@@ -1,0 +1,1743 @@
+diff --git a/3rdparty/composable_kernel b/3rdparty/composable_kernel
+index b0ea67e377..dae85ead64 160000
+--- a/3rdparty/composable_kernel
++++ b/3rdparty/composable_kernel
+@@ -1 +1 @@
+-Subproject commit b0ea67e37725c26860a3520dc31c1f7a01164db9
++Subproject commit dae85ead64c16b34eaa643d09fb0d6da008ca814
+diff --git a/aiter/fused_moe.py b/aiter/fused_moe.py
+index 0aa9498ae6..6d3e986a29 100644
+--- a/aiter/fused_moe.py
++++ b/aiter/fused_moe.py
+@@ -491,7 +491,7 @@ def get_ksplit(token, topk, expert, inter_dim, model_dim):
+     tileN = 128
+ 
+     tgM = token * topk  # decode tile num
+-    tgN = (inter_dim * 2 + tileN - 1) // tileN
++    tgN = (inter_dim + tileN - 1) // tileN
+ 
+     tg_num = tgN * tgM
+     # if all cu already active
+@@ -538,7 +538,7 @@ def get_ksplit(token, topk, expert, inter_dim, model_dim):
+ 
+ 
+ def nextPow2(n):
+-    if n <= 0:
++    if n <= 1:
+         return 1
+     return 1 << (n - 1).bit_length()
+ 
+@@ -715,13 +715,10 @@ def use_cfg():
+             if (run_1stage)
+             else (
+                 get_ksplit(token, topk, expert, inter_dim, model_dim)
+-                if q_type == QuantType.per_1x128
++                if q_type in [QuantType.per_1x128, QuantType.per_1x32]
+                 else ksplit
+             )
+         )
+-        aiter.logger.info(
+-            f"run_1stage = {run_1stage}, ksplit = {ksplit} q_type = {q_type}"
+-        )
+     else:
+         block_m = cfg["block_m"]
+         ksplit = cfg["ksplit"]
+@@ -763,17 +760,43 @@ def get_block_m() -> int:
+                 cktile_moe_stage1,
+                 n_pad_zeros=intermediate_pad // 64 * 64 * (2 if use_g1u1 else 1),
+                 k_pad_zeros=hidden_pad // 128 * 128,
++                activation=activation,
+             ),
+             functools.partial(
+                 cktile_moe_stage2,
+                 n_pad_zeros=hidden_pad // 64 * 64,
+                 k_pad_zeros=intermediate_pad // 128 * 128,
++                activation=activation,
+             ),
+             get_block_m(),
+             ksplit,
+             False,
+             True,
+         )
++    elif (
++        dtype in [dtypes.bf16, dtypes.fp16]
++        and q_type == QuantType.per_1x32
++        and q_dtype_w in [dtypes.fp4x2]
++        and ksplit > 1
++    ):
++        return MOEMetadata(
++            functools.partial(
++                cktile_moe_stage1,
++                n_pad_zeros=intermediate_pad // 64 * 64 * (2 if use_g1u1 else 1),
++                k_pad_zeros=hidden_pad // 128 * 128,
++                activation=activation,
++                split_k=ksplit,
++            ),
++            functools.partial(
++                cktile_moe_stage2,
++                n_pad_zeros=hidden_pad // 64 * 64,
++                k_pad_zeros=intermediate_pad // 128 * 128,
++                activation=activation,
++            ),
++            16 if token < 2048 else 32 if token < 16384 else 64,
++            ksplit,
++            run_1stage,
++        )
+ 
+     if (kernelName1 and "ck2stages" in kernelName1) or (
+         not kernelName1
+@@ -888,9 +911,12 @@ def fused_moe_2stages(
+     if (
+         quant_type == QuantType.per_1x32
+         and dtype in [dtypes.bf16, dtypes.fp16]
+-        and q_dtype_a in [dtypes.bf16, dtypes.fp16]
+         and w1.dtype == dtypes.fp4x2
+-        and activation == ActivationType.Swiglu
++        and (
++            q_dtype_a in [dtypes.bf16, dtypes.fp16]
++            and activation == ActivationType.Swiglu
++            or metadata.ksplit > 1
++        )
+     ):
+         a1 = hidden_states.to(dtype)
+         a1_scale = None
+@@ -984,13 +1010,15 @@ def fused_moe_2stages(
+         sorted_weights=sorted_weights if doweight_stage1 else None,
+         **extra_stage1_args,
+     )
+-
+     if (
+         quant_type == QuantType.per_1x32
+         and dtype in [dtypes.bf16, dtypes.fp16]
+-        and q_dtype_a in [dtypes.bf16, dtypes.fp16]
+         and w1.dtype == dtypes.fp4x2
+-        and activation == ActivationType.Swiglu
++        and (
++            q_dtype_a in [dtypes.bf16, dtypes.fp16]
++            and activation == ActivationType.Swiglu
++            or metadata.ksplit > 1
++        )
+     ):
+         a2_scale = None
+     elif (
+@@ -1307,7 +1335,7 @@ def torch_moe_stage1(
+             if w1_bias is not None:
+                 out[mask] = out[mask] + w1_bias[E_id].view(1, -1)
+     use_g1u1 = w1.shape[1] == (2 * inter_dim)
+-    use_swiglu = (a1_scale is None) and (quant_type == QuantType.per_1x32)
++    use_swiglu = activation == aiter.ActivationType.Swiglu
+     torch_act = aiter.get_torch_act(activation)
+     if use_g1u1:
+         gate, up = out.split([inter_dim, inter_dim], dim=-1)
+@@ -1444,7 +1472,7 @@ def ck_moe_stage1(
+         sorted_weights,
+         quant_type,
+         activation,
+-        splitk,
++        int(splitk),
+         out.dtype,
+     )
+     if splitk > 1:
+@@ -1471,6 +1499,8 @@ def cktile_moe_stage1(
+     n_pad_zeros=0,
+     k_pad_zeros=0,
+     bias1=None,
++    activation=ActivationType.Silu,
++    split_k=1,
+     dtype=torch.bfloat16,
+ ):
+     token_num = hidden_states.shape[0]
+@@ -1481,13 +1511,21 @@ def cktile_moe_stage1(
+ 
+     if w1.dtype is torch.uint32:
+         D = D * 8
++
+     out = torch.empty((token_num, topk, D), dtype=dtype, device=hidden_states.device)
++    tmp_out = (
++        torch.zeros(
++            (token_num, topk, w1.shape[1]), dtype=hidden_states.dtype, device=out.device
++        )
++        if split_k > 1
++        else out
++    )
+ 
+     # print("Run cktile_moe_stage1: M=%d, N(N*2)=%d, K=%d, topk=%d, expert=%d"%(token_num, w1.shape[1], hidden_states.shape[1], topk, w1.shape[0]))
+     aiter.moe_cktile2stages_gemm1(
+         hidden_states,
+         w1,
+-        out,
++        tmp_out,
+         sorted_token_ids,
+         sorted_expert_ids,
+         num_valid_ids,
+@@ -1498,8 +1536,16 @@ def cktile_moe_stage1(
+         a1_scale,
+         w1_scale,
+         bias1,
++        activation,
+         block_m,
++        split_k,
+     )
++
++    if split_k > 1:
++        if activation == ActivationType.Silu:
++            aiter.silu_and_mul(out, tmp_out)  # TODO: support fp32 splitk
++        else:
++            aiter.gelu_and_mul(out, tmp_out)
+     return out
+ 
+ 
+@@ -1515,6 +1561,7 @@ def cktile_moe_stage2(
+     w2_scale,
+     a2_scale,
+     block_m,
++    activation=ActivationType.Swiglu,
+     sorted_weights=None,
+     zeros_out=False,
+     n_pad_zeros=0,
+@@ -1547,6 +1594,7 @@ def cktile_moe_stage2(
+         a2_scale,
+         w2_scale,
+         bias2,
++        activation,
+         block_m,
+     )
+     return out
+diff --git a/aiter/ops/moe_op.py b/aiter/ops/moe_op.py
+index 445496a444..a8f36637d7 100755
+--- a/aiter/ops/moe_op.py
++++ b/aiter/ops/moe_op.py
+@@ -337,7 +337,9 @@ def moe_cktile2stages_gemm1_ck(
+     x_scale: Optional[Tensor] = None,
+     w_scale: Optional[Tensor] = None,
+     exp_bias: Optional[Tensor] = None,
++    activation: Optional[int] = 0,
+     block_m: Optional[int] = 32,
++    split_k: Optional[int] = 1,
+ ) -> Tensor: ...
+ 
+ 
+@@ -355,7 +357,9 @@ def moe_cktile2stages_gemm1(
+     x_scale: Optional[Tensor] = None,
+     w_scale: Optional[Tensor] = None,
+     exp_bias: Optional[Tensor] = None,
++    activation: Optional[int] = 0,
+     block_m: Optional[int] = 32,
++    split_k: Optional[int] = 1,
+ ):
+     return moe_cktile2stages_gemm1_ck(
+         XQ,
+@@ -371,7 +375,9 @@ def moe_cktile2stages_gemm1(
+         x_scale,
+         w_scale,
+         exp_bias,
++        activation,
+         block_m,
++        split_k,
+     )
+ 
+ 
+@@ -390,7 +396,9 @@ def moe_cktile2stages_gemm2_ck(
+     x_scale: Optional[Tensor] = None,
+     w_scale: Optional[Tensor] = None,
+     exp_bias: Optional[Tensor] = None,
++    activation: Optional[int] = 0,
+     block_m: Optional[int] = 32,
++    split_k: Optional[int] = 1,
+ ) -> Tensor: ...
+ 
+ 
+@@ -408,7 +416,9 @@ def moe_cktile2stages_gemm2(
+     x_scale: Optional[Tensor] = None,
+     w_scale: Optional[Tensor] = None,
+     exp_bias: Optional[Tensor] = None,
++    activation: Optional[int] = 0,
+     block_m: Optional[int] = 32,
++    split_k: Optional[int] = 1,
+ ):
+     return moe_cktile2stages_gemm2_ck(
+         XQ,
+@@ -424,7 +434,9 @@ def moe_cktile2stages_gemm2(
+         x_scale,
+         w_scale,
+         exp_bias,
++        activation,
+         block_m,
++        split_k,
+     )
+ 
+ 
+diff --git a/csrc/ck_tile_gemm_moe_2stages/gen_instances.py b/csrc/ck_tile_gemm_moe_2stages/gen_instances.py
+index bc76068637..01c02e6ca9 100644
+--- a/csrc/ck_tile_gemm_moe_2stages/gen_instances.py
++++ b/csrc/ck_tile_gemm_moe_2stages/gen_instances.py
+@@ -2,10 +2,13 @@
+ # Copyright (C) 2024-2025, Advanced Micro Devices, Inc. All rights reserved.
+ import os
+ import argparse
++import itertools
+ from pathlib import Path
+ import shutil
+ import re
+ from moe_cktile2stages_common import (
++    act_dict,
++    dtype_dict,
+     kernelInstance,
+     get_gemm1_kernels_list,
+     get_gemm2_kernels_list,
+@@ -29,27 +32,29 @@ class cktile_moe_2stage_gemm_codegen:
+     def __init__(
+         self,
+         working_path,
+-        a_dtypes,
++        a_dtype,
+         acc_dtype,
+         c_dtype,
+         quant_type,
+         activation,
+         mul_routed_weight_stage,
++        is_split_k,
+         istune=False,
+     ):
+-        self.init = True
+         self.working_path = working_path
+         self.impl_path = os.path.join(working_path, "impl")
+         self.instances_path = os.path.join(working_path, "instances")
+         self.dispatchers_path = os.path.join(working_path, "dispatchers")
++        self.manifests_path = os.path.join(working_path, "manifests")
+         self.istune = istune
+         self.kernel_name_list = []
+-        self.a_dtypes = a_dtypes
+-        self.b_dtypes = ["fp4"]
++        self.a_dtype = a_dtype
++        self.b_dtype = "fp4"
+         self.acc_dtype = acc_dtype.lower()
+         self.c_dtype = c_dtype.lower()
+         self.quant_type = quant_type
+-        self.activation = activation
++        self.is_split_k = is_split_k
++        self.activation = act_dict[activation]
+         self.mul_routed_weight_stage = mul_routed_weight_stage
+ 
+     def get_suffix(self, stage: int) -> str:
+@@ -63,7 +68,7 @@ def get_suffix(self, stage: int) -> str:
+             if element != ""
+         )
+ 
+-    def gen_instance(self, k: kernelInstance, a_type):
++    def gen_instance(self, k: kernelInstance):
+         INSTANCE_IMPL = f"""// SPDX-License-Identifier: MIT
+ // Copyright (C) 2024-2025, Advanced Micro Devices, Inc. All rights reserved.
+ #include "moe_cktile2stages_common.cuh"
+@@ -83,7 +88,9 @@ def gen_instance(self, k: kernelInstance, a_type):
+     std::optional<torch::Tensor> topk_weight,
+     std::optional<torch::Tensor> x_scale,
+     std::optional<torch::Tensor> w_scale,
+-    std::optional<torch::Tensor> exp_bias)
++    std::optional<torch::Tensor> exp_bias,
++    std::optional<int> activation,
++    std::optional<int> k_batch)
+ {{{{
+     // The smallest kernel we have available. Works well for memory bound shapes.
+     int NumTokens = XQ.size(0);
+@@ -91,10 +98,10 @@ def gen_instance(self, k: kernelInstance, a_type):
+     int N = WQ.size(1);
+     int K = XQ.size(-1);
+     int E = WQ.size(0);
+-    int KBatch = 1;
++    int KBatch = k_batch.has_value() ? k_batch.value() : 1;
+     int stride_A = K;
+     int stride_B = K;
+-    int stride_C = N / {3 - k.stage}; //gemm1 gate+up need / 2.
++    int stride_C = KBatch > 1 ? N : N / {3 - k.stage}; //gemm1 gate+up need / 2.
+     void *sorted_weights_ptr = topk_weight.has_value() ? topk_weight.value().data_ptr() : nullptr;
+ 
+     {{INSTANCE_CONTENT}}
+@@ -121,12 +128,15 @@ def gen_instance(self, k: kernelInstance, a_type):
+             wptr = "static_cast<float*>(w_scale.value().data_ptr())"
+         elif k.QuantType == "1x32":
+             # scaleGranA = "-1"
+-            scaleGranA = "1, 32"
+-            scaleGranB = "1, 32"
++            scaleGranA = "1, 32, ck_tile::e8m0_t"
++            scaleGranB = "1, 32, ck_tile::e8m0_t"
+             biasGran = "1"
+-            xptr = "x_scale.has_value() ? static_cast<float*>(x_scale.value().data_ptr()) : nullptr"
+-            wptr = "static_cast<float*>(w_scale.value().data_ptr())"
+-            biasptr = "static_cast<float*>(exp_bias.value().data_ptr())"
++            xptr = "x_scale.has_value() ? static_cast<ck_tile::e8m0_t*>(x_scale.value().data_ptr()) : nullptr"
++            wptr = "static_cast<ck_tile::e8m0_t*>(w_scale.value().data_ptr())"
++            biasptr = "static_cast<float*>(exp_bias.has_value() ? exp_bias.value().data_ptr() : nullptr)"
++
++        if act_dict[k.ActOP] != 2:
++            biasGran = "-1"
+ 
+         INSTANCE_CONTENT = f"""auto per_a_scale_dev_ptr = ck_tile::FlatmmScalePointer<{scaleGranA}>{{{xptr}}};
+     auto per_b_scale_dev_ptr = ck_tile::FlatmmScalePointer<{scaleGranB}>{{{wptr}}};
+@@ -144,15 +154,15 @@ def gen_instance(self, k: kernelInstance, a_type):
+                 NumTokens,
+                 E,
+                 topk,
+-                1, // k_batch
++                KBatch, // k_batch
+                 M,
+                 N,
+                 K,
+                 stride_A,
+                 stride_B,
+                 stride_C,
+-                n_padded_zeros.value(),
+-                k_padded_zeros.value(),
++                n_padded_zeros.has_value() ? n_padded_zeros.value() : 0,
++                k_padded_zeros.has_value() ? k_padded_zeros.value() : 0,
+                 per_a_scale_dev_ptr,
+                 per_b_scale_dev_ptr,
+                 exp_bias_dev_ptr
+@@ -179,8 +189,11 @@ def gen_instance(self, k: kernelInstance, a_type):
+                 col_major,
+                 ck_tile::tuple<>,
+                 row_major,
+-                {"ck_tile::MoeFlatmmKind::kFFN_gemm1_gate_up" if k.stage == 1 else "ck_tile::MoeFlatmmKind::kFFN_gemm2"},
+-                ck_tile::element_wise::PassThrough
++                {"ck_tile::MoeFlatmmKind::kFFN_gemm1_split_k" if self.is_split_k else
++                "ck_tile::MoeFlatmmKind::kFFN_gemm1_gate_up" if k.stage == 1 else
++                "ck_tile::MoeFlatmmKind::kFFN_gemm2"},
++                ck_tile::element_wise::PassThrough,
++                {act_dict[k.ActOP]}
+                 >(kernel_args, stream_config);
+ """
+ 
+@@ -208,7 +221,9 @@ def gen_instance(self, k: kernelInstance, a_type):
+     std::optional<torch::Tensor> topk_weight,
+     std::optional<torch::Tensor> x_scale,
+     std::optional<torch::Tensor> w_scale,
+-    std::optional<torch::Tensor> exp_bias);
++    std::optional<torch::Tensor> exp_bias,
++    std::optional<int> activation,
++    std::optional<int> k_batch);
+ 
+ """
+ 
+@@ -233,7 +248,7 @@ def fill_template(name, a_type, b_type, acc_type, c_type):
+             ).write_text(intsance)
+ 
+         if (k.QuantType == "1x32") and (a_type in ["bf16", "fp16", "fp8"]):
+-            fill_template(k.name, a_type, "pk_fp4", self.acc_dtype, self.c_dtype)
++            fill_template(k.name, self.a_dtype, "pk_fp4", self.acc_dtype, self.c_dtype)
+         else:
+             for CDtype in ["bf16", "fp16"]:
+                 for ABDtype in ["fp8"]:  # "bf16", "fp16",
+@@ -251,13 +266,23 @@ def fill_template(name, a_type, b_type, acc_type, c_type):
+ 
+     """genarete heuristic dispatch"""
+ 
+-    def gen_heuristic_dispatch(self, tag, kernels_dict):
++    def gen_heuristic_dispatch(self, tag, dict):
+         HEURISTIC_template = get_heuristic_dispatch_template(tag)
+         # print(HEURISTIC_template)
+ 
+         def validate_and_format(template: str, mapping: dict) -> str:
+             # check all format element in dict.
+-            str_mapping = {str(key): value.name for key, value in mapping.items()}
++            str_mapping = {
++                "(a_data_type)": dtype_dict[self.a_dtype],
++                "(b_data_type)": dtype_dict[self.b_dtype],
++                "(acc_data_type)": dtype_dict[self.acc_dtype],
++                "(c_data_type)": dtype_dict[self.c_dtype],
++                "(activation)": self.activation,
++                "(has_bias)": "true" if self.activation == 2 else "false",
++                "(split_k)": "true" if self.is_split_k else "false",
++            }
++            format_args = {str(key): value.name for key, value in mapping.items()}
++            str_mapping.update(format_args)
+             cleaned_template = template.replace("{{", "").replace("}}", "")
+             placeholders = re.findall(r"\{([^{}]*)\}", cleaned_template)
+             missing = [p for p in placeholders if p not in str_mapping]
+@@ -272,63 +297,17 @@ def validate_and_format(template: str, mapping: dict) -> str:
+             # return result
+             return template.format(**{k: v for k, v in str_mapping.items()})
+ 
++        _, k = next(iter(dict.items()))
+         # create heuristic heirarchy
+         with open(
+             os.path.join(
+-                self.dispatchers_path, f"moe_cktile2stages_heuristic_dispatch_{tag}.h"
++                self.dispatchers_path, f"{k.dispatch_suffix}_heuristic_dispatch_{tag}.h"
+             ),
+             "w",
+         ) as f:
+-            f.write(validate_and_format(HEURISTIC_template, kernels_dict))
+-            # arch = get_gfx()
+-            # inst_k = "32" if self.quant_type == "1x32" else ("128" if arch == "gfx950" else "64")
+-            # f.write(
+-            #     HEURISTIC_template.format(
+-            #         inst_k=inst_k,
+-            #         suffix1 = self.get_suffix(1),
+-            #         suffix2 = self.get_suffix(2)
+-            #     )
+-            # )
+-
+-    """genarete heuristic dispatch header for multi dtype"""
++            f.write(validate_and_format(HEURISTIC_template, dict))
+ 
+-    def gen_heuristic_dispatch_header(self, tags):
+-        HEURISTIC_dispatch_header = """#pragma once
+-// SPDX-License-Identifier: MIT
+-// Copyright (C) 2024-2025, Advanced Micro Devices, Inc. All rights reserved.
+-#include "moe_cktile2stages.h"
+-
+-"""
+-        for tag in tags:
+-            HEURISTIC_headers = f"""#include "./dispatchers/moe_cktile2stages_heuristic_dispatch_{tag}.h"
+-"""
+-            HEURISTIC_dispatch_header += HEURISTIC_headers
+-
+-        HEURISTIC_function = """#pragma once
+-// SPDX-License-Identifier: MIT
+-// Copyright (C) 2024-2025, Advanced Micro Devices, Inc. All rights reserved.
+-
+-#include "moe_cktile2stages.h"
+-
+-template <typename ADataType, typename BDataType, typename AccDataType, typename CDataType>
+-MoeKernel moe_gemm1_heuristic_dispatch(int M, int N, int K, int block_m);
+-
+-template <typename ADataType, typename BDataType, typename AccDataType, typename CDataType>
+-MoeKernel moe_gemm2_heuristic_dispatch(int M, int N, int K, int block_m);
+-"""
+-        # create heuristic heirarchy
+-        with open(
+-            os.path.join(self.working_path, "moe_cktile2stages_heuristic_dispatch.h"),
+-            "w",
+-        ) as f:
+-            f.write(HEURISTIC_dispatch_header)
+-        with open(
+-            os.path.join(
+-                self.dispatchers_path, "moe_cktile2stages_heuristic_dispatch_common.h"
+-            ),
+-            "w",
+-        ) as f:
+-            f.write(HEURISTIC_function)
++        return f"./dispatchers/{k.dispatch_suffix}_heuristic_dispatch_{tag}.h"
+ 
+     """generate lookup.h linking MNK/datatype to specific instance"""
+ 
+@@ -356,7 +335,6 @@ def gen_lookup_dict(self, kernels_dict):
+         ) as f:
+             f.write(LOOKUP_head)
+             for mnk, k in kernels_dict.items():
+-                print(":", k.name)
+                 # if not tunning, tuned mnk = {stage, m, n, k}
+                 if not self.istune and (
+                     isinstance(mnk, tuple) and (len(mnk) == 4) and mnk[1] > 0
+@@ -376,7 +354,7 @@ def gen_lookup_dict(self, kernels_dict):
+ 
+     """generate manifest.h for instance header"""
+ 
+-    def gen_manifest_head(self):
++    def gen_manifest_head(self, tag, kernels_dict):
+         MAINFEST_head = """#pragma once
+ // SPDX-License-Identifier: MIT
+ // Copyright (c) 2024, Advanced Micro Devices, Inc. All rights reserved.
+@@ -404,44 +382,39 @@ def gen_manifest_head(self):
+     std::optional<torch::Tensor> topk_weight,
+     std::optional<torch::Tensor> x_scale,
+     std::optional<torch::Tensor> w_scale,
+-    std::optional<torch::Tensor> exp_bias);
++    std::optional<torch::Tensor> exp_bias,
++    std::optional<int> activation,
++    std::optional<int> k_batch);
+ """
+         MAINFEST_end = """
+ 
+ // endif // USE_ROCM
+ """
+-
++        _, k0 = next(iter(kernels_dict.items()))
+         with open(
+-            os.path.join(self.working_path, "moe_cktile2stages_manifest.h"), "w"
++            os.path.join(self.manifests_path, f"{k0.dispatch_suffix}_manifest_{tag}.h"),
++            "w",
+         ) as f:
+             f.write(MAINFEST_head)
+             for k_name in self.kernel_name_list:
+                 f.write(MAINFEST_template.format(kernel_name=k_name))
+             f.write(MAINFEST_end)
+ 
+-    """generate all instances and headers"""
+-
+-    def gen_instances(self, tag, kernels_dict, a_type):
+-        if self.init:
+-            if os.path.exists(self.impl_path):
+-                shutil.rmtree(self.impl_path)
+-            os.mkdir(self.impl_path)
+-            if os.path.exists(self.instances_path):
+-                shutil.rmtree(self.instances_path)
+-            os.mkdir(self.instances_path)
+-            if os.path.exists(self.dispatchers_path):
+-                shutil.rmtree(self.dispatchers_path)
+-            os.mkdir(self.dispatchers_path)
++        return f"./manifests/{k0.dispatch_suffix}_manifest_{tag}.h"
+ 
+-        self.init = False
++    """generate all instances and headers"""
+ 
++    def gen_instances(self, tag, kernels_dict):
+         for mnk, k in kernels_dict.items():
+-            self.gen_instance(k, a_type)
++            self.gen_instance(k)
+             if k.name not in self.kernel_name_list:
+                 self.kernel_name_list.append(k.name)
+ 
+         self.gen_lookup_dict(kernels_dict)
+         self.gen_heuristic_dispatch(tag, kernels_dict)
++        return self.gen_heuristic_dispatch(tag, kernels_dict), self.gen_manifest_head(
++            tag, kernels_dict
++        )
+ 
+ 
+ # def get_tune_dict(tune_dict_csv):
+@@ -462,6 +435,39 @@ def gen_instances(self, tag, kernels_dict, a_type):
+ #     return tune_dict
+ 
+ 
++def generate_common_header(working_path, dispatch_files, manifest_files):
++
++    common_header = """// SPDX-License-Identifier: MIT
++// Copyright (C) 2025, Advanced Micro Devices, Inc. All rights reserved.
++#pragma once
++
++"""
++    dispatch_header = common_header
++    manifest_header = common_header
++
++    for file_name in sorted(dispatch_files):
++        include_path = f'"{file_name}"'
++        dispatch_header += f"#include {include_path}\n"
++
++    dispatch_common_header_path = os.path.join(
++        working_path, "moe_cktile2stages_heuristic_dispatch_common.h"
++    )
++    with open(dispatch_common_header_path, "w") as f:
++        f.write(dispatch_header)
++
++    for file_name in sorted(manifest_files):
++        include_path = f'"{file_name}"'
++        manifest_header += f"#include {include_path}\n"
++
++    manifest_common_header_path = os.path.join(
++        working_path, "moe_cktile2stages_manifest_common.h"
++    )
++    with open(manifest_common_header_path, "w") as f:
++        f.write(manifest_header)
++
++    """genarete heuristic dispatch header for multi dtype"""
++
++
+ if __name__ == "__main__":
+     parser = argparse.ArgumentParser(
+         description="Generate ck_tile 2stage gemm instance."
+@@ -537,7 +543,7 @@ def gen_instances(self, tag, kernels_dict, a_type):
+         default="silu",
+         required=False,
+         type=str,
+-        choices=["silu", "gelu"],
++        choices=["silu", "gelu", "swiglu"],
+         help="select activation",
+     )
+ 
+@@ -608,36 +614,76 @@ def gen_instances(self, tag, kernels_dict, a_type):
+     quant_type = "1x32"
+ 
+     acc_type = "float"
+-    c_type = "bf16"
+-    act_type = "silu"
+-    codegen = cktile_moe_2stage_gemm_codegen(
+-        args.working_path, a_types, acc_type, c_type, quant_type, act_type, 2, False
+-    )
+-    # gen all instances for gemm1 and gemm2
+-    tags = []
+-    kernel_list = []
+-    for a_type in a_types:
++    act_types = ["silu", "swiglu"]
++    c_dtypes = ["bf16"]
++    is_split_k_l = [True, False]
++
++    impl_path = os.path.join(args.working_path, "impl")
++    instances_path = os.path.join(args.working_path, "instances")
++    dispatchers_path = os.path.join(args.working_path, "dispatchers")
++    manifests_path = os.path.join(args.working_path, "manifests")
++
++    if os.path.exists(impl_path):
++        shutil.rmtree(impl_path)
++    os.mkdir(impl_path)
++    if os.path.exists(instances_path):
++        shutil.rmtree(instances_path)
++    os.mkdir(instances_path)
++    if os.path.exists(dispatchers_path):
++        shutil.rmtree(dispatchers_path)
++    os.mkdir(dispatchers_path)
++    if os.path.exists(manifests_path):
++        shutil.rmtree(manifests_path)
++    os.mkdir(manifests_path)
++
++    gen_dispatch_files = []
++    gen_manifest_files = []
++
++    for a_type, c_dtype, act_type, is_split_k in itertools.product(
++        a_types, c_dtypes, act_types, is_split_k_l
++    ):
++        has_bias = True if act_type == "swiglu" else False
++
++        # a8w8 do not support
++        if a_type in ["fp8", "bf8"] and is_split_k:
++            continue
++        codegen = cktile_moe_2stage_gemm_codegen(
++            args.working_path,
++            a_type,
++            acc_type,
++            c_dtype,
++            quant_type,
++            act_type,
++            2,
++            is_split_k,
++            False,
++        )
++        # gen all instances for gemm1 and gemm2
+         _, gemm1_kernel_list = get_gemm1_kernels_list(
+             a_type,
+             b_type,
+             quant_type,
+             act_type,
+             False,
++            has_bias,
++            is_split_k,
+         )
+         tag, gemm2_kernel_list = get_gemm2_kernels_list(
+             a_type,
+             b_type,
+             quant_type,
+-            "",
++            "no",
+             True,
++            has_bias,
+         )
+         # merge gemm1/gemm2 dict with key = {stage, key}
+         kernel_dict_merge = {
+             **{(1, key): value for key, value in gemm1_kernel_list.items()},
+             **{(2, key): value for key, value in gemm2_kernel_list.items()},
+         }
+-        # print(kernel_dict_merge)
+-        codegen.gen_instances(tag, kernel_dict_merge, a_type)
+-        tags.append(tag)
+-    codegen.gen_heuristic_dispatch_header(tags)
+-    codegen.gen_manifest_head()
++        dispatch_file, manifest_file = codegen.gen_instances(tag, kernel_dict_merge)
++
++        gen_dispatch_files.append(dispatch_file)
++        gen_manifest_files.append(manifest_file)
++
++    generate_common_header(args.working_path, gen_dispatch_files, gen_manifest_files)
+diff --git a/csrc/ck_tile_gemm_moe_2stages/include/moe_cktile2stages.h b/csrc/ck_tile_gemm_moe_2stages/include/moe_cktile2stages.h
+index df9359d7bf..6ae10e9bf6 100644
+--- a/csrc/ck_tile_gemm_moe_2stages/include/moe_cktile2stages.h
++++ b/csrc/ck_tile_gemm_moe_2stages/include/moe_cktile2stages.h
+@@ -32,7 +32,10 @@ using MoeKernel        = std::function<torch::Tensor(torch::Tensor&,
+                                               std::optional<torch::Tensor>,
+                                               std::optional<torch::Tensor>,
+                                               std::optional<torch::Tensor>,
+-                                              std::optional<torch::Tensor>)>;
++                                              std::optional<torch::Tensor>,
++                                              std::optional<int>,
++                                              std::optional<int>)>;
++
+ using ck_stream_config = ck_tile::stream_config;
+ using row_major        = ck_tile::tensor_layout::gemm::RowMajor;
+ using col_major        = ck_tile::tensor_layout::gemm::ColumnMajor;
+@@ -41,6 +44,17 @@ using fp16             = ck_tile::half_t;
+ using fp8              = ck_tile::fp8_t;
+ using pk_fp4           = ck_tile::pk_fp4_t;
+ 
++template <typename ADataType, typename BDataType, typename AccDataType, typename CDataType, int activation, bool kHasBias, int split_k>
++struct moe_gemm1_heuristic_dispatcher{
++    static MoeKernel dispatch(int M, int N, int K, int block_m){}
++};
++
++
++template <typename ADataType, typename BDataType, typename AccDataType, typename CDataType, int activation, bool kHasBias, int split_k>
++struct moe_gemm2_heuristic_dispatcher{
++    static MoeKernel dispatch(int M, int N, int K, int block_m){}
++};
++
+ __attribute__((visibility("default"))) torch::Tensor
+ cktile_moe_gemm1(torch::Tensor& XQ,
+                  torch::Tensor& WQ,
+@@ -55,7 +69,9 @@ cktile_moe_gemm1(torch::Tensor& XQ,
+                  std::optional<torch::Tensor> x_scale,
+                  std::optional<torch::Tensor> w_scale,
+                  std::optional<torch::Tensor> exp_bias,
+-                 std::optional<int> block_m);
++                 std::optional<int> activation,
++                 std::optional<int> block_m,
++                 std::optional<int> split_k);
+ 
+ __attribute__((visibility("default"))) torch::Tensor
+ cktile_moe_gemm2(torch::Tensor& XQ,
+@@ -71,4 +87,6 @@ cktile_moe_gemm2(torch::Tensor& XQ,
+                  std::optional<torch::Tensor> x_scale,
+                  std::optional<torch::Tensor> w_scale,
+                  std::optional<torch::Tensor> exp_bias,
+-                 std::optional<int> block_m);
+\ No newline at end of file
++                 std::optional<int> activation,
++                 std::optional<int> block_m,
++                 std::optional<int> split_k);
+diff --git a/csrc/ck_tile_gemm_moe_2stages/include/moe_cktile2stages_common.cuh b/csrc/ck_tile_gemm_moe_2stages/include/moe_cktile2stages_common.cuh
+index 4caae47273..6f34080b52 100644
+--- a/csrc/ck_tile_gemm_moe_2stages/include/moe_cktile2stages_common.cuh
++++ b/csrc/ck_tile_gemm_moe_2stages/include/moe_cktile2stages_common.cuh
+@@ -88,6 +88,7 @@ template <typename FlatmmConfig,
+           typename ELayout,
+           ck_tile::MoeFlatmmKind moe_kind,
+           typename CDEElementWise,
++          int ActivationOp,
+           typename MoeFlatmmHostArgs>
+ void moe_gemm(const MoeFlatmmHostArgs& args, const ck_stream_config& s)
+ {
+@@ -234,8 +235,10 @@ void moe_gemm(const MoeFlatmmHostArgs& args, const ck_stream_config& s)
+                 ck_tile::F16xMXF4FlatmmPipelineAGmemBGmemCRegV1<CodegenPipelineProblem>>,
+             ck_tile::MoeFlatmmPipelineAGmemBGmemCRegV1<CodegenPipelineProblem>>;
+ 
++
++        // TODO: support more act type.
+         using FusedAct =
+-            std::conditional_t<BMXFP4_Pipeline, ck_tile::moe::Swiglu, ck_tile::moe::MoeSilu>;
++            std::conditional_t<ActivationOp == 2, ck_tile::moe::Swiglu, ck_tile::moe::MoeSilu>;
+ 
+         using Kernel = ck_tile::MoeFlatmmKernel<TilePartitioner,
+                                                 CodegenFlatmmPipeline,
+diff --git a/csrc/ck_tile_gemm_moe_2stages/moe_cktile2stages.cu b/csrc/ck_tile_gemm_moe_2stages/moe_cktile2stages.cu
+index 850676add3..80dcc57ed1 100644
+--- a/csrc/ck_tile_gemm_moe_2stages/moe_cktile2stages.cu
++++ b/csrc/ck_tile_gemm_moe_2stages/moe_cktile2stages.cu
+@@ -2,9 +2,9 @@
+ // Copyright (C) 2024-2025, Advanced Micro Devices, Inc. All rights reserved.
+ #include "moe_cktile2stages_common.cuh"
+ #include "moe_cktile2stages_lookup.h"
+-#include "moe_cktile2stages_manifest.h"
++#include "moe_cktile2stages_manifest_common.h"
+ #include "py_itfs_common.h"
+-#include "moe_cktile2stages_heuristic_dispatch.h"
++#include "moe_cktile2stages_heuristic_dispatch_common.h"
+ #include <cmath>
+ 
+ template <typename ADataType,
+@@ -12,7 +12,7 @@ template <typename ADataType,
+           typename AccDataType,
+           typename CDataType,
+           int stage = 1>
+-MoeKernel moe_dispatch(int M, int N, int K, int block_m)
++MoeKernel moe_dispatch(int M, int N, int K, int block_m, int activation, bool has_bias, int split_k)
+ {
+     // For a given shape, either find the best kernel via lookup or heuristic.
+     // For many small M shapes, we bucket them to the next largest kernel.
+@@ -52,17 +52,112 @@ MoeKernel moe_dispatch(int M, int N, int K, int block_m)
+     //   return it->second;
+     // }
+     // Otherwise, use heuristics.
+-    if(stage == 1)
++    if (split_k > 1)
+     {
+-        return moe_gemm1_heuristic_dispatch<ADataType, BDataType, AccDataType, CDataType>(
+-            M, N, K, block_m);
++        if (activation == 2 && has_bias) 
++        {
++            if (stage == 1)
++            {
++                return moe_gemm1_heuristic_dispatcher<ADataType, BDataType, AccDataType, CDataType, 2, true, true>::dispatch(
++                    M, N, K, block_m);
++            }
++            else
++            {
++                return moe_gemm2_heuristic_dispatcher<ADataType, BDataType, AccDataType, CDataType, 2, true, true>::dispatch(
++                    M, N, K, block_m);
++            }
++        }
++        else if (activation == 2 && !has_bias) {
++            if (stage == 1)
++            {
++                return moe_gemm1_heuristic_dispatcher<ADataType, BDataType, AccDataType, CDataType, 2, false, true>::dispatch(
++                    M, N, K, block_m);
++            }
++            else
++            {
++                return moe_gemm2_heuristic_dispatcher<ADataType, BDataType, AccDataType, CDataType, 2, false, true>::dispatch(
++                    M, N, K, block_m);
++            }
++        }
++        else if (activation == 0 && has_bias) {
++            if (stage == 1)
++            {
++                return moe_gemm1_heuristic_dispatcher<ADataType, BDataType, AccDataType, CDataType, 0, true, true>::dispatch(
++                    M, N, K, block_m);
++            }
++            else
++            {
++                return moe_gemm2_heuristic_dispatcher<ADataType, BDataType, AccDataType, CDataType, 0, true, true>::dispatch(
++                    M, N, K, block_m);
++            }
++        }
++        else if (activation == 0 && !has_bias) {
++            if (stage == 1)
++            {
++                return moe_gemm1_heuristic_dispatcher<ADataType, BDataType, AccDataType, CDataType, 0, false, true>::dispatch(
++                    M, N, K, block_m);
++            }
++            else
++            {
++                return moe_gemm2_heuristic_dispatcher<ADataType, BDataType, AccDataType, CDataType, 0, false, true>::dispatch(
++                    M, N, K, block_m);
++            }
++        }
+     }
+     else
+     {
+-        return moe_gemm2_heuristic_dispatch<ADataType, BDataType, AccDataType, CDataType>(
+-            M, N, K, block_m);
++        if (activation == 2 && has_bias) 
++        {
++            if (stage == 1)
++            {
++                return moe_gemm1_heuristic_dispatcher<ADataType, BDataType, AccDataType, CDataType, 2, true, false>::dispatch(
++                    M, N, K, block_m);
++            }
++            else
++            {
++                return moe_gemm2_heuristic_dispatcher<ADataType, BDataType, AccDataType, CDataType, 2, true, false>::dispatch(
++                    M, N, K, block_m);
++            }
++        }
++        else if (activation == 2 && !has_bias) {
++            if (stage == 1)
++            {
++                return moe_gemm1_heuristic_dispatcher<ADataType, BDataType, AccDataType, CDataType, 2, false, false>::dispatch(
++                    M, N, K, block_m);
++            }
++            else
++            {
++                return moe_gemm2_heuristic_dispatcher<ADataType, BDataType, AccDataType, CDataType, 2, false, false>::dispatch(
++                    M, N, K, block_m);
++            }
++        }
++        else if (activation == 0 && has_bias) {
++            if (stage == 1)
++            {
++                return moe_gemm1_heuristic_dispatcher<ADataType, BDataType, AccDataType, CDataType, 0, true, false>::dispatch(
++                    M, N, K, block_m);
++            }
++            else
++            {
++                return moe_gemm2_heuristic_dispatcher<ADataType, BDataType, AccDataType, CDataType, 0, true, false>::dispatch(
++                    M, N, K, block_m);
++            }
++        }
++        else if (activation == 0 && !has_bias) {
++            if (stage == 1)
++            {
++                return moe_gemm1_heuristic_dispatcher<ADataType, BDataType, AccDataType, CDataType, 0, false, false>::dispatch(
++                    M, N, K, block_m);
++            }
++            else
++            {
++                return moe_gemm2_heuristic_dispatcher<ADataType, BDataType, AccDataType, CDataType, 0, false, false>::dispatch(
++                    M, N, K, block_m);
++            }
++        }
+     }
+ }
++    
+ 
+ torch::Tensor cktile_moe_gemm1(torch::Tensor& XQ,
+                                torch::Tensor& WQ,
+@@ -77,19 +172,26 @@ torch::Tensor cktile_moe_gemm1(torch::Tensor& XQ,
+                                std::optional<torch::Tensor> x_scale,
+                                std::optional<torch::Tensor> w_scale,
+                                std::optional<torch::Tensor> exp_bias,
+-                               std::optional<int> block_m)
++                               std::optional<int> activation,
++                               std::optional<int> block_m,
++                               std::optional<int> split_k)
+ {
+     TORCH_CHECK(Y.dtype() == at::ScalarType::BFloat16 || Y.dtype() == at::ScalarType::Half,
+                 "Out dtype only support BFloat16/Float16!");
+-    if(x_scale != std::nullopt && w_scale != std::nullopt)
++    if(x_scale.has_value() && w_scale.has_value())
+     {
+         TORCH_CHECK(x_scale.value().dtype() == w_scale.value().dtype(),
+                     "Scales should have the same dtype!");
+     }
+-    int M         = sorted_ids.size(0);
++    int64_t token     = XQ.size(0);
++    int M         = std::min(sorted_ids.size(0), token * topk * block_m.value());
+     int N         = WQ.size(1);
+     int K         = XQ.size(-1);
+-    int MPerBlock = block_m.value();
++    int MPerBlock = block_m.has_value() ? block_m.value() : 32;
++
++    bool has_bias = exp_bias.has_value();
++    int act_op    = activation.has_value() ? activation.value() : -1;
++    int k_batch   = split_k.has_value() ? split_k.value() : 1;
+ 
+     const at::hip::OptionalHIPGuardMasqueradingAsCUDA device_guard(device_of(Y));
+     at::hip::getCurrentHIPStream();
+@@ -113,19 +215,22 @@ torch::Tensor cktile_moe_gemm1(torch::Tensor& XQ,
+         // }
+         if (WQ.dtype() == torch_fp4x2 && Y.dtype() == at::ScalarType::BFloat16)
+         {
+-            moe_dispatch<fp8, pk_fp4, float, bf16, 1>(M, N, K, MPerBlock)(XQ,
+-                                                                          WQ,
+-                                                                          Y,
+-                                                                          sorted_ids,
+-                                                                          sorted_expert_ids,
+-                                                                          max_token_ids,
+-                                                                          topk,
+-                                                                          n_padded_zeros,
+-                                                                          k_padded_zeros,
+-                                                                          topk_weight,
+-                                                                          x_scale,
+-                                                                          w_scale,
+-                                                                          exp_bias);
++            moe_dispatch<fp8, pk_fp4, float, bf16, 1>(M, N, K, MPerBlock, act_op, has_bias, k_batch)(
++                XQ,
++                WQ,
++                Y,
++                sorted_ids,
++                sorted_expert_ids,
++                max_token_ids,
++                topk,
++                n_padded_zeros,
++                k_padded_zeros,
++                topk_weight,
++                x_scale,
++                w_scale,
++                exp_bias,
++                act_op,
++                k_batch);
+         }
+     }
+     else if((XQ.dtype() == at::ScalarType::BFloat16 || XQ.dtype() == at::ScalarType::Half) &&
+@@ -138,19 +243,22 @@ torch::Tensor cktile_moe_gemm1(torch::Tensor& XQ,
+         // }
+         if(Y.dtype() == at::ScalarType::BFloat16)
+         {
+-            moe_dispatch<bf16, pk_fp4, float, bf16, 1>(M, N, K, MPerBlock)(XQ,
+-                                                                           WQ,
+-                                                                           Y,
+-                                                                           sorted_ids,
+-                                                                           sorted_expert_ids,
+-                                                                           max_token_ids,
+-                                                                           topk,
+-                                                                           n_padded_zeros,
+-                                                                           k_padded_zeros,
+-                                                                           topk_weight,
+-                                                                           x_scale,
+-                                                                           w_scale,
+-                                                                           exp_bias);
++            moe_dispatch<bf16, pk_fp4, float, bf16, 1>(M, N, K, MPerBlock, act_op, has_bias, k_batch)(
++                XQ,
++                WQ,
++                Y,
++                sorted_ids,
++                sorted_expert_ids,
++                max_token_ids,
++                topk,
++                n_padded_zeros,
++                k_padded_zeros,
++                topk_weight,
++                x_scale,
++                w_scale,
++                exp_bias,
++                act_op,
++                k_batch);
+         }
+     }
+     else
+@@ -173,12 +281,19 @@ torch::Tensor cktile_moe_gemm2(torch::Tensor& XQ,
+                                std::optional<torch::Tensor> x_scale,
+                                std::optional<torch::Tensor> w_scale,
+                                std::optional<torch::Tensor> exp_bias,
+-                               std::optional<int> block_m)
++                               std::optional<int> activation,
++                               std::optional<int> block_m,
++                               std::optional<int> split_k)
+ {
+-    int M         = sorted_ids.size(0);
++    int64_t token     = XQ.size(0);
++    int MPerBlock = block_m.has_value() ? block_m.value() : 32;
++    int M         = std::min(sorted_ids.size(0), token * topk * MPerBlock);
+     int N         = WQ.size(1);
+     int K         = XQ.size(-1);
+-    int MPerBlock = block_m.value();
++    
++    bool has_bias = exp_bias.has_value();
++    int act_op    = activation.has_value() ? activation.value() : -1;
++    int k_batch   = split_k.has_value() ? split_k.value() : 1;
+ 
+     const at::hip::OptionalHIPGuardMasqueradingAsCUDA device_guard(device_of(Y));
+     at::hip::getCurrentHIPStream();
+@@ -202,19 +317,22 @@ torch::Tensor cktile_moe_gemm2(torch::Tensor& XQ,
+         // }
+         if (WQ.dtype() == torch_fp4x2 && Y.dtype() == at::ScalarType::BFloat16)
+         {
+-            moe_dispatch<fp8, pk_fp4, float, bf16, 2>(M, N, K, MPerBlock)(XQ,
+-                                                                          WQ,
+-                                                                          Y,
+-                                                                          sorted_ids,
+-                                                                          sorted_expert_ids,
+-                                                                          max_token_ids,
+-                                                                          topk,
+-                                                                          n_padded_zeros,
+-                                                                          k_padded_zeros,
+-                                                                          topk_weight,
+-                                                                          x_scale,
+-                                                                          w_scale,
+-                                                                          exp_bias);
++            moe_dispatch<fp8, pk_fp4, float, bf16, 2>(M, N, K, MPerBlock, act_op, has_bias, k_batch)(
++                XQ,
++                WQ,
++                Y,
++                sorted_ids,
++                sorted_expert_ids,
++                max_token_ids,
++                topk,
++                n_padded_zeros,
++                k_padded_zeros,
++                topk_weight,
++                x_scale,
++                w_scale,
++                exp_bias,
++                act_op,
++                k_batch);
+         }
+     }
+     else if((XQ.dtype() == at::ScalarType::BFloat16 || XQ.dtype() == at::ScalarType::Half) &&
+@@ -227,19 +345,22 @@ torch::Tensor cktile_moe_gemm2(torch::Tensor& XQ,
+         // }
+         if(Y.dtype() == at::ScalarType::BFloat16)
+         {
+-            moe_dispatch<bf16, pk_fp4, float, bf16, 2>(M, N, K, MPerBlock)(XQ,
+-                                                                           WQ,
+-                                                                           Y,
+-                                                                           sorted_ids,
+-                                                                           sorted_expert_ids,
+-                                                                           max_token_ids,
+-                                                                           topk,
+-                                                                           n_padded_zeros,
+-                                                                           k_padded_zeros,
+-                                                                           topk_weight,
+-                                                                           x_scale,
+-                                                                           w_scale,
+-                                                                           exp_bias);
++            moe_dispatch<bf16, pk_fp4, float, bf16, 2>(M, N, K, MPerBlock, 0, has_bias, k_batch)(
++                XQ,
++                WQ,
++                Y,
++                sorted_ids,
++                sorted_expert_ids,
++                max_token_ids,
++                topk,
++                n_padded_zeros,
++                k_padded_zeros,
++                topk_weight,
++                x_scale,
++                w_scale,
++                exp_bias,
++                act_op,
++                k_batch);
+         }
+     }
+     else
+diff --git a/csrc/ck_tile_gemm_moe_2stages/moe_cktile2stages_common.py b/csrc/ck_tile_gemm_moe_2stages/moe_cktile2stages_common.py
+index 189f0331d6..765a3228dd 100644
+--- a/csrc/ck_tile_gemm_moe_2stages/moe_cktile2stages_common.py
++++ b/csrc/ck_tile_gemm_moe_2stages/moe_cktile2stages_common.py
+@@ -17,6 +17,22 @@
+ from chip_info import get_gfx  # noqa: E402
+ 
+ 
++act_dict = {
++    "no": -1,
++    "silu": 0,
++    # "gelu": 1,
++    "swiglu": 2,
++}
++
++
++dtype_dict = {
++    "fp8": "ck_tile::fp8_t",
++    "bf16": "ck_tile::bf16_t",
++    "float": "float",
++    "fp4": "ck_tile::pk_fp4_t",
++}
++
++
+ @dataclass
+ class kernelInstance:
+     stage: int
+@@ -31,6 +47,8 @@ class kernelInstance:
+     WAVE_MAP_N: int
+     Block_Per_CU: int = 1
+     MulRoutedWeight: bool = False
++    SplitK: bool = False
++    HasBias: bool = False
+     ActOP: str = "silu"
+     QuantType: str = "per_tensor"
+ 
+@@ -61,7 +79,24 @@ def name(self) -> str:
+                 str(self.Block_Per_CU) + "perCU",
+                 self.QuantType,
+                 "MulRoutedWeight" if self.MulRoutedWeight else "",
++                "HasBias" if self.HasBias else "",
++                "" if (self.stage == 2) else self.ActOP,
++                "SplitK" if self.SplitK else "",
++            ]
++            if element != ""
++        )
++
++    @property
++    def dispatch_suffix(self) -> str:
++        return ("_").join(
++            element
++            for element in [
++                "moe_cktile2stages",
++                self.QuantType,
++                "MulRoutedWeight" if self.MulRoutedWeight else "",
++                "Bias" if self.HasBias else "NoBias",
+                 "" if (self.stage == 2) else self.ActOP,
++                "SplitK" if self.SplitK else "",
+             ]
+             if element != ""
+         )
+@@ -206,62 +241,68 @@ def name(self) -> str:
+ #include "moe_cktile2stages_heuristic_dispatch_common.h"
+ 
+ template <>
+-MoeKernel moe_gemm1_heuristic_dispatch<ck_tile::fp8_t, ck_tile::fp8_t, float, ck_tile::bf16_t>(int M, int N, int K, int block_m)
++struct moe_gemm1_heuristic_dispatcher<{(a_data_type)}, {(b_data_type)}, {(acc_data_type)}, {(c_data_type)}, {(activation)}, {(has_bias)}, {(split_k)}>
+ {{
+-    // Apply shape heuristics to find a suitable kernel implementation.
+-    if (block_m == 32)
+-    {{
+-        return {(1, 1)}<ck_tile::fp8_t, ck_tile::fp8_t, float, ck_tile::bf16_t>;
+-    }}
+-    else if (block_m == 64)
++    static MoeKernel dispatch(int M, int N, int K, int block_m)
+     {{
+-        return {(1, 2)}<ck_tile::fp8_t, ck_tile::fp8_t, float, ck_tile::bf16_t>;
++        // Apply shape heuristics to find a suitable kernel implementation.
++        if (block_m == 32)
++        {{
++            return {(1, 1)}<{(a_data_type)}, {(b_data_type)}, {(acc_data_type)}, {(c_data_type)}>;
++        }}
++        else if (block_m == 64)
++        {{
++            return {(1, 2)}<{(a_data_type)}, {(b_data_type)}, {(acc_data_type)}, {(c_data_type)}>;
++        }}
++        //else if (block_m == 128)
++        //{{
++        //    return {(1, 4)}<{(a_data_type)}, {(b_data_type)}, {(acc_data_type)}, {(c_data_type)}>;
++        //}}
++        //else if (block_m == 256)
++        //{{
++        //    return {(1, 6)}<{(a_data_type)}, {(b_data_type)}, {(acc_data_type)}, {(c_data_type)}>;
++        //}}
++        else
++        {{
++            TORCH_CHECK(
++                false,
++                "Unsupported block_m value for moe_geem1 heuristic dispatch: ",
++                block_m);
++        }}
+     }}
+-    //else if (block_m == 128)
+-    //{{
+-    //    return {(1, 4)}<ck_tile::fp8_t, ck_tile::fp8_t, float, ck_tile::bf16_t>;
+-    //}}
+-    //else if (block_m == 256)
+-    //{{
+-    //    return {(1, 6)}<ck_tile::fp8_t, ck_tile::fp8_t, float, ck_tile::bf16_t>;
+-    //}}
+-    else
+-    {{
+-        TORCH_CHECK(
+-            false,
+-            "Unsupported block_m value for moe_geem1 heuristic dispatch: ",
+-            block_m);
+-    }}
+-}}
++}};
+ 
+ template <>
+-MoeKernel moe_gemm2_heuristic_dispatch<ck_tile::fp8_t, ck_tile::fp8_t, float, ck_tile::bf16_t>(int M, int N, int K, int block_m)
++struct moe_gemm2_heuristic_dispatcher<{(a_data_type)}, {(b_data_type)}, {(acc_data_type)}, {(c_data_type)}, {(activation)}, {(has_bias)}, {(split_k)}>
+ {{
+-    // Apply shape heuristics to find a suitable kernel implementation.
+-    if (block_m == 32)
+-    {{
+-        return {(2, 0)}<ck_tile::fp8_t, ck_tile::fp8_t, float, ck_tile::bf16_t>;
+-    }}
+-    else if (block_m == 64)
++    static MoeKernel dispatch(int M, int N, int K, int block_m)
+     {{
+-        return {(2, 1)}<ck_tile::fp8_t, ck_tile::fp8_t, float, ck_tile::bf16_t>;
++        // Apply shape heuristics to find a suitable kernel implementation.
++        if (block_m == 32)
++        {{
++            return {(2, 0)}<{(a_data_type)}, {(b_data_type)}, {(acc_data_type)}, {(c_data_type)}>;
++        }}
++        else if (block_m == 64)
++        {{
++            return {(2, 1)}<{(a_data_type)}, {(b_data_type)}, {(acc_data_type)}, {(c_data_type)}>;
++        }}
++        //else if (block_m == 128)
++        //{{
++        //    return {(2, 2)}<{(a_data_type)}, {(b_data_type)}, {(acc_data_type)}, {(c_data_type)}>;
++        //}}
++        //else if (block_m == 256)
++        //{{
++        //    return {(2, 3)}<{(a_data_type)}, {(b_data_type)}, {(acc_data_type)}, {(c_data_type)}>;
++        //}}
++        else
++        {{
++            TORCH_CHECK(
++                false,
++                "Unsupported block_m value for moe_gemm1 heuristic dispatch: ",
++                block_m);
++        }}
+     }}
+-    //else if (block_m == 128)
+-    //{{
+-    //    return {(2, 2)}<ck_tile::fp8_t, ck_tile::fp8_t, float, ck_tile::bf16_t>;
+-    //}}
+-    //else if (block_m == 256)
+-    //{{
+-    //    return {(2, 3)}<ck_tile::fp8_t, ck_tile::fp8_t, float, ck_tile::bf16_t>;
+-    //}}
+-    else
+-    {{
+-        TORCH_CHECK(
+-            false,
+-            "Unsupported block_m value for moe_gemm1 heuristic dispatch: ",
+-            block_m);
+-    }}
+-}}
++}};
+ """
+ 
+ a16w4_gfx950_heuristic_dispatch = """#pragma once
+@@ -271,54 +312,60 @@ def name(self) -> str:
+ #include "moe_cktile2stages_heuristic_dispatch_common.h"
+ 
+ template <>
+-MoeKernel moe_gemm1_heuristic_dispatch<ck_tile::bf16_t, ck_tile::pk_fp4_t, float, ck_tile::bf16_t>(int M, int N, int K, int block_m)
++struct moe_gemm1_heuristic_dispatcher<{(a_data_type)}, {(b_data_type)}, {(acc_data_type)}, {(c_data_type)}, {(activation)}, {(has_bias)}, {(split_k)}>
+ {{
+-    // Apply shape heuristics to find a suitable kernel implementation.
+-    if (block_m == 16)
+-    {{
+-        return {(1, 0)}<ck_tile::bf16_t, ck_tile::pk_fp4_t, float, ck_tile::bf16_t>;
+-    }}
+-    else if (block_m == 32)
++    static MoeKernel dispatch(int M, int N, int K, int block_m)
+     {{
+-        return {(1, 1)}<ck_tile::bf16_t, ck_tile::pk_fp4_t, float, ck_tile::bf16_t>;
++        // Apply shape heuristics to find a suitable kernel implementation.
++        if (block_m == 16)
++        {{
++            return {(1, 0)}<{(a_data_type)}, {(b_data_type)}, {(acc_data_type)}, {(c_data_type)}>;
++        }}
++        else if (block_m == 32)
++        {{
++            return {(1, 1)}<{(a_data_type)}, {(b_data_type)}, {(acc_data_type)}, {(c_data_type)}>;
++        }}
++        else if (block_m == 64)
++        {{
++            return {(1, 3)}<{(a_data_type)}, {(b_data_type)}, {(acc_data_type)}, {(c_data_type)}>;
++        }}
++        else
++        {{
++            TORCH_CHECK(
++                false,
++                "Unsupported block_m value for moe_geem1 heuristic dispatch: ",
++                block_m);
++        }}
+     }}
+-    else if (block_m == 64)
+-    {{
+-        return {(1, 3)}<ck_tile::bf16_t, ck_tile::pk_fp4_t, float, ck_tile::bf16_t>;
+-    }}
+-    else
+-    {{
+-        TORCH_CHECK(
+-            false,
+-            "Unsupported block_m value for moe_geem1 heuristic dispatch: ",
+-            block_m);
+-    }}
+-}}
++}};
+ 
+ template <>
+-MoeKernel moe_gemm2_heuristic_dispatch<ck_tile::bf16_t, ck_tile::pk_fp4_t, float, ck_tile::bf16_t>(int M, int N, int K, int block_m)
++struct moe_gemm2_heuristic_dispatcher<{(a_data_type)}, {(b_data_type)}, {(acc_data_type)}, {(c_data_type)}, {(activation)}, {(has_bias)}, {(split_k)}>
+ {{
+-    // Apply shape heuristics to find a suitable kernel implementation.
+-    if (block_m == 16)
+-    {{
+-        return {(2, 0)}<ck_tile::bf16_t, ck_tile::pk_fp4_t, float, ck_tile::bf16_t>;
+-    }}
+-    else if (block_m == 32)
+-    {{
+-        return {(2, 1)}<ck_tile::bf16_t, ck_tile::pk_fp4_t, float, ck_tile::bf16_t>;
+-    }}
+-    else if (block_m == 64)
+-    {{
+-        return {(2, 3)}<ck_tile::bf16_t, ck_tile::pk_fp4_t, float, ck_tile::bf16_t>;
+-    }}
+-    else
++    static MoeKernel dispatch(int M, int N, int K, int block_m)
+     {{
+-        TORCH_CHECK(
+-            false,
+-            "Unsupported block_m value for moe_gemm2 heuristic dispatch: ",
+-            block_m);
++        // Apply shape heuristics to find a suitable kernel implementation.
++        if (block_m == 16)
++        {{
++            return {(2, 0)}<{(a_data_type)}, {(b_data_type)}, {(acc_data_type)}, {(c_data_type)}>;
++        }}
++        else if (block_m == 32)
++        {{
++            return {(2, 1)}<{(a_data_type)}, {(b_data_type)}, {(acc_data_type)}, {(c_data_type)}>;
++        }}
++        else if (block_m == 64)
++        {{
++            return {(2, 3)}<{(a_data_type)}, {(b_data_type)}, {(acc_data_type)}, {(c_data_type)}>;
++        }}
++        else
++        {{
++            TORCH_CHECK(
++                false,
++                "Unsupported block_m value for moe_gemm2 heuristic dispatch: ",
++                block_m);
++        }}
+     }}
+-}}
++}};
+ """
+ 
+ a16w4_heuristic_dispatch = """#pragma once
+@@ -328,111 +375,115 @@ def name(self) -> str:
+ #include "moe_cktile2stages_heuristic_dispatch_common.h"
+ 
+ template <>
+-MoeKernel moe_gemm1_heuristic_dispatch<ck_tile::bf16_t, ck_tile::pk_fp4_t, float, ck_tile::bf16_t>(int M, int N, int K, int block_m)
++struct moe_gemm1_heuristic_dispatcher<{(a_data_type)}, {(b_data_type)}, {(acc_data_type)}, {(c_data_type)}, {(activation)}, {(has_bias)}, {(split_k)}>
+ {{
+-    // Apply shape heuristics to find a suitable kernel implementation.
+-    if (block_m == 16)
++    static MoeKernel dispatch(int M, int N, int K, int block_m)
+     {{
+-        return {(1, 0)}<ck_tile::bf16_t, ck_tile::pk_fp4_t, float, ck_tile::bf16_t>;
++        // Apply shape heuristics to find a suitable kernel implementation.
++        if (block_m == 16)
++        {{
++            return {(1, 0)}<{(a_data_type)}, {(b_data_type)}, {(acc_data_type)}, {(c_data_type)}>;
++        }}
++        else if (block_m == 32)
++        {{
++            return {(1, 1)}<{(a_data_type)}, {(b_data_type)}, {(acc_data_type)}, {(c_data_type)}>;
++        }}
++        else if (block_m == 64)
++        {{
++            return {(1, 3)}<{(a_data_type)}, {(b_data_type)}, {(acc_data_type)}, {(c_data_type)}>;
++        }}
++        else
++        {{
++            TORCH_CHECK(
++                false,
++                "Unsupported block_m value for moe_geem1 heuristic dispatch: ",
++                block_m);
++        }}
+     }}
+-    else if (block_m == 32)
+-    {{
+-        return {(1, 1)}<ck_tile::bf16_t, ck_tile::pk_fp4_t, float, ck_tile::bf16_t>;
+-    }}
+-    else if (block_m == 64)
+-    {{
+-        return {(1, 3)}<ck_tile::bf16_t, ck_tile::pk_fp4_t, float, ck_tile::bf16_t>;
+-    }}
+-    else
+-    {{
+-        TORCH_CHECK(
+-            false,
+-            "Unsupported block_m value for moe_geem1 heuristic dispatch: ",
+-            block_m);
+-    }}
+-}}
++}};
+ 
+ template <>
+-MoeKernel moe_gemm2_heuristic_dispatch<ck_tile::bf16_t, ck_tile::pk_fp4_t, float, ck_tile::bf16_t>(int M, int N, int K, int block_m)
++struct moe_gemm2_heuristic_dispatcher<{(a_data_type)}, {(b_data_type)}, {(acc_data_type)}, {(c_data_type)}, {(activation)}, {(has_bias)}, {(split_k)}>
+ {{
+-    // Apply shape heuristics to find a suitable kernel implementation.
+-    if (block_m == 16)
+-    {{
+-        return {(2, 0)}<ck_tile::bf16_t, ck_tile::pk_fp4_t, float, ck_tile::bf16_t>;
+-    }}
+-    else if (block_m == 32)
++    static MoeKernel dispatch(int M, int N, int K, int block_m)
+     {{
+-        return {(2, 1)}<ck_tile::bf16_t, ck_tile::pk_fp4_t, float, ck_tile::bf16_t>;
++        // Apply shape heuristics to find a suitable kernel implementation.
++        if (block_m == 16)
++        {{
++            return {(2, 0)}<{(a_data_type)}, {(b_data_type)}, {(acc_data_type)}, {(c_data_type)}>;
++        }}
++        else if (block_m == 32)
++        {{
++            return {(2, 1)}<{(a_data_type)}, {(b_data_type)}, {(acc_data_type)}, {(c_data_type)}>;
++        }}
++        else if (block_m == 64)
++        {{
++            return {(2, 3)}<{(a_data_type)}, {(b_data_type)}, {(acc_data_type)}, {(c_data_type)}>;
++        }}
++        else
++        {{
++            TORCH_CHECK(
++                false,
++                "Unsupported block_m value for moe_gemm2 heuristic dispatch: ",
++                block_m);
++        }}
+     }}
+-    else if (block_m == 64)
+-    {{
+-        return {(2, 3)}<ck_tile::bf16_t, ck_tile::pk_fp4_t, float, ck_tile::bf16_t>;
+-    }}
+-    else
+-    {{
+-        TORCH_CHECK(
+-            false,
+-            "Unsupported block_m value for moe_gemm2 heuristic dispatch: ",
+-            block_m);
+-    }}
+-}}
++}};
+ """
+ 
+ a8w4_gfx950_heuristic_dispatch = """#pragma once
+ // SPDX-License-Identifier: MIT
+-// Copyright (C) 2025, Advanced Micro Devices, Inc. All rights reserved.
++// Copyright (C) 2024-2025, Advanced Micro Devices, Inc. All rights reserved.
+ #include "moe_cktile2stages.h"
+ #include "moe_cktile2stages_heuristic_dispatch_common.h"
+ 
+ template <>
+-MoeKernel moe_gemm1_heuristic_dispatch<ck_tile::fp8_t, ck_tile::pk_fp4_t, float, ck_tile::bf16_t>(
+-    int M,
+-    int N,
+-    int K,
+-    int block_m)
++struct moe_gemm1_heuristic_dispatcher<{(a_data_type)}, {(b_data_type)}, {(acc_data_type)}, {(c_data_type)}, {(activation)}, {(has_bias)}, {(split_k)}>
+ {{
+-    // Apply shape heuristics to find a suitable kernel implementation.
+-    if (block_m == 32)
+-    {{
+-        return {(1, 1)}<ck_tile::fp8_t, ck_tile::pk_fp4_t, float, ck_tile::bf16_t>;
+-    }}
+-    else if (block_m == 64)
++    static MoeKernel dispatch(int M, int N, int K, int block_m)
+     {{
+-        return {(1, 3)}<ck_tile::fp8_t, ck_tile::pk_fp4_t, float, ck_tile::bf16_t>;
++        // Apply shape heuristics to find a suitable kernel implementation.
++        if (block_m == 32)
++        {{
++            return {(1, 1)}<{(a_data_type)}, {(b_data_type)}, {(acc_data_type)}, {(c_data_type)}>;
++        }}
++        else if (block_m == 64)
++        {{
++            return {(1, 3)}<{(a_data_type)}, {(b_data_type)}, {(acc_data_type)}, {(c_data_type)}>;
++        }}
++        else
++        {{
++            TORCH_CHECK(
++                false,
++                "Unsupported block_m value for moe_geem1 heuristic dispatch: ",
++                block_m);
++        }}
+     }}
+-    else
+-    {{
+-        TORCH_CHECK(
+-            false,
+-            "Unsupported block_m value for moe_geem1 heuristic dispatch: ",
+-            block_m);
+-    }}
+-}}
++}};
+ 
+ template <>
+-MoeKernel moe_gemm2_heuristic_dispatch<ck_tile::fp8_t, ck_tile::pk_fp4_t, float, ck_tile::bf16_t>(
+-    int M,
+-    int N,
+-    int K,
+-    int block_m)
++struct moe_gemm2_heuristic_dispatcher<{(a_data_type)}, {(b_data_type)}, {(acc_data_type)}, {(c_data_type)}, {(activation)}, {(has_bias)}, {(split_k)}>
+ {{
+-    // Apply shape heuristics to find a suitable kernel implementation.
+-    if (block_m == 32)
+-    {{
+-        return {(2, 1)}<ck_tile::fp8_t, ck_tile::pk_fp4_t, float, ck_tile::bf16_t>;
+-    }}
+-    else if (block_m == 64)
++    static MoeKernel dispatch(int M, int N, int K, int block_m)
+     {{
+-        return {(2, 3)}<ck_tile::fp8_t, ck_tile::pk_fp4_t, float, ck_tile::bf16_t>;
++        // Apply shape heuristics to find a suitable kernel implementation.
++        if (block_m == 32)
++        {{
++            return {(2, 1)}<{(a_data_type)}, {(b_data_type)}, {(acc_data_type)}, {(c_data_type)}>;
++        }}
++        else if (block_m == 64)
++        {{
++            return {(2, 3)}<{(a_data_type)}, {(b_data_type)}, {(acc_data_type)}, {(c_data_type)}>;
++        }}
++        else
++        {{
++            TORCH_CHECK(
++                false,
++                "Unsupported block_m value for moe_gemm2 heuristic dispatch: ",
++                block_m);
++        }}
+     }}
+-    else
+-    {{
+-        TORCH_CHECK(
+-            false,
+-            "Unsupported block_m value for moe_gemm2 heuristic dispatch: ",
+-            block_m);
+-    }}
+-}}
++}};
+ """
+ 
+ heuristic_dispatch_dict = {
+@@ -456,6 +507,8 @@ def get_gemm1_kernels_list(
+     QuantType: str = "none",
+     ActOP: str = "silu",
+     MulRoutedWeight: bool = False,
++    HasBias: bool = False,
++    IsSplitK: bool = False,
+ ) -> list:
+     arch = get_gfx()
+     if Adtype.lower() in bit8_list and Bdtype.lower() in bit8_list and Adtype == Bdtype:
+@@ -482,6 +535,8 @@ def get_gemm1_kernels_list(
+         kernel.MulRoutedWeight = MulRoutedWeight
+         kernel.ActOP = ActOP
+         kernel.QuantType = QuantType
++        kernel.HasBias = HasBias
++        kernel.SplitK = IsSplitK
+         # if tag == "a8w4":
+         # kernel.CDEElementOp = "MulABScaleWint4"
+         # elif tag == "a8w8blkscale":
+@@ -502,6 +557,7 @@ def get_gemm2_kernels_list(
+     QuantType: str = "",
+     ActOP: str = "",
+     MulRoutedWeight: bool = True,
++    HasBias: bool = False,
+ ) -> list:
+     arch = get_gfx()
+     if Adtype in bit8_list and Bdtype in bit8_list and Adtype == Bdtype:
+@@ -526,8 +582,11 @@ def get_gemm2_kernels_list(
+     kernels_list = gemm2_kernels_dict[tag]
+     for id, kernel in kernels_list.items():
+         kernel.MulRoutedWeight = MulRoutedWeight
+-        kernel.ActOP = ""
++        kernel.ActOP = ActOP
+         kernel.QuantType = QuantType
++        kernel.HasBias = HasBias
++        # TODO: support splitk in stage2
++        kernel.SplitK = False
+         # if tag == "a8w4":
+         #     kernel.CDEElementOp = "MulABScaleExpertWeightWin4"
+         # elif tag == "a8w8blkscale":
+diff --git a/csrc/cpp_itfs/gluon_aot_tools/extra/hip/compile.h b/csrc/cpp_itfs/gluon_aot_tools/extra/hip/compile.h
+index cc5007ad93..22876bc6d5 100644
+--- a/csrc/cpp_itfs/gluon_aot_tools/extra/hip/compile.h
++++ b/csrc/cpp_itfs/gluon_aot_tools/extra/hip/compile.h
+@@ -1,5 +1,5 @@
+ // SPDX-License-Identifier: MIT
+-// Copyright (c) 2025, Advanced Micro Devices, Inc. All rights reserved.
++// Copyright (C) 2025, Advanced Micro Devices, Inc. All rights reserved.
+ 
+ #pragma once
+ 
+diff --git a/csrc/include/rocm_ops.hpp b/csrc/include/rocm_ops.hpp
+index 03a9adf70c..f4c85010ac 100644
+--- a/csrc/include/rocm_ops.hpp
++++ b/csrc/include/rocm_ops.hpp
+@@ -962,7 +962,9 @@ namespace py = pybind11;
+           py::arg("x_scale")        = std::nullopt, \
+           py::arg("w_scale")        = std::nullopt, \
+           py::arg("exp_bias")       = std::nullopt, \
+-          py::arg("block_m")        = 32);                 \
++          py::arg("activation")     = 0,            \
++          py::arg("block_m")        = 32,           \
++          py::arg("split_k")        = 1);                 \
+                                                     \
+     m.def("cktile_moe_gemm2",                       \
+           &cktile_moe_gemm2,                        \
+@@ -980,7 +982,9 @@ namespace py = pybind11;
+           py::arg("x_scale")        = std::nullopt, \
+           py::arg("w_scale")        = std::nullopt, \
+           py::arg("exp_bias")       = std::nullopt, \
+-          py::arg("block_m")        = 32);
++          py::arg("activation")     = 0,            \
++          py::arg("block_m")        = 32,           \
++          py::arg("split_k")        = 1);
+ 
+ #define MHA_VARLEN_FWD_PYBIND                            \
+     m.def("mha_varlen_fwd",                              \
+diff --git a/csrc/kernels/mla/metadata/v1_0_device.cuh b/csrc/kernels/mla/metadata/v1_0_device.cuh
+index f7d0d5ea5b..1c8f1e2f9b 100644
+--- a/csrc/kernels/mla/metadata/v1_0_device.cuh
++++ b/csrc/kernels/mla/metadata/v1_0_device.cuh
+@@ -9,7 +9,7 @@ __device__ int32_t get_local_splits(int32_t seqlen_kv,
+                                     int32_t num_splits,
+                                     int32_t num_splits_per_cu)
+ {
+-#if defined(__gfx942__) 
++#if defined(__gfx942__)
+     return 16;
+ #else
+     int32_t ex_splits = seqlen_kv / 196; // magic num 196. Experiments shows 196 per splits can get better performance.
+diff --git a/op_tests/test_moe_2stage.py b/op_tests/test_moe_2stage.py
+index bc85b4d13b..1ae747f34f 100644
+--- a/op_tests/test_moe_2stage.py
++++ b/op_tests/test_moe_2stage.py
+@@ -1,5 +1,5 @@
+ # SPDX-License-Identifier: MIT
+-# Copyright (C) 2024-2025, Advanced Micro Devices, Inc. All rights reserved.
++# Copyright (C) 2024-2026, Advanced Micro Devices, Inc. All rights reserved.
+ 
+ import torch
+ import itertools
+@@ -510,6 +510,8 @@ def calc_diff(x: torch.Tensor, y: torch.Tensor):
+                         use_g1u1=True,
+                         doweight_stage1=doweight_stage1,
+                         preshuffle=preshuffle,
++                        hidden_pad=0,
++                        intermediate_pad=0,
+                     )
+                     df.append(ret)
+     else:

@@ -1,0 +1,1891 @@
+diff --git a/3rdparty/composable_kernel b/3rdparty/composable_kernel
+index 6342f6b5e8..1b846143c6 160000
+--- a/3rdparty/composable_kernel
++++ b/3rdparty/composable_kernel
+@@ -1 +1 @@
+-Subproject commit 6342f6b5e8bbb9f2b4cefa33d2a863a8bb35329b
++Subproject commit 1b846143c669b7bcbba4fda5f9165bb270f88ea1
+diff --git a/aiter/__init__.py b/aiter/__init__.py
+index 7efb3b4631..e69906b59f 100644
+--- a/aiter/__init__.py
++++ b/aiter/__init__.py
+@@ -42,6 +42,7 @@ def getLogger():
+ from .ops.norm import *
+ from .ops.quant import *
+ from .ops.gemm_op_a8w8 import *
++from .ops.gemm_op_a4w4 import *
+ from .ops.batched_gemm_op_a8w8 import *
+ from .ops.batched_gemm_op_bf16 import *
+ from .ops.aiter_operator import *
+diff --git a/aiter/jit/core.py b/aiter/jit/core.py
+index db380fcd04..dbb11681fd 100644
+--- a/aiter/jit/core.py
++++ b/aiter/jit/core.py
+@@ -305,14 +305,13 @@ def MainFunc():
+             ]
+         if hip_version > Version("6.2.41133"):
+             flags_hip += ["-mllvm -amdgpu-coerce-illegal-types=1"]
+-
++        if get_gfx() == "gfx950" and int(os.getenv("AITER_FP4x2", "1")) > 0:
++            flags_hip += ["-D__Float4_e2m1fn_x2"]
+         flags_cc += flags_extra_cc
+         flags_hip += flags_extra_hip
+         archs = validate_and_update_archs()
+         flags_hip += [f"--offload-arch={arch}" for arch in archs]
+-        for i in reversed(range(len(flags_hip))):
+-            if not hip_flag_checker(flags_hip[i]):
+-                del flags_hip[i]
++        flags_hip = [el for el in flags_hip if hip_flag_checker(el)]
+         check_and_set_ninja_worker()
+ 
+         def exec_blob(blob_gen_cmd, op_dir, src_dir, sources):
+diff --git a/aiter/jit/optCompilerConfig.json b/aiter/jit/optCompilerConfig.json
+index ce81c80938..fabd24b135 100644
+--- a/aiter/jit/optCompilerConfig.json
++++ b/aiter/jit/optCompilerConfig.json
+@@ -192,6 +192,18 @@
+         "verbose": "False",
+         "blob_gen_cmd": "''"
+     },
++    "module_gemm_a4w4_asm": {
++        "srcs": [
++            "f'{AITER_CSRC_DIR}/pybind/gemm_a4w4_asm_pybind.cu'",
++            "f'{AITER_CSRC_DIR}/py_itfs_cu/asm_gemm_a4w4.cpp'"
++        ],
++        "flags_extra_cc": [],
++        "flags_extra_hip": [],
++        "extra_ldflags": "None",
++        "extra_include": [],
++        "verbose": "False",
++        "blob_gen_cmd": "''"
++    },
+     "module_gemm_a8w8_blockscale_asm": {
+         "srcs": [
+             "f'{AITER_CSRC_DIR}/py_itfs_cu/asm_flatmm_a8w8_blockscale.cpp'",
+diff --git a/aiter/ops/gemm_op_a4w4.py b/aiter/ops/gemm_op_a4w4.py
+new file mode 100644
+index 0000000000..89c9528b73
+--- /dev/null
++++ b/aiter/ops/gemm_op_a4w4.py
+@@ -0,0 +1,52 @@
++# SPDX-License-Identifier: MIT
++# Copyright (C) 2024-2025, Advanced Micro Devices, Inc. All rights reserved.
++
++import torch
++from torch import Tensor
++from typing import Optional
++import functools
++import pandas as pd
++from ..jit.core import (
++    compile_ops,
++    AITER_CORE_DIR,
++)
++from ..utility import dtypes
++from ..jit.utils.chip_info import get_cu_num
++
++
++def gemm_a4w4(
++    A: Tensor,  # A:[M, K/2] f4x2
++    B: Tensor,  # B:[N, K/2] f4x2
++    A_scale: Tensor,  # A_scale:[M, K/32] e8m0 paded
++    B_scale: Tensor,  # B_scale:[N, K/32] e8m0 paded
++    out: Tensor,  # Out:[M, N] bf16
++    bias: Tensor,  # bias:[1, N] f32
++    alpha: Optional[float] = 1.0,
++    beta: Optional[float] = 0.0,
++) -> torch.Tensor:
++    """
++    A4W4 GEMM kernel for AMD GPUs.
++    This function is a wrapper for the A4W4 GEMM kernel.
++    It is used to perform matrix multiplication with 4-bit quantization.
++    """
++
++    # Get the number of compute units
++    cu_num = get_cu_num()
++
++    # Load the A4W4 GEMM kernel
++    func = gemm_a4w4_asm
++
++    return func(A, B, A_scale, B_scale, out, bias, alpha, beta)
++
++
++@compile_ops("module_gemm_a4w4_asm")
++def gemm_a4w4_asm(
++    A: Tensor,  # A:[M, K/2] f4x2
++    B: Tensor,  # B:[N, K/2] f4x2
++    A_scale: Tensor,  # A_scale:[M, K/32] e8m0 paded
++    B_scale: Tensor,  # B_scale:[N, K/32] e8m0 paded
++    out: Tensor,  # Out:[M, N] bf16
++    bias: Tensor,  # bias:[1, N] f32
++    alpha: Optional[float] = 1.0,
++    beta: Optional[float] = 0.0,
++) -> torch.Tensor: ...
+diff --git a/aiter/ops/quant.py b/aiter/ops/quant.py
+index abadf043d1..8888f74110 100644
+--- a/aiter/ops/quant.py
++++ b/aiter/ops/quant.py
+@@ -69,40 +69,31 @@ def per_1x32_f4_quant(x, scale=None, quant_dtype=dtypes.fp4x2, shuffle=True):
+     assert quant_dtype == dtypes.fp4x2
+     block_size = 32
+     F8E8M0_EXP_BIAS = 127
+-    F4E2M1_MAX = 6
++    F4E2M1_MAX = 6.0
+     MAX_POW2 = int(torch.log2(torch.tensor(F4E2M1_MAX, dtype=torch.float32)).item())
++    # dtypeMax = F4E2M1_MAX
++    dtypeMax = 2.0**MAX_POW2
+ 
+     m, n = x.shape
+     x = x.view(-1, block_size)
+     max_abs = torch.amax(torch.abs(x.float()), 1)
+-    max_abs = max_abs.view(torch.int32)
+-    max_abs = ((max_abs + 0x200000) & 0xFF800000).view(torch.float32)
++    # max_abs = max_abs.view(torch.int32)
++    # max_abs = ((max_abs + 0x200000) & 0xFF800000).view(torch.float32)
+ 
+     # fp8e8m0fnu_from_fp32_value
+-    largest_p2_lt_max_abs = torch.floor(torch.log2(max_abs))
+-    scale_e8m0_unbiased = largest_p2_lt_max_abs - MAX_POW2
+-    scale_e8m0_unbiased = torch.clamp(
+-        scale_e8m0_unbiased, -1 * F8E8M0_EXP_BIAS, F8E8M0_EXP_BIAS
+-    )
+-    scale_e8m0_biased = scale_e8m0_unbiased.to(torch.uint8) + F8E8M0_EXP_BIAS
++    scale_e8m0_biased = fp4_utils.f32_to_e8m0(max_abs / dtypeMax)
+ 
+     # Float8_e8m0fnu to float
+-    zero_case = scale_e8m0_biased == 0
+-    nan_case = scale_e8m0_biased == 0b11111111
+-    scale_f32 = scale_e8m0_biased.to(torch.int32) << 23
+-    scale_f32[zero_case] = 0x00400000
+-    scale_f32[nan_case] = 0x7F800001
+-    scale_f32 = scale_f32.view(dtypes.fp32)
+-
+-    y, _ = pertoken_quant(
+-        x, scale_f32.view(-1, 1), quant_dtype=dtypes.fp32, dtypeMax=F4E2M1_MAX
+-    )
+-    y = fp4_utils.fp32_to_fp4_e2m1fn_x2(y)
++    scale_f32 = fp4_utils.e8m0_to_f32(scale_e8m0_biased)
++
++    y = x.float() / scale_f32.view(-1, 1)
++    y = fp4_utils.f32_to_mxfp4(y)
+     y = y.view(m, -1)
+     scale = scale_e8m0_biased.view(m, -1).view(torch.uint8)
+     scale_padded = torch.empty(
+         (m + 31) // 32 * 32, (n // block_size + 7) // 8 * 8, dtype=torch.uint8
+     ).fill_(0x7F)
++
+     scale_padded[:m, : n // block_size] = scale
+     scale = scale_padded
+     sm, sn = scale.shape
+@@ -114,8 +105,8 @@ def per_1x32_f4_quant(x, scale=None, quant_dtype=dtypes.fp4x2, shuffle=True):
+         scale = scale.permute(0, 2, 1).contiguous()
+         scale = scale.view(sm, sn)
+     elif shuffle:
+-        scale = scale.view(sm // 32, 2, 16, sn // 8, 2, 4, 1)
+-        scale = scale.permute(0, 3, 5, 2, 4, 1, 6).contiguous()
++        scale = scale.view(sm // 32, 2, 16, sn // 8, 2, 4)
++        scale = scale.permute(0, 3, 5, 2, 4, 1).contiguous()
+         scale = scale.view(sm, sn)
+     return y, scale.view(dtypes.fp8_e8m0)
+ 
+@@ -173,7 +164,7 @@ def get_hip_quant(qType):
+         QuantType.No: lambda *a, **k: (a[0], None),
+         QuantType.per_Tensor: per_tensor_quant_hip,
+         QuantType.per_Token: per_token_quant_hip,
+-        QuantType.per_1x32: per_block_quant_wrapper((1, 32))(per_token_quant_hip),
++        QuantType.per_1x32: per_1x32_f4_quant_hip,
+         QuantType.per_1x128: per_block_quant_wrapper((1, 128))(per_token_quant_hip),
+     }
+ 
+@@ -222,6 +213,31 @@ def per_token_quant_hip(x, scale=None, quant_dtype=dtypes.i8):
+     return y, scale
+ 
+ 
++def per_1x32_f4_quant_hip(x, scale=None, quant_dtype=dtypes.fp4x2):
++    m, n = x.shape
++    assert quant_dtype == dtypes.fp4x2
++    assert n % 2 == 0
++    device = x.device
++    if scale is None:
++        scale = (
++            torch.empty(
++                (
++                    (m + 31) // 32 * 32,
++                    (n // 32 + 7) // 8 * 8,
++                ),
++                dtype=torch.uint8,
++                device=device,
++            )
++            .fill_(0x7F)
++            .view(dtypes.fp8_e8m0)
++        )
++    else:
++        raise ValueError("unsupported: static per token quant")
++    y = torch.empty(m, n // 2, dtype=quant_dtype, device=device)
++    dynamic_per_token_scaled_quant(y, x.view(-1, 32), scale)
++    return y.view(torch.uint8), scale
++
++
+ def per_tensor_quant_hip(x, scale=None, quant_dtype=dtypes.i8):
+     y = torch.empty(x.shape, dtype=quant_dtype, device=x.device)
+     if quant_dtype == dtypes.fp8:
+diff --git a/aiter/utility/fp4_utils.py b/aiter/utility/fp4_utils.py
+index 9006aa5b6f..9c4c30b301 100644
+--- a/aiter/utility/fp4_utils.py
++++ b/aiter/utility/fp4_utils.py
+@@ -7,7 +7,7 @@
+ import triton.language as tl
+ 
+ 
+-def fp32_to_fp4_e2m1fn_x2(x):
++def f32_to_mxfp4(x):
+     FP4_EBITS, FP4_MBITS = 2, 1
+     x = _f32_to_floatx_unpacked(x.float(), FP4_EBITS, FP4_MBITS)
+     x = pack_uint4(x)
+@@ -16,6 +16,56 @@ def fp32_to_fp4_e2m1fn_x2(x):
+     return x
+ 
+ 
++def mxfp4_to_f32(x):
++    # 2 because we pack fp4 in uint8.
++    x = x.repeat_interleave(2, dim=1)
++    x[:, ::2] = x[:, ::2] & 0xF
++    x[:, 1::2] = x[:, 1::2] >> 4
++    mxfp4_list = [
++        0.0,
++        0.5,
++        1.0,
++        1.5,
++        2.0,
++        3.0,
++        4.0,
++        6.0,
++        -0.0,
++        -0.5,
++        -1.0,
++        -1.5,
++        -2.0,
++        -3.0,
++        -4.0,
++        -6.0,
++    ]
++    mxfp4_in_f32 = torch.tensor(mxfp4_list, dtype=torch.float32, device="cuda")
++    return mxfp4_in_f32[x.long()]
++
++
++def f32_to_e8m0(x):
++    u32 = x.view(torch.int32)
++    exponent = ((u32 >> 23) & 0xFF).view(torch.uint32).to(torch.uint8)
++    nan_case = exponent == 0xFF
++    round_case = ((u32 & 0x400000) > 0) & (
++        ((u32 & 0x200000) > 0) | ((u32 & 0x1FFFFF) > 0) | (exponent > 0)
++    )
++    exponent[round_case] += 1
++    exponent[nan_case] = 0xFF
++    return exponent.view(dtypes.fp8_e8m0)
++
++
++def e8m0_to_f32(scale_e8m0_biased):
++    scale_e8m0_biased = scale_e8m0_biased.view(torch.uint8)
++    zero_case = scale_e8m0_biased == 0
++    nan_case = scale_e8m0_biased == 0b11111111
++    scale_f32 = scale_e8m0_biased.to(torch.int32) << 23
++    scale_f32[zero_case] = 0x00400000
++    scale_f32[nan_case] = 0x7F800001
++    scale_f32 = scale_f32.view(dtypes.fp32)
++    return scale_f32
++
++
+ def down_size(size):
+     assert size[-1] % 2 == 0, f"{size} last dim not divisible by two"
+     return (*size[:-1], size[-1] // 2)
+@@ -182,6 +232,11 @@ def _dynamic_mxfp4_quant_kernel_asm_layout(
+     pid_m = tl.program_id(0)
+     pid_n = tl.program_id(1)
+ 
++    stride_x_m = tl.cast(stride_x_m, tl.int64)
++    stride_x_n = tl.cast(stride_x_n, tl.int64)
++    stride_x_fp4_m = tl.cast(stride_x_fp4_m, tl.int64)
++    stride_x_fp4_n = tl.cast(stride_x_fp4_n, tl.int64)
++
+     x_offs_m = pid_m * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+     x_offs_n = pid_n * MXFP4_QUANT_BLOCK_SIZE + tl.arange(0, MXFP4_QUANT_BLOCK_SIZE)
+     x_offs = x_offs_m[:, None] * stride_x_m + x_offs_n[None, :] * stride_x_n
+@@ -264,10 +319,8 @@ def _dynamic_mxfp4_quant_kernel_asm_layout(
+     bs_offs_4 = bs_offs_n[None, :] % 8
+     bs_offs_5 = bs_offs_4 % 4
+     bs_offs_4 = bs_offs_4 // 4
+-    bs_offs_6 = bs_offs_5 % 1
+     bs_offs = (
+-        bs_offs_6
+-        + bs_offs_1
++        bs_offs_1
+         + bs_offs_4 * 2
+         + bs_offs_2 * 2 * 2
+         + bs_offs_5 * 2 * 2 * 16
+@@ -341,3 +394,150 @@ def dynamic_mxfp4_quant(
+     )
+ 
+     return (x_fp4, blockscale_e8m0.view(dtypes.fp8_e8m0))
++
++
++@triton.jit
++def _moe_mxfp4_sort_kernel(
++    blockscale_e8m0_ptr,
++    sorted_ids_ptr,
++    num_valid_ids_ptr,
++    blockscale_e8m0_sorted_ptr,
++    stride_blockscale_e8m0_m: tl.constexpr,
++    stride_blockscale_e8m0_n: tl.constexpr,
++    stride_o3: tl.constexpr,
++    stride_o2: tl.constexpr,
++    stride_o1: tl.constexpr,
++    stride_o0: tl.constexpr,
++    token_num: tl.constexpr,
++    M_i: tl.constexpr,
++    N_i: tl.constexpr,
++    BLOCK_SIZE_M: tl.constexpr,
++    BLOCK_SIZE_N: tl.constexpr,
++    TOPK: tl.constexpr,
++):
++    pid_m = tl.program_id(0) * 2
++    pid_n = tl.program_id(1) * 2
++    num_valid_ids = tl.load(num_valid_ids_ptr)
++    if pid_m * BLOCK_SIZE_M >= num_valid_ids:
++        return
++    stride_blockscale_e8m0_m = tl.cast(stride_blockscale_e8m0_m, tl.int64)
++    stride_blockscale_e8m0_n = tl.cast(stride_blockscale_e8m0_n, tl.int64)
++    stride_o0 = tl.cast(stride_o0, tl.int64)
++    stride_o1 = tl.cast(stride_o1, tl.int64)
++    stride_o2 = tl.cast(stride_o2, tl.int64)
++    stride_o3 = tl.cast(stride_o3, tl.int64)
++
++    out = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.uint32)
++    for i in range(0, 4):
++        m = i % 2 * BLOCK_SIZE_M
++        n = i // 2 * BLOCK_SIZE_N
++        sorted_ids_offs_m = pid_m * BLOCK_SIZE_M + m + tl.arange(0, BLOCK_SIZE_M)
++        sorted_ids_offs = sorted_ids_offs_m
++        sorted_ids_mask = sorted_ids_offs_m < num_valid_ids
++        sorted_ids = tl.load(
++            sorted_ids_ptr + sorted_ids_offs, mask=sorted_ids_mask, other=token_num
++        )
++        topk_ids = sorted_ids >> 24
++        sorted_ids = sorted_ids & 0xFFFFFF
++
++        # Sort the blockscale tensor based on the sorted ids
++        if TOPK == 1:
++            blockscale_e8m0_offs_m = sorted_ids
++        else:
++            blockscale_e8m0_offs_m = sorted_ids * TOPK + topk_ids
++        blockscale_e8m0_offs_n = pid_n * BLOCK_SIZE_N + n + tl.arange(0, BLOCK_SIZE_N)
++        blockscale_e8m0_offs = (
++            blockscale_e8m0_offs_m[:, None] * stride_blockscale_e8m0_m
++            + blockscale_e8m0_offs_n[None, :] * stride_blockscale_e8m0_n
++        )
++        blockscale_e8m0_mask = (sorted_ids < token_num)[:, None] & (
++            blockscale_e8m0_offs_n < N_i
++        )[None, :]
++        blockscale_e8m0_sub = tl.load(
++            blockscale_e8m0_ptr + blockscale_e8m0_offs,
++            mask=blockscale_e8m0_mask,
++        ).to(tl.uint8, bitcast=True)
++        out = out | (blockscale_e8m0_sub.to(tl.uint32) << (i * 8))
++
++    # Store the result
++    # 16x4 uint32 -> 32x2 uint8
++    offs_0 = tl.arange(0, BLOCK_SIZE_M)
++    offs_1 = tl.arange(0, BLOCK_SIZE_N)
++    offs_2 = pid_n // 2
++    offs_3 = pid_m // 2
++    offs = (
++        offs_0[:, None] * stride_o0
++        + offs_1[None, :] * stride_o1  # * BLOCK_SIZE_M
++        + offs_2 * stride_o2  # * BLOCK_SIZE_M * BLOCK_SIZE_N
++        + offs_3 * stride_o3  # * BLOCK_SIZE_M * BLOCK_SIZE_N * N_i // BLOCK_SIZE_N
++    )
++    # blockscale_e8m0_sorted_mask = (blockscale_e8m0_sorted_offs_m < M_o)[:, None] & (
++    #     blockscale_e8m0_sorted_offs_n < N_o
++    # )[None, :]
++    tl.store(
++        blockscale_e8m0_sorted_ptr + offs,
++        out,
++        # mask=blockscale_e8m0_sorted_mask,
++    )
++
++
++def moe_mxfp4_sort(
++    blockscale_e8m0: torch.Tensor,
++    sorted_ids: torch.Tensor,
++    num_valid_ids: torch.Tensor,
++    token_num: int,
++    block_size: int = 32,
++) -> torch.Tensor:
++    """
++    Sort the blockscale_e8m0 tensor based on the sorted_ids tensor.
++
++    Args:
++        blockscale_e8m0: The input tensor to be sorted.
++        sorted_ids: The indices used for sorting.
++
++    Returns:
++        A sorted tensor.
++    """
++    # This is fixed by spec for MXFP4. Do not tune this.
++    BLOCK_SIZE_M, BLOCK_SIZE_N = 32, 8
++    BLOCK_SIZE_M_u32, BLOCK_SIZE_N_u32 = 16, 4
++
++    # Assume blockscale_e8m0 is 2D-Tensor for now
++    topk = 1
++    if len(blockscale_e8m0.shape) == 3:
++        topk = blockscale_e8m0.shape[1]
++        blockscale_e8m0 = blockscale_e8m0.view(-1, blockscale_e8m0.shape[-1])
++    M_i, N_i = blockscale_e8m0.shape
++    M_o, N_o = sorted_ids.shape[0], N_i
++    assert (N_i // 2) % 2 == 0
++    assert block_size % BLOCK_SIZE_M == 0
++
++    blockscale_e8m0_sorted = torch.empty(
++        (
++            triton.cdiv(M_o, BLOCK_SIZE_M),
++            triton.cdiv(N_o, BLOCK_SIZE_N),
++            BLOCK_SIZE_N_u32,
++            BLOCK_SIZE_M_u32,
++        ),
++        dtype=torch.uint32,
++        device=blockscale_e8m0.device,
++    )  # .fill_(0)
++
++    grid = (triton.cdiv(M_o, BLOCK_SIZE_M), triton.cdiv(N_i, BLOCK_SIZE_N))
++    _moe_mxfp4_sort_kernel[grid](
++        blockscale_e8m0.view(torch.uint8),
++        sorted_ids,
++        num_valid_ids,
++        blockscale_e8m0_sorted,
++        *blockscale_e8m0.stride(),
++        *blockscale_e8m0_sorted.stride(),
++        token_num=token_num,
++        M_i=M_i,
++        N_i=N_i,
++        BLOCK_SIZE_M=BLOCK_SIZE_M // 2,
++        BLOCK_SIZE_N=BLOCK_SIZE_N // 2,
++        TOPK=topk,
++    )
++
++    # Reshape the output to the final shape
++    return blockscale_e8m0_sorted.view(dtypes.fp8_e8m0).view(-1, N_o)
+diff --git a/csrc/include/asm_gemm_a4w4.h b/csrc/include/asm_gemm_a4w4.h
+new file mode 100644
+index 0000000000..a0dbc2c3b3
+--- /dev/null
++++ b/csrc/include/asm_gemm_a4w4.h
+@@ -0,0 +1,13 @@
++#pragma once
++// SPDX-License-Identifier: MIT
++// Copyright (c) 2024, Advanced Micro Devices, Inc. All rights reserved.
++#include <torch/extension.h>
++
++torch::Tensor gemm_a4w4_asm(torch::Tensor &A,       // A:[M, K/2] f4x2
++                            torch::Tensor &B,       // B:[N, K/2] f4x2
++                            torch::Tensor &A_scale, // A_scale:[M, K/32] e8m0 paded
++                            torch::Tensor &B_scale, // B_scale:[N, K/32] e8m0 paded
++                            torch::Tensor &out,     // Out:[M, N] bf16
++                            torch::Tensor &bias,    // bias:[M, N] f32
++                            std::optional<float> alpha = 1.0,
++                            std::optional<float> beta = 0.0);
+\ No newline at end of file
+diff --git a/csrc/include/ck_tile/vec_convert.h b/csrc/include/ck_tile/vec_convert.h
+index cc558290c6..ded5d3a28e 100644
+--- a/csrc/include/ck_tile/vec_convert.h
++++ b/csrc/include/ck_tile/vec_convert.h
+@@ -11,10 +11,28 @@ namespace ck_tile
+ 
+     using int8x2_v = vec_t<int8_t, 2>;
+     using fp8x2_v = vec_t<fp8_t, 2>;
++    using fp16x2_v = vec_t<fp16_t, 2>;
++    using bf16x2_v = vec_t<bf16_t, 2>;
+     using fp32x2_v = vec_t<fp32_t, 2>;
+-    using fp4_t = unsigned _BitInt(4);
+-    using fp4x2_v = vec_t<fp4_t, 2>;
+-
++    struct fp4x2_t
++    {
++        using type = uint8_t;
++        type data;
++        __host__ __device__ constexpr fp4x2_t() : data{type{}} {}
++        __host__ __device__ constexpr fp4x2_t(type init) : data{init} {}
++    };
++    using fp4x2x2_v = vec_t<fp4x2_t, 2>;
++    using fp4x2x4_v = vec_t<fp4x2_t, 4>;
++    using fp4x2x8_v = vec_t<fp4x2_t, 8>;
++    template <>
++    struct numeric<fp4x2_t>
++    {
++        // maximum finite value
++        CK_TILE_HOST_DEVICE static constexpr fp32_t max()
++        {
++            return 6.0f;
++        }
++    };
+     CK_TILE_DEVICE fp32x2_v amd_assembly_pk_mul_f32(fp32x2_v a, fp32x2_v b)
+     {
+         fp32x2_v c;
+@@ -33,33 +51,33 @@ namespace ck_tile
+         asm volatile("v_cvt_pk_bf8_f32 %0, %1, %2" : "=v"(c) : "v"(a), "v"(b));
+         return bit_cast<fp8x2_v>(c[0]);
+     }
+-    CK_TILE_DEVICE fp4x2_v amd_assembly_cvt_scalef32_pk_fp4_f32(fp32_t a, fp32_t b, float scale)
++    CK_TILE_DEVICE fp4x2_t amd_assembly_cvt_scalef32_pk_fp4_f32(fp32_t a, fp32_t b, fp32_t scale)
+     {
+ #if defined(__gfx950__)
+-        int8x4_t c;
++        int16x2_t c;
+         // permute high bits and low bits to match the order of the original vector
+-        asm volatile("v_cvt_scalef32_pk_fp4_f32 %0, %1, %2" : "=v"(c) : "v"(b), "v"(a), "v"(scale));
+-        return bit_cast<fp4x2_v>(c[0]);
++        asm volatile("v_cvt_scalef32_pk_fp4_f32 %0, %1, %2, %3" : "=v"(c) : "v"(b), "v"(a), "v"(scale));
++        return bit_cast<fp4x2_t>(bit_cast<int8x2_t>(c[0])[0]);
++#endif
++    }
++    CK_TILE_DEVICE fp4x2_t amd_assembly_cvt_scalef32_pk_fp4_f16(fp16x2_v a, fp32_t scale)
++    {
++#if defined(__gfx950__)
++        int16x2_t c;
++        // permute high bits and low bits to match the order of the original vector
++        asm volatile("v_cvt_scalef32_pk_fp4_f16 %0, %1, %2" : "=v"(c) : "v"(a), "v"(scale));
++        return bit_cast<fp4x2_t>(bit_cast<int8x2_t>(c[0])[0]);
++#endif
++    }
++    CK_TILE_DEVICE fp4x2_t amd_assembly_cvt_scalef32_pk_fp4_bf16(bf16x2_v a, fp32_t scale)
++    {
++#if defined(__gfx950__)
++        int16x2_t c;
++        // permute high bits and low bits to match the order of the original vector
++        asm volatile("v_cvt_scalef32_pk_fp4_bf16 %0, %1, %2" : "=v"(c) : "v"(a), "v"(scale));
++        return bit_cast<fp4x2_t>(bit_cast<int8x2_t>(c[0])[0]);
+ #endif
+     }
+-    //     CK_TILE_DEVICE fp4x2_v amd_assembly_cvt_scalef32_pk_fp4_f16(fp16_t a, fp16_t b, float scale)
+-    //     {
+-    // #if defined(__gfx950__)
+-    //         int8x4_t c;
+-    //         // permute high bits and low bits to match the order of the original vector
+-    //         asm volatile("v_cvt_scalef32_pk_fp4_f16 %0, %1, %2" : "=v"(c) : "v"(b), "v"(a), "v"(scale));
+-    //         return bit_cast<fp4x2_v>(c[0]);
+-    // #endif
+-    //     }
+-    //     CK_TILE_DEVICE fp4x2_v amd_assembly_cvt_scalef32_pk_fp4_bf16(bf16_t a, bf16_t b, float scale)
+-    //     {
+-    // #if defined(__gfx950__)
+-    //         int8x4_t c;
+-    //         // permute high bits and low bits to match the order of the original vector
+-    //         asm volatile("v_cvt_scalef32_pk_fp4_bf16 %0, %1, %2" : "=v"(c) : "v"(b), "v"(a), "v"(scale));
+-    //         return bit_cast<fp4x2_v>(c[0]);
+-    // #endif
+-    //     }
+ 
+     // convert any to fp32x?_t one by one
+     template <typename Y,
+@@ -80,8 +98,9 @@ namespace ck_tile
+     template <typename Y,
+               typename X,
+               index_t N,
+-              std::enable_if_t<(N % 2 == 0), bool> = false>
+-    CK_TILE_HOST_DEVICE constexpr vec_t<Y, N> vec_convert(vec_t<X, N> x, float inverted_scale)
++              std::enable_if_t<(N % 2 == 0), bool> = false,
++              std::enable_if_t<(!(std::is_same_v<Y, fp4x2_t>)), bool> = false>
++    CK_TILE_HOST_DEVICE constexpr vec_t<Y, N> vec_convert(vec_t<X, N> x, fp32_t inverted_scale)
+     {
+         if constexpr (!std::is_same_v<X, fp32_t>)
+         {
+@@ -97,7 +116,7 @@ namespace ck_tile
+     }
+ 
+     // fp32x2 -> fp8x2
+-    CK_TILE_HOST_DEVICE constexpr fp8x2_v fp32x2_t_to_fp8x2_t(fp32x2_v x, float inverted_scale)
++    CK_TILE_HOST_DEVICE constexpr fp8x2_v fp32x2_t_to_fp8x2_t(fp32x2_v x, fp32_t inverted_scale)
+     {
+         using vec_ti = vector_traits<fp32x2_v>;
+         constexpr int vec_size = vec_ti::vector_size;
+@@ -109,17 +128,7 @@ namespace ck_tile
+                    : amd_assembly_cvt_pk_bf8_f32(tmp[0], tmp[1]);
+     }
+     // fp32x2 -> int8x2
+-    CK_TILE_HOST_DEVICE constexpr int8x2_v fp32x2_t_to_int8x2_t(fp32x2_v x, float inverted_scale)
+-    {
+-        fp32x2_v tmp = amd_assembly_pk_mul_f32(x, fp32x2_v{inverted_scale, inverted_scale});
+-
+-        int8x2_v out;
+-        out[0] = static_cast<int8_t>(tmp[0]);
+-        out[1] = static_cast<int8_t>(tmp[1]);
+-        return out;
+-    }
+-    // fp32x2 -> int8x2
+-    CK_TILE_HOST_DEVICE constexpr int8x2_v fp32x2x2_t_to_fp4x2x2_t(fp32x2_v x, float inverted_scale)
++    CK_TILE_HOST_DEVICE constexpr int8x2_v fp32x2_t_to_int8x2_t(fp32x2_v x, fp32_t inverted_scale)
+     {
+         fp32x2_v tmp = amd_assembly_pk_mul_f32(x, fp32x2_v{inverted_scale, inverted_scale});
+ 
+@@ -129,60 +138,86 @@ namespace ck_tile
+         return out;
+     }
+     // fp32x2 -> fp4x2
+-    CK_TILE_HOST_DEVICE constexpr fp4x2_v fp32x2_t_to_fp4x2_t(fp32x2_v x, float inverted_scale)
++    CK_TILE_HOST_DEVICE constexpr fp4x2_t fp32x2_t_to_fp4x2_t(fp32x2_v x, fp32_t inverted_scale)
+     {
+         return amd_assembly_cvt_scalef32_pk_fp4_f32(x[0], x[1], inverted_scale);
+     }
+-    // // fp16x2 -> fp4x2
+-    // CK_TILE_HOST_DEVICE constexpr fp4x2x2_t fp16x2x2_t_to_fp4x2x2_t(fp16x2x2_t x, float inverted_scale)
+-    // {
+-    //     return {amd_assembly_cvt_scalef32_pk_fp4_f16(x[0][0], x[0][1], inverted_scale),
+-    //             amd_assembly_cvt_scalef32_pk_fp4_f16(x[1][0], x[1][1], inverted_scale)};
+-    // }
+-    // // bf16x2 -> fp4x2
+-    // CK_TILE_HOST_DEVICE constexpr fp4x2x2_t bf16x2x2_t_to_fp4x2x2_t(bf16x2x2_t x, float inverted_scale)
+-    // {
+-    //     return {amd_assembly_cvt_scalef32_pk_fp4_bf16(x[0][0], x[0][1], inverted_scale),
+-    //             amd_assembly_cvt_scalef32_pk_fp4_bf16(x[1][0], x[1][1], inverted_scale)};
+-    // }
+-#define CK_TILE_TYPE_CONVERT(dtype_, stype_, vec_size_)                                                                                                             \
+-    template <>                                                                                                                                                     \
+-    CK_TILE_HOST_DEVICE constexpr vec_t<dtype_##_t, vec_size_> vec_convert<dtype_##_t, stype_##_t, vec_size_>(vec_t<stype_##_t, vec_size_> x, float inverted_scale) \
+-    {                                                                                                                                                               \
+-        constexpr int iter_num = vec_size_ / 2;                                                                                                                     \
+-        vec_t<dtype_##_t, vec_size_> out;                                                                                                                           \
+-        for (size_t i = 0; i < iter_num; i++)                                                                                                                       \
+-        {                                                                                                                                                           \
+-            auto tmp = stype_##x2##_t_to_##dtype_##x2##_t(vec_t<stype_##_t, 2>{x[i * 2], x[i * 2 + 1]}, inverted_scale);                                            \
+-            out[i * 2] = tmp[0];                                                                                                                                    \
+-            out[i * 2 + 1] = tmp[1];                                                                                                                                \
+-        }                                                                                                                                                           \
+-        return out;                                                                                                                                                 \
++    // fp16x2 -> fp4x2
++    CK_TILE_HOST_DEVICE constexpr fp4x2_t fp16x2_t_to_fp4x2_t(fp16x2_v x, fp32_t inverted_scale)
++    {
++        return amd_assembly_cvt_scalef32_pk_fp4_f16(x, inverted_scale);
++    }
++    // bf16x2 -> fp4x2
++    CK_TILE_HOST_DEVICE constexpr fp4x2_t bf16x2_t_to_fp4x2_t(bf16x2_v x, fp32_t inverted_scale)
++    {
++        return amd_assembly_cvt_scalef32_pk_fp4_bf16(x, inverted_scale);
++    }
++#define CK_TILE_TYPE_CONVERT(dtype_, stype_, vec_size_)                                                                                                              \
++    template <>                                                                                                                                                      \
++    CK_TILE_HOST_DEVICE constexpr vec_t<dtype_##_t, vec_size_> vec_convert<dtype_##_t, stype_##_t, vec_size_>(vec_t<stype_##_t, vec_size_> x, fp32_t inverted_scale) \
++    {                                                                                                                                                                \
++        constexpr int iter_num = vec_size_ / 2;                                                                                                                      \
++        vec_t<dtype_##_t, vec_size_> out;                                                                                                                            \
++        using vec_i2 = vec_t<stype_##_t, 2>;                                                                                                                         \
++        using vec_o2 = vec_t<dtype_##_t, 2>;                                                                                                                         \
++        for (size_t i = 0; i < iter_num; i++)                                                                                                                        \
++        {                                                                                                                                                            \
++            vec_o2 tmp = stype_##x2##_t_to_##dtype_##x2##_t(x.template get_as<vec_i2>()(i), inverted_scale);                                                         \
++            out.template get_as<vec_o2>()(i) = tmp;                                                                                                                  \
++        }                                                                                                                                                            \
++        return out;                                                                                                                                                  \
+     }
+     CK_TILE_TYPE_CONVERT(fp8, fp32, 2)
+     CK_TILE_TYPE_CONVERT(fp8, fp32, 4)
+     CK_TILE_TYPE_CONVERT(fp8, fp32, 8)
+     CK_TILE_TYPE_CONVERT(fp8, fp32, 16)
++    CK_TILE_TYPE_CONVERT(fp8, fp32, 32)
+ 
+     CK_TILE_TYPE_CONVERT(int8, fp32, 2)
+     CK_TILE_TYPE_CONVERT(int8, fp32, 4)
+     CK_TILE_TYPE_CONVERT(int8, fp32, 8)
+     CK_TILE_TYPE_CONVERT(int8, fp32, 16)
++    CK_TILE_TYPE_CONVERT(int8, fp32, 32)
++#undef CK_TILE_TYPE_CONVERT
+ 
+-    CK_TILE_TYPE_CONVERT(fp4, fp32, 2)
+-    CK_TILE_TYPE_CONVERT(fp4, fp32, 4)
+-    CK_TILE_TYPE_CONVERT(fp4, fp32, 8)
+-    CK_TILE_TYPE_CONVERT(fp4, fp32, 16)
++    // 4 bit vec convert
++    // convert any to fp32x?_t one by one
++    template <typename Y,
++              typename X,
++              index_t N,
++              std::enable_if_t<(N % 2 == 0), bool> = false,
++              std::enable_if_t<((std::is_same_v<Y, fp4x2_t>)), bool> = false>
++    CK_TILE_HOST_DEVICE constexpr vec_t<Y, N / 2> vec_convert(vec_t<X, N> x, fp32_t inverted_scale);
++
++#define CK_TILE_TYPE_CONVERT(dtype_, stype_, vec_size_)                                                                                                                  \
++    template <>                                                                                                                                                          \
++    CK_TILE_HOST_DEVICE constexpr vec_t<dtype_##_t, vec_size_ / 2> vec_convert<dtype_##_t, stype_##_t, vec_size_>(vec_t<stype_##_t, vec_size_> x, fp32_t inverted_scale) \
++    {                                                                                                                                                                    \
++        constexpr int iter_num = vec_size_ / 2;                                                                                                                          \
++        vec_t<dtype_##_t, iter_num> out;                                                                                                                                 \
++        using vec_i2 = vec_t<stype_##_t, 2>;                                                                                                                             \
++        using vec_o2 = dtype_##_t;                                                                                                                                       \
++        for (size_t i = 0; i < iter_num; i++)                                                                                                                            \
++        {                                                                                                                                                                \
++            vec_o2 tmp = stype_##x2##_t_to_##dtype_##_t(x.template get_as<vec_i2>()(i), inverted_scale);                                                                 \
++            out.template get_as<vec_o2>()(i) = tmp;                                                                                                                      \
++        }                                                                                                                                                                \
++        return out;                                                                                                                                                      \
++    }
++    CK_TILE_TYPE_CONVERT(fp4x2, fp32, 4)
++    CK_TILE_TYPE_CONVERT(fp4x2, fp32, 8)
++    CK_TILE_TYPE_CONVERT(fp4x2, fp32, 16)
++    CK_TILE_TYPE_CONVERT(fp4x2, fp32, 32)
+ 
+-    // CK_TILE_TYPE_CONVERT(fp4x2, fp16x2, 2)
+-    // CK_TILE_TYPE_CONVERT(fp4x2, fp16x2, 4)
+-    // CK_TILE_TYPE_CONVERT(fp4x2, fp16x2, 8)
+-    // CK_TILE_TYPE_CONVERT(fp4x2, fp16x2, 16)
++    CK_TILE_TYPE_CONVERT(fp4x2, fp16, 4)
++    CK_TILE_TYPE_CONVERT(fp4x2, fp16, 8)
++    CK_TILE_TYPE_CONVERT(fp4x2, fp16, 16)
++    CK_TILE_TYPE_CONVERT(fp4x2, fp16, 32)
+ 
+-    // CK_TILE_TYPE_CONVERT(fp4x2, bf16x2, 2)
+-    // CK_TILE_TYPE_CONVERT(fp4x2, bf16x2, 4)
+-    // CK_TILE_TYPE_CONVERT(fp4x2, bf16x2, 8)
+-    // CK_TILE_TYPE_CONVERT(fp4x2, bf16x2, 16)
++    CK_TILE_TYPE_CONVERT(fp4x2, bf16, 4)
++    CK_TILE_TYPE_CONVERT(fp4x2, bf16, 8)
++    CK_TILE_TYPE_CONVERT(fp4x2, bf16, 16)
++    CK_TILE_TYPE_CONVERT(fp4x2, bf16, 32)
+ #undef CK_TILE_TYPE_CONVERT
+ 
+ } // namespace aiter
+diff --git a/csrc/include/dispatch_utils.h b/csrc/include/dispatch_utils.h
+index 38b1e1052e..044dac2f86 100644
+--- a/csrc/include/dispatch_utils.h
++++ b/csrc/include/dispatch_utils.h
+@@ -1,6 +1,6 @@
+ /*
+- * Copyright © Advanced Micro Devices, Inc. All rights reserved.
+- * Copyright (c) 2024, The vLLM team.
++ * Copyright (C) Advanced Micro Devices, Inc. All rights reserved.
++ * Copyright (C) 2024-2025, The vLLM team.
+  *
+  * Licensed under the Apache License, Version 2.0 (the "License");
+  * you may not use this file except in compliance with the License.
+@@ -22,6 +22,13 @@
+ 
+ #include <torch/extension.h>
+ 
++#define AITER_DISPATCH_CASE_FLOATING16_TYPES(...)     \
++  AT_DISPATCH_CASE(at::ScalarType::Half, __VA_ARGS__) \
++  AT_DISPATCH_CASE(at::ScalarType::BFloat16, __VA_ARGS__)
++
++#define AITER_DISPATCH_FLOATING16_TYPES(TYPE, NAME, ...) \
++  AT_DISPATCH_SWITCH(TYPE, NAME, VLLM_DISPATCH_CASE_FLOATING_TYPES(__VA_ARGS__))
++
+ #define VLLM_DISPATCH_CASE_FLOATING_TYPES(...)         \
+   AT_DISPATCH_CASE(at::ScalarType::Float, __VA_ARGS__) \
+   AT_DISPATCH_CASE(at::ScalarType::Half, __VA_ARGS__)  \
+diff --git a/csrc/include/py_itfs_common.h b/csrc/include/py_itfs_common.h
+index 1f5da776da..42b9792791 100644
+--- a/csrc/include/py_itfs_common.h
++++ b/csrc/include/py_itfs_common.h
+@@ -5,14 +5,31 @@
+ #include <torch/all.h>
+ #include "aiter_hip_common.h"
+ 
++bool static isGPUArch(const std::vector<std::string> &archs)
++{
++    hipDeviceProp_t props;
++
++    hipGetDeviceProperties(&props, 0);
++
++    std::string device_arch = props.gcnArchName;
++    for (std::string arch : archs)
++    {
++        size_t substring = device_arch.find(arch);
++        if (substring != std::string::npos)
++        {
++            return true;
++        }
++    }
++    return false;
++}
+ #ifdef __HIP_DEVICE_COMPILE__
+ #if CK_TILE_USE_OCP_FP8
+-const auto torch_fp8 = at::ScalarType::Float8_e4m3fn;
++const constexpr auto torch_fp8 = at::ScalarType::Float8_e4m3fn;
+ #else
+-const auto torch_fp8 = at::ScalarType::Float8_e4m3fnuz;
++const constexpr auto torch_fp8 = at::ScalarType::Float8_e4m3fnuz;
+ #endif
+ #else
+-const auto torch_fp8 = at::detail::getCUDAHooks().isGPUArch(0, {"gfx94"}) ? at::ScalarType::Float8_e4m3fnuz : at::ScalarType::Float8_e4m3fn;
++const auto torch_fp8 = isGPUArch({"gfx94"}) ? at::ScalarType::Float8_e4m3fnuz : at::ScalarType::Float8_e4m3fn;
+ #endif
+ 
+ // clang-format off
+diff --git a/csrc/include/rocm_ops.hpp b/csrc/include/rocm_ops.hpp
+index edb9bfa593..ff865a600c 100644
+--- a/csrc/include/rocm_ops.hpp
++++ b/csrc/include/rocm_ops.hpp
+@@ -188,6 +188,14 @@
+             py::arg("pad_a") = 0, py::arg("pad_b") = 0,                   \
+             py::arg("pad_c") = 0, py::arg("splitK") = 0);
+ 
++#define GEMM_A4W4_ASM_PYBIND                        \
++      m.def("gemm_a4w4_asm", &gemm_a4w4_asm,        \
++            "Asm gemm a4w4",                        \
++            py::arg("A"), py::arg("B"),             \
++            py::arg("A_scale"), py::arg("B_scale"), \
++            py::arg("out"), py::arg("bias"),        \
++            py::arg("alpha") = 1.0, py::arg("beta") = 0.0);
++
+ #define GEMM_A8W8_BLOCKSCALE_PYBIND                                                                             \
+       m.def("gemm_a8w8_blockscale", &gemm_a8w8_blockscale, "fp8 blockscale gemm", py::arg("XQ"), py::arg("WQ"), \
+             py::arg("x_scale"), py::arg("w_scale"), py::arg("Out"));
+@@ -351,57 +359,57 @@
+             py::arg("alibi_slopes") = std::nullopt,               \
+             py::arg("gen") = std::nullopt);
+ 
+-#define MHA_BATCH_PREFILL_PYBIND                      \
+-      m.def("mha_batch_prefill", &aiter::torch_itfs::mha_batch_prefill,  \
+-            py::arg("q"), py::arg("k"), py::arg("v"),                    \
+-            py::arg("cu_seqlens_q"),                                     \
+-            py::arg("kv_indptr"),                                        \
+-            py::arg("kv_page_indices"),                                  \
+-            py::arg("max_seqlen_q"),                                     \
+-            py::arg("max_seqlen_k"),                                     \
+-            py::arg("dropout_p"),                                        \
+-            py::arg("softmax_scale"),                                    \
+-            py::arg("logits_soft_cap"),                                  \
+-            py::arg("zero_tensors"),                                     \
+-            py::arg("is_causal"),                                        \
+-            py::arg("window_size_left"),                                 \
+-            py::arg("window_size_right"),                                \
+-            py::arg("return_softmax_lse"),                               \
+-            py::arg("return_dropout_randval"),                           \
+-            py::arg("out") = std::nullopt,                               \
+-            py::arg("bias") = std::nullopt,                              \
+-            py::arg("alibi_slopes") = std::nullopt,                      \
++#define MHA_BATCH_PREFILL_PYBIND                                        \
++      m.def("mha_batch_prefill", &aiter::torch_itfs::mha_batch_prefill, \
++            py::arg("q"), py::arg("k"), py::arg("v"),                   \
++            py::arg("cu_seqlens_q"),                                    \
++            py::arg("kv_indptr"),                                       \
++            py::arg("kv_page_indices"),                                 \
++            py::arg("max_seqlen_q"),                                    \
++            py::arg("max_seqlen_k"),                                    \
++            py::arg("dropout_p"),                                       \
++            py::arg("softmax_scale"),                                   \
++            py::arg("logits_soft_cap"),                                 \
++            py::arg("zero_tensors"),                                    \
++            py::arg("is_causal"),                                       \
++            py::arg("window_size_left"),                                \
++            py::arg("window_size_right"),                               \
++            py::arg("return_softmax_lse"),                              \
++            py::arg("return_dropout_randval"),                          \
++            py::arg("out") = std::nullopt,                              \
++            py::arg("bias") = std::nullopt,                             \
++            py::arg("alibi_slopes") = std::nullopt,                     \
+             py::arg("gen") = std::nullopt);
+ 
+-#define MOE_CK_2STAGES_PYBIND                          \
+-      m.def("ck_moe_stage1", &ck_moe_stage1,           \
+-            py::arg("hidden_states"),                  \
+-            py::arg("w1"),                             \
+-            py::arg("w2"),                             \
+-            py::arg("sorted_token_ids"),               \
+-            py::arg("sorted_expert_ids"),              \
+-            py::arg("num_valid_ids"),                  \
+-            py::arg("out"),                            \
+-            py::arg("topk"),                           \
+-            py::arg("w1_scale") = std::nullopt,        \
+-            py::arg("a1_scale") = std::nullopt,        \
+-            py::arg("block_m") = 32,                   \
+-            py::arg("sorted_weights") = std::nullopt,  \
+-            py::arg("act_op") = 0);                    \
+-                                                       \
+-      m.def("ck_moe_stage2", &ck_moe_stage2,           \
+-            py::arg("inter_states"),                   \
+-            py::arg("w1"),                             \
+-            py::arg("w2"),                             \
+-            py::arg("sorted_token_ids"),               \
+-            py::arg("sorted_expert_ids"),              \
+-            py::arg("num_valid_ids"),                  \
+-            py::arg("out"),                            \
+-            py::arg("topk"),                           \
+-            py::arg("w2_scale") = std::nullopt,        \
+-            py::arg("a2_scale") = std::nullopt,        \
+-            py::arg("block_m") = 32,                   \
+-            py::arg("sorted_weights") = std::nullopt); \
++#define MOE_CK_2STAGES_PYBIND                         \
++      m.def("ck_moe_stage1", &ck_moe_stage1,          \
++            py::arg("hidden_states"),                 \
++            py::arg("w1"),                            \
++            py::arg("w2"),                            \
++            py::arg("sorted_token_ids"),              \
++            py::arg("sorted_expert_ids"),             \
++            py::arg("num_valid_ids"),                 \
++            py::arg("out"),                           \
++            py::arg("topk"),                          \
++            py::arg("w1_scale") = std::nullopt,       \
++            py::arg("a1_scale") = std::nullopt,       \
++            py::arg("block_m") = 32,                  \
++            py::arg("sorted_weights") = std::nullopt, \
++            py::arg("act_op") = 0);                   \
++                                                      \
++      m.def("ck_moe_stage2", &ck_moe_stage2,          \
++            py::arg("inter_states"),                  \
++            py::arg("w1"),                            \
++            py::arg("w2"),                            \
++            py::arg("sorted_token_ids"),              \
++            py::arg("sorted_expert_ids"),             \
++            py::arg("num_valid_ids"),                 \
++            py::arg("out"),                           \
++            py::arg("topk"),                          \
++            py::arg("w2_scale") = std::nullopt,       \
++            py::arg("a2_scale") = std::nullopt,       \
++            py::arg("block_m") = 32,                  \
++            py::arg("sorted_weights") = std::nullopt);
+ 
+ #define MOE_CK_PYBIND                                                               \
+       m.def("ck_moe", &ck_moe,                                                      \
+@@ -534,11 +542,11 @@
+       m.def("rotary_embedding_fwd", &rotary_embedding, "rotary_embedding"); \
+       m.def("batched_rotary_embedding", &batched_rotary_embedding, "batched_rotary_embedding");
+ 
+-#define QUANT_PYBIND                                                                   \
+-      m.def("static_per_tensor_quant", &static_per_tensor_quant);                      \
+-      m.def("dynamic_per_tensor_quant", &dynamic_per_tensor_quant);                    \
++#define QUANT_PYBIND                                                           \
++      m.def("static_per_tensor_quant", &static_per_tensor_quant);              \
++      m.def("dynamic_per_tensor_quant", &dynamic_per_tensor_quant);            \
+       m.def("dynamic_per_token_scaled_quant", &dynamic_per_token_scaled_quant, \
+-            py::arg("out"), py::arg("input"),                                          \
++            py::arg("out"), py::arg("input"),                                  \
+             py::arg("scales"), py::arg("scale_ub") = std::nullopt);
+ 
+ #define RMSNORM_PYBIND                                                                                    \
+@@ -599,17 +607,17 @@
+       m.def("rocb_mm", &RocSolIdxBlas, "mm");                                        \
+       m.def("rocb_findallsols", &RocFindAllSolIdxBlas, "rocblas_find_all_sols");
+ 
+-#define AITER_ENUM_PYBIND                               \
+-      pybind11::enum_<QuantType>(m, "QuantType")        \
+-          .value("No", QuantType::No)                   \
+-          .value("per_Tensor", QuantType::per_Tensor)   \
+-          .value("per_Token", QuantType::per_Token)     \
+-          .value("per_1x32", QuantType::per_1x32)     \
+-          .value("per_1x128", QuantType::per_1x128)     \
+-          .value("per_128x128", QuantType::per_128x128) \
+-          .export_values();                             \
+-      pybind11::enum_<ActivationType>(m, "ActivationType")  \
+-          .value("No", ActivationType::No)                  \
+-          .value("Silu", ActivationType::Silu)              \
+-          .value("Gelu", ActivationType::Gelu)              \
++#define AITER_ENUM_PYBIND                                  \
++      pybind11::enum_<QuantType>(m, "QuantType")           \
++          .value("No", QuantType::No)                      \
++          .value("per_Tensor", QuantType::per_Tensor)      \
++          .value("per_Token", QuantType::per_Token)        \
++          .value("per_1x32", QuantType::per_1x32)          \
++          .value("per_1x128", QuantType::per_1x128)        \
++          .value("per_128x128", QuantType::per_128x128)    \
++          .export_values();                                \
++      pybind11::enum_<ActivationType>(m, "ActivationType") \
++          .value("No", ActivationType::No)                 \
++          .value("Silu", ActivationType::Silu)             \
++          .value("Gelu", ActivationType::Gelu)             \
+           .export_values();
+diff --git a/csrc/kernels/quant_kernels.cu b/csrc/kernels/quant_kernels.cu
+index 7741d325b9..6c7c99db67 100644
+--- a/csrc/kernels/quant_kernels.cu
++++ b/csrc/kernels/quant_kernels.cu
+@@ -8,34 +8,117 @@
+ 
+ #include <hipcub/hipcub.hpp>
+ #include "vec_convert.h"
++#include "rocprim/rocprim.hpp"
++
++const int32_t BlockSize = 256;
++const int32_t groupQuantBlockSize = 64;
++const int32_t thread_data_size = 32;
+ 
+ namespace aiter
+ {
++  template <typename T, typename F>
++  __device__ constexpr T multithread_reduce(T data, F reduce_op, int stage)
++  {
++    if (stage == 1)
++    {
++      return data;
++    }
++    if (stage >= 2)
++    {
++      data = reduce_op(rocprim::detail::warp_move_dpp<T, 0xb1>(data), data);
++    }
++    if (stage == 4)
++    {
++      data = reduce_op(rocprim::detail::warp_move_dpp<T, 0x4e>(data), data);
++    }
++    return data;
++  }
++
++  template <typename DTYPE_I, typename DTYPE_O, int thread_data_size = 32>
++  __global__ void dynamic_per_group_scaled_quant_kernel(
++      DTYPE_O *__restrict__ out, float *__restrict__ scale,
++      DTYPE_I const *__restrict__ input, float const *__restrict__ scale_ub,
++      const int32_t rows, const int32_t cols)
++  {
++    int num_thread_per_group = cols / thread_data_size;
++    int64_t row_offset = blockIdx.x * groupQuantBlockSize;
++    int64_t groupId = (row_offset + threadIdx.x) / num_thread_per_group;
++    if (groupId > rows)
++      return;
++    row_offset *= thread_data_size;
++    using vec_i = ck_tile::vec_t<DTYPE_I, thread_data_size>;
++    static constexpr int32_t vec_size_o = std::is_same_v<DTYPE_O, ck_tile::fp4x2_t> ? thread_data_size / 2 : thread_data_size;
++    using vec_o = ck_tile::vec_t<DTYPE_O, vec_size_o>;
++    const float inverted_DTYPE_MAX = std::is_same_v<DTYPE_O, ck_tile::fp4x2_t> ? 0.25 : (1. / ck_tile::type_convert<float>(ck_tile::numeric<DTYPE_O>::max()));
++
++    auto const *input_vecs = reinterpret_cast<vec_i const *>(input + row_offset);
++    vec_i thread_data = input_vecs[threadIdx.x];
++    float absMax = 0.f;
++    for (size_t j = 0; j < thread_data_size; j++)
++    {
++      absMax = max(absMax, abs(ck_tile::type_convert<float>(thread_data[j])));
++    }
++    absMax = multithread_reduce(absMax, hipcub::Max(), num_thread_per_group);
++
++    auto fp4_scale = [](float tmp)
++    {uint32_t u32= ck_tile::bit_cast<uint32_t>(tmp);
++      uint32_t exponent = (u32 >> 23) & 0b11111111;
++      if (exponent == 0b11111111)
++      {
++        return ck_tile::bit_cast<float>(exponent<<23);
++      }
++      if (((u32 & 0x400000)) && (((u32 & 0x200000)) || ((u32 & 0x1FFFFF)) || (exponent)))
++        exponent+=1;
++      return ck_tile::bit_cast<float>(exponent << 23); };
++    float inverted_scale = std::is_same_v<DTYPE_O, ck_tile::fp4x2_t> ? fp4_scale(absMax) * inverted_DTYPE_MAX : absMax * inverted_DTYPE_MAX;
++
++    if (threadIdx.x % num_thread_per_group == 0)
++    {
++      if constexpr (std::is_same_v<DTYPE_O, ck_tile::fp4x2_t>)
++      {
++        auto *tmp = reinterpret_cast<uint8_t *>(scale);
++        uint8_t exponent = (ck_tile::bit_cast<uint32_t>(inverted_scale) >> 23) & 0b11111111;
++        tmp[groupId] = exponent;
++      }
++      else
++      {
++        scale[groupId] = inverted_scale;
++      }
++    }
++    inverted_scale = std::is_same_v<DTYPE_O, ck_tile::fp4x2_t> ? inverted_scale : 1.0f / inverted_scale;
++
++    auto *out_ptr = reinterpret_cast<DTYPE_O *>(out);
++    auto *out_vecs = std::is_same_v<DTYPE_O, ck_tile::fp4x2_t> ? reinterpret_cast<vec_o *>(out + row_offset / 2) : reinterpret_cast<vec_o *>(out + row_offset);
++
++    out_vecs[threadIdx.x] = ck_tile::vec_convert<DTYPE_O, DTYPE_I, thread_data_size>(thread_data, inverted_scale);
++  }
++
+   template <typename DTYPE_I, typename DTYPE_O>
+   __device__ float data_to_per_row_scale(const DTYPE_I *__restrict__ input,
+-                                         int64_t cols)
++                                         int cols)
+   {
+-    static constexpr int32_t vec_size = 16 / sizeof(DTYPE_I);
+-    using vec_i = ck_tile::vec_t<DTYPE_I, vec_size>;
+-    using tb_i = ck_tile::thread_buffer<DTYPE_I, vec_size>;
+-    const float inverted_DTYPE_MAX = 1. / ck_tile::type_convert<float>(ck_tile::numeric<DTYPE_O>::max());
++    static constexpr int32_t vec_size_i = 16 / sizeof(DTYPE_O);
++    static constexpr int32_t vec_size_o = std::is_same_v<DTYPE_O, ck_tile::fp4x2_t> ? vec_size_i / 2 : vec_size_i;
++    using vec_i = ck_tile::vec_t<DTYPE_I, vec_size_i>;
++    using tb_i = ck_tile::thread_buffer<DTYPE_I, vec_size_o>;
++    const float inverted_DTYPE_MAX = std::is_same_v<DTYPE_O, ck_tile::fp4x2_t> ? 0.25 : (1. / ck_tile::type_convert<float>(ck_tile::numeric<DTYPE_O>::max()));
+ 
+-    const int32_t row_offset = blockIdx.x * cols;
++    const int64_t row_offset = blockIdx.x * cols;
+     auto const *input_ptr = reinterpret_cast<DTYPE_I const *>(input);
+-    auto const *input_vecs = reinterpret_cast<vec_i const *>(input + blockIdx.x * cols);
++    auto const *input_vecs = reinterpret_cast<vec_i const *>(input + row_offset);
+     auto buffer_i = ck_tile::make_buffer_view<ck_tile::address_space_enum::global>(input_ptr, gridDim.x * cols);
+     buffer_i.init_raw();
+ 
+     // double load core loop start
+-    const int32_t num_elems_tail = cols % vec_size;
+-    const int32_t num_vecs = cols / vec_size;
+-    // const int32_t num_vecs = (cols + vec_size - 1) / vec_size * vec_size;
++    const int32_t num_elems_tail = cols % vec_size_i;
++    const int32_t num_vecs = cols / vec_size_i;
++    // const int32_t num_vecs = (cols + vec_size_i - 1) / vec_size_i * vec_size_i;
+     vec_i vec_nxt;
+     vec_i vec_cur;
+-    // size_t vec_idx = threadIdx.x * vec_size;
+-    // size_t vec_stride = blockDim.x * vec_size;
++    // size_t vec_idx = threadIdx.x * vec_size_i;
++    // size_t vec_stride = BlockSize * vec_size_i;
+     size_t vec_idx = threadIdx.x;
+-    size_t vec_stride = blockDim.x;
++    size_t vec_stride = BlockSize;
+     if (vec_idx < num_vecs)
+     {
+       // vec_cur = ck_tile::bit_cast<vec_i>(buffer_i.template get<tb_i>(vec_idx, row_offset, true));
+@@ -47,7 +130,7 @@ namespace aiter
+     {
+       vec_nxt = input_vecs[vec_idx];
+       // vec_nxt = ck_tile::bit_cast<vec_i>(buffer_i.template get<tb_i>(vec_idx, row_offset, true));
+-      for (size_t j = 0; j < vec_size; j++)
++      for (size_t j = 0; j < vec_size_i; j++)
+       {
+         absMax = max(absMax, abs(ck_tile::type_convert<float>(vec_cur[j])));
+       }
+@@ -55,7 +138,7 @@ namespace aiter
+     }
+     if (vec_idx - vec_stride < num_vecs)
+     {
+-      for (size_t j = 0; j < vec_size; j++)
++      for (size_t j = 0; j < vec_size_i; j++)
+       {
+         absMax = max(absMax, abs(ck_tile::type_convert<float>(vec_cur[j])));
+       }
+@@ -66,22 +149,33 @@ namespace aiter
+     if (num_elems_tail > 0)
+     {
+       auto *tmp_i = reinterpret_cast<DTYPE_I const *>(input_vecs + num_vecs);
+-      for (size_t j = threadIdx.x; j < num_elems_tail; j += blockDim.x)
++      for (size_t j = threadIdx.x; j < num_elems_tail; j += BlockSize)
+       {
+         absMax = max(absMax, abs(ck_tile::type_convert<float>(tmp_i[j])));
+       }
+     }
+ 
+-    using BlockReduce = hipcub::BlockReduce<float, 256>;
++    using BlockReduce = hipcub::BlockReduce<float, BlockSize>;
+     __shared__ typename BlockReduce::TempStorage temp_storage;
+     absMax = BlockReduce(temp_storage).Reduce(absMax, hipcub::Max());
+-    return absMax * inverted_DTYPE_MAX;
++
++    auto fp4_scale = [](float tmp)
++    {uint32_t u32= ck_tile::bit_cast<uint32_t>(tmp);
++      uint32_t exponent = (u32 >> 23) & 0b11111111;
++      if (exponent == 0b11111111)
++      {
++        return ck_tile::bit_cast<float>(exponent<<23);
++      }
++      if (((u32 & 0x400000)) && (((u32 & 0x200000)) || ((u32 & 0x1FFFFF)) || (exponent)))
++        exponent+=1;
++      return ck_tile::bit_cast<float>(exponent << 23); };
++    return std::is_same_v<DTYPE_O, ck_tile::fp4x2_t> ? fp4_scale(absMax) * inverted_DTYPE_MAX : absMax * inverted_DTYPE_MAX;
+   }
+ 
+   template <typename DTYPE_I, typename DTYPE_O>
+   __global__ void data_to_scale_kernel(float *__restrict__ scale,
+                                        const DTYPE_I *__restrict__ input,
+-                                       int64_t cols)
++                                       int cols)
+   {
+     float row_scale = data_to_per_row_scale<DTYPE_I, DTYPE_O>(input, cols);
+     if (threadIdx.x == 0)
+@@ -94,20 +188,23 @@ namespace aiter
+   __device__ void scaled_quant_impl(DTYPE_O *__restrict__ out,
+                                     const DTYPE_I *__restrict__ input,
+                                     const float *__restrict__ scale,
+-                                    int64_t cols)
++                                    int cols)
+   {
+-    const float inverted_scale = 1.0f / (*scale);
+-    static constexpr int32_t vec_size = 16 / sizeof(DTYPE_O);
+-    using vec_i = ck_tile::vec_t<DTYPE_I, vec_size>;
+-    using tb_i = ck_tile::thread_buffer<DTYPE_I, vec_size>;
+-    using vec_o = ck_tile::vec_t<DTYPE_O, vec_size>;
+-    using tb_o = ck_tile::thread_buffer<DTYPE_O, vec_size>;
+-
+-    const int32_t row_offset = blockIdx.x * cols;
++
++    const float inverted_scale = std::is_same_v<DTYPE_O, ck_tile::fp4x2_t> ? (*scale) : 1.0f / (*scale);
++    static constexpr int32_t vec_size_i = 16 / sizeof(DTYPE_O);
++    static constexpr int32_t vec_size_o = std::is_same_v<DTYPE_O, ck_tile::fp4x2_t> ? vec_size_i / 2 : vec_size_i;
++
++    using vec_i = ck_tile::vec_t<DTYPE_I, vec_size_i>;
++    using tb_i = ck_tile::thread_buffer<DTYPE_I, vec_size_i>;
++    using vec_o = ck_tile::vec_t<DTYPE_O, vec_size_o>;
++    using tb_o = ck_tile::thread_buffer<DTYPE_O, vec_size_o>;
++
++    const int64_t row_offset = blockIdx.x * cols;
+     auto const *input_ptr = reinterpret_cast<DTYPE_I const *>(input);
+     auto const *input_vecs = reinterpret_cast<vec_i const *>(input + row_offset);
+     auto *out_ptr = reinterpret_cast<DTYPE_O *>(out);
+-    auto *out_vecs = reinterpret_cast<vec_o *>(out + row_offset);
++    auto *out_vecs = std::is_same_v<DTYPE_O, ck_tile::fp4x2_t> ? reinterpret_cast<vec_o *>(out + row_offset / 2) : reinterpret_cast<vec_o *>(out + row_offset);
+ 
+     // auto buffer_i = ck_tile::make_buffer_view<ck_tile::address_space_enum::global, ck_tile::amd_buffer_coherence_enum::glc>(input_ptr, gridDim.x * cols);
+     // buffer_i.init_raw();
+@@ -115,16 +212,16 @@ namespace aiter
+     // buffer_o.init_raw();
+ 
+     // double load core loop start
+-    // const int32_t num_vecs = (cols + vec_size - 1) / vec_size * vec_size;
+-    const int32_t num_elems_tail = cols % vec_size;
+-    const int32_t num_vecs = cols / vec_size;
+-    const int32_t tail_thread = num_vecs % blockDim.x;
++    // const int32_t num_vecs = (cols + vec_size_i - 1) / vec_size_i * vec_size_i;
++    const int32_t num_elems_tail = cols % vec_size_i;
++    const int32_t num_vecs = cols / vec_size_i;
++    const int32_t tail_thread = num_vecs % BlockSize;
+     vec_i vec_nxt;
+     vec_i vec_cur;
+-    // size_t vec_idx = threadIdx.x * vec_size;
+-    // size_t vec_stride = blockDim.x * vec_size;
++    // size_t vec_idx = threadIdx.x * vec_size_i;
++    // size_t vec_stride = BlockSize * vec_size_i;
+     size_t vec_idx = threadIdx.x;
+-    size_t vec_stride = blockDim.x;
++    size_t vec_stride = BlockSize;
+     if (vec_idx < num_vecs)
+     {
+       // vec_cur = ck_tile::bit_cast<vec_i>(buffer_i.template get<tb_i>(vec_idx, row_offset, true));
+@@ -134,16 +231,16 @@ namespace aiter
+     for (vec_idx += vec_stride; vec_idx < num_vecs; vec_idx += vec_stride)
+     {
+       // vec_nxt = ck_tile::bit_cast<vec_i>(buffer_i.template get<tb_i>(vec_idx, row_offset, true));
+-      // buffer_o.template set<tb_o>((vec_idx - vec_stride), row_offset, true, ck_tile::bit_cast<tb_o>(ck_tile::vec_convert<DTYPE_O, DTYPE_I, vec_size>(vec_cur, inverted_scale)));
++      // buffer_o.template set<tb_o>((vec_idx - vec_stride), row_offset, true, ck_tile::bit_cast<tb_o>(ck_tile::vec_convert<DTYPE_O, DTYPE_I, vec_size_i>(vec_cur, inverted_scale)));
+       vec_nxt = input_vecs[vec_idx];
+-      out_vecs[vec_idx - vec_stride] = ck_tile::vec_convert<DTYPE_O, DTYPE_I, vec_size>(vec_cur, inverted_scale);
++      out_vecs[vec_idx - vec_stride] = ck_tile::vec_convert<DTYPE_O, DTYPE_I, vec_size_i>(vec_cur, inverted_scale);
+       vec_cur = vec_nxt;
+     }
+ 
+     if (vec_idx - vec_stride < num_vecs)
+     {
+-      // buffer_o.template set<tb_o>((vec_idx - vec_stride), row_offset, true, ck_tile::bit_cast<tb_o>(ck_tile::vec_convert<DTYPE_O, DTYPE_I, vec_size>(vec_cur, inverted_scale)));
+-      out_vecs[vec_idx - vec_stride] = ck_tile::vec_convert<DTYPE_O, DTYPE_I, vec_size>(vec_cur, inverted_scale);
++      // buffer_o.template set<tb_o>((vec_idx - vec_stride), row_offset, true, ck_tile::bit_cast<tb_o>(ck_tile::vec_convert<DTYPE_O, DTYPE_I, vec_size_i>(vec_cur, inverted_scale)));
++      out_vecs[vec_idx - vec_stride] = ck_tile::vec_convert<DTYPE_O, DTYPE_I, vec_size_i>(vec_cur, inverted_scale);
+     }
+     // double load core loop end
+ 
+@@ -152,9 +249,9 @@ namespace aiter
+     {
+       auto *out_ptr2 = (out + row_offset);
+       auto *tmp_i = reinterpret_cast<DTYPE_I const *>(input_vecs + num_vecs);
+-      for (size_t j = threadIdx.x; j < num_elems_tail; j += blockDim.x)
++      for (size_t j = threadIdx.x; j < num_elems_tail; j += BlockSize)
+       {
+-        out_ptr2[num_vecs * vec_size + j] =
++        out_ptr2[num_vecs * vec_size_i + j] =
+             ck_tile::type_convert<DTYPE_O>(ck_tile::type_convert<float>(tmp_i[j]) * inverted_scale);
+       }
+     }
+@@ -163,7 +260,7 @@ namespace aiter
+   __global__ void scaled_quant_kernel(DTYPE_O *__restrict__ out,
+                                       const DTYPE_I *__restrict__ input,
+                                       const float *__restrict__ scale,
+-                                      int64_t cols)
++                                      int cols)
+   {
+     scaled_quant_impl<DTYPE_I>(out, input, scale, cols);
+   }
+@@ -176,14 +273,24 @@ namespace aiter
+   {
+     // float const min_scaling_factor = 1.0f / (FP8_MAX * 512.f);
+ 
+-    const int32_t token_idx = blockIdx.x;
++    const int token_idx = blockIdx.x;
+     float row_scale = data_to_per_row_scale<DTYPE_I, DTYPE_O>(input, cols);
+ 
+     __shared__ float token_scale;
+     if (threadIdx.x == 0)
+     {
+       token_scale = row_scale;
+-      scale[token_idx] = token_scale;
++      if (std::is_same_v<DTYPE_O, ck_tile::fp4x2_t>)
++      {
++        // scale[token_idx] = token_scale;
++        auto *tmp = reinterpret_cast<uint8_t *>(scale);
++        uint8_t exponent = (ck_tile::bit_cast<uint32_t>(token_scale) >> 23) & 0b11111111;
++        tmp[token_idx] = exponent;
++      }
++      else
++      {
++        scale[token_idx] = token_scale;
++      }
+     }
+     __syncthreads();
+ 
+@@ -196,13 +303,13 @@ void static_per_tensor_quant(torch::Tensor &out,         // [..., d]
+                              torch::Tensor const &input, // [..., d]
+                              torch::Tensor const &scale) // [1]
+ {
+-  int64_t cols = input.size(-1);
+-  int64_t rows = input.numel() / cols;
++  int cols = input.size(-1);
++  int rows = input.numel() / cols;
+   dim3 grid(rows);
+-  dim3 block(256);
++  dim3 block(BlockSize);
+   const at::cuda::OptionalCUDAGuard device_guard(device_of(input));
+   const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+-  VLLM_DISPATCH_FLOATING_TYPES(
++  AITER_DISPATCH_FLOATING16_TYPES(
+       input.scalar_type(), "scaled_quant_kernel", [&]
+       {using input_dtype= typename t2ck<scalar_t>::type;
+     aiter::scaled_quant_kernel<<<grid, block, 0, stream>>>(
+@@ -215,13 +322,13 @@ void dynamic_per_tensor_quant(torch::Tensor &out,         // [..., d]
+                               torch::Tensor const &input, // [..., d]
+                               torch::Tensor &scale)       // [1]
+ {
+-  int64_t cols = input.size(-1);
+-  int64_t rows = input.numel() / cols;
++  int cols = input.size(-1);
++  int rows = input.numel() / cols;
+   dim3 grid(rows);
+-  dim3 block(256);
++  dim3 block(BlockSize);
+   const at::cuda::OptionalCUDAGuard device_guard(device_of(input));
+   const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+-  VLLM_DISPATCH_FLOATING_TYPES(
++  AITER_DISPATCH_FLOATING16_TYPES(
+       input.scalar_type(), "scaled_quant_kernel", [&]
+       {using input_dtype= typename t2ck<scalar_t>::type;
+       vllm::initializeScale<<<dim3(1), dim3(64), 0, stream>>>(scale.data_ptr<float>(), 1, 0.0f);
+@@ -241,37 +348,103 @@ void dynamic_per_token_scaled_quant(
+   TORCH_CHECK(input.is_contiguous());
+   TORCH_CHECK(out.is_contiguous());
+ 
+-  int32_t const cols = input.size(-1);
+-  int32_t const rows = input.numel() / cols;
+-  dim3 const grid(rows);
+-  dim3 const block(256);
++  int const cols = input.size(-1);
++  int const rows = input.numel() / cols;
++  
+ 
+   const at::cuda::OptionalCUDAGuard device_guard(device_of(input));
+   const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+-  if (out.dtype() == torch_fp8)
++
++  if (cols == 32 || cols == 64 || cols == 128)
+   {
+-    VLLM_DISPATCH_FLOATING_TYPES(
+-        input.scalar_type(), "dynamic_per_token_scaled_quant_kernel", [&]
+-        { using input_dtype= typename t2ck<scalar_t>::type;
+-    aiter::dynamic_per_token_scaled_quant_kernel<<<grid, block, 0, stream>>>(
+-            reinterpret_cast<FP8_TYPE *>(out.data_ptr()), scales.data_ptr<float>(),
+-            reinterpret_cast<input_dtype*>(input.data_ptr()),
++    int num_thread_per_group = cols / thread_data_size;
++    int num_group_per_tg = groupQuantBlockSize / num_thread_per_group;
++    dim3 const grid((rows + num_group_per_tg -1)/num_group_per_tg);
++    dim3 const block(groupQuantBlockSize);
++    if (out.dtype() == torch_fp8)
++    {
++      AITER_DISPATCH_FLOATING16_TYPES(
++          input.scalar_type(), "dynamic_per_group_scaled_quant_kernel", [&]
++          { using input_dtype= typename t2ck<scalar_t>::type;
++        aiter::dynamic_per_group_scaled_quant_kernel<<<grid, block, 0, stream>>>(
++                reinterpret_cast<FP8_TYPE *>(out.data_ptr()), scales.data_ptr<float>(),
++                reinterpret_cast<input_dtype*>(input.data_ptr()),
++                scale_ub.has_value() ? scale_ub->data_ptr<float>() : nullptr,
++                rows, cols); });
++    }
++    else if (out.dtype() == torch::kInt8)
++    {
++      AITER_DISPATCH_FLOATING16_TYPES(
++          input.scalar_type(), "dynamic_per_group_scaled_quant_kernel", [&]
++          { using input_dtype= typename t2ck<scalar_t>::type;
++        aiter::dynamic_per_group_scaled_quant_kernel<<<grid, block, 0, stream>>>(
++                reinterpret_cast<ck_tile::int8_t *>(out.data_ptr()), scales.data_ptr<float>(),
++                reinterpret_cast<input_dtype *>(input.data_ptr()),
++                scale_ub.has_value() ? scale_ub->data_ptr<float>() : nullptr,
++                rows, cols); });
++    }
++#if defined(__Float4_e2m1fn_x2)
++    else if (out.dtype() == torch::kFloat4_e2m1fn_x2 || out.dtype() == torch::kUInt8)
++    {
++      AITER_DISPATCH_FLOATING16_TYPES(
++          input.scalar_type(), "dynamic_per_group_scaled_quant_kernel", [&]
++          { using input_dtype= typename t2ck<scalar_t>::type;
++        aiter::dynamic_per_group_scaled_quant_kernel<<<grid, block, 0, stream>>>(
++            reinterpret_cast<ck_tile::fp4x2_t *>(out.data_ptr()), 
++            reinterpret_cast<float *>(scales.data_ptr()),
++            reinterpret_cast<input_dtype *>(input.data_ptr()),
+             scale_ub.has_value() ? scale_ub->data_ptr<float>() : nullptr,
+-            cols); });
++            rows, cols); });
++    }
++#endif
++    else
++    {
++      TORCH_CHECK(false, __func__, " not support output type: ", out.dtype());
++    }
+   }
+-  else if (out.dtype() == torch::kInt8)
++  else
+   {
+-    VLLM_DISPATCH_FLOATING_TYPES(
+-        input.scalar_type(), "dynamic_per_token_scaled_quant_kernel", [&]
+-        { using input_dtype= typename t2ck<scalar_t>::type;
+-    aiter::dynamic_per_token_scaled_quant_kernel<<<grid, block, 0, stream>>>(
+-            reinterpret_cast<ck_tile::int8_t *>(out.data_ptr()), scales.data_ptr<float>(),
++    dim3 const grid(rows);
++    dim3 const block(BlockSize);
++    if (out.dtype() == torch_fp8)
++    {
++      AITER_DISPATCH_FLOATING16_TYPES(
++          input.scalar_type(), "dynamic_per_token_scaled_quant_kernel", [&]
++          { using input_dtype= typename t2ck<scalar_t>::type;
++        aiter::dynamic_per_token_scaled_quant_kernel<<<grid, block, 0, stream>>>(
++                reinterpret_cast<FP8_TYPE *>(out.data_ptr()), scales.data_ptr<float>(),
++                reinterpret_cast<input_dtype*>(input.data_ptr()),
++                scale_ub.has_value() ? scale_ub->data_ptr<float>() : nullptr,
++                cols); });
++    }
++    else if (out.dtype() == torch::kInt8)
++    {
++      AITER_DISPATCH_FLOATING16_TYPES(
++          input.scalar_type(), "dynamic_per_token_scaled_quant_kernel", [&]
++          { using input_dtype= typename t2ck<scalar_t>::type;
++        aiter::dynamic_per_token_scaled_quant_kernel<<<grid, block, 0, stream>>>(
++                reinterpret_cast<ck_tile::int8_t *>(out.data_ptr()), scales.data_ptr<float>(),
++                reinterpret_cast<input_dtype *>(input.data_ptr()),
++                scale_ub.has_value() ? scale_ub->data_ptr<float>() : nullptr,
++                cols); });
++    }
++#if defined(__Float4_e2m1fn_x2)
++    else if (out.dtype() == torch::kFloat4_e2m1fn_x2 || out.dtype() == torch::kUInt8)
++    {
++      AITER_DISPATCH_FLOATING16_TYPES(
++          input.scalar_type(), "dynamic_per_token_scaled_quant_kernel", [&]
++          { using input_dtype= typename t2ck<scalar_t>::type;
++        aiter::dynamic_per_token_scaled_quant_kernel<<<grid, block, 0, stream>>>(
++            reinterpret_cast<ck_tile::fp4x2_t *>(out.data_ptr()), 
++            reinterpret_cast<float *>(scales.data_ptr()),
+             reinterpret_cast<input_dtype *>(input.data_ptr()),
+             scale_ub.has_value() ? scale_ub->data_ptr<float>() : nullptr,
+             cols); });
++    }
++#endif
++    else
++    {
++      TORCH_CHECK(false, __func__, " not support output type: ", out.dtype());
++    }
+   }
+-  else
+-  {
+-    TORCH_CHECK(false, __func__, "Unsupported output type for dynamic_per_token_scaled_quant");
+-  }
+-}
++}
+\ No newline at end of file
+diff --git a/csrc/py_itfs_cu/asm_gemm_a4w4.cpp b/csrc/py_itfs_cu/asm_gemm_a4w4.cpp
+new file mode 100644
+index 0000000000..888fe17ae5
+--- /dev/null
++++ b/csrc/py_itfs_cu/asm_gemm_a4w4.cpp
+@@ -0,0 +1,119 @@
++// SPDX-License-Identifier: MIT
++// Copyright (c) 2024, Advanced Micro Devices, Inc. All rights reserved.
++#include <hip/hip_runtime.h>
++#include <torch/all.h>
++#include <ATen/cuda/CUDAContext.h>
++#include <c10/cuda/CUDAGuard.h>
++#include "aiter_hip_common.h"
++
++struct __attribute__((packed)) KernelArgs
++{
++    void *ptr_D;
++    p2 _p0;
++    void *ptr_C;
++    p2 _p1;
++    void *ptr_A;
++    p2 _p2;
++    void *ptr_B;
++    p2 _p3;
++    float alpha;
++    p3 _p4;
++    float beta;
++    p3 _p5;
++
++    unsigned int stride_D0;
++    p3 _p6;
++    unsigned int stride_D1;
++    p3 _p7;
++    unsigned int stride_C0;
++    p3 _p8;
++    unsigned int stride_C1;
++    p3 _p9;
++    unsigned int stride_A0;
++    p3 _p10;
++    unsigned int stride_A1;
++    p3 _p11;
++    unsigned int stride_B0;
++    p3 _p12;
++    unsigned int stride_B1;
++    p3 _p13;
++    unsigned int M;
++    p3 _p14;
++    unsigned int N;
++    p3 _p15;
++    unsigned int K;
++    p3 _p16;
++    void *ptr_ScaleA;
++    p2 _p17;
++    void *ptr_ScaleB;
++    p2 _p18;
++    unsigned int stride_ScaleA0;
++    p3 _p19;
++    unsigned int stride_ScaleA1;
++    p3 _p20;
++    unsigned int stride_ScaleB0;
++    p3 _p21;
++    unsigned int stride_ScaleB1;
++    p3 _p22;
++};
++
++// A4W4 asm gemm kernel
++// D=A*B*alpha+beta*C
++torch::Tensor gemm_a4w4_asm(torch::Tensor &A,       // A:[M, K/2] f4x2
++                            torch::Tensor &B,       // B:[N, K/2] f4x2
++                            torch::Tensor &A_scale, // A_scale:[M, K/32] e8m0 paded
++                            torch::Tensor &B_scale, // B_scale:[N, K/32] e8m0 paded
++                            torch::Tensor &out,     // Out:[M, N] bf16
++                            torch::Tensor &bias,    // bias:[M, N] f32
++                            std::optional<float> alpha = 1.0,
++                            std::optional<float> beta = 0.0)
++{
++    TORCH_CHECK(out.dtype() == torch::ScalarType::BFloat16,
++                __func__, " only support BFloat16 output now!");
++    int Mdim = A.size(0);
++    int Ndim = B.size(0);
++    int Kdim = A.size(1) * 2; // always fp4_x2
++
++    KernelArgs args;
++    size_t arg_size = sizeof(args);
++    args.ptr_D = (void *)out.data_ptr();
++    args.ptr_C = (void *)bias.data_ptr();
++    args.ptr_A = (void *)A.data_ptr();
++    args.ptr_B = (void *)B.data_ptr();
++
++    args.alpha = alpha.value();
++    args.beta = beta.value();
++    args.stride_C0 = out.stride(0);
++    args.stride_A0 = A.stride(0) * 2; // always fp4_x2
++    args.stride_B0 = B.stride(0) * 2; // always fp4_x2
++    args.M = Mdim;
++    args.N = Ndim;
++    args.K = Kdim;
++
++    args.ptr_ScaleA = (void *)A_scale.data_ptr();
++    args.ptr_ScaleB = (void *)B_scale.data_ptr();
++    args.stride_ScaleA0 = A_scale.stride(0);
++    args.stride_ScaleB0 = B_scale.stride(0);
++
++    const at::cuda::OptionalCUDAGuard device_guard(device_of(A));
++    const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
++
++    // TODO should get from kernel
++    int SUBM = 256;
++    int SUBN = 256;
++    static AiterAsmKernel noSplitK_impl("_ZN5aiter33f4gemm_bf16_per1x32Fp4_tn_256x256E", "f4gemm/f4gemm_bf16_per1x32Fp4_tn_256x256.co");
++    AiterAsmKernel *impl_ptr = &noSplitK_impl;
++    // if (ks > 0)
++    //     impl_ptr = &splitK_impl;
++
++    impl_ptr->launch_kernel({&args,
++                             &arg_size,
++                             (Ndim + SUBN - 1) / SUBN, // gdx
++                             (Mdim + SUBM - 1) / SUBM, // gdy
++                             1,                        // gdz
++                             256,                      // bdx: 4 wv64
++                             1,                        // bdy
++                             1,                        // bdz
++                             stream});
++    return out;
++}
+diff --git a/csrc/pybind/gemm_a4w4_asm_pybind.cu b/csrc/pybind/gemm_a4w4_asm_pybind.cu
+new file mode 100644
+index 0000000000..19690d0f91
+--- /dev/null
++++ b/csrc/pybind/gemm_a4w4_asm_pybind.cu
+@@ -0,0 +1,9 @@
++// SPDX-License-Identifier: MIT
++// Copyright (c) 2024, Advanced Micro Devices, Inc. All rights reserved.
++#include "rocm_ops.hpp"
++#include "asm_gemm_a4w4.h"
++
++PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
++{
++    GEMM_A4W4_ASM_PYBIND;
++}
+\ No newline at end of file
+diff --git a/csrc/rocm_ops.cpp b/csrc/rocm_ops.cpp
+index 5d19401940..6e9bacd5d9 100644
+--- a/csrc/rocm_ops.cpp
++++ b/csrc/rocm_ops.cpp
+@@ -19,6 +19,7 @@
+ #include "smoothquant.h"
+ #include "aiter_operator.h"
+ #include "asm_gemm_a8w8.h"
++#include "asm_gemm_a4w4.h"
+ #include <torch/extension.h>
+ #include "gemm_a8w8.h"
+ #include "batched_gemm_a8w8.h"
+@@ -62,6 +63,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
+       MOE_CK_PYBIND;
+       // BATCHED_GEMM_A8W8_TUNE_PYBIND;
+       GEMM_A8W8_ASM_PYBIND;
++      GEMM_A4W4_ASM_PYBIND;
+       ACTIVATION_PYBIND;
+       ATTENTION_ASM_MLA_PYBIND;
+       ATTENTION_CK_PYBIND;
+diff --git a/hsa/gfx950/f4gemm/f4gemm_bf16_per1x32Fp4_tn_256x256.co b/hsa/gfx950/f4gemm/f4gemm_bf16_per1x32Fp4_tn_256x256.co
+new file mode 100755
+index 0000000000..adb5523a6b
+Binary files /dev/null and b/hsa/gfx950/f4gemm/f4gemm_bf16_per1x32Fp4_tn_256x256.co differ
+diff --git a/op_tests/test_gemm_a4w4.py b/op_tests/test_gemm_a4w4.py
+new file mode 100644
+index 0000000000..9da0914172
+--- /dev/null
++++ b/op_tests/test_gemm_a4w4.py
+@@ -0,0 +1,128 @@
++# SPDX-License-Identifier: MIT
++# Copyright (C) 2024-2025, Advanced Micro Devices, Inc. All rights reserved.
++
++import torch
++import aiter
++from aiter.test_common import checkAllclose, benchmark, perftest
++from aiter import dtypes
++from aiter.utility import fp4_utils
++import random
++import itertools
++
++torch.set_default_device("cuda")
++torch.set_printoptions(sci_mode=False)
++SCALE_GROUP_SIZE = 32
++
++
++@perftest(num_iters=5)
++def run_torch(x, w, x_scales, w_scales, dtype):
++    m, k = x.shape
++    n, k = w.shape
++    # First convert the x and w inputs to f32.
++    x_f32 = fp4_utils.mxfp4_to_f32(x)
++    w_f32 = fp4_utils.mxfp4_to_f32(w)
++    # Next convert the e8m0 scales to f32.
++    x_scales = x_scales.repeat_interleave(SCALE_GROUP_SIZE, dim=1)
++    x_scales_f32 = fp4_utils.e8m0_to_f32(x_scales)
++    x_f32 = x_f32 * x_scales_f32
++    w_scales = w_scales.repeat_interleave(SCALE_GROUP_SIZE, dim=1)
++    w_scales_f32 = fp4_utils.e8m0_to_f32(w_scales)
++    w_f32 = w_f32 * w_scales_f32
++    return torch.mm(x_f32, w_f32.T).to(dtype)[:m, :n]
++
++
++@perftest()
++def run_triton(x, w, x_scales, w_scales, out, dtype=dtypes.bf16):
++    from aiter.ops.triton.gemm_afp4wfp4 import gemm_afp4wfp4
++
++    gemm_afp4wfp4(x, w, out, x_scales, w_scales, dtype)
++    return out
++
++
++@perftest()
++def run_gemm_asm(x, weightshuffle, x_scale, w_scale, out, bias=None, dtype=dtypes.bf16):
++    return aiter.gemm_a4w4_asm(x, weightshuffle, x_scale, w_scale, out, bias)
++
++
++@benchmark()
++def test_gemm(dtype, M, N, K):
++    from aiter.jit.utils.chip_info import get_gfx
++
++    if get_gfx() not in ["gfx950"]:
++        return
++    quant_func = aiter.get_torch_quant(aiter.QuantType.per_1x32)
++    x = torch.randn((M, K), dtype=dtype)
++    w = torch.randn((N, K), dtype=dtype)
++    _, x_scales = quant_func(x, shuffle=False)
++    _, w_scales = quant_func(w, shuffle=False)
++    x, x_scales_shffle = quant_func(x, shuffle=True)
++    w, w_scales_shffle = quant_func(w, shuffle=True)
++    out1 = torch.empty(M, N, dtype=dtype)
++    out2 = torch.empty(M, N, dtype=dtype)
++    bias_f32 = torch.zeros(M, N, dtype=dtype)
++    x_scales = x_scales.view(torch.uint8)
++    w_scales = w_scales.view(torch.uint8)
++
++    a, avg_a = run_torch(x, w, x_scales, w_scales, dtype)
++    b, avg_b = run_triton(x, w.T, x_scales, w_scales, out1, dtype)
++    checkAllclose(a, b, msg="triton")
++    avg_c = None
++    tflops_c = None
++    tbs_c = None
++    if M % 256 == 0 and N % 256 == 0:
++        # currently, the asm kernel only supports M % 256 == 0 and N % 256 == 0
++        c, avg_c = run_gemm_asm(x, w, x_scales_shffle, w_scales_shffle, out2, bias_f32)
++        checkAllclose(a, c, msg="asm")
++        tflops_c = M * N * K * 2 / avg_c / 1e6
++        tbs_c = (x.nbytes + w.nbytes) / avg_c / 1e6
++    return {
++        "triton": avg_b,
++        "asm": avg_c,
++        "asm TFLPOS": tflops_c,
++        "asm TB/s": tbs_c,
++    }
++
++
++import pandas as pd
++
++df = []
++for dtype in [dtypes.bf16]:
++    for m, n, k in [
++        # pure_compute
++        (16384, 16384, 16384),
++        (32768, 106496, 16384),
++        (32768, 16384, 53248),
++        (32768, 18432, 16384),
++        (32768, 16384, 16384),
++        # qkv_proj
++        (1, 1280, 8192),
++        (32, 1280, 8192),
++        (64, 1280, 8192),
++        (128, 1280, 8192),
++        (192, 1280, 8192),
++        (256, 1280, 8192),
++        (320, 1280, 8192),
++        (512, 1280, 8192),
++        (1024, 1280, 8192),
++        (2048, 1280, 8192),
++        (4096, 1280, 8192),
++        (8192, 1280, 8192),
++        # attn_out
++        (1, 8192, 1024),
++        (32, 8192, 1024),
++        (64, 8192, 1024),
++        (128, 8192, 1024),
++        (192, 8192, 1024),
++        (256, 8192, 1024),
++        (320, 8192, 1024),
++        (512, 8192, 1024),
++        (1024, 8192, 1024),
++        (2048, 8192, 1024),
++        (4096, 8192, 1024),
++        (8192, 8192, 1024),
++        (16384, 8192, 1024),
++    ]:
++        ret = test_gemm(dtype, m, n, k)
++        df.append(ret)
++df = pd.DataFrame(df)
++aiter.logger.info(f"summary:\n{df}")
+diff --git a/op_tests/test_moe_sorting_mxfp4.py b/op_tests/test_moe_sorting_mxfp4.py
+new file mode 100644
+index 0000000000..4729a1b034
+--- /dev/null
++++ b/op_tests/test_moe_sorting_mxfp4.py
+@@ -0,0 +1,113 @@
++# SPDX-License-Identifier: MIT
++# Copyright (C) 2024-2025, Advanced Micro Devices, Inc. All rights reserved.
++import torch
++import aiter
++from aiter.test_common import checkAllclose, benchmark, run_perftest, perftest
++from aiter.fused_moe import moe_sorting, fused_topk
++from aiter import get_torch_quant, dtypes
++from aiter.utility import fp4_utils
++import pandas as pd
++import itertools
++
++torch.set_default_device("cuda")
++torch.set_printoptions(sci_mode=False)
++torch.set_printoptions(threshold=float("inf"))
++
++
++@perftest()
++def run_torch(scale, sorted_ids, num_valid_ids, token_num):
++    topk = 1
++    if len(scale.shape) == 3:
++        topk = scale.shape[1]
++        scale = scale.view(-1, scale.shape[-1])
++    sorted_ids[num_valid_ids:] = token_num
++    topk_ids = sorted_ids >> 24
++    sorted_ids = sorted_ids & 0xFFFFFF
++    mask = sorted_ids == token_num
++    if topk > 1:
++        sorted_ids = sorted_ids * topk + topk_ids
++    sorted_ids[mask] = 0  # set to 0 to avoid overflow
++    scale = scale[sorted_ids]
++    scale[mask] = 0
++    sm, sn = scale.shape
++    tmp = torch.zeros(
++        ((sm + 31) // 32 * 32, sn), dtype=scale.dtype, device=scale.device
++    )
++    tmp[:sm, :sn] = scale
++    scale = tmp
++    sm, sn = scale.shape
++    scale = scale.view(sm // 32, 2, 16, sn // 8, 2, 4)
++    scale = scale.permute(0, 3, 5, 2, 4, 1).contiguous()
++    ref = scale.view(-1, sn)
++    return ref
++
++
++@benchmark()
++def test_moe_mxfp4_sort(dtype, token_num, model_dim, E, topk, block_size, stage):
++    input = torch.randn((token_num, model_dim), dtype=dtype)
++    score = torch.randn((token_num, E), dtype=dtype)
++
++    topk_weights, topk_ids = fused_topk(input, score, topk, True)
++    sorted_ids, sorted_weights, sorted_expert_ids, num_valid_ids, moe_buf = moe_sorting(
++        topk_ids,
++        topk_weights,
++        E,
++        model_dim,
++        dtype,
++    )
++    if stage == "stage1":
++        scale = torch.arange(token_num * model_dim // 32, dtype=torch.uint8)
++        scale = scale.view(token_num, model_dim // 32)
++    else:
++        scale = torch.arange(token_num * topk * model_dim // 32, dtype=torch.uint8)
++        scale = scale.view(token_num, topk, model_dim // 32)
++    ref, us_ref = run_torch(scale.clone(), sorted_ids.clone(), num_valid_ids, token_num)
++    sorted_mxfp4_scale, us = run_perftest(
++        fp4_utils.moe_mxfp4_sort,
++        scale,
++        sorted_ids,
++        num_valid_ids,
++        token_num,
++        block_size,
++    )
++
++    num_valid_ids = num_valid_ids.item()
++    num_valid_ids = (num_valid_ids + block_size - 1) // block_size * block_size
++
++    err = checkAllclose(
++        ref[:num_valid_ids],
++        sorted_mxfp4_scale[:num_valid_ids].view(torch.uint8),
++        msg="sorted_mxfp4_scale",
++    )
++    return {"us_ref": us_ref, "us": us, "err": err}
++
++
++df = []
++list_dim = [4096, 6144, 8192][:]
++list_E = [32, 256, 257, 512][:]
++list_topk = [5, 8][:]
++list_m = [1, 31, 64, 128, 256, 10000, 163840][:]
++for dtype in [dtypes.bf16]:
++    for (
++        dim,
++        E,
++        topk,
++        m,
++    ) in itertools.product(list_dim, list_E, list_topk, list_m):
++        ret = test_moe_mxfp4_sort(dtype, m, dim, E, topk, 32, "stage1")
++        df.append(ret)
++df = pd.DataFrame(df)
++aiter.logger.info(f"summary:\n{df}")
++
++df = []
++for dtype in [dtypes.bf16]:
++    for (
++        dim,
++        E,
++        topk,
++        m,
++    ) in itertools.product(list_dim, list_E, list_topk, list_m):
++        ret = test_moe_mxfp4_sort(dtype, m, dim, E, topk, 32, "stage2")
++        df.append(ret)
++df = pd.DataFrame(df)
++aiter.logger.info(f"summary:\n{df}")

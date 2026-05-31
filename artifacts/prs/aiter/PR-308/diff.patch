@@ -1,0 +1,2006 @@
+diff --git a/3rdparty/composable_kernel b/3rdparty/composable_kernel
+index c318ec0778..39ba03f25d 160000
+--- a/3rdparty/composable_kernel
++++ b/3rdparty/composable_kernel
+@@ -1 +1 @@
+-Subproject commit c318ec0778f0b9db90618ac51185ff6f9dfab0e1
++Subproject commit 39ba03f25d4c4c4e9f551a2dcf001cadd0b86cbe
+diff --git a/aiter/fused_moe.py b/aiter/fused_moe.py
+index 42dd236ec6..3233d69e1d 100644
+--- a/aiter/fused_moe.py
++++ b/aiter/fused_moe.py
+@@ -354,7 +354,7 @@ def FinalFunc():
+         tag = cfg["tag"]
+ 
+     # war
+-    if q_dtype_w in [torch.bfloat16, torch.float16, torch.uint32]:
++    if q_dtype_w in [torch.bfloat16, torch.float16, torch.uint32, torch.int8]:
+         tag = "ck"
+ 
+     logger.info(f"[fused_moe] using {'default' if cfg is None else tag} for {keys} ")
+@@ -387,7 +387,9 @@ def FinalFunc():
+         block_m,
+         ksplit,
+     )
+-
++@functools.lru_cache()
++def get1tensor(device):
++    return torch.tensor(1.0, dtype=torch.float, device=device)
+ 
+ def fused_moe_2stages(
+     hidden_states,
+@@ -481,11 +483,6 @@ def fused_moe_2stages(
+         a2 = a2_v
+ 
+     if quant_type == aiter.QuantType.No:
+-
+-        @functools.lru_cache()
+-        def get1tensor(device):
+-            return torch.tensor(1.0, dtype=torch.float, device=device)
+-
+         a2_scale = get1tensor(device)
+ 
+     stage2(
+@@ -590,31 +587,30 @@ def ck_stage1(
+     w1_scale=None,
+     sorted_weights=None
+ ):
+-    topk = out.shape[1]
+-    expert, topk, _ = out.shape
++    _, topk, _ = out.shape
++    # max_num_tokens_padded = sorted_expert_ids.shape[0]*block_size
++
++    if activation == ActivationType.Silu:
++        act_op = 1
++    else:
++        act_op = 0
+ 
+-    # tmp = torch.empty_like(out)
+-    dtype = out.dtype
+-    device = out.device
+-    tmp = torch.empty((expert, topk, w1.shape[1]), dtype=dtype, device=device)
+     aiter.ck_moe_stage1(
+-        input,
+-        w1,
+-        w2,
++        input, 
++        w1, 
++        w2, 
+         sorted_ids,
+-        sorted_expert_ids,
+-        num_valid_ids,
+-        tmp,
+-        topk,
+-        w1_scale,
+-        a1_scale,
+-        block_m,
++        sorted_expert_ids, 
++        num_valid_ids, 
++        out, 
++        topk, 
++        w1_scale, 
++        a1_scale, 
++        block_m, 
+         sorted_weights,
++        act_op,
+     )
+-    if activation == ActivationType.Silu:
+-        aiter.silu_and_mul(out, tmp)
+-    else:
+-        aiter.gelu_and_mul(out, tmp)
++
+     return out
+ 
+ 
+diff --git a/aiter/fused_moe_bf16_asm.py b/aiter/fused_moe_bf16_asm.py
+index bd3b32d829..49f096b752 100755
+--- a/aiter/fused_moe_bf16_asm.py
++++ b/aiter/fused_moe_bf16_asm.py
+@@ -9,8 +9,10 @@
+ from typing import Any, Callable, Dict, Optional, Tuple
+ import aiter
+ from aiter import logger
+-from aiter import pertoken_quant
+-from aiter import ActivationType
++from aiter import pertoken_quant, get_hip_quant, get_torch_quant
++from aiter import ActivationType, QuantType
++from aiter import pertoken_quant, get_hip_quant, get_torch_quant
++from aiter import ActivationType, QuantType
+ BLOCK_SIZE_M = 32
+ 
+ 
+@@ -275,19 +277,31 @@ def get_block_size(token, topk, expert):
+ 
+ 
+ # Only support fp8 per tensor quant
+-def ck_moe_2stages(a1,
+-                   w1,  # [expert(local_expert:EP), inter_dim(*2), dim] N,K
+-                   w2,  # [expert(local_expert:EP), dim, inter_dim]
+-                   topk_weight, topk_ids,
+-                   # following for int8 quant
+-                   fc1_scale=None,  # [expert(local_expert:EP), inter_dim, 1]
+-                   fc2_scale=None,  # [expert(local_expert:EP), model_dim, 1]
+-                   a1_scale=None,  # [1]
+-                   a2_scale=None,  # [1]
+-                   block_size=None,
+-                   expert_mask=None
+-                   ):
++def ck_moe_2stages(
++    a1,
++    w1,  # [expert(local_expert:EP), inter_dim(*2), dim] N,K
++    w2,  # [expert(local_expert:EP), dim, inter_dim]
++    topk_weight, topk_ids,
++    # following for int8 quant
++    quant_type=QuantType.No,
++    fc1_scale=None,  # [expert(local_expert:EP), inter_dim, 1]
++    fc2_scale=None,  # [expert(local_expert:EP), model_dim, 1]
++    a1_scale=None,  # [1]
++    a2_scale=None,  # [1]
++    block_size=None,
++    expert_mask=None,
++    activation=ActivationType.Silu,
++    doweight_stage1=False,
++):
++    
++    quant_func = get_hip_quant(quant_type)
++    q_dtype_a = w1.dtype if w1.dtype != torch.uint32 else torch.float8_e4m3fnuz
++
++    # quant_func = get_torch_quant(quant_type)
+     E, model_dim, inter_dim = w2.shape
++    if w1.dtype is torch.uint32:
++        inter_dim = inter_dim * 8
++    
+     global_E = E
+     if expert_mask is not None:
+         global_E = expert_mask.numel()
+@@ -298,53 +312,54 @@ def ck_moe_2stages(a1,
+         block_size = get_block_size(M, topk, E)
+     sorted_ids, sorted_weights, sorted_expert_ids, num_valid_ids, moe_buf = moe_sorting_ck(topk_ids, topk_weight, global_E,
+                                                                                            model_dim, dtype, block_size, expert_mask)
+-
+     # print("block_size:", block_size, sorted_expert_ids)
+-    if w1.dtype == torch.float8_e4m3fnuz:
+-        a1, a1_scale = aiter.per_tensor_quant_hip(a1, a1_scale, quant_dtype=w1.dtype)
+-        # a1, a1_scale = aiter.per_tensor_quant(a1, quant_dtype=w1.dtype)
+-    else:
+-        a1_scale = None
++    a1, a1_scale = quant_func(a1, scale=a1_scale, quant_dtype=q_dtype_a)
+ 
+-    a2 = torch.zeros(
+-        (M, topk, w1.shape[1]),
++    a2 = torch.empty(
++        (M, topk, inter_dim),
+         dtype=dtype,
+         device=device,
+     )
+ 
+-    aiter.ck_moe_stage1(a1, w1, w2,
+-                        sorted_ids, sorted_expert_ids, num_valid_ids,
+-                        a2, topk,
+-                        fc1_scale, a1_scale, block_size, sorted_weights)
+-
+-    # g1u0
+-    if (w2.shape[2] != w1.shape[1]) and (w2.dtype == torch.float8_e4m3fnuz):
+-      tmp = torch.empty((M, topk, inter_dim), dtype=torch.float8_e4m3fnuz, device=device)
+-      if a2_scale == None:
+-        a2_scale = torch.empty(1, dtype=torch.float, device=device)
+-      aiter.scaled_silu_and_mul(tmp, a2, a2_scale)
+-      a2 = tmp
++    if activation == ActivationType.Silu:
++        act_op = 1  # silu_and_mul
+     else:
+-      if w2.shape[2] == w1.shape[1]:
+-        a2 = F.gelu(a2)
+-      # g1u1
+-      else:
+-        tmp = torch.empty((M, topk, inter_dim), dtype=dtype, device=device)
+-        aiter.silu_and_mul(tmp, a2)
+-        a2 = tmp
+-      if w2.dtype == torch.float8_e4m3fnuz:
+-        a2, a2_scale = aiter.per_tensor_quant_hip(a2, a2_scale, quant_dtype=w2.dtype)
+-        # a2, a2_scale = aiter.per_tensor_quant(a2, quant_dtype=w2.dtype)
+-      else:
+-        if not hasattr(ck_moe_2stages, "one_float_tensor"):
+-            ck_moe_2stages.one_float_tensor = torch.tensor(
+-                1.0, dtype=torch.float, device=device)
+-        a2_scale = ck_moe_2stages.one_float_tensor
+-
+-    aiter.ck_moe_stage2(a2, w1, w2, sorted_ids,
+-                        sorted_expert_ids,
+-                        num_valid_ids, moe_buf, topk, fc2_scale, a2_scale, block_size, sorted_weights)
++        act_op = 0  # gelu_and_mul
++
++    aiter.ck_moe_stage1(
++        a1, 
++        w1, 
++        w2,
++        sorted_ids, 
++        sorted_expert_ids, 
++        num_valid_ids,
++        a2, topk,
++        fc1_scale, 
++        a1_scale, 
++        block_size, 
++        sorted_weights if doweight_stage1 else None,
++        act_op
++    )
+ 
++    if quant_type == QuantType.per_Token:
++        a2 = a2.view(M, -1)
++    a2, a2_scale = quant_func(a2, scale=a2_scale, quant_dtype=q_dtype_a)
++    a2 = a2.view(M, topk, -1)
++
++    aiter.ck_moe_stage2(
++        a2, 
++        w1,
++        w2, 
++        sorted_ids,
++        sorted_expert_ids,
++        num_valid_ids, 
++        moe_buf, 
++        topk, 
++        fc2_scale, 
++        a2_scale, 
++        block_size, 
++        sorted_weights if not doweight_stage1 else None,
++    )
+     return moe_buf
+ 
+ 
+diff --git a/aiter/jit/optCompilerConfig.json b/aiter/jit/optCompilerConfig.json
+index 7754e72ba4..d815a0e110 100644
+--- a/aiter/jit/optCompilerConfig.json
++++ b/aiter/jit/optCompilerConfig.json
+@@ -242,7 +242,9 @@
+         ],
+         "md_name": "'module_moe_ck2stages'",
+         "flags_extra_cc": [],
+-        "flags_extra_hip": [],
++        "flags_extra_hip": [
++            "'-mllvm --amdgpu-enable-max-ilp-scheduling-strategy=1'"
++        ],
+         "extra_ldflags": "None",
+         "extra_include": [],
+         "verbose": "False",
+diff --git a/aiter/ops/moe_op.py b/aiter/ops/moe_op.py
+index c8ce970416..a3aed55254 100755
+--- a/aiter/ops/moe_op.py
++++ b/aiter/ops/moe_op.py
+@@ -221,6 +221,7 @@ def ck_moe_stage1(
+     a1_scale: Optional[Tensor] = None,
+     block_m: Optional[int] = 32,
+     sorted_weights: Optional[Tensor] = None,
++    act_op: Optional[int] = 0,
+ ): ...
+ 
+ 
+diff --git a/csrc/include/moe_ck.h b/csrc/include/moe_ck.h
+index 1f219e88d2..7582c35882 100644
+--- a/csrc/include/moe_ck.h
++++ b/csrc/include/moe_ck.h
+@@ -27,7 +27,8 @@ void ck_moe_stage1(torch::Tensor &hidden_states,     // [m, k], input token
+                    std::optional<torch::Tensor> w1_scale, // [e, 1, n], gate(up) scale
+                    std::optional<torch::Tensor> a1_scale, // [m, 1], token scale
+                    std::optional<int> block_m,
+-                   std::optional<torch::Tensor> sorted_weights);    // [max_num_tokens_padded]);
++                   std::optional<torch::Tensor> sorted_weights,
++                   std::optional<int> act_op);
+ 
+ void ck_moe_stage2(torch::Tensor &inter_states,      // [m, k], input token
+                    torch::Tensor &w1,                // [e, n, k]/[e, 2*n, k], pre-shuffle([e, nr, kr, w])
+diff --git a/csrc/include/rocm_ops.hpp b/csrc/include/rocm_ops.hpp
+index 8fbd3b1e00..51278b931a 100755
+--- a/csrc/include/rocm_ops.hpp
++++ b/csrc/include/rocm_ops.hpp
+@@ -348,7 +348,8 @@
+             py::arg("w1_scale") = std::nullopt,        \
+             py::arg("a1_scale") = std::nullopt,        \
+             py::arg("block_m") = 32,                   \
+-            py::arg("sorted_weights") = std::nullopt); \
++            py::arg("sorted_weights") = std::nullopt,  \
++            py::arg("act_op") = 0);                    \
+                                                        \
+       m.def("ck_moe_stage2", &ck_moe_stage2,           \
+             py::arg("inter_states"),                   \
+diff --git a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm.hpp b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm.hpp
+index e79cc7c942..a6abcedd2d 100644
+--- a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm.hpp
++++ b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm.hpp
+@@ -19,13 +19,13 @@
+ 
+ template <ck::index_t... Is>
+ using S = ck::Sequence<Is...>;
++using I4 = ck::pk_i4_t;
+ using I8 = int8_t;
+ using I32 = int;
+ using F16 = ck::half_t;
+ using B16 = ck::bhalf_t;
+ using F8 = ck::f8_t;
+ using F32 = float;
+-using I4 = ck::pk_i4_t;
+ 
+ using Row = ck::tensor_layout::gemm::RowMajor;
+ using Col = ck::tensor_layout::gemm::ColumnMajor;
+@@ -55,7 +55,7 @@ struct TypeCast
+     }
+ 
+     template <>
+-    __host__ __device__ constexpr void operator()<F16, int, float, float, float>(F16 &e, const int &c,
++    __host__ __device__ constexpr void operator()<F16, F16, float, float>(F16 &e, const F16 &c,
+                                                                             const float &d0,
+                                                                             const float &d1,
+                                                                             const float &d2) const
+@@ -64,7 +64,7 @@ struct TypeCast
+     }
+ 
+     template <>
+-    __host__ __device__ constexpr void operator()<B16, int, float, float, float>(B16 &e, const int &c,
++    __host__ __device__ constexpr void operator()<B16, B16, float, float>(B16 &e, const B16 &c,
+                                                                             const float &d0,
+                                                                             const float &d1,
+                                                                             const float &d2) const
+@@ -87,7 +87,7 @@ struct MulABScale
+                                                                             const float &d1,
+                                                                             const float &d2) const
+     {
+-        e = ck::type_convert<F16>(c * d1 * d2);
++        e = ck::type_convert<F16>(c);
+     }
+ 
+     template <>
+@@ -97,27 +97,7 @@ struct MulABScale
+                                                                             const float &d1,
+                                                                             const float &d2) const
+     {
+-        e = ck::type_convert<B16>(c * d1 * d2);
+-    }
+-
+-    template <>
+-    __host__ __device__ constexpr void operator()<F16, int, float, float, float>(F16 &e,
+-                                                                          const int &c,
+-                                                                          const float &d0,
+-                                                                          const float &d1,
+-                                                                          const float &d2) const
+-    {
+-        e = ck::type_convert<F16>(ck::type_convert<F32>(c) * d1 * d2);
+-    }
+-
+-    template <>
+-    __host__ __device__ constexpr void operator()<B16, int, float, float, float>(B16 &e,
+-                                                                          const int &c,
+-                                                                          const float &d0,
+-                                                                          const float &d1,
+-                                                                          const float &d2) const
+-    {
+-        e = ck::type_convert<B16>(ck::type_convert<F32>(c) * d1 * d2);
++        e = ck::type_convert<B16>(c);
+     }
+ };
+ 
+@@ -134,7 +114,7 @@ struct MulABScaleWint4
+                                                                             const float &d1,
+                                                                             const float &d2) const
+     {
+-        e = ck::type_convert<F16>(c * d1 * d2 * 16.f);
++        e = ck::type_convert<F16>(c);
+     }
+ 
+     template <>
+@@ -144,7 +124,7 @@ struct MulABScaleWint4
+                                                                             const float &d1,
+                                                                             const float &d2) const
+     {
+-        e = ck::type_convert<B16>(c * d1 * d2 * 16.f);
++        e = ck::type_convert<B16>(c);
+     }
+ 
+     template <>
+@@ -154,7 +134,7 @@ struct MulABScaleWint4
+                                                                           const float &d1,
+                                                                           const float &d2) const
+     {
+-        e = ck::type_convert<F16>(ck::type_convert<F32>(c) * d1 * d2 * 16.f);
++        e = ck::type_convert<F16>(ck::type_convert<F32>(c));
+     }
+ 
+     template <>
+@@ -164,7 +144,7 @@ struct MulABScaleWint4
+                                                                           const float &d1,
+                                                                           const float &d2) const
+     {
+-        e = ck::type_convert<B16>(ck::type_convert<F32>(c) * d1 * d2 * 16.f);
++        e = ck::type_convert<B16>(ck::type_convert<F32>(c));
+     }
+ };
+ 
+@@ -180,7 +160,7 @@ struct TypeCastExpertWeight
+                                                                                    const float &d1,
+                                                                                    const float &d2) const
+     {
+-        e = ck::type_convert<F16>(c * d2);
++        e = ck::type_convert<F16>(c);
+     }
+     template <>
+     __host__ __device__ constexpr void operator()<B16, float, float, float, float>(B16 &e,
+@@ -189,31 +169,49 @@ struct TypeCastExpertWeight
+                                                                                    const float &d1,
+                                                                                    const float &d2) const
+     {
+-        e = ck::type_convert<B16>(c * d2);
++        e = ck::type_convert<B16>(c);
++    }
++    template <>
++    __host__ __device__ constexpr void operator()<F16, F16, float, float, float>(F16 &e,
++                                                                                   const F16 &c,
++                                                                                   const float &d0,
++                                                                                   const float &d1,
++                                                                                   const float &d2) const
++    {
++        e = ck::type_convert<F16>(c);
++    }
++    template <>
++    __host__ __device__ constexpr void operator()<B16, B16, float, float, float>(B16 &e,
++                                                                                   const B16 &c,
++                                                                                   const float &d0,
++                                                                                   const float &d1,
++                                                                                   const float &d2) const
++    {
++        e = ck::type_convert<B16>(c);
+     }
+ 
+     template <>
+     __host__ __device__ constexpr void operator()<F16, int, float, float, float>(F16 &e,
+-                                                                                 const int &c,
+-                                                                                 const float &d0,
+-                                                                                 const float &d1,
+-                                                                                 const float &d2) const
++                                                                                   const int &c,
++                                                                                   const float &d0,
++                                                                                   const float &d1,
++                                                                                   const float &d2) const
+     {
+-        e = ck::type_convert<F16>(ck::type_convert<F32>(c) * d2);
++        e = ck::type_convert<F16>(ck::type_convert<F32>(c));
+     }
+     template <>
+     __host__ __device__ constexpr void operator()<B16, int, float, float, float>(B16 &e,
+-                                                                                 const int &c,
+-                                                                                 const float &d0,
+-                                                                                 const float &d1,
+-                                                                                 const float &d2) const
++                                                                                   const int &c,
++                                                                                   const float &d0,
++                                                                                   const float &d1,
++                                                                                   const float &d2) const
+     {
+-        e = ck::type_convert<B16>(ck::type_convert<F32>(c) * d2);
++        e = ck::type_convert<B16>(ck::type_convert<F32>(c));
+     }
+ };
+ 
+ // d0: ascale, d1: bscale, d2:expert weight
+-// warning: hack hack hack here!!!! ignore d0 right now as kernel mul d0 * d2 outside. tofix:felix
++//warning: hack hack hack here!!!! ignore d0 right now as kernel mul d0 * d2 outside. tofix:felix 
+ struct MulABScaleExpertWeight
+ {
+     template <typename E, typename C, typename D0, typename D1, typename D2>
+@@ -226,7 +224,25 @@ struct MulABScaleExpertWeight
+                                                                                    const float &d1,
+                                                                                    const float &d2) const
+     {
+-        e = ck::type_convert<F16>(c * d1 * d2);
++        e = ck::type_convert<F16>(c);
++    }
++    template <>
++    __host__ __device__ constexpr void operator()<F16, F16, float, float, float>(F16 &e,
++                                                                                   const F16 &c,
++                                                                                   const float &d0,
++                                                                                   const float &d1,
++                                                                                   const float &d2) const
++    {
++        e = ck::type_convert<F16>(c);
++    }
++    template <>
++    __host__ __device__ constexpr void operator()<B16, B16, float, float, float>(B16 &e,
++                                                                                   const B16 &c,
++                                                                                   const float &d0,
++                                                                                   const float &d1,
++                                                                                   const float &d2) const
++    {
++        e = ck::type_convert<B16>(c);
+     }
+     template <>
+     __host__ __device__ constexpr void operator()<B16, float, float, float, float>(B16 &e,
+@@ -235,26 +251,26 @@ struct MulABScaleExpertWeight
+                                                                                    const float &d1,
+                                                                                    const float &d2) const
+     {
+-        e = ck::type_convert<B16>(c * d1 * d2);
++        e = ck::type_convert<B16>(c);
+     }
+ 
+     template <>
+     __host__ __device__ constexpr void operator()<F16, int, float, float, float>(F16 &e,
+-                                                                                 const int &c,
+-                                                                                 const float &d0,
+-                                                                                 const float &d1,
+-                                                                                 const float &d2) const
++                                                                                    const int &c,
++                                                                                    const float &d0,
++                                                                                    const float &d1,
++                                                                                    const float &d2) const
+     {
+-        e = ck::type_convert<F16>(ck::type_convert<F32>(c) * d1 * d2);
++        e = ck::type_convert<F16>(ck::type_convert<F32>(c));
+     }
+     template <>
+     __host__ __device__ constexpr void operator()<B16, int, float, float, float>(B16 &e,
+-                                                                                 const int &c,
+-                                                                                 const float &d0,
+-                                                                                 const float &d1,
+-                                                                                 const float &d2) const
++                                                                                    const int &c,
++                                                                                    const float &d0,
++                                                                                    const float &d1,
++                                                                                    const float &d2) const
+     {
+-        e = ck::type_convert<B16>(ck::type_convert<F32>(c) * d1 * d2);
++        e = ck::type_convert<B16>(ck::type_convert<F32>(c));
+     }
+ };
+ 
+@@ -272,7 +288,16 @@ struct MulABScaleExpertWeightWin4
+                                                                                    const float &d1,
+                                                                                    const float &d2) const
+     {
+-        e = ck::type_convert<F16>(c * d1 * d2 * 16.f);
++        e = ck::type_convert<F16>(c * 16.f);
++    }
++    template <>
++    __host__ __device__ constexpr void operator()<F16, F16, float, float, float>(F16 &e,
++                                                                                   const F16 &c,
++                                                                                   const float &d0,
++                                                                                   const float &d1,
++                                                                                   const float &d2) const
++    {
++        e = ck::type_convert<F16>(c * 16.f);
+     }
+     template <>
+     __host__ __device__ constexpr void operator()<B16, float, float, float, float>(B16 &e,
+@@ -281,9 +306,19 @@ struct MulABScaleExpertWeightWin4
+                                                                                    const float &d1,
+                                                                                    const float &d2) const
+     {
+-        e = ck::type_convert<B16>(c * d1 * d2 * 16.f);
++        e = ck::type_convert<B16>(c * 16.f);
++    }
++    template <>
++    __host__ __device__ constexpr void operator()<B16, B16, float, float, float>(B16 &e,
++                                                                                   const B16 &c,
++                                                                                   const float &d0,
++                                                                                   const float &d1,
++                                                                                   const float &d2) const
++    {
++        e = ck::type_convert<B16>(c * 16.f);
+     }
+ 
++
+     template <>
+     __host__ __device__ constexpr void operator()<F16, int, float, float, float>(F16 &e,
+                                                                                  const int &c,
+@@ -291,7 +326,7 @@ struct MulABScaleExpertWeightWin4
+                                                                                  const float &d1,
+                                                                                  const float &d2) const
+     {
+-        e = ck::type_convert<F16>(ck::type_convert<F32>(c) * d1 * d2 * 16.f);
++        e = ck::type_convert<F16>(ck::type_convert<F32>(c) * 16.f);
+     }
+     template <>
+     __host__ __device__ constexpr void operator()<B16, int, float, float, float>(B16 &e,
+@@ -300,11 +335,11 @@ struct MulABScaleExpertWeightWin4
+                                                                                  const float &d1,
+                                                                                  const float &d2) const
+     {
+-        e = ck::type_convert<B16>(ck::type_convert<F32>(c) * d1 * d2 * 16.f);
++        e = ck::type_convert<B16>(ck::type_convert<F32>(c) * 16.f);
+     }
+ };
+ 
+-template <typename A0DataType, typename B0DataType, typename AccDataType, typename EDataType, typename CDEElementOp, int MPerBlock, int KPerBlock, int MWaves, int NWaves, bool Nswizzle, bool PerTensorQuant, bool MulRoutedWeight>
++template <typename A0DataType, typename B0DataType, typename AccDataType, typename EDataType, typename CDEElementOp, int MPerBlock, int KPerBlock, int MWaves, int NWaves, bool Nswizzle, bool PerTensorQuant, bool MulRoutedWeight, int ActOP>
+ void ck_moe_stage1_gemm(const hipStream_t &stream, int tokens, int sorted_size, int N, int K,
+                         int topk,
+                         void *&hidden_states,                          // [m, k], input token
+diff --git a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertensor_b16.cu b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertensor_b16.cu
+index 670073ec37..b6060f2c6f 100644
+--- a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertensor_b16.cu
++++ b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertensor_b16.cu
+@@ -9,6 +9,14 @@ using EDataType = B16;
+ using CDEElementOp = TypeCast;
+ const bool Nswizzle = false;
+ const bool PerTensorQuant = true;
+-CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, false)
+-CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, false)
+-CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, false)
+\ No newline at end of file
++
++CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, false, 0)
+\ No newline at end of file
+diff --git a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertensor_b16_f8.cu b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertensor_b16_f8.cu
+index d237646e88..4b2fddb7fe 100644
+--- a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertensor_b16_f8.cu
++++ b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertensor_b16_f8.cu
+@@ -9,10 +9,25 @@ using EDataType = B16;
+ using CDEElementOp = MulABScale;
+ const bool Nswizzle = false;
+ const bool PerTensorQuant = true;
+-CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, true)
+-CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, true)
+-CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, true)
+ 
+-CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, false)
+-CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, false)
+-CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, false)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, true, 0)
++
++CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, false, 0)
+\ No newline at end of file
+diff --git a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertensor_b16_f8_wint4.cu b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertensor_b16_f8_wint4.cu
+index 362e1d1835..226b2ad099 100644
+--- a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertensor_b16_f8_wint4.cu
++++ b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertensor_b16_f8_wint4.cu
+@@ -9,10 +9,18 @@ using EDataType = B16;
+ using CDEElementOp = MulABScaleWint4;
+ const bool Nswizzle = false;
+ const bool PerTensorQuant = true;
+-CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, true)
+-CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, true)
+-CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 1, 4, true)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 1, 4, true, 0)
+ 
+-CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, false)
+-CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, false)
+-CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 1, 4, false)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 1, 4, false, 0)
++
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 1, 4, true, 1)
++
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 1, 4, false, 1)
+diff --git a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertensor_b16_i8.cu b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertensor_b16_i8.cu
+index 5c0e905048..7c00322f01 100644
+--- a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertensor_b16_i8.cu
++++ b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertensor_b16_i8.cu
+@@ -9,10 +9,24 @@ using EDataType = B16;
+ using CDEElementOp = MulABScale;
+ const bool Nswizzle = false;
+ const bool PerTensorQuant = true;
+-CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, true)
+-CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, true)
+-CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, true)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, true, 0)
+ 
+-CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, false)
+-CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, false)
+-CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, false)
+\ No newline at end of file
++CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, false, 0)
+diff --git a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertensor_f16.cu b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertensor_f16.cu
+index e100da3473..a72457ed27 100644
+--- a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertensor_f16.cu
++++ b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertensor_f16.cu
+@@ -9,6 +9,15 @@ using EDataType = F16;
+ using CDEElementOp = TypeCast;
+ const bool Nswizzle = false;
+ const bool PerTensorQuant = true;
+-CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, false)
+-CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, false)
+-CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, false)
++
++CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, false, 0)
++
+diff --git a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertensor_f16_f8.cu b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertensor_f16_f8.cu
+index e2566d1432..ebd125e749 100644
+--- a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertensor_f16_f8.cu
++++ b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertensor_f16_f8.cu
+@@ -9,10 +9,24 @@ using EDataType = F16;
+ using CDEElementOp = MulABScale;
+ const bool Nswizzle = false;
+ const bool PerTensorQuant = true;
+-CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, true)
+-CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, true)
+-CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, true)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, true, 0)
+ 
+-CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, false)
+-CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, false)
+-CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, false)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, false, 0)
+\ No newline at end of file
+diff --git a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertensor_f16_f8_win4.cu b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertensor_f16_f8_win4.cu
+index 6e166378c1..cc0dbdf570 100644
+--- a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertensor_f16_f8_win4.cu
++++ b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertensor_f16_f8_win4.cu
+@@ -9,10 +9,18 @@ using EDataType = F16;
+ using CDEElementOp = MulABScaleWint4;
+ const bool Nswizzle = false;
+ const bool PerTensorQuant = true;
+-CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, true)
+-CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, true)
+-CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 1, 4, true)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 1, 4, true, 0)
+ 
+-CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, false)
+-CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, false)
+-CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 1, 4, false)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 1, 4, false, 0)
++
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 1, 4, true, 1)
++
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 1, 4, false, 1)
+diff --git a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertensor_f16_i8.cu b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertensor_f16_i8.cu
+index 4d1c2e4299..a599c4a56a 100644
+--- a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertensor_f16_i8.cu
++++ b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertensor_f16_i8.cu
+@@ -9,10 +9,24 @@ using EDataType = F16;
+ using CDEElementOp = MulABScale;
+ const bool Nswizzle = false;
+ const bool PerTensorQuant = true;
+-CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, true)
+-CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, true)
+-CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, true)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, true, 0)
+ 
+-CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, false)
+-CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, false)
+-CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, false)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, false, 0)
+\ No newline at end of file
+diff --git a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertensor_mulweight_b16.cu b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertensor_mulweight_b16.cu
+index eab8252182..d52b1a5c19 100644
+--- a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertensor_mulweight_b16.cu
++++ b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertensor_mulweight_b16.cu
+@@ -9,6 +9,14 @@ using EDataType = B16;
+ using CDEElementOp = TypeCastExpertWeight;
+ const bool Nswizzle = false;
+ const bool PerTensorQuant = true;
+-CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, true)
+-CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, true)
+-CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, true)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, true, 0)
++
+diff --git a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertensor_mulweight_f16.cu b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertensor_mulweight_f16.cu
+index 046ae1c9b8..bb958e47da 100644
+--- a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertensor_mulweight_f16.cu
++++ b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertensor_mulweight_f16.cu
+@@ -9,7 +9,14 @@ using EDataType = F16;
+ using CDEElementOp = TypeCastExpertWeight;
+ const bool Nswizzle = false;
+ const bool PerTensorQuant = true;
+-CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, true)
+-CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, true)
+-CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, true)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, true, 0)
+ 
+diff --git a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertoken_b16.cu b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertoken_b16.cu
+index 222f4d4b60..0a4674b56e 100644
+--- a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertoken_b16.cu
++++ b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertoken_b16.cu
+@@ -9,6 +9,14 @@ using EDataType = B16;
+ using CDEElementOp = TypeCast;
+ const bool Nswizzle = false;
+ const bool PerTensorQuant = false;
+-CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, false)
+-CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, false)
+-CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, false)
++
++CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, false, 0)
+diff --git a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertoken_b16_f8.cu b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertoken_b16_f8.cu
+index 0244052d38..bc8d2a5669 100644
+--- a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertoken_b16_f8.cu
++++ b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertoken_b16_f8.cu
+@@ -9,10 +9,25 @@ using EDataType = B16;
+ using CDEElementOp = MulABScale;
+ const bool Nswizzle = false;
+ const bool PerTensorQuant = false;
+-CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, true)
+-CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, true)
+-CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, true)
+ 
+-CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, false)
+-CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, false)
+-CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, false)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, true, 0)
++
++CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, false, 0)
+diff --git a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertoken_b16_f8_wint4.cu b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertoken_b16_f8_wint4.cu
+index c0f8dfd439..d0dc009053 100644
+--- a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertoken_b16_f8_wint4.cu
++++ b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertoken_b16_f8_wint4.cu
+@@ -9,10 +9,18 @@ using EDataType = B16;
+ using CDEElementOp = MulABScaleWint4;
+ const bool Nswizzle = false;
+ const bool PerTensorQuant = false;
+-CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, true)
+-CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, true)
+-CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 1, 4, true)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 1, 4, true, 0)
+ 
+-CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, false)
+-CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, false)
+-CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 1, 4, false)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 1, 4, false, 0)
++
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 1, 4, true, 1)
++
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 1, 4, false, 1)
+diff --git a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertoken_b16_i8.cu b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertoken_b16_i8.cu
+index 8fb62d55d6..de80c4c8f2 100644
+--- a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertoken_b16_i8.cu
++++ b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertoken_b16_i8.cu
+@@ -9,10 +9,24 @@ using EDataType = B16;
+ using CDEElementOp = MulABScale;
+ const bool Nswizzle = false;
+ const bool PerTensorQuant = false;
+-CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, true)
+-CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, true)
+-CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, true)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, true, 0)
+ 
+-CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, false)
+-CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, false)
+-CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, false)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, false, 0)
+diff --git a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertoken_f16.cu b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertoken_f16.cu
+index 2543daaf7c..1ee0c3cbc8 100644
+--- a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertoken_f16.cu
++++ b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertoken_f16.cu
+@@ -9,6 +9,15 @@ using EDataType = F16;
+ using CDEElementOp = TypeCast;
+ const bool Nswizzle = false;
+ const bool PerTensorQuant = false;
+-CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, false)
+-CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, false)
+-CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, false)
++
++CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, false, 0)
++
+diff --git a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertoken_f16_f8.cu b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertoken_f16_f8.cu
+index 50422a7029..3692b1d8b6 100644
+--- a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertoken_f16_f8.cu
++++ b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertoken_f16_f8.cu
+@@ -9,10 +9,25 @@ using EDataType = F16;
+ using CDEElementOp = MulABScale;
+ const bool Nswizzle = false;
+ const bool PerTensorQuant = false;
+-CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, true)
+-CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, true)
+-CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, true)
+ 
+-CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, false)
+-CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, false)
+-CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, false)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, true, 0)
++
++CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, false, 0)
+diff --git a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertoken_f16_f8_win4.cu b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertoken_f16_f8_win4.cu
+index 4ce5bf8535..57850e63ff 100644
+--- a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertoken_f16_f8_win4.cu
++++ b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertoken_f16_f8_win4.cu
+@@ -9,10 +9,18 @@ using EDataType = F16;
+ using CDEElementOp = MulABScaleWint4;
+ const bool Nswizzle = false;
+ const bool PerTensorQuant = false;
+-CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, true)
+-CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, true)
+-CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 1, 4, true)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 1, 4, true, 0)
+ 
+-CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, false)
+-CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, false)
+-CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 1, 4, false)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 1, 4, false, 0)
++
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 1, 4, true, 1)
++
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 1, 4, false, 1)
+diff --git a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertoken_f16_i8.cu b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertoken_f16_i8.cu
+index 26ff1f6591..98f9ba589d 100644
+--- a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertoken_f16_i8.cu
++++ b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertoken_f16_i8.cu
+@@ -9,10 +9,24 @@ using EDataType = F16;
+ using CDEElementOp = MulABScale;
+ const bool Nswizzle = false;
+ const bool PerTensorQuant = false;
+-CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, true)
+-CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, true)
+-CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, true)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, true, 0)
+ 
+-CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, false)
+-CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, false)
+-CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, false)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, false, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, false, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, false, 0)
+diff --git a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertoken_mulweight_b16.cu b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertoken_mulweight_b16.cu
+index 2dbbef58e5..7e2b9435bf 100644
+--- a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertoken_mulweight_b16.cu
++++ b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertoken_mulweight_b16.cu
+@@ -9,6 +9,13 @@ using EDataType = B16;
+ using CDEElementOp = TypeCastExpertWeight;
+ const bool Nswizzle = false;
+ const bool PerTensorQuant = false;
+-CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, true)
+-CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, true)
+-CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, true)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, true, 0)
+diff --git a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertoken_mulweight_f16.cu b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertoken_mulweight_f16.cu
+index 7cd3f53cd3..15392df71c 100644
+--- a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertoken_mulweight_f16.cu
++++ b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm1_instance_pertoken_mulweight_f16.cu
+@@ -9,6 +9,13 @@ using EDataType = F16;
+ using CDEElementOp = TypeCastExpertWeight;
+ const bool Nswizzle = false;
+ const bool PerTensorQuant = false;
+-CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, true)
+-CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, true)
+-CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, true)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, true, 1)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 256/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(32, 128/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 256/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(64, 128/sizeof(A0DataType), 1, 4, true, 0)
++CK_MOE_STAGE1_GEMM_DEFINE(128, 128/sizeof(A0DataType), 2, 2, true, 0)
+diff --git a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm_common.cuh b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm_common.cuh
+index 345cb0d381..cc30ee91ac 100644
+--- a/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm_common.cuh
++++ b/csrc/py_itfs_ck/moe_ck_2stages_gemm_impl/moe_ck_gemm_common.cuh
+@@ -3,7 +3,7 @@
+ #pragma once
+ #include "moe_ck_gemm.hpp"
+ #include <iostream>
+-template <typename A0DataType, typename B0DataType, typename AccDataType, typename EDataType, typename CDEElementOp, int MPerBlock, int KPerBlock, int MWaves, int NWaves, bool Nswizzle, bool PerTensorQuant, bool MulRoutedWeight>
++template <typename A0DataType, typename B0DataType, typename AccDataType, typename EDataType, typename CDEElementOp, int MPerBlock, int KPerBlock, int MWaves, int NWaves, bool Nswizzle, bool PerTensorQuant, bool MulRoutedWeight, int ActOP>
+ void ck_moe_stage1_gemm(const hipStream_t &stream, int tokens, int sorted_size, int N, int K,
+                         int topk,
+                         void *&hidden_states,           // [m, k], input token
+@@ -43,16 +43,16 @@ void ck_moe_stage1_gemm(const hipStream_t &stream, int tokens, int sorted_size,
+ 
+     static constexpr auto GemmSpec = ck::tensor_operation::device::GemmSpecialization::Default;
+     // static constexpr ck::index_t MPerBlock = 128;
+-    static constexpr ck::index_t MNPerXDL = ck::is_same_v<B0DataType, I4> ? 32 : 16;
++    static constexpr ck::index_t MNPerXDL = 16;
+     static constexpr ck::index_t BLOCKSIZE = 256;
+-    static constexpr ck::index_t NPerBlock = 128;
++    static constexpr ck::index_t NPerBlock = 64;//MNPerXDL * NWaves;
+     static constexpr ck::index_t WAVES = BLOCKSIZE / 64;
+     // static constexpr ck::index_t MWaves = 1;
+     // static constexpr ck::index_t NWaves = WAVES / MWaves;
+     static constexpr ck::index_t MXDLPerWave = MPerBlock / (MNPerXDL * MWaves);
+     static constexpr ck::index_t NXDLPerWave = NPerBlock / (MNPerXDL * NWaves);
+-    static constexpr ck::index_t CShuffleMXDLPerWave = ck::is_same_v<B0DataType, I4> ? 1 : 2;
+-    static constexpr ck::index_t CShuffleNXDLPerWave = ck::is_same_v<B0DataType, I4> ? 1 : 2;
++    static constexpr ck::index_t CShuffleMXDLPerWave = ck::is_same_v<B0DataType, I4> ? 2 : MXDLPerWave;
++    static constexpr ck::index_t CShuffleNXDLPerWave = ck::is_same_v<B0DataType, I4> ? 1 : NXDLPerWave;
+     // static constexpr ck::index_t KPerBlock = ck::is_same_v<B0DataType, I4> ? 128 : 256 / sizeof(A0DataType);
+     static constexpr ck::index_t AK1 = 16 / sizeof(A0DataType);
+     static constexpr ck::index_t BK1 = ck::is_same_v<B0DataType, I4> ? 32 : 16 / sizeof(B0DataType);
+@@ -93,8 +93,8 @@ void ck_moe_stage1_gemm(const hipStream_t &stream, int tokens, int sorted_size,
+                //    CShuffle|    CShuffle| CBlockTransferClusterLengths|  CBlockTransfer|
+                //    MXdlPerWave| NXdlPerWave|         _MBlock_MWaveMPerXdl| ScalarPerVector|
+                 //  PerShuffle|  PerShuffle|         _NBlock_NWaveNPerXdl|   _NWaveNPerXdl|
+-               CShuffleMXDLPerWave,    CShuffleNXDLPerWave,   S<1, 32, 1, 8>, S<EVec, D0Vec, D1Vec, D2Vec>,
+-               ck::BlockGemmPipelineScheduler::Intrawave, ck::BlockGemmPipelineVersion::v1, Nswizzle, true, MulRoutedWeight, A0DataType>;
++               2,    CShuffleNXDLPerWave,   S<1, 32, 1, 8>, S<EVec, D0Vec, D1Vec>,
++               ck::BlockGemmPipelineScheduler::Intrawave, ck::BlockGemmPipelineVersion::v1, ActOP, Nswizzle, true, MulRoutedWeight, !PerTensorQuant, ck::index_t, A0DataType>;
+         // kernel 2: 128->32x128x128
+         //  <      Row,      Col, DsLayout, ELayout, A0DataType, B0DataType, DsDataType, EDataType, AccDataType, CShuffleDataType,  AElementOp,  BElementOp, CDEElementOp,       GemmSpec,   128,   32,   128,    128,  16,  16,  32,   32,    1,    2,     S<8, 16, 1>,     S<1, 0, 2>,    S<1, 0, 2>,               2,             16,             16,          0,     S<8, 16, 1>,    S<1, 0, 2>,     S<1, 0, 2>,             2,              16,             16,          0,          1,           1,               S<1, 16, 1, 8>,      S<8, 8, 1>,  ck::BlockGemmPipelineScheduler::Interwave, ck::BlockGemmPipelineVersion::v1, EDataType>;
+ 
+@@ -148,20 +148,20 @@ void ck_moe_stage1_gemm(const hipStream_t &stream, int tokens, int sorted_size,
+     invoker.Run(argument, StreamConfig{stream});
+ }
+ 
+-#define CK_MOE_STAGE1_GEMM_DEFINE(MPerfBlock, KPerBlock, MWaves, NWaves, MulRoutedWeight)                                                                                             \
+-    template void ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, MPerfBlock, KPerBlock, MWaves, NWaves, Nswizzle, PerTensorQuant, MulRoutedWeight>( \
+-        const hipStream_t &stream,                                                                                                                                   \
+-        int tokens, int sorted_size, int N, int K,                                                                                                                   \
+-        int topk,                                                                                                                                                    \
+-        void *&hidden_states,                                                                                                                                        \
+-        void *&w1,                                                                                                                                                   \
+-        void *&w2,                                                                                                                                                   \
+-        void *&sorted_token_ids,                                                                                                                                     \
+-        void *&sorted_expert_ids,                                                                                                                                    \
+-        void *&sorted_weights,                                                                                                                         \
+-        void *&num_valid_ids,                                                                                                                                        \
+-        void *&out,                                                                                                                                                  \
+-        std::optional<void *> w1_scale,                                                                                                                              \
++#define CK_MOE_STAGE1_GEMM_DEFINE(MPerfBlock, KPerBlock, MWaves, NWaves, MulRoutedWeight, ActOP)                                                                                             \
++    template void ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, MPerfBlock, KPerBlock, MWaves, NWaves, Nswizzle, PerTensorQuant, MulRoutedWeight, ActOP>( \
++        const hipStream_t &stream,                                                                                                                                          \
++        int tokens, int sorted_size, int N, int K,                                                                                                                          \
++        int topk,                                                                                                                                                           \
++        void *&hidden_states,                                                                                                                                               \
++        void *&w1,                                                                                                                                                          \
++        void *&w2,                                                                                                                                                          \
++        void *&sorted_token_ids,                                                                                                                                            \
++        void *&sorted_expert_ids,                                                                                                                                           \
++        void *&sorted_weights,                                                                                                                                              \
++        void *&num_valid_ids,                                                                                                                                               \
++        void *&out,                                                                                                                                                         \
++        std::optional<void *> w1_scale,                                                                                                                                     \
+         std::optional<void *> a1_scale);
+ 
+ template <typename A0DataType, typename B0DataType, typename AccDataType, typename EDataType, typename CDEElementOp, int MPerBlock, int KPerBlock, int MWaves, int NWaves, bool Nswizzle, bool PerTensorQuant, bool MulRoutedWeight>
+@@ -205,14 +205,14 @@ void ck_moe_stage2_gemm(const hipStream_t &stream, int tokens, int sorted_size,
+     static constexpr ck::index_t BLOCKSIZE = 256;
+     static constexpr ck::index_t WAVES = BLOCKSIZE / 64;
+     static constexpr ck::index_t NPerBlock = 128;
+-    static constexpr ck::index_t MNPerXDL = ck::is_same_v<B0DataType, I4> ? 32 : 16;
++    static constexpr ck::index_t MNPerXDL = 16;
+     // static constexpr ck::index_t MWaves = 1;
+     // static constexpr ck::index_t NWaves = WAVES / MWaves;
+     static constexpr ck::index_t MXDLPerWave = MPerBlock / (MNPerXDL * MWaves);
+     static constexpr ck::index_t NXDLPerWave = NPerBlock / (MNPerXDL * NWaves);
+     // static constexpr ck::index_t KPerBlock = ck::is_same_v<B0DataType, I4> ? 128 : 256 / sizeof(A0DataType);
+-    static constexpr ck::index_t CShuffleMXDLPerWave = ck::is_same_v<B0DataType, I4> ? 1 : 2/*MXDLPerWave*/;
+-    static constexpr ck::index_t CShuffleNXDLPerWave = ck::is_same_v<B0DataType, I4> ? 1 : 2/*NXDLPerWave*/;
++    static constexpr ck::index_t CShuffleMXDLPerWave = ck::is_same_v<B0DataType, I4> ? 2 : MXDLPerWave;
++    static constexpr ck::index_t CShuffleNXDLPerWave = ck::is_same_v<B0DataType, I4> ? 2 : NXDLPerWave;
+     static constexpr ck::index_t CShuffleNLane = ck::is_same_v<B0DataType, I4> ? 32 : NPerBlock / 2 / NXDLPerWave; // 64
+     static constexpr ck::index_t CShuffleMLane = BLOCKSIZE / CShuffleNLane;
+     static constexpr ck::index_t AK1 = 16 / sizeof(A0DataType);
+@@ -252,8 +252,8 @@ void ck_moe_stage2_gemm(const hipStream_t &stream, int tokens, int sorted_size,
+               //    CShuffle|    CShuffle| CBlockTransferClusterLengths|  CBlockTransfer|
+               //    MXdlPerWave| NXdlPerWave|         _MBlock_MWaveMPerXdl| ScalarPerVector|
+                //  PerShuffle|  PerShuffle|         _NBlock_NWaveNPerXdl|   _NWaveNPerXdl|
+-              CShuffleMXDLPerWave,    CShuffleNXDLPerWave,   S<1, CShuffleMLane, 1, CShuffleNLane>, S<EVec, D0Vec, D1Vec, D2Vec>,
+-              ck::BlockGemmPipelineScheduler::Intrawave, ck::BlockGemmPipelineVersion::v1, Nswizzle, false, MulRoutedWeight, A0DataType>;
++              CShuffleMXDLPerWave,    1,   S<1, CShuffleMLane, 1, CShuffleNLane>, S<EVec, D0Vec, D1Vec, D2Vec>,
++              ck::BlockGemmPipelineScheduler::Intrawave, ck::BlockGemmPipelineVersion::v1, 0, Nswizzle, false, MulRoutedWeight, !PerTensorQuant, ck::index_t, A0DataType>;
+        // kernel 2: 128->32x128x128
+        //  <      Row,      Col, DsLayout, ELayout, A0DataType, B0DataType, DsDataType, EDataType, AccDataType, CShuffleDataType,  AElementOp,  BElementOp, CDEElementOp,       GemmSpec,   128,   32,   128,    128,  16,  16,  32,   32,    1,    2,     S<8, 16, 1>,     S<1, 0, 2>,    S<1, 0, 2>,               2,             16,             16,          0,     S<8, 16, 1>,    S<1, 0, 2>,     S<1, 0, 2>,             2,              16,             16,          0,          1,           1,               S<1, 16, 1, 8>,      S<8, 8, 1>,  ck::BlockGemmPipelineScheduler::Interwave, ck::BlockGemmPipelineVersion::v1, EDataType>;
+ 
+diff --git a/csrc/py_itfs_ck/moe_ck_2stages_kernel.cu b/csrc/py_itfs_ck/moe_ck_2stages_kernel.cu
+index 6f4c172f5a..4b0547c0d1 100644
+--- a/csrc/py_itfs_ck/moe_ck_2stages_kernel.cu
++++ b/csrc/py_itfs_ck/moe_ck_2stages_kernel.cu
+@@ -6,93 +6,165 @@
+ #include "py_itfs_common.h"
+ #include "moe_ck_gemm.hpp"
+ 
+-#define CK_MOE_STAGE1_GEMM_IMPL(A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, Nswizzle, isPerTensorQuant, MPerBlock)                                                                                                                                                                                                                                        \
+-    if (MulRoutedWeight)                                                                                                                                                                                                                                                                                                                                                    \
+-    {                                                                                                                                                                                                                                                                                                                                                                       \
+-        if (isPerTensorQuant)                                                                                                                                                                                                                                                                                                                                               \
+-        {                                                                                                                                                                                                                                                                                                                                                                   \
+-            if (MPerBlock == 32)                                                                                                                                                                                                                                                                                                                                            \
+-                ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 32, 256 / sizeof(A0DataType), 1, 4, Nswizzle, true, true>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr, num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);   \
+-            else if (MPerBlock == 64)                                                                                                                                                                                                                                                                                                                                       \
+-                ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 64, 256 / sizeof(A0DataType), 1, 4, Nswizzle, true, true>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr, num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);   \
+-            else if (MPerBlock == 128)                                                                                                                                                                                                                                                                                                                                      \
+-                ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 128, 128 / sizeof(A0DataType), 2, 2, Nswizzle, true, true>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr, num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);  \
+-        }                                                                                                                                                                                                                                                                                                                                                                   \
+-        else                                                                                                                                                                                                                                                                                                                                                                \
+-        {                                                                                                                                                                                                                                                                                                                                                                   \
+-            if (MPerBlock == 32)                                                                                                                                                                                                                                                                                                                                            \
+-                ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 32, 256 / sizeof(A0DataType), 1, 4, Nswizzle, false, true>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr, num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);  \
+-            else if (MPerBlock == 64)                                                                                                                                                                                                                                                                                                                                       \
+-                ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 64, 256 / sizeof(A0DataType), 1, 4, Nswizzle, false, true>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr, num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);  \
+-            else if (MPerBlock == 128)                                                                                                                                                                                                                                                                                                                                      \
+-                ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 128, 128 / sizeof(A0DataType), 2, 2, Nswizzle, false, true>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr, num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr); \
+-        }                                                                                                                                                                                                                                                                                                                                                                   \
+-    }                                                                                                                                                                                                                                                                                                                                                                       \
+-    else                                                                                                                                                                                                                                                                                                                                                                    \
+-    {                                                                                                                                                                                                                                                                                                                                                                       \
+-        if (isPerTensorQuant)                                                                                                                                                                                                                                                                                                                                               \
+-        {                                                                                                                                                                                                                                                                                                                                                                   \
+-            if (MPerBlock == 32)                                                                                                                                                                                                                                                                                                                                            \
+-                ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 32, 256 / sizeof(A0DataType), 1, 4, Nswizzle, true, false>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr, num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);   \
+-            else if (MPerBlock == 64)                                                                                                                                                                                                                                                                                                                                       \
+-                ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 64, 256 / sizeof(A0DataType), 1, 4, Nswizzle, true, false>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr, num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);   \
+-            else if (MPerBlock == 128)                                                                                                                                                                                                                                                                                                                                      \
+-                ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 128, 128 / sizeof(A0DataType), 2, 2, Nswizzle, true, false>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr, num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);  \
+-        }                                                                                                                                                                                                                                                                                                                                                                   \
+-        else                                                                                                                                                                                                                                                                                                                                                                \
+-        {                                                                                                                                                                                                                                                                                                                                                                   \
+-            if (MPerBlock == 32)                                                                                                                                                                                                                                                                                                                                            \
+-                ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 32, 256 / sizeof(A0DataType), 1, 4, Nswizzle, false, false>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr, num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);  \
+-            else if (MPerBlock == 64)                                                                                                                                                                                                                                                                                                                                       \
+-                ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 64, 256 / sizeof(A0DataType), 1, 4, Nswizzle, false, false>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr, num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);  \
+-            else if (MPerBlock == 128)                                                                                                                                                                                                                                                                                                                                      \
+-                ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 128, 128 / sizeof(A0DataType), 2, 2, Nswizzle, false, false>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr, num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr); \
+-        }                                                                                                                                                                                                                                                                                                                                                                   \
++#define CK_MOE_STAGE1_GEMM_IMPL(A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, Nswizzle, isPerTensorQuant, MPerBlock, MulRoutedWeight, ActOP) \
++    if (ActOP == 0)                                                                                               \
++    {                                                                                                           \
++        if (isPerTensorQuant)                                                                                               \
++        {                                                                                                                   \
++            if (MPerBlock == 32)                                                                                            \
++            {                                                                                                               \
++                if (K % (256 / sizeof(A0DataType)) == 0)                                                                    \
++                {                                                                                                           \
++                    ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 32, 256 / sizeof(A0DataType), 1, 4, Nswizzle, true, MulRoutedWeight, 0>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr,  num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);   \
++                }                                                                                                           \
++                else                                                                                                        \
++                {                                                                                                           \
++                    ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 32, 128 / sizeof(A0DataType), 1, 4, Nswizzle, true, MulRoutedWeight, 0>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr,  num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);   \
++                }                                                                                                           \
++            }                                                                                                               \
++            else if (MPerBlock == 64)                                                                                       \
++            {                                                                                                               \
++                if (K % (256 / sizeof(A0DataType)) == 0)                                                                    \
++                {                                                                                                           \
++                    ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 64, 256 / sizeof(A0DataType), 1, 4, Nswizzle, true, MulRoutedWeight, 0>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr,  num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);   \
++                }                                                                                                           \
++                else                                                                                                        \
++                {                                                                                                           \
++                    ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 64, 128 / sizeof(A0DataType), 1, 4, Nswizzle, true, MulRoutedWeight, 0>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr,  num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);   \
++                }                                                                                                           \
++            }                                                                                                               \
++            else if (MPerBlock == 128)                                                                                      \
++                ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 128, 128 / sizeof(A0DataType), 2, 2, Nswizzle, true, MulRoutedWeight, 0>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr,  num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);  \
++        }                                                                                                                   \
++        else                                                                                                                \
++        {                                                                                                                   \
++            if (MPerBlock == 32)                                                                                            \
++            {                                                                                                               \
++                if (K % (256 / sizeof(A0DataType)) == 0)                                                                    \
++                {                                                                                                           \
++                    ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 32, 256 / sizeof(A0DataType), 1, 4, Nswizzle, false, MulRoutedWeight, 0>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr,  num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);   \
++                }                                                                                                           \
++                else                                                                                                        \
++                {                                                                                                           \
++                    ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 32, 128 / sizeof(A0DataType), 1, 4, Nswizzle, false, MulRoutedWeight, 0>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr,  num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);   \
++                }                                                                                                           \
++            }                                                                                                               \
++            else if (MPerBlock == 64)                                                                                       \
++            {                                                                                                               \
++                if (K % (256 / sizeof(A0DataType)) == 0)                                                                    \
++                {                                                                                                           \
++                    ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 64, 256 / sizeof(A0DataType), 1, 4, Nswizzle, false, MulRoutedWeight, 0>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr,  num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);   \
++                }                                                                                                           \
++                else                                                                                                        \
++                {                                                                                                           \
++                    ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 64, 128 / sizeof(A0DataType), 1, 4, Nswizzle, false, MulRoutedWeight, 0>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr,  num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);   \
++                }                                                                                                           \
++            }                                                                                                               \
++            else if (MPerBlock == 128)                                                                                      \
++                ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 128, 128 / sizeof(A0DataType), 2, 2, Nswizzle, false, MulRoutedWeight, 0>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr,  num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);  \
++        }\
++    }\
++    else if (ActOP == 1)                                                                                       \
++    {\
++        if (isPerTensorQuant)                                                                                               \
++        {                                                                                                                   \
++            if (MPerBlock == 32)                                                                                            \
++            {                                                                                                               \
++                if (K % (256 / sizeof(A0DataType)) == 0)                                                                    \
++                {                                                                                                           \
++                    ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 32, 256 / sizeof(A0DataType), 1, 4, Nswizzle, true, MulRoutedWeight, 1>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr,  num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);   \
++                }                                                                                                           \
++                else                                                                                                        \
++                {                                                                                                           \
++                    ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 32, 128 / sizeof(A0DataType), 1, 4, Nswizzle, true, MulRoutedWeight, 1>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr,  num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);   \
++                }                                                                                                           \
++            }                                                                                                               \
++            else if (MPerBlock == 64)                                                                                       \
++            {                                                                                                               \
++                if (K % (256 / sizeof(A0DataType)) == 0)                                                                    \
++                {                                                                                                           \
++                    ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 64, 256 / sizeof(A0DataType), 1, 4, Nswizzle, true, MulRoutedWeight, 1>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr,  num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);   \
++                }                                                                                                           \
++                else                                                                                                        \
++                {                                                                                                           \
++                    ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 64, 128 / sizeof(A0DataType), 1, 4, Nswizzle, true, MulRoutedWeight, 1>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr,  num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);   \
++                }                                                                                                           \
++            }                                                                                                               \
++            else if (MPerBlock == 128)                                                                                      \
++                ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 128, 128 / sizeof(A0DataType), 2, 2, Nswizzle, true, MulRoutedWeight, 1>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr,  num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);  \
++        }                                                                                                                   \
++        else                                                                                                                \
++        {                                                                                                                   \
++            if (MPerBlock == 32)                                                                                            \
++            {                                                                                                               \
++                if (K % (256 / sizeof(A0DataType)) == 0)                                                                    \
++                {                                                                                                           \
++                    ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 32, 256 / sizeof(A0DataType), 1, 4, Nswizzle, false, MulRoutedWeight, 1>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr,  num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);   \
++                }                                                                                                           \
++                else                                                                                                        \
++                {                                                                                                           \
++                    ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 32, 128 / sizeof(A0DataType), 1, 4, Nswizzle, false, MulRoutedWeight, 1>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr,  num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);   \
++                }                                                                                                           \
++            }                                                                                                               \
++            else if (MPerBlock == 64)                                                                                       \
++            {                                                                                                               \
++                if (K % (256 / sizeof(A0DataType)) == 0)                                                                    \
++                {                                                                                                           \
++                    ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 64, 256 / sizeof(A0DataType), 1, 4, Nswizzle, false, MulRoutedWeight, 1>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr,  num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);   \
++                }                                                                                                           \
++                else                                                                                                        \
++                {                                                                                                           \
++                    ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 64, 128 / sizeof(A0DataType), 1, 4, Nswizzle, false, MulRoutedWeight, 1>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr,  num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);   \
++                }                                                                                                           \
++            }                                                                                                               \
++            else if (MPerBlock == 128)                                                                                      \
++                ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 128, 128 / sizeof(A0DataType), 2, 2, Nswizzle, false, MulRoutedWeight, 1>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr,  num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);  \
++        }\
+     }
+-   
+-#define CK_MOE_STAGE1_GEMM_IMPL_INT4(A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, Nswizzle, isPerTensorQuant, MPerBlock)                                                                                                                                                                                                                                   \
+-    if (MulRoutedWeight)                                                                                                                                                                                                                                                                                                                                                    \
+-    {                                                                                                                                                                                                                                                                                                                                                                       \
++
++#define CK_MOE_STAGE1_GEMM_IMPL_INT4(A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, Nswizzle, isPerTensorQuant, MPerBlock, MulRoutedWeight, ActOP)                                                                            \
++    if (ActOP == 0)     \
++    {   \
+         if (isPerTensorQuant)                                                                                                                                                                                                                                                                                                                                               \
+         {                                                                                                                                                                                                                                                                                                                                                                   \
+             if (MPerBlock == 32)                                                                                                                                                                                                                                                                                                                                            \
+-                ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 32, 128 / sizeof(A0DataType), 1, 4, Nswizzle, true, true>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr, num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);   \
++                ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 32, 128 / sizeof(A0DataType), 1, 4, Nswizzle, true, MulRoutedWeight, 0>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr,  num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);   \
+             else if (MPerBlock == 64)                                                                                                                                                                                                                                                                                                                                       \
+-                ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 64, 128 / sizeof(A0DataType), 1, 4, Nswizzle, true, true>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr, num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);   \
++                ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 64, 128 / sizeof(A0DataType), 1, 4, Nswizzle, true, MulRoutedWeight, 0>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr,  num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);   \
+             else if (MPerBlock == 128)                                                                                                                                                                                                                                                                                                                                      \
+-                ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 128, 128 / sizeof(A0DataType), 1, 4, Nswizzle, true, true>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr, num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);  \
++                ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 128, 128 / sizeof(A0DataType), 1, 4, Nswizzle, true, MulRoutedWeight, 0>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr,  num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);  \
+         }                                                                                                                                                                                                                                                                                                                                                                   \
+         else                                                                                                                                                                                                                                                                                                                                                                \
+         {                                                                                                                                                                                                                                                                                                                                                                   \
+             if (MPerBlock == 32)                                                                                                                                                                                                                                                                                                                                            \
+-                ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 32, 128 / sizeof(A0DataType), 1, 4, Nswizzle, false, true>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr, num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);  \
++                ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 32, 128 / sizeof(A0DataType), 1, 4, Nswizzle, false, MulRoutedWeight, 0>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr,  num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);  \
+             else if (MPerBlock == 64)                                                                                                                                                                                                                                                                                                                                       \
+-                ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 64, 128 / sizeof(A0DataType), 1, 4, Nswizzle, false, true>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr, num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);  \
++                ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 64, 128 / sizeof(A0DataType), 1, 4, Nswizzle, false, MulRoutedWeight, 0>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr,  num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);  \
+             else if (MPerBlock == 128)                                                                                                                                                                                                                                                                                                                                      \
+-                ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 128, 128 / sizeof(A0DataType), 1, 4, Nswizzle, false, true>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr, num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr); \
+-        }                                                                                                                                                                                                                                                                                                                                                                   \
+-    }                                                                                                                                                                                                                                                                                                                                                                       \
+-    else                                                                                                                                                                                                                                                                                                                                                    \
+-    {                                                                                                                                                                                                                                                                                                                                                                       \
++                ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 128, 128 / sizeof(A0DataType), 1, 4, Nswizzle, false, MulRoutedWeight, 0>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr,  num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr); \
++        }   \
++    }\
++    else if (ActOP == 1)                                                                                       \
++    {   \
+         if (isPerTensorQuant)                                                                                                                                                                                                                                                                                                                                               \
+         {                                                                                                                                                                                                                                                                                                                                                                   \
+             if (MPerBlock == 32)                                                                                                                                                                                                                                                                                                                                            \
+-                ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 32, 128 / sizeof(A0DataType), 1, 4, Nswizzle, true, false>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr, num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);   \
++                ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 32, 128 / sizeof(A0DataType), 1, 4, Nswizzle, true, MulRoutedWeight, 1>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr,  num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);   \
+             else if (MPerBlock == 64)                                                                                                                                                                                                                                                                                                                                       \
+-                ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 64, 128 / sizeof(A0DataType), 1, 4, Nswizzle, true, false>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr, num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);   \
++                ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 64, 128 / sizeof(A0DataType), 1, 4, Nswizzle, true, MulRoutedWeight, 1>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr,  num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);   \
+             else if (MPerBlock == 128)                                                                                                                                                                                                                                                                                                                                      \
+-                ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 128, 128 / sizeof(A0DataType), 1, 4, Nswizzle, true, false>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr, num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);  \
++                ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 128, 128 / sizeof(A0DataType), 1, 4, Nswizzle, true, MulRoutedWeight, 1>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr,  num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);  \
+         }                                                                                                                                                                                                                                                                                                                                                                   \
+         else                                                                                                                                                                                                                                                                                                                                                                \
+         {                                                                                                                                                                                                                                                                                                                                                                   \
+             if (MPerBlock == 32)                                                                                                                                                                                                                                                                                                                                            \
+-                ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 32, 128 / sizeof(A0DataType), 1, 4, Nswizzle, false, false>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr, num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);  \
++                ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 32, 128 / sizeof(A0DataType), 1, 4, Nswizzle, false, MulRoutedWeight, 1>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr, num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);  \
+             else if (MPerBlock == 64)                                                                                                                                                                                                                                                                                                                                       \
+-                ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 64, 128 / sizeof(A0DataType), 1, 4, Nswizzle, false, false>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr, num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);  \
++                ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 64, 128 / sizeof(A0DataType), 1, 4, Nswizzle, false, MulRoutedWeight, 1>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr, num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);  \
+             else if (MPerBlock == 128)                                                                                                                                                                                                                                                                                                                                      \
+-                ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 128, 128 / sizeof(A0DataType), 1, 4, Nswizzle, false, false>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr, num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr); \
+-        }                                                                                                                                                                                                                                                                                                                                                                   \
+-    }                                                                                                                                                                                                                                                                                                                                                                       \
++                ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, 128, 128 / sizeof(A0DataType), 1, 4, Nswizzle, false, MulRoutedWeight, 1>(at::cuda::getCurrentCUDAStream().stream(), tokens, sorted_size, N, K, topk, hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr, num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr); \
++        }   \
++    }                                                                                                                                                                                                                                                                                                                                                                  \
+ 
+ void ck_moe_stage1(torch::Tensor &hidden_states,     // [m, k], input token
+                    torch::Tensor &w1,                // [e, n, k]/[e, 2*n, k], pre-shuffle([e, nr, kr, w])
+@@ -102,10 +174,11 @@ void ck_moe_stage1(torch::Tensor &hidden_states,     // [m, k], input token
+                    torch::Tensor &num_valid_ids,     // [1]
+                    torch::Tensor &out,               // [m * topk, inter_dim]
+                    int topk,
+-                   std::optional<torch::Tensor> w1_scale = std::nullopt, // [e, 1, n], gate(up) scale
+-                   std::optional<torch::Tensor> a1_scale = std::nullopt, // [m, 1], token scale
+-                   std::optional<int> block_m = 32,
+-                   std::optional<torch::Tensor> sorted_weights = std::nullopt)    // [max_num_tokens_padded])
++                   std::optional<torch::Tensor> w1_scale        = std::nullopt, // [e, 1, n], gate(up) scale
++                   std::optional<torch::Tensor> a1_scale        = std::nullopt, // [m, 1], token scale
++                   std::optional<int> block_m                   = 32,
++                   std::optional<torch::Tensor> sorted_weights  = std::nullopt,
++                   std::optional<int> act_op                    = 0)
+ {
+     const at::cuda::OptionalCUDAGuard device_guard(device_of(out));
+     at::cuda::getCurrentCUDAStream().stream();
+@@ -118,13 +191,12 @@ void ck_moe_stage1(torch::Tensor &hidden_states,     // [m, k], input token
+     int tokens = hidden_states.size(0);
+     int sorted_size = sorted_token_ids.size(0);
+     int E = w1.size(0);
+-    int N = w1.size(1);
++    int N = w1.size(1) / 2;
+     int K = hidden_states.size(-1);
+     // int max_num_tokens_padded = sorted_token_ids.size(0);
+     // int agvtokens_per_expert = max_num_tokens_padded / E;
+     int MPerBlock = block_m.value();
+     bool isPerTensorQuant = (!w1_scale.has_value()) || (w1_scale.value().numel() == E);
+-    bool MulRoutedWeight = sorted_weights.has_value();
+ 
+     // int M = agvtokens_per_expert < 32 ? 32 : (agvtokens_per_expert < 64 ? 64 : 128);
+ 
+@@ -133,7 +205,7 @@ void ck_moe_stage1(torch::Tensor &hidden_states,     // [m, k], input token
+     void *w2_ptr = w2.data_ptr();
+     void *sorted_token_ids_ptr = sorted_token_ids.data_ptr();
+     void *sorted_expert_ids_ptr = sorted_expert_ids.data_ptr();
+-    void *sorted_weights_ptr = MulRoutedWeight ? sorted_weights.value().data_ptr() : nullptr;
++    void *sorted_weights_ptr = sorted_weights.has_value() ? sorted_weights.value().data_ptr() : nullptr;
+     void *num_valid_ids_ptr = num_valid_ids.data_ptr();
+     void *out_ptr = out.data_ptr();
+     void *w1_scale_ptr = w1_scale.has_value() ? w1_scale.value().data_ptr() : nullptr;
+@@ -147,15 +219,15 @@ void ck_moe_stage1(torch::Tensor &hidden_states,     // [m, k], input token
+         using AccDataType = F32;
+         using EDataType = B16;
+         const bool Nswizzle = false;
+-        if (MulRoutedWeight) 
++        if (sorted_weights.has_value()) 
+         {
+             using CDEElementOp = TypeCastExpertWeight;
+-            CK_MOE_STAGE1_GEMM_IMPL(A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, Nswizzle, isPerTensorQuant, MPerBlock);
++            CK_MOE_STAGE1_GEMM_IMPL(A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, Nswizzle, isPerTensorQuant, MPerBlock, true, act_op);
+         }
+         else 
+         {
+             using CDEElementOp = TypeCast;
+-            CK_MOE_STAGE1_GEMM_IMPL(A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, Nswizzle, isPerTensorQuant, MPerBlock);
++            CK_MOE_STAGE1_GEMM_IMPL(A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, Nswizzle, isPerTensorQuant, MPerBlock, false, act_op);
+         }
+     }
+     // FP16
+@@ -166,15 +238,15 @@ void ck_moe_stage1(torch::Tensor &hidden_states,     // [m, k], input token
+         using AccDataType = F32;
+         using EDataType = F16;
+         const bool Nswizzle = false;
+-        if (MulRoutedWeight) 
++        if (sorted_weights.has_value()) 
+         {
+             using CDEElementOp = TypeCastExpertWeight;
+-            CK_MOE_STAGE1_GEMM_IMPL(A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, Nswizzle, isPerTensorQuant, MPerBlock);
++            CK_MOE_STAGE1_GEMM_IMPL(A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, Nswizzle, isPerTensorQuant, MPerBlock, true, act_op);
+         }
+         else 
+         {
+             using CDEElementOp = TypeCast;
+-            CK_MOE_STAGE1_GEMM_IMPL(A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, Nswizzle, isPerTensorQuant, MPerBlock);
++            CK_MOE_STAGE1_GEMM_IMPL(A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, Nswizzle, isPerTensorQuant, MPerBlock, false, act_op);
+         }
+     }
+     // FP8 Wint4
+@@ -189,13 +261,27 @@ void ck_moe_stage1(torch::Tensor &hidden_states,     // [m, k], input token
+                     "Scales must be Float dtype!");
+         using AccDataType = F32;
+         using CDEElementOp = MulABScaleWint4;
+-        if (out.dtype() == at::ScalarType::Half)
++        if (sorted_weights.has_value()) 
+         {
+-            CK_MOE_STAGE1_GEMM_IMPL_INT4(A0DataType, B0DataType, AccDataType, F16, CDEElementOp, Nswizzle, isPerTensorQuant, MPerBlock);
++            if (out.dtype() == at::ScalarType::Half)
++            {
++                CK_MOE_STAGE1_GEMM_IMPL_INT4(A0DataType, B0DataType, AccDataType, F16, CDEElementOp, Nswizzle, isPerTensorQuant, MPerBlock, true, act_op);
++            }
++            else if (out.dtype() == at::ScalarType::BFloat16)
++            {
++                CK_MOE_STAGE1_GEMM_IMPL_INT4(A0DataType, B0DataType, AccDataType, B16, CDEElementOp, Nswizzle, isPerTensorQuant, MPerBlock, true, act_op);
++            }
+         }
+-        else if (out.dtype() == at::ScalarType::BFloat16)
++        else
+         {
+-            CK_MOE_STAGE1_GEMM_IMPL_INT4(A0DataType, B0DataType, AccDataType, B16, CDEElementOp, Nswizzle, isPerTensorQuant, MPerBlock);
++            if (out.dtype() == at::ScalarType::Half)
++            {
++                CK_MOE_STAGE1_GEMM_IMPL_INT4(A0DataType, B0DataType, AccDataType, F16, CDEElementOp, Nswizzle, isPerTensorQuant, MPerBlock, false, act_op);
++            }
++            else if (out.dtype() == at::ScalarType::BFloat16)
++            {
++                CK_MOE_STAGE1_GEMM_IMPL_INT4(A0DataType, B0DataType, AccDataType, B16, CDEElementOp, Nswizzle, isPerTensorQuant, MPerBlock, false, act_op);
++            }
+         }
+     }
+     // FP8
+@@ -210,13 +296,27 @@ void ck_moe_stage1(torch::Tensor &hidden_states,     // [m, k], input token
+         using AccDataType = F32;
+         using CDEElementOp = MulABScale;
+         const bool Nswizzle = false;
+-        if (out.dtype() == at::ScalarType::Half)
++        if (sorted_weights.has_value()) 
+         {
+-            CK_MOE_STAGE1_GEMM_IMPL(A0DataType, B0DataType, AccDataType, F16, CDEElementOp, Nswizzle, isPerTensorQuant, MPerBlock);
++            if (out.dtype() == at::ScalarType::Half)
++            {
++                CK_MOE_STAGE1_GEMM_IMPL(A0DataType, B0DataType, AccDataType, F16, CDEElementOp, Nswizzle, isPerTensorQuant, MPerBlock, true, act_op);
++            }
++            else if (out.dtype() == at::ScalarType::BFloat16)
++            {
++                CK_MOE_STAGE1_GEMM_IMPL(A0DataType, B0DataType, AccDataType, B16, CDEElementOp, Nswizzle, isPerTensorQuant, MPerBlock, true, act_op);
++            }
+         }
+-        else if (out.dtype() == at::ScalarType::BFloat16)
++        else
+         {
+-            CK_MOE_STAGE1_GEMM_IMPL(A0DataType, B0DataType, AccDataType, B16, CDEElementOp, Nswizzle, isPerTensorQuant, MPerBlock);
++            if (out.dtype() == at::ScalarType::Half)
++            {
++                CK_MOE_STAGE1_GEMM_IMPL(A0DataType, B0DataType, AccDataType, F16, CDEElementOp, Nswizzle, isPerTensorQuant, MPerBlock, false, act_op);
++            }
++            else if (out.dtype() == at::ScalarType::BFloat16)
++            {
++                CK_MOE_STAGE1_GEMM_IMPL(A0DataType, B0DataType, AccDataType, B16, CDEElementOp, Nswizzle, isPerTensorQuant, MPerBlock, false, act_op);
++            }
+         }
+     }
+     // I8
+@@ -231,13 +331,27 @@ void ck_moe_stage1(torch::Tensor &hidden_states,     // [m, k], input token
+         using AccDataType = I32;
+         using CDEElementOp = MulABScale;
+         const bool Nswizzle = false;
+-        if (out.dtype() == at::ScalarType::Half)
++        if (sorted_weights.has_value()) 
+         {
+-            CK_MOE_STAGE1_GEMM_IMPL(A0DataType, B0DataType, AccDataType, F16, CDEElementOp, Nswizzle, isPerTensorQuant, MPerBlock);
++            if (out.dtype() == at::ScalarType::Half)
++            {
++                CK_MOE_STAGE1_GEMM_IMPL(A0DataType, B0DataType, AccDataType, F16, CDEElementOp, Nswizzle, isPerTensorQuant, MPerBlock, true, act_op);
++            }
++            else if (out.dtype() == at::ScalarType::BFloat16)
++            {
++                CK_MOE_STAGE1_GEMM_IMPL(A0DataType, B0DataType, AccDataType, B16, CDEElementOp, Nswizzle, isPerTensorQuant, MPerBlock, true, act_op);
++            }
+         }
+-        else if (out.dtype() == at::ScalarType::BFloat16)
++        else
+         {
+-            CK_MOE_STAGE1_GEMM_IMPL(A0DataType, B0DataType, AccDataType, B16, CDEElementOp, Nswizzle, isPerTensorQuant, MPerBlock);
++            if (out.dtype() == at::ScalarType::Half)
++            {
++                CK_MOE_STAGE1_GEMM_IMPL(A0DataType, B0DataType, AccDataType, F16, CDEElementOp, Nswizzle, isPerTensorQuant, MPerBlock, false, act_op);
++            }
++            else if (out.dtype() == at::ScalarType::BFloat16)
++            {
++                CK_MOE_STAGE1_GEMM_IMPL(A0DataType, B0DataType, AccDataType, B16, CDEElementOp, Nswizzle, isPerTensorQuant, MPerBlock, false, act_op);
++            }
+         }
+     }
+ }
+@@ -474,4 +588,4 @@ void ck_moe_stage2(torch::Tensor &inter_states,      // [m, k], input token
+             CK_MOE_STAGE2_GEMM_IMPL(A0DataType, B0DataType, AccDataType, B16, CDEElementOp, Nswizzle, isPerTensorQuant, MPerBlock);
+         }
+     }
+-}
++}
+\ No newline at end of file
+diff --git a/op_tests/test_moe_2stage.py b/op_tests/test_moe_2stage.py
+index e4579cf7f2..c741bc481b 100644
+--- a/op_tests/test_moe_2stage.py
++++ b/op_tests/test_moe_2stage.py
+@@ -29,32 +29,71 @@
+     torch_moe_stage1,
+     torch_moe_stage2,
+ )
++
++from aiter.fused_moe_bf16_asm import moe_sorting_ck, get_block_size, ck_moe_2stages
++
+ from aiter.ops.shuffle import shuffle_weight
+ from aiter import ActivationType
+ 
+ torch.int4 = getattr(torch, "int4", torch.uint32)
+ torch.set_default_device("cuda")
+ 
++def ck_moe_stage1(hidden_states,
++                  w1,  # [E, inter_dim*2, model_dim]
++                  w2,  # [E, model_dim, inter_dim]
++                  sorted_token_ids,  # [max_num_tokens_padded]
++                  sorted_expert_ids,  # [max_num_m_blocks]
++                  num_valid_ids,  # [1]
++                  w1_scale, a1_scale, dtype,
++                  topk,
++                  block_size=32,
++                  Activation=ActivationType.Gelu,
++                  sorted_weights=None,  # [max_num_tokens_padded]
++                  ):
++    token_num = hidden_states.shape[0]
++    D = w2.shape[-1]
++    # max_num_tokens_padded = sorted_expert_ids.shape[0]*block_size
++    if Activation == ActivationType.Silu:
++        act_op = 1
++    else:
++        act_op = 0
+ 
+-@perftest()
+-def ck_moe_stage2(
+-    hidden_states,  # [M, topk, inter_dim]
+-    w1,  # [E, inter_dim*2, model_dim]
+-    w2,  # [E, model_dim, inter_dim]
+-    sorted_token_ids,  # [max_num_tokens_padded]
+-    sorted_expert_ids,  # [max_num_m_blocks]
+-    sorted_weights,  # [max_num_tokens_padded]
+-    num_valid_ids,  # [1]
+-    w2_scale,
+-    a2_scale,
+-    dtype,
+-    topk,
+-    block_size=32,
+-):
++    if w1.dtype is torch.uint32:
++        D = D * 8
++
++    out = torch.empty((token_num, topk, D), dtype=dtype)
++
++    aiter.ck_moe_stage1(
++        hidden_states, 
++        w1, 
++        w2, 
++        sorted_token_ids,             
++        sorted_expert_ids, 
++        num_valid_ids, 
++        out, 
++        topk, 
++        w1_scale,
++        a1_scale, 
++        block_size, 
++        sorted_weights, 
++        act_op
++    )
++
++    return out
++
++def ck_moe_stage2(hidden_states,
++                  w1,  # [E, inter_dim*2, model_dim]
++                  w2,  # [E, model_dim, inter_dim]
++                  sorted_token_ids,  # [max_num_tokens_padded]
++                  sorted_expert_ids,  # [max_num_m_blocks]
++                  num_valid_ids,  # [1]
++                  w2_scale, a2_scale, dtype,
++                  topk,
++                  block_size=32,
++                  sorted_weights=None,  # [max_num_tokens_padded]
++                  ):
+     token_num = hidden_states.shape[0]
+     D = w2.shape[1]
+-    num_experts, model_dim, inter_dim = w2.shape
+-    max_num_tokens_padded = sorted_token_ids.shape[0]
+     # max_num_tokens_padded = sorted_expert_ids.shape[0]*block_size
+ 
+     out = torch.zeros(
+@@ -78,7 +117,6 @@ def ck_moe_stage2(
+     )
+     return out
+ 
+-
+ @benchmark()
+ def test_fmoe(
+     dtype,
+@@ -106,10 +144,13 @@ def test_fmoe(
+     score = torch.randn((token, E), dtype=dtype)
+     topk_weights, topk_ids = fused_topk(input, score, topk, True)
+ 
+-    # BLOCK_SIZE_M = 128
+-    # sorted_ids, sorted_weights, sorted_expert_ids, num_valid_ids, moe_buf = moe_sorting(
+-    #     topk_ids, topk_weights, E, model_dim, dtype, BLOCK_SIZE_M
+-    # )
++    M, _ = topk_ids.shape
++
++    BLOCK_SIZE_M = get_block_size(M, topk, E)
++    sorted_ids, sorted_weights, sorted_expert_ids, num_valid_ids, moe_buf = moe_sorting_ck(
++        topk_ids, topk_weights, E, model_dim, dtype, BLOCK_SIZE_M
++    )
++    
+     if qType == aiter.QuantType.per_Tensor:
+         w1_qt, w1_scale = aiter.pertoken_quant(w1.view(E, -1), quant_dtype=WQDType)
+         w2_qt, w2_scale = aiter.pertoken_quant(w2.view(E, -1), quant_dtype=WQDType)
+@@ -119,6 +160,7 @@ def test_fmoe(
+     else:
+         w1_qt, w1_scale = torch_quant(w1, quant_dtype=WQDType)
+         w2_qt, w2_scale = torch_quant(w2, quant_dtype=WQDType)
++
+     w1_qt = w1_qt_aiter = w1_qt.view(w1.shape)
+     w2_qt = w2_qt_aiter = w2_qt.view(w2.shape)
+ 
+@@ -143,35 +185,37 @@ def test_fmoe(
+     )
+ 
+     if WQDType == torch.int4:  # int4 w quant
+-        w1_qt_aiter = rearrange_4bit_elements(convert_int8_to_uint32_int4(w1_qt_aiter))
+-        w2_qt_aiter = rearrange_4bit_elements(convert_int8_to_uint32_int4(w2_qt_aiter))
+-        w1_qt_aiter = shuffle_weight(w1_qt_aiter, layout=(32, 32))
+-        w2_qt_aiter = shuffle_weight(w2_qt_aiter, layout=(32, 32))
++        w1_qt_aiter = rearrange_4bit_elements(convert_int8_to_uint32_int4(shuffle_weight(w1_qt_aiter, (16, 16), use_int4=True)))
++        w2_qt_aiter = rearrange_4bit_elements(convert_int8_to_uint32_int4(shuffle_weight(w2_qt_aiter, (16, 16), use_int4=True)))
+     else:
+         w1_qt_aiter = shuffle_weight(w1_qt_aiter, layout=(16, 16))
+         w2_qt_aiter = shuffle_weight(w2_qt_aiter, layout=(16, 16))
+ 
++    # ######################## stage 1 start ###########
+     # out1_ck = torch.empty((token, topk, inter_dim), dtype=dtype)
+-    # _, us = run_perftest(
+-    #     ck_stage1,
+-    #     a1_qt,
+-    #     w1_qt_aiter,
+-    #     w2_qt_aiter,
+-    #     sorted_ids,
+-    #     sorted_expert_ids,
+-    #     num_valid_ids,
+-    #     out1_ck,
+-    #     w1_scale=w1_scale,
+-    #     a1_scale=a1_scale,
+-    #     activation=actType,
+-    #     block_m=BLOCK_SIZE_M,
+-    # )
+-
+-    # checkAllclose(
+-    #     out1_ref,
+-    #     out1_ck,
+-    #     msg=f"[perf]  ck_moe_stage1:{us:>8.2f} us, {token*model_dim*inter_dim*topk*2/us/1000/1000:>8.2f} tflops......(quant:{AQDType})",
+-    # )
++    out1_ck, us = run_perftest(
++        ck_moe_stage1,
++        a1_qt,
++        w1_qt_aiter,
++        w2_qt_aiter,
++        sorted_ids,
++        sorted_expert_ids,
++        num_valid_ids,
++        w1_scale,
++        a1_scale,
++        dtype,
++        topk,
++        BLOCK_SIZE_M,
++        actType,
++        sorted_weights=sorted_weights if doweight_stage1 else None,
++    )
++
++    checkAllclose(
++        out1_ref,
++        out1_ck,
++        msg=f"[perf]  ck_moe_stage1:{us:>8.2f} us, {token*model_dim*inter_dim*2*topk*2/us/1000/1000:>8.2f} tflops......(quant:{AQDType})",
++    )
++    # ######################## stage 2 end ###########
+ 
+     # if WQDType != torch.int4:
+     #     # asm int4 2 stage not support yet
+@@ -232,34 +276,53 @@ def test_fmoe(
+     # # )
+     # # checkAllclose(out_ref, out2_ref, msg="[torch] 1_stage vs 2_stage")
+ 
+-    # if qType == aiter.QuantType.per_Token:
+-    #     out1_ck = out1_ck.view(token, -1)
+-    # a2_qt, a2_scale = torch_quant(out1_ck, quant_dtype=AQDType)
+-    # a2_qt = a2_qt.view(token, topk, -1)
+-    # if qType == aiter.QuantType.No:
+-    #     a2_scale = torch.tensor(1.0, dtype=torch.float, device=a2_qt.device)
+-    # out2_ck, us = ck_moe_stage2(
+-    #     a2_qt,
+-    #     w1_qt_aiter,
+-    #     w2_qt_aiter,
+-    #     sorted_ids,
+-    #     sorted_expert_ids,
+-    #     sorted_weights,
+-    #     num_valid_ids,
+-    #     w2_scale,
+-    #     a2_scale,
+-    #     dtype,
+-    #     topk,
+-    #     BLOCK_SIZE_M,
+-    # )
+-    # checkAllclose(
+-    #     out2_ref,
+-    #     out2_ck,
+-    #     msg=f"ck_moe_stage2:{us:>8.2f} us, {token*model_dim*inter_dim*topk*2/us/1000/1000:>8.2f} tflops......(quant:{AQDType})",
+-    # )
++    if qType == aiter.QuantType.per_Token:
++        out1_ck = out1_ck.view(token, -1)
++    a2_qt, a2_scale = torch_quant(out1_ck, quant_dtype=AQDType)
++    a2_qt = a2_qt.view(M, topk, -1)
++
++    out2_ck, us = run_perftest(
++        ck_moe_stage2,
++        a2_qt,
++        w1_qt_aiter,
++        w2_qt_aiter,
++        sorted_ids,
++        sorted_expert_ids,
++        num_valid_ids,
++        w2_scale,
++        a2_scale,
++        dtype,
++        topk,
++        BLOCK_SIZE_M,
++        sorted_weights if not doweight_stage1 else None,
++    )
++
++    checkAllclose(
++        out2_ref,
++        out2_ck,
++        msg=f"[perf]  ck_moe_stage2:{us:>8.2f} us, {token*model_dim*inter_dim*topk*2/us/1000/1000:>8.2f} tflops......(quant:{AQDType})",
++    )
+     # ######################## stage 2 end ###########
+ 
+     # ######################## fused 2 stage #########
++    out2_ck, us = run_perftest(
++        ck_moe_2stages,
++        input,
++        w1_qt_aiter,
++        w2_qt_aiter,
++        topk_weights, topk_ids,
++        quant_type=qType,
++        fc1_scale=w1_scale,  # [expert(local_expert:EP), inter_dim, 1]
++        fc2_scale=w2_scale,  # [expert(local_expert:EP), model_dim, 1]
++        block_size=BLOCK_SIZE_M,
++        activation=actType,
++        doweight_stage1=doweight_stage1,
++    )
++    checkAllclose(
++        out2_ref,
++        out2_ck,
++        msg=f"ck_moe_2stages:{us:>8.2f} us, {token*model_dim*inter_dim*3*topk*2/us/1000/1000:>8.2f} tflops......(quant:{AQDType})",
++    )
+ 
+     out2_aiter, us_fuse = run_perftest(
+         fused_moe,
+@@ -280,6 +343,7 @@ def test_fmoe(
+         out2_aiter,
+         msg=f"aiter_all_stages:{us_fuse:>8.2f} us......",
+     )
++
+     return {"us": us_fuse, "err": err}
+ 
+ 
+@@ -302,9 +366,10 @@ def test_fmoe(
+     (aiter.QuantType.No, None, None),  # a16w16
+     (aiter.QuantType.per_Tensor, torch.float8_e4m3fnuz, torch.float8_e4m3fnuz),  # a8w8
+     (aiter.QuantType.per_Token, torch.float8_e4m3fnuz, torch.float8_e4m3fnuz),  # a8w8
++    (aiter.QuantType.per_Token, torch.int8, torch.int8),  # a8w8
+     (aiter.QuantType.per_Token, torch.float8_e4m3fnuz, torch.int4),  # a8w4
+ ]
+-list_act = [aiter.ActivationType.Silu, aiter.ActivationType.Gelu][:1]
++list_act = [aiter.ActivationType.Silu, aiter.ActivationType.Gelu]
+ list_doweight_stage1 = [False, True]
+ expert, topk = 8, 2
+ 

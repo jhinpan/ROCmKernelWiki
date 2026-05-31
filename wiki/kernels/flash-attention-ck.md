@@ -15,7 +15,8 @@ tags:
 - softmax
 - kernel-fusion
 confidence: source-reported
-reproducibility: snippet
+reproducibility: runnable
+artifact_dir: examples/flash-attention-ck
 kernel_types:
 - flash-attention
 - attention
@@ -230,6 +231,35 @@ make tile_example_fmha_fwd -j
 # bf16, batch=2 heads=32 seqlen=8192 headdim=128, causal
 ./bin/tile_example_fmha_fwd -prec=bf16 -b=2 -h=32 -s=8192 -d=128 -mask=1
 ```
+
+## Runnable example
+
+The production CK-tile path above issues both GEMMs as `v_mfma_*` matrix-core
+instructions, which **do not execute on RDNA4 (gfx1201)**. A portable, pure-HIP
+fp32 reference that reproduces the same FlashAttention-2 online-softmax
+recurrence — tiled over KV, one block per `(head, query-tile)`, `(m, l, O)` state
+in registers, `1/l` hoisted to the epilogue — is in
+[`examples/flash-attention-ck/`](../../examples/flash-attention-ck/). It runs and
+self-checks against a naive CPU `softmax(QKᵀ)V` on this gfx1201 box.
+
+```bash
+cd examples/flash-attention-ck
+hipcc --offload-arch=gfx1201 -O3 flash_attention_fwd.hip -o flash_attention_fwd
+./flash_attention_fwd          # H=4 N=256 D=64
+```
+
+Expected output (captured on gfx1201, ROCm 7.2.3):
+
+```
+FlashAttention-2 fwd (portable HIP, fp32) on gfx1201
+  H=4 N=256 D=64  BR=64 BC=64  scale=0.12500
+  avg kernel time: 2.1091 ms   (31.8 GFLOP/s)
+  max abs error: 1.490e-07   max rel error: 4.404e-03
+PASS
+```
+
+This is a correctness/algorithm reference (scalar FMA math, not MFMA); the
+TFLOPS figures below are the matrix-core CK-tile throughput, not this kernel.
 
 ## Sources
 

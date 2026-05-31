@@ -1,0 +1,663 @@
+diff --git a/example/ck_tile/99_toy_example/00_add_vector/CMakeLists.txt b/example/ck_tile/99_toy_example/00_add_vector/CMakeLists.txt
+new file mode 100644
+index 00000000000..8c1665a1c4c
+--- /dev/null
++++ b/example/ck_tile/99_toy_example/00_add_vector/CMakeLists.txt
+@@ -0,0 +1,22 @@
++set(EXAMPLE_REDUCE "add_vector")
++# not using add_example_executable() to add this target, since we don't want this to have
++# to be included in "make all/install/check"
++message("adding example ${EXAMPLE_REDUCE}")
++
++add_executable(${EXAMPLE_REDUCE} EXCLUDE_FROM_ALL add_vector.cpp)
++target_include_directories(${EXAMPLE_REDUCE} PRIVATE ${CMAKE_CURRENT_LIST_DIR})
++set(EXAMPLE_REDUCE_COMPILE_OPTIONS)
++
++# generate assembly
++# list(APPEND EXAMPLE_REDUCE_COMPILE_OPTIONS -v --save-temps -Wno-gnu-line-marker)
++
++# NOTE: we turn off undefined-func-template to let source compile without explicit declare function specializations
++list(APPEND EXAMPLE_REDUCE_COMPILE_OPTIONS -Wno-undefined-func-template -Wno-float-equal)
++
++target_compile_options(${EXAMPLE_REDUCE} PRIVATE ${EXAMPLE_REDUCE_COMPILE_OPTIONS})
++
++# TODO: we have to turn off this global prop, otherwise the progress bar generated
++# by cmake will print too many files, execvp: /bin/sh: Argument list too long
++# however, this property may affect global
++# TODO: consider codegen a makefile by us
++set_property(GLOBAL PROPERTY RULE_MESSAGES OFF)
+diff --git a/example/ck_tile/99_toy_example/00_add_vector/add_vector.cpp b/example/ck_tile/99_toy_example/00_add_vector/add_vector.cpp
+new file mode 100644
+index 00000000000..ef5c2afae4a
+--- /dev/null
++++ b/example/ck_tile/99_toy_example/00_add_vector/add_vector.cpp
+@@ -0,0 +1,166 @@
++#include "ck_tile/host.hpp"
++#include "reference_add_vector.hpp"
++#include "add_vector.hpp"
++#include <cstring>
++
++// This example demonstrates how to use the ck_tile library to perform an elementwise vector
++// addition using a custom kernel. The kernel is defined in the vector_add.hpp file, and the
++// reference implementation is provided in the reference_vector_add.hpp file.
++
++// parse command line arguments
++// -m: size of the vectors
++// -v: validation flag (1 for validation, 0 for no validation)
++// -prec: precision of the data type (fp16, fp32, int8, int32)
++// -warmup: number of warmup iterations (number of kernel launches before measuring performance)
++// -repeat: number of repeat iterations (number of kernel launches to measure performance)
++auto create_args(int argc, char* argv[])
++{
++    ck_tile::ArgParser arg_parser;
++    arg_parser.insert("m", "256000000", "m dimension")
++        .insert("v", "1", "cpu validation or not")
++        .insert("prec", "fp16", "precision")
++        .insert("warmup", "5", "cold iter")
++        .insert("repeat", "20", "hot iter");
++
++    bool result = arg_parser.parse(argc, argv);
++    return std::make_tuple(result, arg_parser);
++}
++
++template <typename DataType>
++bool run(const ck_tile::ArgParser& arg_parser)
++{
++    using XDataType       = DataType; // input data type
++    using ComputeDataType = float;    // compute data type
++    using YDataType       = DataType; // output data type
++
++    ck_tile::index_t m = arg_parser.get_int("m"); // size of the vectors
++    int do_validation  = arg_parser.get_int("v"); // do we verify the result on cpu
++    int warmup         = arg_parser.get_int("warmup");
++    int repeat         = arg_parser.get_int("repeat");
++
++    ck_tile::HostTensor<XDataType> x_host_a(
++        {m}); // length input vector A, if given two arguments (m, n) the HostTensor will be created
++              // with shape (m, n)
++    ck_tile::HostTensor<XDataType> x_host_b(
++        {m}); // length input vector B, if given two arguments (m, n) the HostTensor will be created
++              // with shape (m, n)
++
++    ck_tile::HostTensor<YDataType> y_host_ref({m});
++    ck_tile::HostTensor<YDataType> y_host_dev({m});
++
++    ck_tile::FillUniformDistribution<XDataType>{-5.f, 5.f}(
++        x_host_a); // fill the input vector A with random values
++    ck_tile::FillUniformDistribution<XDataType>{-5.f, 5.f}(x_host_b);
++
++    ck_tile::DeviceMem x_buf_a(
++        x_host_a.get_element_space_size_in_bytes()); // allocate device memory for input vector A
++                                                     // (this a wrapper over hipMalloc)
++    ck_tile::DeviceMem x_buf_b(x_host_b.get_element_space_size_in_bytes());
++    ck_tile::DeviceMem y_buf(y_host_dev.get_element_space_size_in_bytes());
++
++    x_buf_a.ToDevice(
++        x_host_a
++            .data()); // copy the input vector A to device memory, this is a wrapper over hipMemcpy
++    x_buf_b.ToDevice(x_host_b.data());
++
++    // Dividing the problem into blocktile, warptile, and vector
++    // The blocktile is the size of the tile that will be processed by a single thread block (also
++    // called work group) The warptile is the size of the tile that will be processed by a single
++    // warp (also called wavefront) The vector is the size of the tile that will be processed by a
++    // single thread (also called work item) The problem is divided into blocks of size BlockTile,
++    // each block is further divided into warps of size WarpTile and each warp is composed of 64 or
++    // 32 threads of size Vector each of the thread in a warp will process one vector worth elements
++    // of the data
++    using BlockTile = ck_tile::sequence<8192>; // Size of the block tile (Entire problem is divided
++                                               // into blocks of this size)
++    using BlockWarps = ck_tile::sequence<8>; // How many concurrent warps are in a block (Each warp
++                                             // will cover some part of blockTile)
++    using WarpTile = ck_tile::sequence<64>;  // How many elements are covered by a warp
++    using Vector   = ck_tile::sequence<1>; // How many elements are covered by a thread (Each thread
++                                           // will cover some part of WarpTile)
++
++    // Interpretation of above configurations
++    // Each thread will cover 1 element (Vector)
++    // Each WarpTile will cover 64 elements (WarpTile) --> since 64 threads in a warp
++    // if we have 8 warps in a block (BlockWarps) then we have 8 * 64 = 512 threads in a block
++    // if 8 warps are not enough to cover the entire blockTile then each of the 8 concurrent warps
++    // will iterate over the blockTile several times
++
++    constexpr ck_tile::index_t kBlockSize  = 512;
++    constexpr ck_tile::index_t kBlockPerCu = 1;
++
++    ck_tile::index_t kGridSize = (m / BlockTile::at(ck_tile::number<0>{}));
++    std::cout << "block x-size = " << BlockTile::at(ck_tile::number<0>{}) << std::endl;
++    std::cout << "grid size " << kGridSize << std::endl;
++
++    using Shape = ck_tile::AddVectorShape<BlockWarps, BlockTile, WarpTile, Vector>;
++    std::cout << "Problem Shape:: M = " << m << std::endl;
++    std::cout << "BlockTile: " << BlockTile::at(ck_tile::number<0>{}) << std::endl;
++    std::cout << "Number of Blocks in Grid: " << m / BlockTile::at(ck_tile::number<0>{})
++              << std::endl;
++    std::cout << "BlockWarps: " << BlockWarps::at(ck_tile::number<0>{}) << std::endl;
++    std::cout << "WarpTile: " << WarpTile::at(ck_tile::number<0>{}) << std::endl;
++    std::cout << "Vector: " << Vector::at(ck_tile::number<0>{}) << std::endl;
++    std::cout << "Repeat: " << Shape::Repeat_M
++              << std::endl; // number of times a warp will iterate over the blockTile, covering
++                            // different parts of the blockTile
++    std::cout << "Threads per Block: " << kBlockSize << std::endl;
++    std::cout << "ThreadBlocks per CU: " << kBlockPerCu << std::endl;
++
++    // What is a Problem in CKTile?
++    // A Problem defines the shape of the data, the precision of the data
++    using Problem = ck_tile::AddVectorProblem<XDataType, ComputeDataType, YDataType, Shape>;
++
++    // What is a Policy in CKTile?
++    // A Policy defines how to map the data between threads and data in memory
++
++    // The kernel is the function that will be executed on the device
++    // It requires a Problem and Policy to be defined
++    using Kernel = ck_tile::AddVectorKernel<Problem>;
++
++    // The kernel is launched with the following parameters:
++    float ave_time = launch_kernel(
++        ck_tile::stream_config{nullptr, true, 0, warmup, repeat}, // wrapper over hipStreamCreate
++        ck_tile::make_kernel<kBlockSize, kBlockPerCu>( // numOfThreadsPerBlock, numOfBlocksPerCU
++            Kernel{},                                  // kernel
++            kGridSize,                                 // number of blocks in the grid
++            kBlockSize,                                // number of threads in a block
++            0,                                         // shared memory size
++            static_cast<XDataType*>(x_buf_a.GetDeviceBuffer()), // input vector A
++            static_cast<XDataType*>(x_buf_b.GetDeviceBuffer()), // input vector B
++            static_cast<YDataType*>(y_buf.GetDeviceBuffer()),   // output vector
++            m));
++
++    std::size_t num_btype = sizeof(XDataType) * m + sizeof(YDataType) * m;
++
++    float gb_per_sec = num_btype / 1.E6 / ave_time;
++
++    std::cout << "Perf: " << ave_time << " ms, " << gb_per_sec << " GB/s" << std::endl;
++
++    bool pass = true;
++
++    if(do_validation)
++    {
++        ck_tile::reference_add_vector<XDataType, YDataType>(x_host_a, x_host_b, y_host_ref);
++        y_buf.FromDevice(y_host_dev.mData.data());
++        pass = ck_tile::check_err(y_host_dev, y_host_ref);
++
++        std::cout << "valid:" << (pass ? "y" : "n") << std::flush << std::endl;
++    }
++
++    return pass;
++}
++
++int main(int argc, char* argv[])
++{
++    auto [result, arg_parser] = create_args(argc, argv);
++    if(!result)
++        return -1;
++
++    const std::string data_type = arg_parser.get_str("prec");
++
++    if(data_type == "fp16")
++    {
++        return run<ck_tile::half_t>(arg_parser) ? 0 : -2;
++    }
++}
+diff --git a/example/ck_tile/99_toy_example/00_add_vector/add_vector.hpp b/example/ck_tile/99_toy_example/00_add_vector/add_vector.hpp
+new file mode 100644
+index 00000000000..26e569c21e0
+--- /dev/null
++++ b/example/ck_tile/99_toy_example/00_add_vector/add_vector.hpp
+@@ -0,0 +1,140 @@
++// SPDX-License-Identifier: MIT
++// Copyright (c) 2018-2024, Advanced Micro Devices, Inc. All rights reserved.
++
++#pragma once
++
++#include "ck_tile/core.hpp"
++#include "ck_tile/ops/common.hpp"
++
++namespace ck_tile {
++
++// struct that holds the tile size of the block, warp, and vector
++// and the number of warps per block
++// and the number of threads per warp
++// and the number of times the warp tile is repeated in the block tile
++// and the block size
++template <typename BlockWarps, typename BlockTile, typename WarpTile, typename Vector>
++struct AddVectorShape
++{
++    static constexpr index_t Block_M = BlockTile::at(number<0>{});
++
++    static constexpr index_t Warp_M = WarpTile::at(number<0>{});
++
++    static constexpr index_t Vector_M = Vector::at(number<0>{});
++
++    static constexpr index_t WarpPerBlock_M = BlockWarps::at(number<0>{});
++
++    static constexpr index_t ThreadPerWarp_M = Warp_M / Vector_M;
++
++    static constexpr index_t Repeat_M =
++        Block_M /
++        (WarpPerBlock_M * Warp_M); // Number of times the warp tile is repeated in the block tile
++
++    static constexpr index_t BlockSize =
++        warpSize * reduce_on_sequence(BlockWarps{}, multiplies{}, number<1>{});
++};
++
++template <typename XDataType_, typename ComputeDataType_, typename YDataType_, typename BlockShape_>
++struct AddVectorProblem
++{
++    using XDataType       = remove_cvref_t<XDataType_>;
++    using ComputeDataType = remove_cvref_t<ComputeDataType_>;
++    using YDataType       = remove_cvref_t<YDataType_>;
++    using BlockShape      = remove_cvref_t<BlockShape_>;
++};
++
++// data mapping beween threads and memory
++struct AddDefaultPolicy
++{
++    template <typename Problem>
++    CK_TILE_DEVICE static constexpr auto MakeXBlockTileDistribution()
++    {
++        using S = typename Problem::BlockShape;
++        return make_static_tile_distribution(
++            tile_distribution_encoding<sequence<>, // Replicate
++                                       tuple<sequence<S::Repeat_M,
++                                                      S::WarpPerBlock_M,
++                                                      S::ThreadPerWarp_M,
++                                                      S::Vector_M>>,    // Hierarchical
++                                       tuple<sequence<1>, sequence<1>>, // Parallel
++                                       tuple<sequence<1>, sequence<2>>, // Parallel
++                                       sequence<1, 1>,                  // Yield
++                                       sequence<0, 3>>{}                // Yield
++        );
++    }
++};
++
++template <typename Problem_, typename Policy_ = AddDefaultPolicy>
++struct AddVectorKernel
++{
++    using Problem = ck_tile::remove_cvref_t<Problem_>;
++    using Policy  = ck_tile::remove_cvref_t<Policy_>;
++
++    using XDataType       = ck_tile::remove_cvref_t<typename Problem::XDataType>;
++    using ComputeDataType = ck_tile::remove_cvref_t<typename Problem::ComputeDataType>;
++    using YDataType       = ck_tile::remove_cvref_t<typename Problem::YDataType>;
++
++    // body of the kernel
++    CK_TILE_DEVICE void
++    operator()(const XDataType* p_x_a, const XDataType* p_x_b, YDataType* p_y, index_t M) const
++    {
++        using S = typename Problem::BlockShape;
++
++        // create tensor view for the input and output data, this defines how the data is laid out
++        // in memory
++        const auto x_m_n_a = make_naive_tensor_view<address_space_enum::global>(
++            p_x_a,
++            make_tuple(M),
++            make_tuple(1),
++            number<S::Vector_M>{}); // raw pointer, shape of the tensor, stride of the tensor, and
++                                    // lastGarunteedVectorLength
++
++        const auto x_m_n_b = make_naive_tensor_view<address_space_enum::global>(
++            p_x_b, make_tuple(M), make_tuple(1), number<S::Vector_M>{});
++
++        const auto y_m_n = make_naive_tensor_view<address_space_enum::global>(
++            p_y, make_tuple(M), make_tuple(1), number<S::Vector_M>{});
++
++        // origin of the block tile
++        const auto iM = get_block_id() * S::Block_M;
++
++        // creating tile windows for the input and output data
++        auto x_window_a = make_tile_window(x_m_n_a,
++                                           make_tuple(number<S::Block_M>{}),
++                                           {iM},
++                                           Policy::template MakeXBlockTileDistribution<Problem>());
++
++        auto x_window_b = make_tile_window(x_m_n_b,
++                                           make_tuple(number<S::Block_M>{}),
++                                           {iM},
++                                           Policy::template MakeXBlockTileDistribution<Problem>());
++
++        auto y_window = make_tile_window(y_m_n,
++                                         make_tuple(number<S::Block_M>{}),
++                                         {iM},
++                                         Policy::template MakeXBlockTileDistribution<Problem>());
++
++        // Load tile data
++        const auto xa =
++            load_tile(x_window_a); // load tile data from global tensor view, load from where? what?
++                                   // how many? logical memory layout? all are defined in x_window_a
++        const auto xb  = load_tile(x_window_b);
++        auto y_compute = load_tile(y_window);
++
++        // Process the vector add
++        constexpr auto spans = decltype(xa)::get_distributed_spans(); // shape of the tile
++        sweep_tile_span(spans[number<0>{}], [&](auto idx) {           // iterate over the tile
++            const auto tile_idx = make_tuple(idx);
++            const auto a_val    = type_convert<ComputeDataType>(xa[tile_idx]);
++            const auto b_val    = type_convert<ComputeDataType>(xb[tile_idx]);
++            y_compute(tile_idx) = a_val + b_val;
++
++        });
++
++        // Store results
++        store_tile(y_window,
++                   cast_tile<YDataType>(y_compute)); // store the result back to global tensor view
++    }
++};
++
++} // namespace ck_tile
+diff --git a/example/ck_tile/99_toy_example/00_add_vector/reference_add_vector.hpp b/example/ck_tile/99_toy_example/00_add_vector/reference_add_vector.hpp
+new file mode 100644
+index 00000000000..4c034797dc2
+--- /dev/null
++++ b/example/ck_tile/99_toy_example/00_add_vector/reference_add_vector.hpp
+@@ -0,0 +1,31 @@
++// SPDX-License-Identifier: MIT
++// Copyright (c) 2018-2023, Advanced Micro Devices, Inc. All rights reserved.
++
++#pragma once
++
++#include "ck_tile/core.hpp"
++#include "ck_tile/host/host_tensor.hpp"
++#include <thread>
++
++namespace ck_tile {
++
++template <typename XDataType, typename YDataType>
++CK_TILE_HOST void reference_add_vector(const HostTensor<XDataType>& xa_m_n,
++                                       const HostTensor<XDataType>& xb_m_n,
++                                       HostTensor<YDataType>& y_m_n)
++{
++    auto f = [&](auto m) {
++        const int N = 1;
++
++        for(int n = 0; n < N; ++n)
++        {
++            y_m_n(m, n) = ck_tile::type_convert<YDataType>(xa_m_n(m, n)) +
++                          ck_tile::type_convert<YDataType>(xb_m_n(m, n));
++        }
++    };
++
++    make_ParallelTensorFunctor(f,
++                               y_m_n.mDesc.get_lengths()[0])(std::thread::hardware_concurrency());
++}
++
++} // namespace ck_tile
+diff --git a/example/ck_tile/99_toy_example/01_add/add.cpp b/example/ck_tile/99_toy_example/01_add/add.cpp
+index cd4ce141dc4..dd6c1d9a82c 100644
+--- a/example/ck_tile/99_toy_example/01_add/add.cpp
++++ b/example/ck_tile/99_toy_example/01_add/add.cpp
+@@ -46,12 +46,17 @@ bool run(const ck_tile::ArgParser& arg_parser)
+     x_buf_a.ToDevice(x_host_a.data());
+     x_buf_b.ToDevice(x_host_b.data());
+ 
+-    using BlockWarps = ck_tile::sequence<1, 8>;
+-    using BlockTile  = ck_tile::sequence<1, 4096>;
+-    using WarpTile   = ck_tile::sequence<1, 512>;
+-    using Vector     = ck_tile::sequence<1, 8>;
+-
+-    constexpr ck_tile::index_t kBlockSize  = 512;
++    using BlockWarps =
++        ck_tile::sequence<1, 8>; // number of concurrent warps in one block (if 8 warps * 64 threads
++                                 // per warp, 512 threads in one block are NEEDED)
++    using BlockTile =
++        ck_tile::sequence<1, 4096>; // shape of one blockTile (elements covered by one block)
++    using WarpTile = ck_tile::sequence<1, 512>; // shape of one warpTile (elements covered by one
++                                                // warp (64 threads))
++    using Vector = ck_tile::sequence<1, 8>; // shape of one vector (elements covered by one thread)
++
++    constexpr ck_tile::index_t kBlockSize =
++        512; // number of blockWarps * number of threads per warp
+     constexpr ck_tile::index_t kBlockPerCu = 1;
+     ck_tile::index_t kGridSize             = (m / BlockTile::at(ck_tile::number<0>{}));
+     std::cout << "block x-size = " << BlockTile::at(ck_tile::number<0>{}) << std::endl;
+diff --git a/example/ck_tile/99_toy_example/01_add/add.hpp b/example/ck_tile/99_toy_example/01_add/add.hpp
+index 87eb86e0c46..ca550bdc548 100644
+--- a/example/ck_tile/99_toy_example/01_add/add.hpp
++++ b/example/ck_tile/99_toy_example/01_add/add.hpp
+@@ -14,35 +14,48 @@ template <typename BlockWarps, // num warps along seq<M, N>
+           typename Vector>     // contiguous pixels(vector size) along seq<M, N>
+ struct AddShape
+ {
+-    static constexpr index_t Block_M = BlockTile::at(number<0>{});
+-    static constexpr index_t Block_N = BlockTile::at(number<1>{});
+-
+-    static constexpr index_t Warp_M = WarpTile::at(number<0>{});
+-    static constexpr index_t Warp_N = WarpTile::at(number<1>{});
+-
+-    static constexpr index_t Vector_M = Vector::at(number<0>{});
+-    static constexpr index_t Vector_N = Vector::at(number<1>{});
+-
+-    static constexpr index_t WarpPerBlock_M = BlockWarps::at(number<0>{});
+-    static constexpr index_t WarpPerBlock_N = BlockWarps::at(number<1>{});
+-
+-    static constexpr index_t ThreadPerWarp_M = Warp_M / Vector_M;
+-    static constexpr index_t ThreadPerWarp_N = Warp_N / Vector_N;
+-
+-    static constexpr index_t Repeat_M = Block_M / (WarpPerBlock_M * Warp_M);
+-    static constexpr index_t Repeat_N = Block_N / (WarpPerBlock_N * Warp_N);
++    static constexpr index_t Block_M = BlockTile::at(number<0>{}); // elements along M in one Block
++    static constexpr index_t Block_N = BlockTile::at(number<1>{}); // elements along N in one Block
++
++    static constexpr index_t Warp_M = WarpTile::at(number<0>{}); // elements along M in one Warp
++    static constexpr index_t Warp_N = WarpTile::at(number<1>{}); // elements along N in one Warp
++
++    static constexpr index_t Vector_M = Vector::at(number<0>{}); // elements along M in one Vector
++    static constexpr index_t Vector_N = Vector::at(number<1>{}); // elements along N in one Vector
++
++    static constexpr index_t WarpPerBlock_M =
++        BlockWarps::at(number<0>{}); // num concurrent warps along M
++    static constexpr index_t WarpPerBlock_N =
++        BlockWarps::at(number<1>{}); // num concurrent warps along N
++
++    static constexpr index_t ThreadPerWarp_M =
++        Warp_M /
++        Vector_M; // num threads along M in one Warp (ThreadPerWarp_M * ThreadPerWarp_N must be 64)
++    static constexpr index_t ThreadPerWarp_N =
++        Warp_N /
++        Vector_N; // num threads along N in one Warp (ThreadPerWarp_M * ThreadPerWarp_N must be 64)
++
++    static constexpr index_t Repeat_M =
++        Block_M /
++        (WarpPerBlock_M *
++         Warp_M); // num of time a warp iterates along M to ensure the entire block is covered
++    static constexpr index_t Repeat_N =
++        Block_N /
++        (WarpPerBlock_N *
++         Warp_N); // num of time a warp iterates along N to ensure the entire block is covered
+ 
+     static constexpr index_t BlockSize =
+-        warpSize * reduce_on_sequence(BlockWarps{}, multiplies{}, number<1>{});
++        warpSize *
++        reduce_on_sequence(BlockWarps{}, multiplies{}, number<1>{}); // num of threads in one block
+ };
+ 
+ template <typename XDataType_, typename ComputeDataType_, typename YDataType_, typename BlockShape_>
+ struct AddProblem
+ {
+-    using XDataType       = remove_cvref_t<XDataType_>;
+-    using ComputeDataType = remove_cvref_t<ComputeDataType_>;
+-    using YDataType       = remove_cvref_t<YDataType_>;
+-    using BlockShape      = remove_cvref_t<BlockShape_>;
++    using XDataType       = remove_cvref_t<XDataType_>;       // data type of input tensor
++    using ComputeDataType = remove_cvref_t<ComputeDataType_>; // data type of compute tensor
++    using YDataType       = remove_cvref_t<YDataType_>;       // data type of output tensor
++    using BlockShape      = remove_cvref_t<BlockShape_>;      // block shapes and sizes
+ };
+ 
+ struct AddDefaultPolicy
+@@ -54,12 +67,20 @@ struct AddDefaultPolicy
+         return make_static_tile_distribution(
+             tile_distribution_encoding<
+                 sequence<>,
+-                tuple<sequence<S::Repeat_M, S::WarpPerBlock_M, S::ThreadPerWarp_M, S::Vector_M>,
+-                      sequence<S::Repeat_N, S::WarpPerBlock_N, S::ThreadPerWarp_N, S::Vector_N>>,
+-                tuple<sequence<1, 2>, sequence<1, 2>>,
+-                tuple<sequence<1, 1>, sequence<2, 2>>,
+-                sequence<1, 1, 2, 2>,
+-                sequence<0, 3, 0, 3>>{});
++                tuple<sequence<S::Repeat_M,
++                               S::WarpPerBlock_M,
++                               S::ThreadPerWarp_M,
++                               S::Vector_M>, // how many sub division is a block divided in
++                      sequence<S::Repeat_N,
++                               S::WarpPerBlock_N,
++                               S::ThreadPerWarp_N,
++                               S::Vector_N>>, // how many sub division is a block divided in
++                tuple<sequence<1, 2>, sequence<1, 2>>, // What are the shapes of those sub divisions
++                tuple<sequence<1, 1>, sequence<2, 2>>, // What are the shapes of those sub divisions
++                sequence<1, 1, 2, 2>, // How much data does a thread work on and how many iterations
++                                      // of warps are there
++                sequence<0, 3, 0, 3>>{}); // How much data does a thread work on and how many
++                                          // iterations of warps are there
+     }
+ };
+ 
+@@ -81,7 +102,12 @@ struct Add
+         const auto x_m_n_a = make_naive_tensor_view<address_space_enum::global,
+                                                     memory_operation_enum::set,
+                                                     amd_buffer_coherence_enum::slc>(
+-            p_x_a, make_tuple(M, N), make_tuple(N, 1), number<S::Vector_N>{}, number<1>{});
++            p_x_a,
++            make_tuple(M, N),
++            make_tuple(N, 1),
++            number<S::Vector_N>{},
++            number<1>{}); // raw data, shape of tensor, stride of tensor, lastGarunteedVectorLength,
++                          // lastGarunteedVectorStride
+ 
+         const auto x_m_n_b = make_naive_tensor_view<address_space_enum::global,
+                                                     memory_operation_enum::set,
+@@ -93,7 +119,7 @@ struct Add
+                                                   amd_buffer_coherence_enum::slc>(
+             p_y, make_tuple(M, N), make_tuple(N, 1), number<S::Vector_N>{}, number<1>{});
+ 
+-        const auto iM = get_block_id() * S::Block_M;
++        const auto iM = get_block_id() * S::Block_M; // origin of the block along
+ 
+         auto x_window_a = make_tile_window(x_m_n_a,
+                                            make_tuple(number<S::Block_M>{}, number<S::Block_N>{}),
+diff --git a/example/ck_tile/99_toy_example/03_flash_attention_fwd/block_gemm_pipeline_agmem_bgmem_creg_v2_askiplds.hpp b/example/ck_tile/99_toy_example/03_flash_attention_fwd/block_gemm_pipeline_agmem_bgmem_creg_v2_askiplds.hpp
+index cfbd7d63768..32acb0f1b63 100644
+--- a/example/ck_tile/99_toy_example/03_flash_attention_fwd/block_gemm_pipeline_agmem_bgmem_creg_v2_askiplds.hpp
++++ b/example/ck_tile/99_toy_example/03_flash_attention_fwd/block_gemm_pipeline_agmem_bgmem_creg_v2_askiplds.hpp
+@@ -374,9 +374,9 @@ struct BlockGemmPipelineAGmemBGmemCReg
+     {
+         return operator()(
+             a_dram_block_window_tmp,
+-            [](const ADataType & a) { return a; },
++            [](const ADataType& a) { return a; },
+             b_dram_block_window_tmp,
+-            [](const BDataType & b) { return b; },
++            [](const BDataType& b) { return b; },
+             a_reg_block_tensor_tmp,
+             p_smem);
+     }
+@@ -388,7 +388,7 @@ struct BlockGemmPipelineAGmemBGmemCReg
+     {
+         return operator()(
+             b_dram_block_window_tmp,
+-            [](const BDataType & b) { return b; },
++            [](const BDataType& b) { return b; },
+             a_reg_block_tensor_tmp,
+             p_smem);
+     }
+diff --git a/example/ck_tile/99_toy_example/04_codegen_flash_attention_fwd/block_gemm_pipeline_agmem_bgmem_creg_v2_askiplds.hpp b/example/ck_tile/99_toy_example/04_codegen_flash_attention_fwd/block_gemm_pipeline_agmem_bgmem_creg_v2_askiplds.hpp
+index cfbd7d63768..32acb0f1b63 100644
+--- a/example/ck_tile/99_toy_example/04_codegen_flash_attention_fwd/block_gemm_pipeline_agmem_bgmem_creg_v2_askiplds.hpp
++++ b/example/ck_tile/99_toy_example/04_codegen_flash_attention_fwd/block_gemm_pipeline_agmem_bgmem_creg_v2_askiplds.hpp
+@@ -374,9 +374,9 @@ struct BlockGemmPipelineAGmemBGmemCReg
+     {
+         return operator()(
+             a_dram_block_window_tmp,
+-            [](const ADataType & a) { return a; },
++            [](const ADataType& a) { return a; },
+             b_dram_block_window_tmp,
+-            [](const BDataType & b) { return b; },
++            [](const BDataType& b) { return b; },
+             a_reg_block_tensor_tmp,
+             p_smem);
+     }
+@@ -388,7 +388,7 @@ struct BlockGemmPipelineAGmemBGmemCReg
+     {
+         return operator()(
+             b_dram_block_window_tmp,
+-            [](const BDataType & b) { return b; },
++            [](const BDataType& b) { return b; },
+             a_reg_block_tensor_tmp,
+             p_smem);
+     }
+diff --git a/example/ck_tile/99_toy_example/CMakeLists.txt b/example/ck_tile/99_toy_example/CMakeLists.txt
+index cadbb1c06ff..ba225e086c4 100644
+--- a/example/ck_tile/99_toy_example/CMakeLists.txt
++++ b/example/ck_tile/99_toy_example/CMakeLists.txt
+@@ -2,6 +2,7 @@ include_directories(AFTER
+   ${CMAKE_CURRENT_LIST_DIR}
+ )
+ 
++add_subdirectory(00_add_vector)
+ add_subdirectory(01_add)
+ add_subdirectory(02_gemm)
+ add_subdirectory(03_flash_attention_fwd)
+diff --git a/include/ck_tile/core/tensor/slice_tile.hpp b/include/ck_tile/core/tensor/slice_tile.hpp
+index fe788a227b7..3d0ed22dfef 100644
+--- a/include/ck_tile/core/tensor/slice_tile.hpp
++++ b/include/ck_tile/core/tensor/slice_tile.hpp
+@@ -86,8 +86,10 @@ set_slice_tile(static_distributed_tensor<DstDataType_, DstStaticTileDistribution
+ 
+     // static_assert(std::is_same_v<decltype(sliced_dstr), DstDistribution>, "wrong!");
+ 
+-    // dst_tile.SetSlicedThreadData(sliced_y_origins, sliced_y_lengths, src_tile.get_thread_buffer());
+-    dst_tile.set_y_sliced_thread_data(sliced_y_origins, sliced_y_lengths, src_tile.get_thread_buffer());
++    // dst_tile.SetSlicedThreadData(sliced_y_origins, sliced_y_lengths,
++    // src_tile.get_thread_buffer());
++    dst_tile.set_y_sliced_thread_data(
++        sliced_y_origins, sliced_y_lengths, src_tile.get_thread_buffer());
+ }
+ 
+ } // namespace ck_tile
+diff --git a/include/ck_tile/core/tensor/tensor_view.hpp b/include/ck_tile/core/tensor/tensor_view.hpp
+index a7c18bcc474..32de227b52f 100644
+--- a/include/ck_tile/core/tensor/tensor_view.hpp
++++ b/include/ck_tile/core/tensor/tensor_view.hpp
+@@ -417,7 +417,8 @@ template <address_space_enum BufferAddressSpace = address_space_enum::generic,
+ CK_TILE_HOST_DEVICE constexpr auto make_tensor_view(DataType* p,
+                                                     const tensor_descriptor<Ts...>& desc)
+ {
+-    auto buffer_view = make_buffer_view<BufferAddressSpace, Coherence>(p, desc.get_element_space_size());
++    auto buffer_view =
++        make_buffer_view<BufferAddressSpace, Coherence>(p, desc.get_element_space_size());
+ 
+     return tensor_view<decltype(buffer_view), decltype(desc)>{buffer_view, desc};
+ }
+@@ -443,7 +444,8 @@ make_naive_tensor_view(DataType* p,
+                                              number<GuaranteedLastDimensionVectorLength>{},
+                                              number<GuaranteedLastDimensionVectorStride>{});
+ 
+-    auto buffer_view = make_buffer_view<BufferAddressSpace, Coherence>(p, desc.get_element_space_size());
++    auto buffer_view =
++        make_buffer_view<BufferAddressSpace, Coherence>(p, desc.get_element_space_size());
+ 
+     return tensor_view<decltype(buffer_view), decltype(desc), DstInMemOp>{buffer_view, desc};
+ }
+@@ -461,7 +463,8 @@ make_naive_tensor_view_packed(DataType* p,
+     auto desc =
+         make_naive_tensor_descriptor_packed(lengths, number<GuaranteedLastDimensionVectorLength>{});
+ 
+-    auto buffer_view = make_buffer_view<BufferAddressSpace, Coherence>(p, desc.get_element_space_size());
++    auto buffer_view =
++        make_buffer_view<BufferAddressSpace, Coherence>(p, desc.get_element_space_size());
+ 
+     return tensor_view<decltype(buffer_view), decltype(desc)>{buffer_view, desc};
+ }
+diff --git a/include/ck_tile/ops/gemm/block/block_gemm_areg_bsmem_creg_v1.hpp b/include/ck_tile/ops/gemm/block/block_gemm_areg_bsmem_creg_v1.hpp
+index 60b4b63022a..01282f9b3d8 100644
+--- a/include/ck_tile/ops/gemm/block/block_gemm_areg_bsmem_creg_v1.hpp
++++ b/include/ck_tile/ops/gemm/block/block_gemm_areg_bsmem_creg_v1.hpp
+@@ -116,7 +116,8 @@ struct BlockGemmARegBSmemCRegV1
+         static_assert(
+             std::is_same_v<remove_cvref_t<decltype(c_block_dstr_encode)>,
+                            remove_cvref_t<decltype(CBlockTensor::get_tile_distribution()
+-                           .get_static_tile_distribution_encoding())>>, "wrong!");
++                                                       .get_static_tile_distribution_encoding())>>,
++            "wrong!");
+ 
+         using AWarpDstr = typename WG::AWarpDstr;
+         using CWarpDstr = typename WG::CWarpDstr;

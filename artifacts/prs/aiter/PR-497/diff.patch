@@ -1,0 +1,587 @@
+diff --git a/aiter/fused_moe.py b/aiter/fused_moe.py
+index 0c2a44ce0c..f43b88f529 100644
+--- a/aiter/fused_moe.py
++++ b/aiter/fused_moe.py
+@@ -10,67 +10,14 @@
+ from aiter import ActivationType, QuantType, dtypes
+ 
+ # from aiter import get_hip_quant as get_quant
++
+ # from aiter import get_torch_quant as get_quant
+ from aiter import get_triton_quant as get_quant
+ from aiter.jit.core import AITER_ROOT_DIR, PY, get_asm_dir, bd_dir, mp_lock
+ from aiter.jit.utils.chip_info import get_cu_num
+ 
+-BLOCK_SIZE_M = 128
+-
+-def mxfp4_to_f32(x):
+-    # 2 because we pack fp4 in uint8.
+-    x = x.repeat_interleave(2, dim=1)
+-    x[:, ::2] = x[:, ::2] & 0xF
+-    x[:, 1::2] = x[:, 1::2] >> 4
+-    mxfp4_list = [
+-        0.0,
+-        0.5,
+-        1.0,
+-        1.5,
+-        2.0,
+-        3.0,
+-        4.0,
+-        6.0,
+-        -0.0,
+-        -0.5,
+-        -1.0,
+-        -1.5,
+-        -2.0,
+-        -3.0,
+-        -4.0,
+-        -6.0,
+-    ]
+-    mxfp4_in_f32 = torch.tensor(mxfp4_list, dtype=torch.float32, device="cuda")
+-    return mxfp4_in_f32[x.long()]
+- 
+-BLOCK_SIZE_M = 128
+-
+-def mxfp4_to_f32(x):
+-    # 2 because we pack fp4 in uint8.
+-    x = x.repeat_interleave(2, dim=1)
+-    x[:, ::2] = x[:, ::2] & 0xF
+-    x[:, 1::2] = x[:, 1::2] >> 4
+-    mxfp4_list = [
+-        0.0,
+-        0.5,
+-        1.0,
+-        1.5,
+-        2.0,
+-        3.0,
+-        4.0,
+-        6.0,
+-        -0.0,
+-        -0.5,
+-        -1.0,
+-        -1.5,
+-        -2.0,
+-        -3.0,
+-        -4.0,
+-        -6.0,
+-    ]
+-    mxfp4_in_f32 = torch.tensor(mxfp4_list, dtype=torch.float32, device="cuda")
+-    return mxfp4_in_f32[x.long()]
+- 
++BLOCK_SIZE_M = 32
++
+ 
+ def moe_sorting(
+     topk_ids,
+@@ -114,8 +61,7 @@ def moe_sorting(
+ def get_inter_dim(w1_shape, w2_shape):
+     E, _, model_dim = w1_shape
+     E, model_dim, inter_dim = w2_shape
+-    print(f"{w1_shape=}")
+-    print(f"{w2_shape=}")
++
+     int4_war = model_dim // w1_shape[-1]
+     inter_dim *= int4_war
+     return E, model_dim, inter_dim
+@@ -155,6 +101,7 @@ def fused_moe(
+     dtype = hidden_states.dtype
+     q_dtype_w = w1.dtype
+     q_dtype_a = w1.dtype if w1.dtype != torch.uint32 else dtypes.fp8
++    q_dtype_a = dtypes.fp4x2 if quant_type == QuantType.per_1x32 else q_dtype_a
+ 
+     if block_size_M is None:
+         _, _, block_size_M, *_ = get_2stage_cfgs(
+@@ -172,7 +119,7 @@ def fused_moe(
+             doweight_stage1,
+         )
+     run_1stage = M < 256
+-    run_1stage = quant_type == QuantType.per_128x128
++    run_1stage = quant_type in [QuantType.per_128x128, QuantType.per_1x32]
+     block_size_M = 32 if run_1stage else block_size_M
+ 
+     sorted_ids, sorted_weights, sorted_expert_ids, num_valid_ids, moe_buf = moe_sorting(
+@@ -757,23 +704,21 @@ def torch_moe_stage1(
+     doweight=False,
+ ):
+     ctype = dtypes.fp32  # compute type
+-    # hidden_states = hidden_states.to(ctype)
+-    # w1 = w1.to(ctype)
+-    w1_shape = w1.shape
+-    w2_shape = w2.shape
+-
+-    w1 = mxfp4_to_f32(w1)
+-    w2 = mxfp4_to_f32(w2)
+-    hidden_states = mxfp4_to_f32(hidden_states)
+-
+-    w1 = w1.view([w1_shape[0], w1_shape[1], w1_shape[2] * 2])
+-
+     B, D = hidden_states.shape
+     topk = topk_weight.shape[1]
+     N = w1.shape[1]
+     E, model_dim, inter_dim = get_inter_dim(w1.shape, w2.shape)
+-    inter_dim = w1_shape[1] // 2
+-    # inter_dim=4096
++    if quant_type == QuantType.per_1x32:
++        from aiter.utility import fp4_utils
++
++        hidden_states = fp4_utils.mxfp4_to_f32(hidden_states)
++        w1 = fp4_utils.mxfp4_to_f32(w1)
++        w1_scale = fp4_utils.e8m0_to_f32(w1_scale)
++        a1_scale = fp4_utils.e8m0_to_f32(a1_scale)
++    else:
++        hidden_states = hidden_states.to(ctype)
++        w1 = w1.to(ctype)
++
+     if quant_type in [QuantType.per_Token, QuantType.per_Tensor]:
+         w1 = w1 * w1_scale.view(w1_scale.shape[0], -1, 1)
+         hidden_states = hidden_states * a1_scale
+@@ -796,36 +741,26 @@ def torch_moe_stage1(
+         pass
+     elif quant_type == QuantType.per_1x32:
+         w1_shape = w1.shape
+-
+-        w1_scale = torch.exp2(w1_scale.view(
+-            w1.shape[0], w1.shape[1], w1.shape[2] // 32, 1
+-        ).float() - 127)
+-
+-        w1 = w1.view(
+-            w1.shape[0], w1.shape[1], w1.shape[2] // 32, 32
+-        ) * w1_scale
+-        
+-        w1 = w1.view(w1_shape)
+-        # print(f"{w1=}")
+-        # print(f"{w1_scale=}")
+-        a1_scale = torch.exp2(a1_scale.view(hidden_states.shape[0], hidden_states.shape[1] // 32, -1).float() - 127)
+-        hidden_states = hidden_states.view(
+-            hidden_states.shape[0], hidden_states.shape[1] // 32, 32
++        w1 = w1.view(E, N, model_dim // 32, 32) * w1_scale.view(
++            E, N, model_dim // 32, 1
+         )
+-        hidden_states = hidden_states * a1_scale
++        w1 = w1.view(w1_shape)
+ 
+-        # print(f"{a1_scale=}")
++        a1_shape = hidden_states.shape
++        a1_scale = a1_scale[: a1_shape[0]]
++        hidden_states = hidden_states.view(a1_shape[0], a1_shape[1] // 32, 32)
++        hidden_states = hidden_states * a1_scale.view(a1_shape[0], a1_shape[1] // 32, 1)
++        hidden_states = hidden_states.view(a1_shape)
+     else:
+         assert False, f"Unsupported quant_type: {quant_type}"
+ 
+-    hidden_states = hidden_states.view(B, -1, D).repeat(1, topk, 1)
++    hidden_states = hidden_states.view(B, -1, model_dim).repeat(1, topk, 1)
+ 
+     out = torch.zeros(
+         (B, topk, N),
+         dtype=ctype,
+         device=hidden_states.device,
+     )
+-    # import pdb; pdb.set_trace()
+     for E_id in range(w1.shape[0]):
+         mask = topk_ids == E_id
+         if mask.sum():
+@@ -839,8 +774,7 @@ def torch_moe_stage1(
+     torch_act = aiter.get_torch_act(activation)
+     if use_g1u1:
+         gate, up = out.split([inter_dim, inter_dim], dim=-1)
+-        # out = torch_act(gate) * up
+-        out = gate
++        out = torch_act(gate) * up
+     else:
+         out = torch_act(out)
+     return out.to(dtype)
+@@ -859,28 +793,29 @@ def torch_moe_stage2(
+     doweight=True,
+ ):
+     ctype = dtypes.fp32  # compute type
+-    # hidden_states = hidden_states.to(ctype)
+-    # w2 = w2.to(ctype)
+-    w1 = mxfp4_to_f32(w1)
+-    w2 = mxfp4_to_f32(w2)
+-    hidden_states = mxfp4_to_f32(hidden_states)
++    E, model_dim, inter_dim = get_inter_dim(w1.shape, w2.shape)
++    if quant_type == QuantType.per_1x32:
++        from aiter.utility import fp4_utils
+ 
+-    # print(f"{w2=}")
+-    # print(f"{hidden_states=}")
+-    # print(f"{a2_scale=}")
+-    # print(f"{w2_scale=}")
++        hidden_states = fp4_utils.mxfp4_to_f32(hidden_states)
++        w2 = fp4_utils.mxfp4_to_f32(w2)
++        w2_scale = fp4_utils.e8m0_to_f32(w2_scale)
++        a2_scale = fp4_utils.e8m0_to_f32(a2_scale)
++    else:
++        hidden_states = hidden_states.to(ctype)
++        w2 = w2.to(ctype)
+ 
+     token_num, topk = topk_ids.shape
+-    num_experts, model_dim, inter_dim = w2.shape
+-    inter_dim *= 2
+-    model_dim = model_dim // 2
+     hidden_states = hidden_states.view(token_num, topk, inter_dim)
+-    w2 = w2.view(num_experts, model_dim, inter_dim)
+-    print(w2.shape)
++
+     if quant_type in [QuantType.per_Token, QuantType.per_Tensor]:
++        hidden_states = hidden_states * a2_scale.view(a2_scale.shape[0], -1, 1)
+         w2 = w2 * w2_scale.view(w2_scale.shape[0], -1, 1)
+-    # per_128x128
+     elif quant_type == QuantType.per_128x128:
++        a2_scale = a2_scale.view(hidden_states.shape[0], topk, -1, 1)
++        a2_scale = a2_scale.repeat(1, 1, 1, 128).view(hidden_states.shape[0], topk, -1)
++        hidden_states = hidden_states * a2_scale
++
+         w2_shape = w2.shape
+         w2 = w2.view(
+             w2.shape[0], w2.shape[1] // 128, 128, w2.shape[2] // 128, 128
+@@ -889,31 +824,18 @@ def torch_moe_stage2(
+         )
+         w2 = w2.view(w2_shape)
+     elif quant_type == QuantType.per_1x32:
+-        w2_shape = w2.shape
+-
+-        w2_scale = torch.exp2(w2_scale.view(
+-            w2.shape[0], w2.shape[1], w2.shape[2] // 32, 1
+-        ).float() - 127)
++        a2_shape = hidden_states.shape
++        a2_scale = a2_scale.view(token_num, topk, inter_dim // 32, 1)
++        hidden_states = (
++            hidden_states.view(token_num, topk, inter_dim // 32, 32) * a2_scale
++        )
++        hidden_states = hidden_states.view(a2_shape)
+ 
+-        w2 = w2.view(
+-            w2.shape[0], w2.shape[1], w2.shape[2] // 32, 32
+-        ) * w2_scale
+-        
++        w2_shape = w2.shape
++        w2 = w2.view(E, model_dim, inter_dim // 32, 32) * w2_scale.view(
++            E, model_dim, inter_dim // 32, 1
++        )
+         w2 = w2.view(w2_shape)
+-        a2_scale = torch.exp2(a2_scale.view(hidden_states.shape[0], hidden_states.shape[1], hidden_states.shape[2] // 32, -1).float() - 127)
+-        
+-        
+-        hidden_states = hidden_states.view(
+-            hidden_states.shape[0], hidden_states.shape[1], hidden_states.shape[2] // 32, 32
+-        ) * a2_scale
+-        hidden_states = hidden_states.view(token_num, topk, inter_dim)
+-
+-    if quant_type in [QuantType.per_Token, QuantType.per_Tensor]:
+-        hidden_states = hidden_states * a2_scale.view(a2_scale.shape[0], -1, 1)
+-    elif quant_type == QuantType.per_128x128:
+-        a2_scale = a2_scale.view(hidden_states.shape[0], topk, -1, 1)
+-        a2_scale = a2_scale.repeat(1, 1, 1, 128).view(hidden_states.shape[0], topk, -1)
+-        hidden_states = hidden_states * a2_scale
+ 
+     out = torch.zeros(
+         (token_num, topk, model_dim),
+diff --git a/aiter/jit/core.py b/aiter/jit/core.py
+index db380fcd04..8e12ffee60 100644
+--- a/aiter/jit/core.py
++++ b/aiter/jit/core.py
+@@ -305,7 +305,8 @@ def MainFunc():
+             ]
+         if hip_version > Version("6.2.41133"):
+             flags_hip += ["-mllvm -amdgpu-coerce-illegal-types=1"]
+-
++        if get_gfx() == "gfx950" and int(os.getenv("AITER_FP4x2", "1")) > 0:
++            flags_hip += ["-D__Float4_e2m1fn_x2"]
+         flags_cc += flags_extra_cc
+         flags_hip += flags_extra_hip
+         archs = validate_and_update_archs()
+diff --git a/aiter/ops/quant.py b/aiter/ops/quant.py
+index 1535f1408f..6e398761ba 100644
+--- a/aiter/ops/quant.py
++++ b/aiter/ops/quant.py
+@@ -74,6 +74,9 @@ def per_1x32_f4_quant(x, scale=None, quant_dtype=dtypes.fp4x2, shuffle=True):
+     # dtypeMax = F4E2M1_MAX
+     dtypeMax = 2.0**MAX_POW2
+ 
++    shape_original = x.shape
++    x = x.view(-1, shape_original[-1])
++
+     m, n = x.shape
+     x = x.view(-1, block_size)
+     max_abs = torch.amax(torch.abs(x.float()), 1)
+@@ -88,11 +91,14 @@ def per_1x32_f4_quant(x, scale=None, quant_dtype=dtypes.fp4x2, shuffle=True):
+ 
+     y = x.float() / scale_f32.view(-1, 1)
+     y = fp4_utils.f32_to_mxfp4(y)
+-    y = y.view(m, -1)
++    y = y.view(*shape_original[:-1], -1)
+     scale = scale_e8m0_biased.view(m, -1).view(torch.uint8)
+     if shuffle:
+         scale_padded = torch.empty(
+-            (m + 255) // 256 * 256, (n // block_size + 7) // 8 * 8, dtype=torch.uint8, device=x.device
++            (m + 255) // 256 * 256,
++            (n // block_size + 7) // 8 * 8,
++            dtype=torch.uint8,
++            device=x.device,
+         ).fill_(0x7F)
+ 
+         scale_padded[:m, : n // block_size] = scale
+diff --git a/aiter/utility/fp4_utils.py b/aiter/utility/fp4_utils.py
+index 1ca7fbe9c0..616e452867 100644
+--- a/aiter/utility/fp4_utils.py
++++ b/aiter/utility/fp4_utils.py
+@@ -18,7 +18,7 @@ def f32_to_mxfp4(x):
+ 
+ def mxfp4_to_f32(x):
+     # 2 because we pack fp4 in uint8.
+-    x = x.repeat_interleave(2, dim=1)
++    x = x.repeat_interleave(2, dim=-1)
+     x[:, ::2] = x[:, ::2] & 0xF
+     x[:, 1::2] = x[:, 1::2] >> 4
+     mxfp4_list = [
+diff --git a/csrc/py_itfs_cu/asm_fmoe.cpp b/csrc/py_itfs_cu/asm_fmoe.cpp
+index 721da7d6dc..3afd444644 100755
+--- a/csrc/py_itfs_cu/asm_fmoe.cpp
++++ b/csrc/py_itfs_cu/asm_fmoe.cpp
+@@ -84,9 +84,9 @@ class FMoeKernel
+         this->sub_GU = sub_GU;
+     };
+ 
+-    void set_int4(bool is_int4_)
++    void set_4bit(bool is_4bit_)
+     {
+-        is_int4 = is_int4_;
++        is_int4 = is_4bit_;
+     }
+ 
+     template <typename T, typename T_O, bool switchGxy = false>
+@@ -106,10 +106,10 @@ class FMoeKernel
+     )
+     {
+         int token_cnt = out.size(0);
+-        int dim = input.size(1);
++        int dim = w2.size(1);
+         int sub_X_cnt = sorted_expert_ids.size(0);
+         int eprt = w1.size(0);
+-        int inter_dim = is_int4 ? w2.size(2) * 8 : w2.size(2);
++        int inter_dim = w2.size(2) * (w2.size(1) / w1.size(2));
+         uint32_t sub_GU = this->sub_GU;
+         uint32_t I_elemSize = sizeof(T);
+         uint32_t O_elemSize = sizeof(T_O);
+@@ -444,8 +444,16 @@ void fmoe_g1u1(torch::Tensor &out,                            // [token_cnt, dim
+         {
+             TORCH_CHECK(false, __func__, " Unsupported inter_dim " + std::to_string(inter_dim) + ", which should be divisible by 128, 256, or 512");
+         }
+-        impl_ptr->set_int4(true);
++        impl_ptr->set_4bit(true);
+     }
++#if defined(__Float4_e2m1fn_x2)
++    else if (input.dtype() == gate.dtype() && (input.dtype() == torch::kFloat4_e2m1fn_x2 || input.dtype() == torch::kUInt8))
++    {
++        static FMoeKernel impl_fmoe_fp4_g1u1_novs_subGU_256_test("fmoe_fp4_g1u1_novs_subGU_256_test", "fmoe/silu/fmoe_fp4_g1u1_novs_subGU_256_test.co", 256);
++        impl_ptr = &impl_fmoe_fp4_g1u1_novs_subGU_256_test;
++        impl_ptr->set_4bit(true);
++    }
++#endif
+     else if (input.dtype() == at::ScalarType::Char || input.dtype() == at::ScalarType::Byte)
+     {
+         static std::unordered_map<int, FMoeKernelConfig> multix_kernel_int8_configs = {
+diff --git a/csrc/py_itfs_cu/asm_moe_2stage.cpp b/csrc/py_itfs_cu/asm_moe_2stage.cpp
+index 104b19b166..5390e7e611 100644
+--- a/csrc/py_itfs_cu/asm_moe_2stage.cpp
++++ b/csrc/py_itfs_cu/asm_moe_2stage.cpp
+@@ -96,7 +96,7 @@ static CFG *get_cfg(torch::Tensor &inp, torch::Tensor &out, torch::Tensor &w1, Q
+     }
+     else
+     {
+-        TORCH_CHECK(false, __func__, "Unsupported input_type:", inp.scalar_type(), ", weight_type:", w1.scalar_type(),
++        TORCH_CHECK(false, __func__, " Unsupported input_type:", inp.scalar_type(), ", weight_type:", w1.scalar_type(),
+                     ", out_type:", out.scalar_type(), ", quant_type:", static_cast<int>(quant_type), ", do_weight:", do_weight);
+     }
+ };
+diff --git a/hsa/gfx950/fmoe/silu/fmoe_fp4_g1u1_novs_subGU_256_test.co b/hsa/gfx950/fmoe/silu/fmoe_fp4_g1u1_novs_subGU_256_test.co
+new file mode 100755
+index 0000000000..a5a7795db1
+Binary files /dev/null and b/hsa/gfx950/fmoe/silu/fmoe_fp4_g1u1_novs_subGU_256_test.co differ
+diff --git a/op_tests/test_moe_2stage.py b/op_tests/test_moe_2stage.py
+index f1634fdd44..7fea8d4207 100644
+--- a/op_tests/test_moe_2stage.py
++++ b/op_tests/test_moe_2stage.py
+@@ -71,7 +71,6 @@ def ck_moe_stage1(
+         block_size,
+         sorted_weights,
+         act_op,
+-        3,
+     )
+ 
+     return out
+@@ -113,7 +112,6 @@ def ck_moe_stage2(
+         a2_scale,
+         block_size,
+         sorted_weights,
+-        3,
+     )
+     return out
+ 
+@@ -155,6 +153,8 @@ def test_fmoe(
+     if qType == aiter.QuantType.per_Tensor:
+         w1_qt, w1_scale = aiter.pertoken_quant(w1.view(E, -1), quant_dtype=WQDType)
+         w2_qt, w2_scale = aiter.pertoken_quant(w2.view(E, -1), quant_dtype=WQDType)
++        w1_qt = w1_qt.view(w1.shape)
++        w2_qt = w2_qt.view(w2.shape)
+     elif qType == aiter.QuantType.per_Token and WQDType == torch.int4:  # int4 w quant
+         w1_qt, w1_scale = aiter.pertoken_quant(w1, quant_dtype=dtypes.i8, dtypeMax=7)
+         w2_qt, w2_scale = aiter.pertoken_quant(w2, quant_dtype=dtypes.i8, dtypeMax=7)
+@@ -162,8 +162,8 @@ def test_fmoe(
+         w1_qt, w1_scale = torch_quant(w1, quant_dtype=WQDType)
+         w2_qt, w2_scale = torch_quant(w2, quant_dtype=WQDType)
+ 
+-    w1_qt = w1_qt_aiter = w1_qt.view(w1.shape)
+-    w2_qt = w2_qt_aiter = w2_qt.view(w2.shape)
++    w1_qt_aiter = w1_qt
++    w2_qt_aiter = w2_qt
+ 
+     a1_qt, a1_scale = torch_quant(input, quant_dtype=AQDType)
+     # w1_scale = w1_scale.fill_(1)
+@@ -201,29 +201,29 @@ def test_fmoe(
+         w2_qt_aiter = shuffle_weight(w2_qt_aiter, layout=(16, 16))
+ 
+     # ######################## stage 1 start ###########
+-    out1_ck = torch.empty((token, topk, inter_dim), dtype=dtype)
+-    out1_ck, us = run_perftest(
+-        ck_moe_stage1,
+-        a1_qt,
+-        w1_qt_aiter,
+-        w2_qt_aiter,
+-        sorted_ids,
+-        sorted_expert_ids,
+-        num_valid_ids,
+-        w1_scale,
+-        a1_scale,
+-        dtype,
+-        topk,
+-        BLOCK_SIZE_M,
+-        actType,
+-        sorted_weights=sorted_weights if doweight_stage1 else None,
+-    )
++    # out1_ck = torch.empty((token, topk, inter_dim), dtype=dtype)
++    # out1_ck, us = run_perftest(
++    #     ck_moe_stage1,
++    #     a1_qt,
++    #     w1_qt_aiter,
++    #     w2_qt_aiter,
++    #     sorted_ids,
++    #     sorted_expert_ids,
++    #     num_valid_ids,
++    #     w1_scale,
++    #     a1_scale,
++    #     dtype,
++    #     topk,
++    #     BLOCK_SIZE_M,
++    #     actType,
++    #     sorted_weights=sorted_weights if doweight_stage1 else None,
++    # )
+ 
+-    checkAllclose(
+-        out1_ref,
+-        out1_ck,
+-        msg=f"[perf]  ck_moe_stage1:{us:>8.2f} us, {token*model_dim*inter_dim*2*topk*2/us/1000/1000:>8.2f} tflops......(quant:{AQDType})",
+-    )
++    # checkAllclose(
++    #     out1_ref,
++    #     out1_ck,
++    #     msg=f"[perf]  ck_moe_stage1:{us:>8.2f} us, {token*model_dim*inter_dim*2*topk*2/us/1000/1000:>8.2f} tflops......(quant:{AQDType})",
++    # )
+     # ######################## stage 2 end ###########
+ 
+     # if WQDType != torch.int4:
+@@ -285,31 +285,31 @@ def test_fmoe(
+     # # )
+     # # checkAllclose(out_ref, out2_ref, msg="[torch] 1_stage vs 2_stage")
+ 
+-    if qType == aiter.QuantType.per_Token:
+-        out1_ck = out1_ck.view(token, -1)
+-    a2_qt, a2_scale = torch_quant(out1_ck, quant_dtype=AQDType)
+-    a2_qt = a2_qt.view(M, topk, -1)
+-    out2_ck, us = run_perftest(
+-        ck_moe_stage2,
+-        a2_qt,
+-        w1_qt_aiter,
+-        w2_qt_aiter,
+-        sorted_ids,
+-        sorted_expert_ids,
+-        num_valid_ids,
+-        w2_scale,
+-        a2_scale,
+-        dtype,
+-        topk,
+-        BLOCK_SIZE_M,
+-        sorted_weights if not doweight_stage1 else None,
+-    )
++    # if qType == aiter.QuantType.per_Token:
++    #     out1_ck = out1_ck.view(token, -1)
++    # a2_qt, a2_scale = torch_quant(out1_ck, quant_dtype=AQDType)
++    # a2_qt = a2_qt.view(M, topk, -1)
++    # out2_ck, us = run_perftest(
++    #     ck_moe_stage2,
++    #     a2_qt,
++    #     w1_qt_aiter,
++    #     w2_qt_aiter,
++    #     sorted_ids,
++    #     sorted_expert_ids,
++    #     num_valid_ids,
++    #     w2_scale,
++    #     a2_scale,
++    #     dtype,
++    #     topk,
++    #     BLOCK_SIZE_M,
++    #     sorted_weights if not doweight_stage1 else None,
++    # )
+ 
+-    checkAllclose(
+-        out2_ref,
+-        out2_ck,
+-        msg=f"[perf]  ck_moe_stage2:{us:>8.2f} us, {token*model_dim*inter_dim*topk*2/us/1000/1000:>8.2f} tflops......(quant:{AQDType})",
+-    )
++    # checkAllclose(
++    #     out2_ref,
++    #     out2_ck,
++    #     msg=f"[perf]  ck_moe_stage2:{us:>8.2f} us, {token*model_dim*inter_dim*topk*2/us/1000/1000:>8.2f} tflops......(quant:{AQDType})",
++    # )
+     # ######################## stage 2 end ###########
+ 
+     # # ######################## fused 2 stage #########
+@@ -372,14 +372,14 @@ def test_fmoe(
+     163840,
+ ]
+ list_quant = [
+-    # (aiter.QuantType.No, None, None),  # a16w16
++    (aiter.QuantType.No, None, None),  # a16w16
+     (aiter.QuantType.per_Tensor, dtypes.fp8, dtypes.fp8),  # a8w8
+     (aiter.QuantType.per_Token, dtypes.fp8, dtypes.fp8),  # a8w8
+-    # (aiter.QuantType.per_Token, dtypes.fp8, torch.int4),  # a8w4
++    (aiter.QuantType.per_Token, dtypes.fp8, torch.int4),  # a8w4
+     # (aiter.QuantType.per_128x128, dtypes.fp8, dtypes.fp8),  # a8w8 TODO add test
+ ]
+-list_act = [aiter.ActivationType.Silu, aiter.ActivationType.Gelu][:]
+-list_doweight_stage1 = [False, True][:]
++list_act = [aiter.ActivationType.Silu, aiter.ActivationType.Gelu][:1]
++list_doweight_stage1 = [False, True][:1]
+ expert, topk = 8, 2
+ 
+ import pandas as pd
+@@ -412,3 +412,17 @@ def test_fmoe(
+         df.append(ret)
+     df = pd.DataFrame(df)
+     aiter.logger.info(f"summary:\n{df}")
++# ret = test_fmoe(
++#     dtypes.bf16,
++#     128,
++#     7168,
++#     256,
++#     256,
++#     8,
++#     aiter.ActivationType.Silu,
++#     aiter.QuantType.per_1x32,
++#     dtypes.fp4x2,
++#     dtypes.fp4x2,
++#     use_g1u1=True,
++#     doweight_stage1=False,
++# )

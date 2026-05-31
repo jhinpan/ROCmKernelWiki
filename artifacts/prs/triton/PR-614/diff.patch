@@ -1,0 +1,2751 @@
+diff --git a/python/perf-kernels/tune_gemm/README.md b/python/perf-kernels/tune_gemm/README.md
+new file mode 100644
+index 000000000000..5a986a9f987d
+--- /dev/null
++++ b/python/perf-kernels/tune_gemm/README.md
+@@ -0,0 +1,316 @@
++# GEMM tuning script (current v3.3)
++
++## matmul kernel
++
++The matmul kernel implementation can be found as [matmul_kernel.py](https://github.com/ROCm/triton/blob/main_perf/python/perf-kernels/tune_gemm/matmul_kernel.py), which includes the following features:
++- grouping order of workgroup id, which is controlled by `GROUP_SIZE_M`, that
++implements L2 cache optimization introduced in the [tutorial](https://triton-lang.org/main/getting-started/tutorials/03-matrix-multiplication.html#l2-cache-optimizations).
++- split-k algorithm, which is controlled by `SPLIT_K`.
++- Bias along M dim, which is controlled by `BIAS` and `bias_ptr`.
++- Masked load along K dim inside the loop, which is controlled by `EVEN_K`.
++This means `BLOCK_SIZE_K` does not need to divide K dim.
++
++### Differences between the tutorial
++
++Unlike the [matmul tutorial](https://github.com/triton-lang/triton/blob/main/python/tutorials/03-matrix-multiplication.py) (referred as the tutorial), 
++the matmul kernel used in the tuning script (referred as the kernel) does not
++guard load along M and N dim 
++([this](https://github.com/triton-lang/triton/blob/main/python/tutorials/03-matrix-multiplication.py#L282-L283) shows how this is done in the tutorial).
++When `BLOCK_SIZE_M` or `BLOCK_SIZE_N` does not divide M or N, the kernel will 
++load out-of-bound data.
++In most cases this is fine, since the kernel does masked store at the end.
++However, this may lead to GPU memory access fault in some cases, especially
++when the tensor is large. 
++We will fix this issue in the future.
++
++
++## Tuning script usage
++
++### Tuning mode
++
++The tuning script can take one or more gemm sizes and run tuning for them.
++The input gemm sizes are prepared in a yaml file. Here is an example yaml file:
++```yaml
++- {'M': 4864, 'N': 4096, 'K': 8256, 'rowMajorA': 'T', 'rowMajorB': 'N'}
++- {'M': 512, 'N': 512, 'K': 512, 'rowMajorA': 'T', 'rowMajorB': 'N'}
++```
++
++The tuning script works as follows
++```python
++./tune_gemm.py --gemm_size_file input.yaml [options]
++```
++The following `options` are supported in the tuning mode
++
++- Input data types:
++  - `-dtype_a dtype`, `-dtype_b dtype`, and `-dtype_c dtype`: input and output element type.
++  - Supported `dtype`: fp16 (default), bf16, fp8, bf8, int8, int32, fp32
++- Parallel compilation of kernels:
++  - `num_threads n` controls that n threads will
++  be used in the compilation stage. The default value is 32.
++  - `--no_warmup` can be used to skip the compilation stage. Thus kernels will be
++  compiled during the profiling stage. This increases tuning time. But it's
++  required for some old torch version, in which some function used in the warmup
++  kernel launch is not supported.
++- Parallel profiling of kernels: The tuning space is first divided into a number
++of tasks, which is controlled by `--jobs n`. And all the tasks can be profiled in
++parallel on a number of GPUs in the system. There are two ways to specify which 
++GPU(s) we want to use for profiling. Note that these flags cannot be use together.
++By default, only one task is generated and profiled on GPU0.
++  - `--ngpus n`: GPU 0,1,.., n-1 will be used.
++  - `--gpu_ids ids`: `ids` are comma separated gpu ids and GPUs in `ids` will be used.
++- General tuning control flags
++  - `--init_type INIT_TYPE` defines how input data are initialized. `INIT_TYPE` can be
++    - hpl: uniform distribution between -.5 and .5
++    - trig_float: the distribution of elements in the flattened tensor follow
++    the `sin` function.
++    - zeros: initialize all data as 0, i.e. `torch.zeros`
++    - randn (default): normal distribution, i.e. `torch.randn`
++  - `--rotating_tensor SIZE`: provide the size of memory used for rotating tensor.
++  The default is 0, meaning rotating tensor is not used.
++  - `--icahe_flush`: If true, the script will generate a kernel to flush i-cache.
++  The default is False.
++  - `--bias_vector`: If true, a bias vector along the M dim is applied.
++  The default is False.
++- Correctness check
++  - `--compare` will check the correctness of the best config for each gemm size.
++  - `--compare_wo_tuning` will check the correctness of the config provided in
++  the yaml file. If this is set, user needs to provide all the parameters in
++  the input yaml file. Example can be found in the benchmark mode section.
++- Logistics
++  - `--keep` can be used to keep the files generated during the tuning process.
++  Be default, intermediate files are removed at the end.
++  - `--time_breakdown`: If set, the script will print out elapsed time during
++  each stage of the tuning in real-time. The default is False.
++  - `--verbose` will enable more logging message than `--time_breakdown`, such
++  as output from rocprofv2
++  - `--o OUTPUT` can be used to control the output filename to store the tuning
++  result. The default filename is `tuning_results_branchName@gitCommit_timeStamp.yaml`.
++  Therefore, each time the user runs the tuning script, a different output file
++  will be generated.
++- Hacks
++  - `--hack_triton_compiler`: If set, the triton source code will be modified
++  to provide a static backend target so that the compiler will not query
++  GPU information. This makes sure that during the compilation stage, no
++  hip runtime kernels are launched.
++  Note that this is a very hacky option, because
++    - It modifies the triton compiler directly, which is located from
++    `pip show triton`.
++    - It does string match and replace to modify the code.
++    - It does not restore the code when the tuning session terminates.
++
++Here are some example usages of running the script for tuning:
++
++Tune some gemm sizes with f16 input
++```python
++./tune_gemm.py --gemm_size_file input.yaml --ngpus 8 --jobs 32 --o output.yaml
++```
++It's recommended to use as many GPUs as possible and set `--jobs` to
++a value that is 4 to 6 times the number of GPUs.
++
++If you are only allowed to use a subset of the GPUs, you can
++```python
++./tune_gemm.py --gemm_size_file input.yaml --gpu_ids 0,1,3,4 --jobs 32 --o output.yaml
++```
++This runs the profiling on GPU 0,1,3,4.
++
++For bf8 input
++```python
++./tune_gemm.py --gemm_size_file input.yaml --ngpus 8 --jobs 32 -dtype_a bf8 -dtype_b bf8
++```
++
++Check correctness of the tuned configs
++```python
++./tune_gemm.py --gemm_size_file output.yaml --compare_wo_tuning
++```
++
++
++### Benchmark mode
++
++In benchmark mode, the script will run a single given config multiple times to
++collect performance data. The benchmark mode works as
++The tuning script works as follows
++```python
++./tune_gemm.py --gemm_size_file input.yaml [options] --benchmark
++```
++The supported `options` are as followings
++- `-dtype_a dtype`, `-dtype_b dtype`, and `-dtype_c dtype`: same as tuning mode.
++- `--iters n` controls the number of iterations to run the kernel.
++The default value is 1000.
++- `--icahe`: same as tuning mode
++- `--rotating_tensor SIZE`: same as tuning mode
++  
++
++## Tuning script implementation overview
++
++The general idea of the tuning script can be summarized as
++- Compile all the kernels in the tuning space in parallel.
++- Divide the tuning space into tasks and invoke `rocprofv2` once per
++task. This will save invocation overhead of the profiler.
++- Profile tasks in parallel on multiple GPUs.
++
++For detailed implementation, please refer to the changelog of each version.
++
++
++# Changelog
++
++## GEMM tuning script v1
++
++Shucai (@scxiao) implemented the first version of gemm tuning script: https://github.com/ROCmSoftwarePlatform/triton/pull/309
++
++## GEMM tuning script v2
++
++This version is based on v1 and @alefimov-amd's thread pool https://github.com/ROCmSoftwarePlatform/triton/pull/310
++
++### Main features
++- `rocprof` is used to measure the time for kernels in the full tuning space
++- Each kernel is executed 10 times and the execution time of the last instance is used
++- All kernels are compiled in parallel
++- Two modes for correctness checking
++    - During tuning, check correctness with the best perf_config for the current gemm size
++    - Without tuning, check correctness based on the tuning results, which includes best perf_config for each gemm size
++- The process takes about 30 - 40 minutes for the full tuning space with ~15000 configs
++- Limitations
++   - For now, only support fp16 as inputs. It should be trivial to extend to other types, but may require some work for mixed inputs
++
++### Overview of implementations
++
++Workflow of the tuning process
++1. Generate the full tuning space. For now the `range`s for each tuning parameter are hard-coded
++2. Prune the tuning space according to the current GEMM size and some rules
++    - BLOCK_SIZE must be equal or larger than the mfma instruction size.
++    - SPLIT_K * BLOCK_SIZE_K must divide K. Therefore, we do not need EVEN_K in the kernel. 
++    - When split-k is not needed, i.e. both M and N are large, it must be 1
++    - GROUP_M * BLOCK_SIZE_M must be smaller than M. Otherwise, GROUP_M must be 1
++    - When BLOCK_SIZE_K = 128, neither BLOCK_SIZE_M or BLOCK_SIZE_N can be 128. Otherwise too much LDS will be required. **Needs further investigation**
++    - Skip BLOCK_SIZE_M or BLOCK_SIZE_N if they are over 2 times larger than M or N.
++3. Open a file `generated_kernel{M}-{N}-{K}-{gpuid}.py` and write the following into the file
++    1. For each config in the pruned space, generate a kernel with name `matmul_kernel_{configStr}`, where `configStr` contains the gemm size and the tuning parameters.
++    2. Generate `matmul` function for each config in a similar way
++    3. Generate `try_config` functions for each `matmul` function.
++    4. Generate `test_gemm`, which does
++        1. Add all `try_config` functions in the thread_pool by `thread_pool.apply_async(try_config)`. This is used to compile all kernels in parallel.  
++        2. Call each `matmul` function in a for loop of 10 iterations
++    5. Generate `main` function
++4. Run the generated script with 16 workers. This will compile all kernels in parallel.
++5. Invoke `rocprof` on the generated script
++6. Post process `results.csv` by extract the execution time of the last instance of each kernel. Pick the best one, write to file, and return.
++
++## GEMM Tuning Script v3
++
++### API changes
++
++- Input and output data types can be provided as `-dtype_a`, `-dtype_b`, and `-dtype_c`.
++The provided types must be one of ['fp32', 'fp16', 'bf16', 'fp8', 'bf8', 'int8'].
++- Row/col major-ness of operand a and b can be provided as `-col_a` and `-col_b`.
++If set, it means the corresponding operand is column major.
++The major-ness is considered as problem input. 
++So they should be included in the input yaml file. However, in the yaml file, user should
++set `rowMajowA` and `rowMajorB` as shown in the example below.
++- `--benchmark` is used to control if the perf config in the input yaml file is used as the tuning space.
++- `--jobs` is used to control the number of .py files for generated kernels.
++Note that this can be different from `ngpus`. This usually means multiple kernel files
++will be profiled on each GPU.
++This is necessary to keep each file "small" in terms of execution time.
++
++### Implementation changes
++- `gen_input` is used to generate matmul inputs.
++- Time measurement
++    - In benchmark mode, the kernel is executed 1000 times.
++    - In tuning mode, each kernel is executed 200 times. We cannot afford to larger runs since rocprof hangs if the session takes too long.
++    - In both tuning and benchmark mode, kernel time is measured as the average execution time of the last 100 instances.
++- Added error recovery. This helps when rocprof crashes in multi-processing mode. 
++
++
++
++## GEMM Tuning Script v3.1
++
++### API changes
++
++- Added `matrix_instr_nonkdim` into the tuning space. Now we can tune mfma instruction size.
++
++
++## GEMM Tuning Script v3.2
++
++### API changes
++
++- Added `--rotating_tensor <value>` to use rotating memory blocks in each iteration, size in MB. Default is 0MB.  
++- Added `--icache_flush` to flush icache in each iteration. 
++Note, icache flush needs the module `python-hip`, which can be installed as:
++`python3 -m pip install -i https://test.pypi.org/simple hip-python~=$rocm_version`
++Rotating tensor and icache flush are to make perf numbers are closer to that in real applications.
++- Added `--bias_vector` to support kernel execution with bias (bias vector is of the same size as the number of rows of the output matrix, 
++so each element of the bias vector is added to all elements of the corresponding row of the output matrix.)
++
++
++## GEMM Tuning Script v3.3
++
++### API changes
++
++no API changes
++
++### Implementation changes
++
++- We use a dedicated file (named `get_filename_myKernels()`) to keep all the kernels
++in the tuning space.
++- Inside the for loop of tuning, each iteration tunes one gemm size
++  1. Update kernel stage: Different gemm size may need different configs. We keep track
++  of the current tuning space. And if the current gemm size needs some configs that is
++  not included in the current tuning space, we expand the tuning space with the newly
++  added configs.
++    - This means if two gemm sizes share some configs, these configs will be compiled
++    once. This will greatly reduce batch tuning time.
++  2. Compilation stage:
++    - We generate a single compilation driver file, named compile_driver.py (this is
++    obtained from `get_filename_compile_driver`) which contains the wrapper functions
++    of all the configs in the **pruned** tuning space for this gemm size.
++    - All the kernels will be compiled by 32 threads by default. Compiling all the
++    kernels in a single file in parallel is faster than splitting them into multiple
++    files. This can greatly reduce the compile time of the tuning process.
++    - Note that we no longer generate matmul_kernel in this file. Kernels are imported
++    from myKernels.py.
++  3. Profile stage
++     - We generate one task file per job, named `profile_driver_MxNxK_{job_id}.py`
++     (this is obtained from `get_filename_profile_driver`). The only difference is
++     that we no longer generate matmul_kernel in this file. Kernels are imported
++     from myKernels.py.
++- `configStr` does not contain gemm size anymore. This allows the same matmul_{configStr}
++kernel to be reused by different gemm sizes.
++- `configStr` does not contain `_bias` if bias is provided. This is because we do not
++expect to compare the same kernel w/ and w/o bias. Therefore, we treat bias in the same
++way as gemm sizes.
++- Add support for `EVEN_K` in the matmul kernel. Now the kernel support `BLOCK_SIZE_K`
++that cannot divide `K`.
++- Tuning result file is open and closed inside the tuning loop, enabling timely flush
++of the tuning results.
++- Now we use `rocprofv2` to measure kernel time.
++- We can use `--hack_triton_compile` to avoid all GPU activities during the compilation 
++stage. This is achieved by modifying the triton frontend compiler in the following
++places:
++  - Return True from the `is_active()` function in the hip hackend [driver](https://github.com/triton-lang/triton/blob/fd691c67ac20958a67693358186d877790f5f48f/third_party/amd/backend/driver.py#L433)
++  - Return statically constructed GPUTarget from the `get_current_target()` 
++  function in the hip backend [driver](https://github.com/triton-lang/triton/blob/fd691c67ac20958a67693358186d877790f5f48f/third_party/amd/backend/driver.py#L437)
++  - Return False from the `is_active()` function in the cuda hackend [driver](https://github.com/triton-lang/triton/blob/fd691c67ac20958a67693358186d877790f5f48f/third_party/nvidia/backend/driver.py#L383)
++  - Statically set `device` and `stream` in the [jit.py](https://github.com/triton-lang/triton/blob/fd691c67ac20958a67693358186d877790f5f48f/python/triton/runtime/jit.py#L588-L589)
++
++
++# One config running script
++
++`one_config.py` is a script that runs one given matmul config.
++It is an interface to `tune_gemm.py` functionality and could be used for triton debugging.
++
++## Usage
++
++This script supports two methods to specify configuration parameters.
++
++Variant 1: Separate command line attributes.
++
++```bash
++python one_config.py -m 256 -n 256 -k 256 --block_m 64 --block_n 64 --block_k 64 --group_m 1 --split_k 2 --num_warps 2 --num_stages 0 --waves_per_eu 0 --matrix_instr_nonkdim 16 --kpack 2
++```
++
++Variant 2: one-line config description.
++This is how configs are printed by `tune_gemm.py` script
++
++```bash
++python one_config.py --config_str M16_N8_K128_BM64_BN64_BK64_GM1_SK2_nW2_nS0_EU0_kP2_mfma16
++```
+diff --git a/python/perf-kernels/tune_gemm/icache_flush.py b/python/perf-kernels/tune_gemm/icache_flush.py
+new file mode 100644
+index 000000000000..320e746d30d4
+--- /dev/null
++++ b/python/perf-kernels/tune_gemm/icache_flush.py
+@@ -0,0 +1,94 @@
++import ctypes
++import array
++import random
++import math
++
++# the hip module can be installed as
++# `python3 -m pip install -i https://test.pypi.org/simple hip-python~=$rocm_version`
++# more information about hip-python is at: https://github.com/ROCm/hip-python
++from hip import hip, hiprtc
++
++def hip_check(call_result):
++    err = call_result[0]
++    result = call_result[1:]
++    if len(result) == 1:
++        result = result[0]
++
++    if isinstance(err, hip.hipError_t) and err != hip.hipError_t.hipSuccess:
++        raise RuntimeError(str(err))
++    elif (
++        isinstance(err, hiprtc.hiprtcResult)
++        and err != hiprtc.hiprtcResult.HIPRTC_SUCCESS
++        ):
++        raise RuntimeError(str(err))
++
++    return result
++
++# S_ICACHE_INV Invalidate entire first level instruction cache.
++# There must be 16 separate S_NOP instructions or a jump/branch instruction
++# after this instruction to ensure the internal instruction buffers are also
++# invalidated.
++def gen_kernel():
++    source = b"""\
++        extern "C" __global__ void icache_flush_kernel() {
++              asm __volatile__("s_icache_inv");
++              asm __volatile__("s_nop 0");
++              asm __volatile__("s_nop 0");
++              asm __volatile__("s_nop 0");
++              asm __volatile__("s_nop 0");
++              asm __volatile__("s_nop 0");
++              asm __volatile__("s_nop 0");
++              asm __volatile__("s_nop 0");
++              asm __volatile__("s_nop 0");
++              asm __volatile__("s_nop 0");
++              asm __volatile__("s_nop 0");
++              asm __volatile__("s_nop 0");
++              asm __volatile__("s_nop 0");
++              asm __volatile__("s_nop 0");
++              asm __volatile__("s_nop 0");
++              asm __volatile__("s_nop 0");
++              asm __volatile__("s_nop 0");
++        }
++    """
++
++    # print(f"source = {source}")
++    prog = hip_check(hiprtc.hiprtcCreateProgram(source, b"icache_flush_kernel", 0, [], []))
++    progs = hip.hipDeviceProp_t()
++    hip_check(hip.hipGetDeviceProperties(progs, 0))
++    arch = progs.gcnArchName
++    cflags = [b"--offload-arch="+arch]
++    err, = hiprtc.hiprtcCompileProgram(prog, len(cflags), cflags)
++    if err != hiprtc.hiprtcResult.HIPRTC_SUCCESS:
++        log_size = hip_check(hiprtc.hiprtcGetProgramLogSize(prog))
++        log = bytearray(log_size)
++        hip_check(hiprtc.hiprtcGetProgramLog(prog, log))
++        print(f"log = {log.decode()}, err = {err}")
++        raise RuntimeError(log.decode())
++
++    code_size = hip_check(hiprtc.hiprtcGetCodeSize(prog))
++    code = bytearray(code_size)
++    hip_check(hiprtc.hiprtcGetCode(prog, code))
++    module = hip_check(hip.hipModuleLoadData(code))
++    kernel = hip_check(hip.hipModuleGetFunction(module, b"icache_flush_kernel"))
++
++    return kernel
++
++kernel = gen_kernel()
++progs = hip.hipDeviceProp_t()
++hip_check(hip.hipGetDeviceProperties(progs, 0))
++cu_num = progs.multiProcessorCount
++
++def icache_flush():
++    block = hip.dim3(x=64)
++    grid = hip.dim3(cu_num * 60)
++
++    hip_check(hip.hipModuleLaunchKernel(
++        kernel,
++        *grid,
++        *block,
++        sharedMemBytes=0,
++        stream=None,
++        kernelParams=None,
++        extra=()
++        )
++    )
+diff --git a/python/perf-kernels/tune_gemm/matmul.py b/python/perf-kernels/tune_gemm/matmul.py
+new file mode 100644
+index 000000000000..5b39d9330bff
+--- /dev/null
++++ b/python/perf-kernels/tune_gemm/matmul.py
+@@ -0,0 +1,375 @@
++"""
++Matrix Multiplication Tuning Scripts, Changed from the tutorial example "python/tutorials/03-matrix-multiplication.py"
++"""
++
++import torch
++
++import triton
++import triton.language as tl
++import argparse
++import sys
++import yaml
++import os
++import subprocess
++
++
++
++# global flag to indicate whether using the full tuing space
++tuning_full_space = True
++
++# pruned some unreasonable config
++def prune_configs(configs, named_args):
++    # call only for full tuning space
++    if not tuning_full_space:
++        return configs
++
++    SIZE_M = named_args["a_ptr"].shape[0]
++    SIZE_N = named_args["b_ptr"].shape[1]
++    SIZE_K = named_args["a_ptr"].shape[1]
++
++    pruned_configs = []
++    for config in configs:
++        kw = config.kwargs
++        BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K =\
++            kw["BLOCK_SIZE_M"], kw["BLOCK_SIZE_N"], kw["BLOCK_SIZE_K"]
++        SPLIT_K = kw["SPLIT_K"]
++        if SIZE_M <=32 and BLOCK_SIZE_M != 32:
++            continue
++        if SIZE_N <=32 and BLOCK_SIZE_N != 32:
++            continue
++        # skip large split_k when not necessary
++        if SPLIT_K != 1 and not need_split_k(SIZE_M, SIZE_N, SIZE_K):
++            continue
++        pruned_configs.append(config)
++
++    return pruned_configs
++
++
++def get_full_tuning_space(use_split_k):
++    configs = []
++    if not tuning_full_space:
++        return configs
++
++    block_mn_range = [32, 64, 128]
++    block_k_range = [32, 64]
++    split_k_range = [1, 2, 4, 5, 8, 10]
++    num_warps_range = [1, 2, 4, 8]
++    group_m_range = [1, 4, 8]
++    # For now we see better perf with num_stages=0 for all gemm configs we care
++    # But keep this explicit so that we do not forget we may need to set it to
++    # other values in the future
++    num_stage_range = [0]
++
++    for block_m in block_mn_range:
++        for block_n in block_mn_range:
++            for block_k in block_k_range:
++                for num_warps in num_warps_range:
++                    for group_m in group_m_range:
++                        for split_k in split_k_range:
++                            for num_stages in num_stage_range:
++                                configs.append(triton.Config({'BLOCK_SIZE_M': block_m, 'BLOCK_SIZE_N': block_n, 'BLOCK_SIZE_K': block_k, 'GROUP_SIZE_M': group_m, 'SPLIT_K': split_k}, num_stages=num_stages, num_warps=num_warps))
++
++    return configs
++
++
++# `triton.jit`'ed functions can be auto-tuned by using the `triton.autotune` decorator, which consumes:
++#   - A list of `triton.Config` objects that define different configurations of
++#       meta-parameters (e.g., `BLOCK_SIZE_M`) and compilation options (e.g., `num_warps`) to try
++#   - An auto-tuning *key* whose change in values will trigger evaluation of all the
++#       provided configs
++@triton.autotune(
++    configs= get_full_tuning_space(True) if tuning_full_space else [
++        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8, 'SPLIT_K': 1}, num_stages=1, num_warps=4),
++        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8, 'SPLIT_K': 1}, num_stages=1, num_warps=4),
++        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8, 'SPLIT_K': 1}, num_stages=1, num_warps=4),
++        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8, 'SPLIT_K': 1}, num_stages=1, num_warps=4),
++        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8, 'SPLIT_K': 1}, num_stages=1, num_warps=4),
++        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8, 'SPLIT_K': 1}, num_stages=1, num_warps=4),
++        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8, 'SPLIT_K': 1}, num_stages=1, num_warps=2),
++        triton.Config({'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8, 'SPLIT_K': 1}, num_stages=1, num_warps=2),
++        triton.Config({'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'SPLIT_K': 8}, num_stages=1, num_warps=2),
++        triton.Config({'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'SPLIT_K': 10}, num_stages=1, num_warps=2),
++        triton.Config({'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'SPLIT_K': 8}, num_stages=1, num_warps=4),
++        triton.Config({'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'SPLIT_K': 10}, num_stages=1, num_warps=1),
++    ],
++    key=['M', 'N', 'K'],
++    prune_configs_by={
++        'early_config_prune': prune_configs,
++        'perf_model': None,
++        "top_k": None
++    },
++)
++@triton.heuristics({
++    'EVEN_K': lambda args: args['K'] % (args['BLOCK_SIZE_K'] * args['SPLIT_K']) == 0,
++})
++@triton.jit
++def matmul_kernel_splitK(
++    # Pointers to matrices
++    a_ptr, b_ptr, c_ptr,
++    # Matrix dimensions
++    M, N, K,
++    # The stride variables represent how much to increase the ptr by when moving by 1
++    # element in a particular dimension. E.g. `stride_am` is how much to increase `a_ptr`
++    # by to get the element one row down (A has M rows).
++    stride_am, stride_ak,
++    stride_bk, stride_bn,
++    stride_cm, stride_cn,
++    # Meta-parameters
++    BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,
++    SPLIT_K: tl.constexpr, EVEN_K: tl.constexpr,
++    GROUP_SIZE_M: tl.constexpr,
++    ACTIVATION: tl.constexpr,
++):
++    """Kernel for computing the matmul C = A x B.
++    A has shape (M, K), B has shape (K, N) and C has shape (M, N)
++    """
++    # -----------------------------------------------------------
++    # Map program ids `pid` to the block of C it should compute.
++    # This is done in a grouped ordering to promote L2 data reuse.
++    # See above `L2 Cache Optimizations` section for details.
++    pid = tl.program_id(axis=0)
++    pid_z = tl.program_id(1)
++    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
++    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
++    num_pid_in_group = GROUP_SIZE_M * num_pid_n
++    group_id = pid // num_pid_in_group
++    first_pid_m = group_id * GROUP_SIZE_M
++    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
++    pid_m = first_pid_m + (pid % group_size_m)
++    pid_n = (pid % num_pid_in_group) // group_size_m
++
++    # ----------------------------------------------------------
++    # Create pointers for the first blocks of A and B.
++    # We will advance this pointer as we move in the K direction
++    # and accumulate
++    # `a_ptrs` is a block of [BLOCK_SIZE_M, BLOCK_SIZE_K] pointers
++    # `b_ptrs` is a block of [BLOCK_SIZE_K, BLOCK_SIZE_N] pointers
++    # See above `Pointer Arithmetics` section for details
++    if SPLIT_K == 1:
++        offs_k = tl.arange(0, BLOCK_SIZE_K)
++    else:
++        offs_k = pid_z * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)
++    if torch.version.hip is None:
++        offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
++        offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
++        a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
++        b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
++    else:
++        offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M))
++        offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N))
++        a_ptrs = a_ptr + offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak
++        b_ptrs = b_ptr + offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn
++
++    # -----------------------------------------------------------
++    # Iterate to compute a block of the C matrix.
++    # We accumulate into a `[BLOCK_SIZE_M, BLOCK_SIZE_N]` block
++    # of fp32 values for higher accuracy.
++    # `accumulator` will be converted back to fp16 after the loop.
++    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
++    for k in range(0, tl.cdiv(K, BLOCK_SIZE_K * SPLIT_K)):
++        # Load the next block of A and B, generate a mask by checking the K dimension.
++        # If it is out of bounds, set it to 0.
++        if EVEN_K:
++            a = tl.load(a_ptrs)
++            b = tl.load(b_ptrs)
++        else:
++            k_remaining = K - k * (BLOCK_SIZE_K * SPLIT_K)
++            a = tl.load(a_ptrs, mask=offs_k[None, :] < k_remaining, other=0.0)
++            b = tl.load(b_ptrs, mask=offs_k[:, None] < k_remaining, other=0.0)
++        # We accumulate along the K dimension.
++        accumulator += tl.dot(a, b)
++        # Advance the ptrs to the next K block.
++        a_ptrs += BLOCK_SIZE_K * SPLIT_K * stride_ak
++        b_ptrs += BLOCK_SIZE_K * SPLIT_K * stride_bk
++    # You can fuse arbitrary activation functions here
++    # while the accumulator is still in FP32!
++    if ACTIVATION == "leaky_relu":
++        accumulator = leaky_relu(accumulator)
++    c = accumulator.to(tl.float16)
++
++    # -----------------------------------------------------------
++    # Write back the block of the output matrix C with masks.
++    offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
++    offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
++    c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
++    c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
++    if SPLIT_K == 1:
++        tl.store(c_ptrs, c, mask=c_mask)
++    else:
++        tl.atomic_add(c_ptrs, c, mask=c_mask)
++
++
++# We can fuse `leaky_relu` by providing it as an `ACTIVATION` meta-parameter in `_matmul`.
++@triton.jit
++def leaky_relu(x):
++    x = x + 1
++    return tl.where(x >= 0, x, 0.01 * x)
++
++
++def need_split_k(SIZE_M, SIZE_N, SIZE_K):
++    return (SIZE_M < 64 or SIZE_N < 64) and SIZE_K > 1024
++
++
++def matmul(a, b, activation=""):
++    # Check constraints.
++    assert a.shape[1] == b.shape[0], "Incompatible dimensions"
++    assert a.is_contiguous(), "Matrix A must be contiguous"
++    assert b.is_contiguous(), "Matrix B must be contiguous"
++    M, K = a.shape
++    K, N = b.shape
++    # Allocates output.
++    c = torch.empty((M, N), device=a.device, dtype=a.dtype)
++    # 1D launch kernel where each block gets its own program.
++
++    grid_splitK = lambda META: (
++        triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
++        META['SPLIT_K']
++    )
++    matmul_kernel_splitK[grid_splitK](
++        a, b, c,
++        M, N, K,
++        a.stride(0), a.stride(1),
++        b.stride(0), b.stride(1),
++        c.stride(0), c.stride(1),
++        ACTIVATION=activation
++    )
++
++    return c
++
++
++def test_correctness(M, N, K, datatype = torch.float16):
++    torch.manual_seed(0)
++    a = torch.randn((M, K), device='cuda', dtype=datatype)
++    b = torch.randn((K, N), device='cuda', dtype=datatype)
++    triton_output = matmul(a, b)
++    torch_output = torch.matmul(a, b)
++    print(f"triton_output={triton_output}")
++    print(f"torch_output={torch_output}")
++    rtol = 0 if torch.version.hip is None else 1e-2
++    size_str = f'size, (M: {M}, N: {N}, K: {K})'
++    if torch.allclose(triton_output, torch_output, atol=1e-2, rtol=rtol):
++        print(f'✅ Triton and Torch match for {size_str}')
++    else:
++        print(f'❌ Triton and Torch differ for {size_str}')
++
++
++def run_speed(M, N, K, datatype, use_rocprof, provider):
++    a = torch.randn((M, K), device='cuda', dtype=datatype)
++    b = torch.randn((K, N), device='cuda', dtype=datatype)
++    quantiles = [0.5, 0.2, 0.8]
++    if provider == 'pytorch':
++        ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), quantiles=quantiles)
++    if provider == 'triton':
++        ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b), quantiles=quantiles)
++    return min_ms
++
++def run_bash_command(commandstring):
++    #print( commandstring )
++    proc = subprocess.run(commandstring, shell=True, check=True, executable='/bin/bash', stdout = subprocess.PIPE)
++    return proc.stdout.splitlines()
++
++
++def parse_args():
++    parser = argparse.ArgumentParser(
++        prog="tune a specific gemm size",
++        allow_abbrev=False,
++    )
++
++    parser.add_argument("-m", type=int, default=0)
++    parser.add_argument("-n", type=int, default=0)
++    parser.add_argument("-k", type=int, default=0)
++    parser.add_argument("-dtype", type=str, default='fp16', help="Input data type, default is fp16")
++    parser.add_argument("--specify_type", action='store_true', default=False, help="Whether user specify data type, default false")
++    parser.add_argument("--specify_size", action='store_true', default=False, help="Whether user specify input matrix size, default false")
++    parser.add_argument("--compare", action='store_true', default=False, help="Whether check result correctness")
++    parser.add_argument("--gemm_size_file", type=str, default="", help='yaml file to indicate matrix size')
++    parser.add_argument("--rocprof", action='store_true', default=False, help='Use rocprof to measure kernel time, default uses do_bench()!')
++    parser.add_argument("-v", action='store_true', default=False, help="Print out the best tuning config")
++    args = parser.parse_args()
++
++    return args
++
++def main():
++    args = parse_args()
++    dtype = torch.float16
++    if args.specify_type:
++        if args.dtype == 'fp16':
++            dtype = torch.float16
++        elif args.dtype == 'fp32':
++            dtype = torch.float32
++        elif args.dtype == 'bf16':
++            dtype = torch.bfloat16
++        else:
++            print(f"Unsupported datatype {args.dtype}")
++            sys.exit(1)
++    use_rocprof = args.rocprof
++    verbose = args.v
++
++    mnks = []
++    if args.specify_size:
++        M = args.m
++        N = args.n
++        K = args.k
++        if M == 0 or N == 0 or K == 0:
++            print(f"Input matrix size: (M {M}, N {N}, K {K}) contains dim size 0!")
++        mnks = [(M, N, K)]
++    else:
++        matrix_size_file = args.gemm_size_file
++        if matrix_size_file == "" or not os.path.isfile(matrix_size_file):
++            print(f"Matrix size file: {matrix_size_file} does not exist!")
++            sys.exit(1)
++
++        with open(matrix_size_file) as file:
++            matrix_sizes = yaml.safe_load(file)
++
++        for sizes in matrix_sizes:
++            M = sizes['M']
++            N = sizes['N']
++            K = sizes['K']
++            mnks.append((M, N, K))
++
++
++    for (m, n, k) in mnks:
++        min_ms = run_speed(m, n, k, dtype, use_rocprof, 'triton')
++
++        # function to compute flops
++        perf_flops = lambda ms: 2 * m * n * k * 1e-12 / (ms * 1e-3)
++
++        if args.compare:
++            test_correctness(m, n, k, dtype)
++        best_config = matmul_kernel_splitK.get_best_config()
++
++        if use_rocprof:
++            dtype_str = 'fp16' if (not args.specify_type) else args.dtype 
++            block_m = best_config.kwargs['BLOCK_SIZE_M']
++            block_n = best_config.kwargs['BLOCK_SIZE_N']
++            block_k = best_config.kwargs['BLOCK_SIZE_K']
++            group_m = best_config.kwargs['GROUP_SIZE_M']
++            split_k = best_config.kwargs['SPLIT_K']
++            # num_warps = best_config['num_warps']
++            num_warps = best_config.num_warps
++            driver = 'rocprof_gemm.py'
++            TRITON_DIR = os.getenv('TRITON_DIR')
++            if TRITON_DIR is not None:
++                driver = os.path.join(TRITON_DIR, 'python/perf-kernels/tune_gemm', driver)
++            run_cmd = f'python {driver} -m {m} -n {n} -k {k} \
++                        -block_m {block_m} -block_n {block_n} -block_k {block_k} \
++                        -group_m {group_m} -split_k {split_k} -num_warps {num_warps} \
++                        -dtype {dtype_str}'
++            prof_cmd = f'rocprof --stats {run_cmd}'
++            run_bash_command(prof_cmd)
++
++            parse_result_cmd = f'sed -n \'/matmul_kernel/p\' results.stats.csv | awk -F \',\' \'{{print $4}}\''
++            parse_outputs = run_bash_command(parse_result_cmd)
++            min_ms = int(parse_outputs[0]) / 1000000
++
++        out_str = f'SIZE: {m},{n},{k} '
++        # print best config
++        if verbose:
++            out_str += f'  best_config: ({best_config}),   '
++        out_str += f'TFLOPS: {perf_flops(min_ms)} time(ns): {min_ms * 1000000}'
++        print(out_str)
++
++
++if __name__ == '__main__':
++    sys.exit(main())
+diff --git a/python/perf-kernels/tune_gemm/matmul_kernel.py b/python/perf-kernels/tune_gemm/matmul_kernel.py
+new file mode 100644
+index 000000000000..d5f854f3d8a1
+--- /dev/null
++++ b/python/perf-kernels/tune_gemm/matmul_kernel.py
+@@ -0,0 +1,64 @@
++import triton
++import triton.language as tl
++
++
++@triton.jit
++def matmul_kernel(
++    a_ptr, b_ptr, c_ptr, bias_ptr,
++    M, N, K,
++    stride_am, stride_ak,
++    stride_bk, stride_bn,
++    stride_cm, stride_cn,
++    stride_bias,
++    BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,
++    SPLIT_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr, BIAS: tl.constexpr,
++    EVEN_K: tl.constexpr
++):
++    pid = tl.program_id(axis=0)
++    pid_z = tl.program_id(1)
++    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
++    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
++    if GROUP_SIZE_M == 1:
++        pid_m = pid // num_pid_n
++        pid_n = pid % num_pid_n
++    else:
++        num_pid_in_group = GROUP_SIZE_M * num_pid_n
++        group_id = pid // num_pid_in_group
++        first_pid_m = group_id * GROUP_SIZE_M
++        group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
++        pid_m = first_pid_m + (pid % group_size_m)
++        pid_n = (pid % num_pid_in_group) // group_size_m
++    if SPLIT_K == 1:
++        offs_k = tl.arange(0, BLOCK_SIZE_K)
++    else:
++        offs_k = pid_z * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)
++    offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M))
++    offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N))
++    a_ptrs = a_ptr + offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak
++    b_ptrs = b_ptr + offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn
++    if BIAS:
++        bias_ptrs = bias_ptr + offs_am * stride_bias
++        bias = tl.load(bias_ptrs, mask=offs_am < M, other=0.0)
++    acc_dtype = tl.float32 if a_ptr.type.element_ty != tl.int8 else tl.int32
++    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=acc_dtype)
++    for k in range(0, tl.cdiv(K, BLOCK_SIZE_K * SPLIT_K)):
++        if EVEN_K:
++            a = tl.load(a_ptrs)
++            b = tl.load(b_ptrs)
++        else:
++            a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K, other=0.0)
++            b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0)
++        accumulator += tl.dot(a, b)
++        a_ptrs += BLOCK_SIZE_K * SPLIT_K * stride_ak
++        b_ptrs += BLOCK_SIZE_K * SPLIT_K * stride_bk
++    c = accumulator.to(c_ptr.type.element_ty)
++    if BIAS:
++        c += bias[:, None]
++    offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
++    offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
++    c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
++    c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
++    if SPLIT_K == 1:
++        tl.store(c_ptrs, c, mask=c_mask)
++    else:
++        tl.atomic_add(c_ptrs, c, mask=c_mask)
+diff --git a/python/perf-kernels/tune_gemm/one_config.py b/python/perf-kernels/tune_gemm/one_config.py
+new file mode 100644
+index 000000000000..52e6fba4a0a5
+--- /dev/null
++++ b/python/perf-kernels/tune_gemm/one_config.py
+@@ -0,0 +1,90 @@
++"""
++Script for running one Matrix Multiplication kernel config at a time
++"""
++
++import argparse
++import re
++import sys
++import tune_gemm
++
++def parse_args():
++    parser = argparse.ArgumentParser(
++        prog="check corectness of particular config for tuning gemm script",
++        allow_abbrev=False,
++    )
++
++    parser.add_argument("-m", type=int, default=0)
++    parser.add_argument("-n", type=int, default=0)
++    parser.add_argument("-k", type=int, default=0)
++    parser.add_argument("-col_a", action='store_true', default=False, help='whether matrix a is column major')
++    parser.add_argument("-col_b", action='store_true', default=False, help='whether matrix b is column major')
++    parser.add_argument("-dtype_a", type=str, default='fp16', help="matrix a element data type")
++    parser.add_argument("-dtype_b", type=str, default='fp16', help="matrix b element data type")
++    parser.add_argument("-dtype_c", type=str, default='fp16', help="output element data type")
++    parser.add_argument("--init_type", type=str, default='randn', help="Initialization type for input matrices (default uniform rand [0, 1.0)])")
++    parser.add_argument("--bias_vector", action='store_true', default=False, help="apply bias vector")
++    parser.add_argument("--block_m", type=int, default=0)
++    parser.add_argument("--block_n", type=int, default=0)
++    parser.add_argument("--block_k", type=int, default=0)
++    parser.add_argument("--group_m", type=int, default=0)
++    parser.add_argument("--split_k", type=int, default=0)
++    parser.add_argument("--num_warps", type=int, default=0)
++    parser.add_argument("--num_stages", type=int, default=0)
++    parser.add_argument("--waves_per_eu", type=int, default=0)
++    parser.add_argument("--matrix_instr_nonkdim", type=int, default=0)
++    parser.add_argument("--kpack", type=int, default=0)
++    parser.add_argument("--config_str", type=str, default="", help="can take from tune_gemm.py script output, looks like M16_N8_K128_BM64_BN64_BK64_GM1_SK2_nW2_nS0_EU0_kP2_mfma16")
++    args = parser.parse_args()
++
++    return args
++
++
++def parse_config(cfg_str):
++    values = cfg_str.split("_")
++    config_name = {"M": "M",
++                   "N": "N",
++                   "K": "K",
++                   "BM": "BLOCK_SIZE_M",
++                   "BN": "BLOCK_SIZE_N",
++                   "BK": "BLOCK_SIZE_K",
++                   "GM": "GROUP_SIZE_M",
++                   "SK": "SPLIT_K",
++                   "nW": "num_warps",
++                   "nS": "num_stages",
++                   "EU": "waves_per_eu",
++                   "kP": "kpack",
++                   "mfma": "matrix_instr_nonkdim"
++                  }
++    config = {}
++    for val in values:
++        match = re.search("([a-zA-Z]*)([0-9]*)", val)
++        if match:
++            cfg_field_name = config_name[match.group(1)]
++            config[cfg_field_name] = int(match.group(2))
++    return config
++
++
++def main():
++    args = parse_args()
++    if args.config_str:
++        config = parse_config(args.config_str)
++    else:
++        config = {"M": args.m,
++                  "N": args.n,
++                  "K": args.k,
++                  "BLOCK_SIZE_M": args.block_m,
++                  "BLOCK_SIZE_N": args.block_n,
++                  "BLOCK_SIZE_K": args.block_k,
++                  "GROUP_SIZE_M": args.group_m,
++                  "SPLIT_K": args.split_k,
++                  "num_warps": args.num_warps,
++                  "num_stages": args.num_stages,
++                  "waves_per_eu": args.waves_per_eu,
++                  "kpack": args.kpack,
++                  "matrix_instr_nonkdim": args.matrix_instr_nonkdim
++                 }
++    tune_gemm.test_correctness(config["M"], config["N"], config["K"], args.col_a, args.col_b, args.dtype_a, args.dtype_b, args.dtype_c, args.init_type, config, args.bias_vector, verbose=True)
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/python/perf-kernels/tune_gemm/rocprof_gemm.py b/python/perf-kernels/tune_gemm/rocprof_gemm.py
+new file mode 100755
+index 000000000000..8103fad554f7
+--- /dev/null
++++ b/python/perf-kernels/tune_gemm/rocprof_gemm.py
+@@ -0,0 +1,318 @@
++#!/usr/bin/env python3
++import argparse
++import sys
++
++import torch
++import triton
++import triton.language as tl
++
++
++@triton.heuristics({
++    'EVEN_K': lambda args: args['K'] % (args['BLOCK_SIZE_K'] * args['SPLIT_K']) == 0,
++})
++@triton.jit
++def matmul_kernel_splitK(
++    # Pointers to matrices
++    a_ptr, b_ptr, c_ptr,
++    # Matrix dimensions
++    M, N, K,
++    # The stride variables represent how much to increase the ptr by when moving by 1
++    # element in a particular dimension. E.g. `stride_am` is how much to increase `a_ptr`
++    # by to get the element one row down (A has M rows).
++    stride_am, stride_ak,
++    stride_bk, stride_bn,
++    stride_cm, stride_cn,
++    # Meta-parameters
++    BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,
++    SPLIT_K: tl.constexpr, EVEN_K: tl.constexpr,
++    GROUP_SIZE_M: tl.constexpr,
++    ACTIVATION: tl.constexpr,
++):
++    """Kernel for computing the matmul C = A x B.
++    A has shape (M, K), B has shape (K, N) and C has shape (M, N)
++    """
++    # -----------------------------------------------------------
++    # Map program ids `pid` to the block of C it should compute.
++    # This is done in a grouped ordering to promote L2 data reuse.
++    # See above `L2 Cache Optimizations` section for details.
++    pid = tl.program_id(axis=0)
++    pid_z = tl.program_id(1)
++    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
++    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
++    num_pid_in_group = GROUP_SIZE_M * num_pid_n
++    group_id = pid // num_pid_in_group
++    first_pid_m = group_id * GROUP_SIZE_M
++    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
++    pid_m = first_pid_m + (pid % group_size_m)
++    pid_n = (pid % num_pid_in_group) // group_size_m
++
++    # ----------------------------------------------------------
++    # Create pointers for the first blocks of A and B.
++    # We will advance this pointer as we move in the K direction
++    # and accumulate
++    # `a_ptrs` is a block of [BLOCK_SIZE_M, BLOCK_SIZE_K] pointers
++    # `b_ptrs` is a block of [BLOCK_SIZE_K, BLOCK_SIZE_N] pointers
++    # See above `Pointer Arithmetics` section for details
++    offs_k = pid_z * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)
++    if torch.version.hip is None:
++        offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
++        offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
++        a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
++        b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
++    else:
++        offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M))
++        offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N))
++        a_ptrs = a_ptr + offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak
++        b_ptrs = b_ptr + offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn
++
++    # -----------------------------------------------------------
++    # Iterate to compute a block of the C matrix.
++    # We accumulate into a `[BLOCK_SIZE_M, BLOCK_SIZE_N]` block
++    # of fp32 values for higher accuracy.
++    # `accumulator` will be converted back to fp16 after the loop.
++    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
++    for k in range(0, tl.cdiv(K, BLOCK_SIZE_K * SPLIT_K)):
++        # Load the next block of A and B, generate a mask by checking the K dimension.
++        # If it is out of bounds, set it to 0.
++        if EVEN_K:
++            a = tl.load(a_ptrs)
++            b = tl.load(b_ptrs)
++        else:
++            k_remaining = K - k * (BLOCK_SIZE_K * SPLIT_K)
++            a = tl.load(a_ptrs, mask=offs_k[None, :] < k_remaining, other=0.0)
++            b = tl.load(b_ptrs, mask=offs_k[:, None] < k_remaining, other=0.0)
++        # We accumulate along the K dimension.
++        accumulator += tl.dot(a, b)
++        # Advance the ptrs to the next K block.
++        a_ptrs += BLOCK_SIZE_K * SPLIT_K * stride_ak
++        b_ptrs += BLOCK_SIZE_K * SPLIT_K * stride_bk
++    # You can fuse arbitrary activation functions here
++    # while the accumulator is still in FP32!
++    if ACTIVATION == "leaky_relu":
++        accumulator = leaky_relu(accumulator)
++    c = accumulator.to(tl.float16)
++
++    # -----------------------------------------------------------
++    # Write back the block of the output matrix C with masks.
++    offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
++    offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
++    c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
++    c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
++    if SPLIT_K == 1:
++        tl.store(c_ptrs, c, mask=c_mask)
++    else:
++        tl.atomic_add(c_ptrs, c, mask=c_mask)
++
++
++# Kernel no split K
++@triton.heuristics({
++    'EVEN_K': lambda args: args['K'] % args['BLOCK_SIZE_K'] == 0,
++})
++@triton.jit
++def matmul_kernel(
++    # Pointers to matrices
++    a_ptr, b_ptr, c_ptr,
++    # Matrix dimensions
++    M, N, K,
++    # The stride variables represent how much to increase the ptr by when moving by 1
++    # element in a particular dimension. E.g. `stride_am` is how much to increase `a_ptr`
++    # by to get the element one row down (A has M rows).
++    stride_am, stride_ak,
++    stride_bk, stride_bn,
++    stride_cm, stride_cn,
++    # Meta-parameters
++    BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,
++    GROUP_SIZE_M: tl.constexpr, EVEN_K: tl.constexpr,
++    ACTIVATION: tl.constexpr,
++):
++    """Kernel for computing the matmul C = A x B.
++    A has shape (M, K), B has shape (K, N) and C has shape (M, N)
++    """
++    # -----------------------------------------------------------
++    # Map program ids `pid` to the block of C it should compute.
++    # This is done in a grouped ordering to promote L2 data reuse.
++    # See above `L2 Cache Optimizations` section for details.
++    pid = tl.program_id(axis=0)
++    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
++    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
++    num_pid_in_group = GROUP_SIZE_M * num_pid_n
++    group_id = pid // num_pid_in_group
++    first_pid_m = group_id * GROUP_SIZE_M
++    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
++    pid_m = first_pid_m + (pid % group_size_m)
++    pid_n = (pid % num_pid_in_group) // group_size_m
++
++    # ----------------------------------------------------------
++    # Create pointers for the first blocks of A and B.
++    # We will advance this pointer as we move in the K direction
++    # and accumulate
++    # `a_ptrs` is a block of [BLOCK_SIZE_M, BLOCK_SIZE_K] pointers
++    # `b_ptrs` is a block of [BLOCK_SIZE_K, BLOCK_SIZE_N] pointers
++    # See above `Pointer Arithmetics` section for details
++    offs_k = tl.arange(0, BLOCK_SIZE_K)
++    if torch.version.hip is None:
++        offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
++        offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
++        a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
++        b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
++    else:
++        offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M))
++        offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N))
++        a_ptrs = a_ptr + offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak
++        b_ptrs = b_ptr + offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn
++
++    # -----------------------------------------------------------
++    # Iterate to compute a block of the C matrix.
++    # We accumulate into a `[BLOCK_SIZE_M, BLOCK_SIZE_N]` block
++    # of fp32 values for higher accuracy.
++    # `accumulator` will be converted back to fp16 after the loop.
++    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
++    for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
++        # Load the next block of A and B, generate a mask by checking the K dimension.
++        # If it is out of bounds, set it to 0.
++        if EVEN_K:
++            a = tl.load(a_ptrs)
++            b = tl.load(b_ptrs)
++        else:
++            a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K, other=0.0)
++            b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0)
++        # We accumulate along the K dimension.
++        accumulator += tl.dot(a, b)
++        # Advance the ptrs to the next K block.
++        a_ptrs += BLOCK_SIZE_K * stride_ak
++        b_ptrs += BLOCK_SIZE_K * stride_bk
++    # You can fuse arbitrary activation functions here
++    # while the accumulator is still in FP32!
++    if ACTIVATION == "leaky_relu":
++        accumulator = leaky_relu(accumulator)
++    c = accumulator.to(tl.float16)
++
++    # -----------------------------------------------------------
++    # Write back the block of the output matrix C with masks.
++    offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
++    offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
++    c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
++    c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
++    tl.store(c_ptrs, c, mask=c_mask)
++
++
++# We can fuse `leaky_relu` by providing it as an `ACTIVATION` meta-parameter in `_matmul`.
++@triton.jit
++def leaky_relu(x):
++    x = x + 1
++    return tl.where(x >= 0, x, 0.01 * x)
++
++
++def need_split_k(SIZE_M, SIZE_N, SIZE_K):
++    return (SIZE_M < 64 or SIZE_N < 64) and SIZE_K > 1024
++
++
++def matmul(a, b, block_m, block_n, block_k, group_m, split_k, num_warps, activation=""):
++    # Check constraints.
++    assert a.shape[1] == b.shape[0], "Incompatible dimensions"
++    assert a.is_contiguous(), "Matrix A must be contiguous"
++    assert b.is_contiguous(), "Matrix B must be contiguous"
++    M, K = a.shape
++    K, N = b.shape
++    # Allocates output.
++    c = torch.empty((M, N), device=a.device, dtype=a.dtype)
++    # 1D launch kernel where each block gets its own program.
++
++    if need_split_k(M, N, K):
++        grid_splitK = lambda META: (
++            triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
++            META['SPLIT_K']
++        )
++        matmul_kernel_splitK[grid_splitK](
++            a, b, c,
++            M, N, K,
++            a.stride(0), a.stride(1),
++            b.stride(0), b.stride(1),
++            c.stride(0), c.stride(1),
++            BLOCK_SIZE_M = block_m, 
++            BLOCK_SIZE_N = block_n, 
++            BLOCK_SIZE_K = block_k,
++            GROUP_SIZE_M = group_m,
++            SPLIT_K = split_k,
++            num_warps = num_warps,
++            num_stages = 1,
++            ACTIVATION=activation
++        )
++
++    else:
++        grid = lambda META: (
++            triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
++        )
++        matmul_kernel[grid](
++            a, b, c,
++            M, N, K,
++            a.stride(0), a.stride(1),
++            b.stride(0), b.stride(1),
++            c.stride(0), c.stride(1),
++            BLOCK_SIZE_M = block_m, 
++            BLOCK_SIZE_N = block_n, 
++            BLOCK_SIZE_K = block_k,
++            GROUP_SIZE_M = group_m,
++            num_warps = num_warps,
++            num_stages = 1,
++            ACTIVATION=activation
++        )
++
++    return c
++
++
++def test_gemm(M, N, K, block_m, block_n, block_k, group_m, split_k, num_warps, dtype):
++    a = torch.randn((M, K), device='cuda', dtype=dtype)
++    b = torch.randn((K, N), device='cuda', dtype=dtype)
++    c = matmul(a, b, block_m, block_n, block_k, group_m, split_k, num_warps)
++
++    return c
++
++
++def main(args=None):
++    if args is None:
++        args = sys.argv[1:]
++
++    parser = argparse.ArgumentParser(
++        prog="test gemm tuning",
++        description="Tuning infra for triton gemm",
++        allow_abbrev=False,
++    )
++
++    parser.add_argument("-m", type=int, default=argparse.SUPPRESS)
++    parser.add_argument("-n", type=int, default=argparse.SUPPRESS)
++    parser.add_argument("-k", type=int, default=argparse.SUPPRESS)
++    parser.add_argument("-block_m", type=int, default=argparse.SUPPRESS)
++    parser.add_argument("-block_n", type=int, default=argparse.SUPPRESS)
++    parser.add_argument("-block_k", type=int, default=argparse.SUPPRESS)
++    parser.add_argument("-group_m", type=int, default=argparse.SUPPRESS)
++    parser.add_argument("-split_k", type=int, default=argparse.SUPPRESS)
++    parser.add_argument("-num_warps", type=int, default=argparse.SUPPRESS)
++    parser.add_argument("-dtype", type=str, default='fp16', help="Input/output data type")
++    parsed_args = parser.parse_args(args)
++
++    dtype = torch.float16
++    if parsed_args.dtype == 'fp16':
++        dtype = torch.float16
++    elif parsed_args.dtype == 'fp32':
++        dtype = torch.float32
++    elif parsed_args.dtype == 'bf16':
++        dtype = torch.bfloat16
++    else:
++        print(f"Unsupported datatype {args.dtype}")
++        sys.exit(1)
++
++    M = parsed_args.m
++    N = parsed_args.n
++    K = parsed_args.k
++    block_m = parsed_args.block_m
++    block_n = parsed_args.block_n
++    block_k = parsed_args.block_k
++    group_m = parsed_args.group_m
++    split_k = parsed_args.split_k
++    num_warps = parsed_args.num_warps
++    test_gemm(M, N, K, block_m, block_n, block_k, group_m, split_k, num_warps, dtype)
++
++
++if __name__ == '__main__':
++    sys.exit(main())
+diff --git a/python/perf-kernels/tune_gemm/tune_gemm.py b/python/perf-kernels/tune_gemm/tune_gemm.py
+new file mode 100755
+index 000000000000..3fdd7da082b5
+--- /dev/null
++++ b/python/perf-kernels/tune_gemm/tune_gemm.py
+@@ -0,0 +1,937 @@
++#!/usr/bin/env python3
++
++import argparse
++import sys
++import yaml
++import os
++import glob
++
++import torch
++import triton
++import triton.language as tl
++
++from matmul_kernel import matmul_kernel
++
++from datetime import datetime
++import multiprocessing
++import pandas as pd
++
++from utils.file_generator import *
++from utils.utils import *
++
++
++def is_hip_available():
++    try:
++        __import__("hip")
++    except ImportError:
++        return False
++    else:
++        return True
++
++
++def get_full_tuning_space():
++    configs = []
++
++    block_mn_range = [16, 32, 64, 128, 256]
++    block_k_range = [16, 32, 64, 128, 256]
++    split_k_range = [1, 2, 4, 5, 6, 8, 10, 12, 16, 18, 24]
++    num_warps_range = [1, 2, 4, 8]
++    group_m_range = [1, 4, 8, 16, 32]
++    # For now we see better perf with num_stages=0 for all gemm configs we care
++    # But keep this explicit so that we do not forget we may need to set it to
++    # other values in the future
++    num_stage_range = [0]
++    waves_per_eu_range = [0]
++    matrix_instr_nonkdim_range = [16, 32]
++    kpack_range = [1, 2]
++
++    for block_m in block_mn_range:
++        for block_n in block_mn_range:
++            for block_k in block_k_range:
++                for num_warps in num_warps_range:
++                    for group_m in group_m_range:
++                        for split_k in split_k_range:
++                            for num_stages in num_stage_range:
++                                for waves_per_eu in waves_per_eu_range:
++                                    for matrix_instr_nonkdim in matrix_instr_nonkdim_range:
++                                        for kpack in kpack_range:
++                                            configs.append({
++                                                'BLOCK_SIZE_M':
++                                                block_m,
++                                                'BLOCK_SIZE_N':
++                                                block_n,
++                                                'BLOCK_SIZE_K':
++                                                block_k,
++                                                'GROUP_SIZE_M':
++                                                group_m,
++                                                'SPLIT_K':
++                                                split_k,
++                                                'num_warps':
++                                                num_warps,
++                                                'num_stages':
++                                                num_stages,
++                                                'waves_per_eu':
++                                                waves_per_eu,
++                                                'matrix_instr_nonkdim':
++                                                matrix_instr_nonkdim,
++                                                'kpack':
++                                                kpack
++                                            })
++
++    return configs
++
++
++def get_default_config():
++    full_configs = get_full_tuning_space()
++    return full_configs[0]
++
++
++def prune_configs(M, N, K, configs, elemBytes_a, elemBytes_b):
++    pruned_configs = []
++
++    if M < 32 or N < 32:
++        mfma = 16
++    else:
++        mfma = 32
++
++    # TODO (zhanglx): figure out the boundary between large and small gemms
++    large_gemm = False
++    if M >= 2048 and N >= 2048:
++        large_gemm = True
++
++    for config in configs:
++        BLOCK_SIZE_M = config.get("BLOCK_SIZE_M")
++        BLOCK_SIZE_N = config.get("BLOCK_SIZE_N")
++        BLOCK_SIZE_K = config.get("BLOCK_SIZE_K")
++        num_warps = config.get("num_warps")
++        num_stages = config.get("num_stages")
++        matrix_instr_nonkdim = config.get("matrix_instr_nonkdim")
++        kpack = config.get("kpack")
++        if matrix_instr_nonkdim > mfma:
++            continue
++        if mfma == 4 and BLOCK_SIZE_K < 64:
++            continue
++        # some layouts could not work properly in case
++        # number elemens per thread is less 1
++        if BLOCK_SIZE_M * BLOCK_SIZE_N < 64:
++            continue
++        SPLIT_K = config.get("SPLIT_K")
++        GROUP_M = config.get("GROUP_SIZE_M")
++        if BLOCK_SIZE_M < matrix_instr_nonkdim or BLOCK_SIZE_N < matrix_instr_nonkdim:
++            continue
++        if M <= matrix_instr_nonkdim and BLOCK_SIZE_M != matrix_instr_nonkdim:
++            continue
++        if N <= matrix_instr_nonkdim and BLOCK_SIZE_N != matrix_instr_nonkdim:
++            continue
++        # Skip BLOCK_SIZE that is too large compare to M/N
++        # unless BLOCK_SIZE is already small enough
++        if BLOCK_SIZE_M > M * 2 and BLOCK_SIZE_M != 16:
++            continue
++        if BLOCK_SIZE_N > N * 2 and BLOCK_SIZE_N != 16:
++            continue
++        # skip large split_k when not necessary
++        if SPLIT_K != 1 and not need_split_k(M, N, K):
++            continue
++        # skip split_k that leads to EVEN_K = false
++        leap = SPLIT_K * BLOCK_SIZE_K
++        modv = K % leap
++        if modv != 0 and SPLIT_K != 1:
++            continue
++        # skip large GROUP_M
++        if GROUP_M * BLOCK_SIZE_M > M and GROUP_M != 1:
++            continue
++        # out of shared memory resource
++        # TODO (zhanglx): This does not consider the LDS usage in the epilogue
++        LDS = BLOCK_SIZE_K * BLOCK_SIZE_M * elemBytes_a + BLOCK_SIZE_K * BLOCK_SIZE_N * elemBytes_b
++        LDS = LDS if not num_stages else LDS * num_stages
++        if LDS > 65536:
++            continue
++        # Skip small block sizes and num_warps for large gemm
++        # For fp16 and f8, we want to only use BLOCK_SIZE >= 64
++        if large_gemm:
++            if BLOCK_SIZE_M < 64 or BLOCK_SIZE_N < 64:
++                continue
++            if BLOCK_SIZE_K < 64:
++                continue
++            if num_warps < 4:
++                continue
++            # check if tiling is integer multiple of GEMM size because we have no boundary check
++            if M % BLOCK_SIZE_M != 0 or N % BLOCK_SIZE_N != 0 or K % BLOCK_SIZE_K != 0:
++                continue
++
++        pruned_configs.append(config)
++
++    return pruned_configs
++
++
++def need_split_k(SIZE_M, SIZE_N, SIZE_K):
++    return (SIZE_M < 64 or SIZE_N < 64) and SIZE_K > 1024
++
++
++def extract_kernel_time(M, N, K, config, df, bias_size):
++    # Correct the header by removing 'sig' and 'obj' to reduce number from 21 to 19
++    # once the bug(https://github.com/ROCm/rocprofiler/issues/144) fixed, we should
++    # not need below two lines
++    cols = [
++        'Index', 'KernelName', 'gpu-id', 'queue-id', 'queue-index', 'pid',
++        'tid', 'grd', 'wgr', 'lds', 'scr', 'arch_vgpr', 'accum_vgpr', 'sgpr',
++        'wave_size', 'DispatchNs', 'BeginNs', 'EndNs', 'CompleteNs'
++    ]
++    df.columns = cols
++    configStr = gen_configStr(config)
++    filtered_df = df[df['KernelName'].str.contains(configStr, na=False)].copy()
++    filtered_df['DurationNs'] = filtered_df['EndNs'] - filtered_df['BeginNs']
++    meanTime = filtered_df['DurationNs'].tail(100).mean()
++    return config, meanTime
++
++
++def profile_batch_kernels(M, N, K, gpuid, gpus, jobs, verbose):
++    ngpus = len(gpus)
++    gpuIdx = gpus.index(gpuid)
++    if gpuIdx + 1 > jobs:
++        return
++    os.environ['ROCR_VISIBLE_DEVICES'] = str(gpuid)
++    jobId = gpuIdx
++    while jobId < jobs:
++        kernel_name = get_filename_profile_driver(M, N, K, jobId)
++        if verbose:
++            print(f"profiling {kernel_name} on GPU {gpuid}")
++        run_bash_command_wrapper(
++            f"rocprofv2 --plugin file --plugin-version 1 --kernel-trace -o {jobId} python {get_filename_profile_driver(M, N, K, jobId)}",
++            capture=(verbose < 2))
++        jobId += ngpus
++
++
++def tune_gemm_config(M,
++                     N,
++                     K,
++                     col_a,
++                     col_b,
++                     dtype_a,
++                     dtype_b,
++                     dtype_c,
++                     init_type,
++                     configs,
++                     run_bench,
++                     jobs,
++                     iters,
++                     skipWarmup,
++                     verbose=0,
++                     num_threads=32,
++                     gpus=[0],
++                     rotating_buffer_size=256,
++                     bias_size=0,
++                     icache_flush=False):
++
++    # precompile the kernels in parallel
++    start_time = datetime.now()
++    if not skipWarmup:
++        # Generate kernel out of all configs
++        fname = generate_compile_driver(M, N, K, col_a, col_b, dtype_a,
++                                        dtype_b, dtype_c, init_type, configs,
++                                        rotating_buffer_size, bias_size)
++
++        run_bash_command(f"python {fname} -n {num_threads}",
++                         capture=(verbose < 2))
++    compile_end = datetime.now()
++    compile_time = compile_end - start_time
++    if verbose:
++        print(f"compile time: {compile_time}", flush=True)
++
++    # Generate kernels out of all configs
++    generate_profile_tasks(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c,
++                           init_type, configs, jobs, iters, run_bench,
++                           rotating_buffer_size, bias_size, icache_flush)
++
++    # profile generated kernels
++    running = [
++        multiprocessing.Process(target=profile_batch_kernels,
++                                args=(M, N, K, gpu_id, gpus, jobs, verbose))
++        for gpu_id in gpus
++    ]
++    for p in running:
++        p.start()
++    for p in running:
++        p.join()
++
++    profile_end = datetime.now()
++    profile_time = profile_end - compile_end
++    if verbose:
++        print(f"profile time: {profile_time}", flush=True)
++
++    # post process results.csv to get the best config and minTime
++    # TODO: process the file in parallel
++    minTime = 1024 * 1024 * 1024
++    thread_pool = multiprocessing.Pool(processes=num_threads)
++    tasks = []
++    idx = 0
++    df_prof = [
++        pd.read_csv(f"results_{i}.csv",
++                    skiprows=1,
++                    header=None,
++                    delimiter=',',
++                    quotechar='"',
++                    escapechar='\\') for i in range(jobs)
++    ]
++    for config in configs:
++        file_idx = idx % jobs
++        tasks += [
++            thread_pool.apply_async(extract_kernel_time,
++                                    args=(M, N, K, config, df_prof[file_idx],
++                                          bias_size))
++        ]
++        idx += 1
++    thread_pool.close()
++    thread_pool.join()
++
++    for task in tasks:
++        config, myTime = task.get()
++        if myTime:
++            min_us = myTime / 1000
++            if min_us < minTime:
++                minTime = min_us
++                bestConfig = config
++        else:
++            min_us = -1
++            print(
++                f"invalid config(post processing): SIZE {M} {N} {K}: {config}",
++                flush=True)
++    post_end = datetime.now()
++    post_time = post_end - profile_end
++    if verbose:
++        print(f"post procesing time: {post_time}", flush=True)
++    return minTime, bestConfig, compile_time, profile_time, post_time
++
++
++def gen_input(M, N, ty_name, needTrans, seed, init_type, device='cuda'):
++    d_type = name_to_tl_types[ty_name]
++    torch.manual_seed(seed)
++    torch.cuda.manual_seed(seed)
++
++    @triton.jit
++    def copy_kernel(input_ptr, output_ptr, n_elements,
++                    BLOCK_SIZE: tl.constexpr):
++        offsets = tl.program_id(axis=0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
++        mask = offsets < n_elements
++        input = tl.load(input_ptr + offsets, mask=mask)
++        output = input
++        tl.store(output_ptr + offsets, output, mask=mask)
++
++    def init_by_size_and_type(size, dtype, init_type):
++        if init_type == 'hpl':
++            return torch.empty(size, device='cuda',
++                               dtype=dtype).uniform_(-0.5, 0.5)
++        # This init type has element[i] in row[j] equal to sin(i+j*N)
++        elif init_type == 'trig_float':
++            M, N = size
++            return torch.reshape(torch.arange(0, M * N),
++                                 (M, N)).sin().to(dtype=dtype, device='cuda')
++        elif init_type == 'zeros':
++            return torch.zeros(size, dtype=dtype, device='cuda')
++        elif init_type == "randn":
++            temp = torch.randn(size, dtype=dtype, device='cuda')
++            return temp
++        else:
++            raise ValueError("Bad matrix initialization type.")
++
++    raw_data = init_by_size_and_type((N, M) if needTrans else (M, N),
++                                     torch.float32, init_type)
++    if needTrans:
++        raw_data = raw_data.T
++    if (d_type == tl.float8e4b8 and TORCH_HAS_FP8E4B8) or \
++        (d_type == tl.float8e5b16 and TORCH_HAS_FP8E5B16) or not d_type.is_fp8():
++        input = raw_data.to(tl_to_torch_types[d_type])
++        input_f16 = input.to(torch.float16)
++    else:
++        f8_tensor = raw_data.to(torch.int8)
++        # keep only two bits of exponent to avoid overflow
++        f8_tensor = f8_tensor & 0b00111111
++        input = triton.reinterpret(f8_tensor, d_type)
++        input_f16 = torch.empty_like(f8_tensor, dtype=torch.float16)
++        grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']), )
++        n_elements = raw_data.numel()
++        copy_kernel[grid](input, input_f16, n_elements, BLOCK_SIZE=1024)
++
++    return input, input_f16
++
++
++# generate inputs/outputs according to rotating tensor size
++def gen_rotating_tensors(M,
++                         N,
++                         K,
++                         dtype_a,
++                         need_Trans_a,
++                         dtype_b,
++                         need_Trans_b,
++                         dtype_c,
++                         seed,
++                         init_type,
++                         rotating_buffer_size,
++                         bias_size,
++                         device='cuda'):
++    a_size = M * K * type_name_to_bytes(dtype_a)
++    b_size = K * N * type_name_to_bytes(dtype_b)
++    c_size = M * N * type_name_to_bytes(dtype_c)
++    bias_size = bias_size * type_name_to_bytes(dtype_c)
++
++    total_size = a_size + b_size + c_size + bias_size
++    block_count = rotating_buffer_size * 1024 * 1024 // total_size
++    block_count = max(1, block_count)
++
++    # generate input and outputs
++    a = []
++    b = []
++    c = []
++    bias = []
++    for i in range(block_count):
++        in_a, in_a_fp16 = gen_input(M,
++                                    K,
++                                    dtype_a,
++                                    need_Trans_a,
++                                    1,
++                                    init_type,
++                                    device='cuda')
++        a.append(in_a)
++        in_b, in_b_fp16 = gen_input(K,
++                                    N,
++                                    dtype_b,
++                                    need_Trans_b,
++                                    2,
++                                    init_type,
++                                    device='cuda')
++        b.append(in_b)
++        out_c = torch.zeros((M, N),
++                            dtype=tl_to_torch_types[name_to_tl_types[dtype_c]],
++                            device='cuda')
++        c.append(out_c)
++        if bias_size > 0:
++            bs, bs_fp16 = gen_input(M,
++                                    1,
++                                    dtype_b,
++                                    need_Trans_b,
++                                    2,
++                                    init_type,
++                                    device='cuda')
++            bias.append(bs.squeeze())
++
++    in_outs = {
++        "rotating_num": block_count,
++        "input_a": a,
++        "input_b": b,
++        "output_c": c,
++        "bias": bias
++    }
++
++    return in_outs
++
++
++def matmul(a, b, c, bias, block_m, block_n, block_k, group_m, split_k,
++           num_warps, num_stages, waves_per_eu, mfmaInstrSize, kpack,
++           use_bias):
++    # Check constraints.
++    assert a.shape[1] == b.shape[0], "Incompatible dimensions"
++    #assert a.is_contiguous(), "Matrix A must be contiguous"
++    #assert b.is_contiguous(), "Matrix B must be contiguous"
++    M, K = a.shape
++    K, N = b.shape
++    # 1D launch kernel where each block gets its own program.
++
++    grid = triton.cdiv(M, block_m) * triton.cdiv(N, block_n), split_k
++    stride_bias = bias.stride(0) if use_bias else 0
++    EVEN_K = K % block_k == 0
++    matmul_kernel[grid](a,
++                        b,
++                        c,
++                        bias,
++                        M,
++                        N,
++                        K,
++                        a.stride(0),
++                        a.stride(1),
++                        b.stride(0),
++                        b.stride(1),
++                        c.stride(0),
++                        c.stride(1),
++                        stride_bias=stride_bias,
++                        BLOCK_SIZE_M=block_m,
++                        BLOCK_SIZE_N=block_n,
++                        BLOCK_SIZE_K=block_k,
++                        GROUP_SIZE_M=group_m,
++                        SPLIT_K=split_k,
++                        num_warps=num_warps,
++                        num_stages=num_stages,
++                        waves_per_eu=waves_per_eu,
++                        matrix_instr_nonkdim=mfmaInstrSize,
++                        kpack=kpack,
++                        BIAS=use_bias,
++                        EVEN_K=EVEN_K)
++    return c
++
++
++def test_correctness(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c,
++                     init_type, config, bias_vector, verbose):
++    block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfmaInstrSize, kpack = read_config(
++        config)
++    use_bias = bias_vector
++    torch.manual_seed(0)
++    #a = torch.randn((M, K), device='cuda', dtype=datatype)
++    #b = torch.randn((K, N), device='cuda', dtype=datatype)
++    a, a_fp16 = gen_input(M, K, dtype_a, col_a, 1, init_type, device='cuda')
++    b, b_fp16 = gen_input(K, N, dtype_b, col_b, 2, init_type, device='cuda')
++    bias = None
++    if use_bias:
++        bias, bias_fp16 = gen_input(M,
++                                    1,
++                                    dtype_b,
++                                    col_b,
++                                    2,
++                                    init_type,
++                                    device='cuda')
++        bias = bias.squeeze()
++        bias_fp16 = bias.squeeze()
++    # Allocates output.
++    c = torch.zeros((M, N),
++                    device=a.device,
++                    dtype=tl_to_torch_types[name_to_tl_types[dtype_c]])
++    triton_output = matmul(a, b, c, bias, block_m, block_n, block_k, group_m,
++                           split_k, num_warps, num_stages, waves_per_eu,
++                           mfmaInstrSize, kpack, use_bias)
++    torch_output = torch.matmul(a_fp16, b_fp16)
++    if use_bias:
++        torch_output += bias_fp16[:, None]
++    rtol = 0 if torch.version.hip is None else 1e-2
++    atol = 1e-3 if split_k == 1 else 4e-2
++    row_a_str = 'N' if col_a else 'T'
++    row_b_str = 'N' if col_b else 'T'
++    size_str = ''
++    if verbose:
++        size_str = f'SIZE M: {M}, N: {N}, K: {K}, trans: {row_a_str}{row_b_str}'
++    if torch.allclose(triton_output.to(torch.float16),
++                      torch_output,
++                      atol=atol,
++                      rtol=rtol):
++        print(f'{size_str} Correct✅')
++    else:
++        print(f"triton_output={triton_output}")
++        print(f"torch_output={torch_output}")
++        print(f'{size_str} Incorrect❌')
++
++
++def parse_args():
++    parser = argparse.ArgumentParser(
++        prog="tune a specific gemm size",
++        allow_abbrev=False,
++    )
++
++    parser.add_argument("-m", type=int, default=0)
++    parser.add_argument("-n", type=int, default=0)
++    parser.add_argument("-k", type=int, default=0)
++    parser.add_argument("-col_a",
++                        action='store_true',
++                        default=False,
++                        help='whether matrix a is column major')
++    parser.add_argument("-col_b",
++                        action='store_true',
++                        default=False,
++                        help='whether matrix b is column major')
++    parser.add_argument("-dtype_a",
++                        type=str,
++                        default='fp16',
++                        help="matrix a element data type")
++    parser.add_argument("-dtype_b",
++                        type=str,
++                        default='fp16',
++                        help="matrix b element data type")
++    parser.add_argument("-dtype_c",
++                        type=str,
++                        default='fp16',
++                        help="output element data type")
++    parser.add_argument("--ngpus",
++                        type=int,
++                        default=0,
++                        help='number of GPUs used in the profiling step')
++    parser.add_argument("--gpu_ids",
++                        type=lambda s: [int(id) for id in s.split(',')],
++                        default=[],
++                        help='list of gpu ids to use for tuning')
++    parser.add_argument("--gemm_size_file",
++                        type=str,
++                        default="",
++                        help='yaml file to indicate matrix size')
++    parser.add_argument("--o",
++                        type=str,
++                        default='',
++                        help='yaml file to store tuning results')
++    parser.add_argument("--keep",
++                        action='store_true',
++                        default=False,
++                        help='keep generated files')
++    parser.add_argument("--compare",
++                        action='store_true',
++                        default=False,
++                        help="Whether check result correctness")
++    parser.add_argument(
++        "--compare_wo_tuning",
++        action='store_true',
++        default=False,
++        help="Whether check result correctness without tuning.")
++    parser.add_argument("--benchmark",
++                        action='store_true',
++                        default=False,
++                        help="Benchmark the given config")
++    parser.add_argument(
++        "--time_breakdown",
++        action='store_true',
++        default=False,
++        help="Show detailed time breakdown of each step during the tuning")
++    parser.add_argument(
++        "--verbose",
++        action='store_true',
++        default=False,
++        help="enables time_breakdown and additional logging messages")
++    parser.add_argument(
++        "--num_threads",
++        type=int,
++        default=32,
++        help=
++        "number of threads to use for kernel compilation and post processing")
++    parser.add_argument("--jobs",
++                        type=int,
++                        default=1,
++                        help="number of tasks during the profiling process")
++    parser.add_argument("--iters",
++                        type=int,
++                        default=1000,
++                        help="number of iterations used in --benchmark mode")
++    parser.add_argument(
++        "--init_type",
++        type=str,
++        default='randn',
++        choices=['randn', 'hpl', 'trig_float', 'zeros'],
++        help="Input tensor initialization (default normal distribution)")
++    parser.add_argument(
++        "--rotating_tensor",
++        type=int,
++        default=0,
++        help="total size (MB) of all tensors (a, b, c, bias)."
++        " The default value is 0 (no rotating tensor)."
++        " When set, it needs to be larger than the L1, L2, MALL size)")
++    parser.add_argument("--bias_vector",
++                        action='store_true',
++                        default=False,
++                        help="apply bias vector")
++    parser.add_argument("--icache_flush",
++                        action='store_true',
++                        default=False,
++                        help="apply icache flush in tuning performance")
++    parser.add_argument("--no_warmup",
++                        action='store_true',
++                        default=False,
++                        help="Whether we want to skip the compilation stage")
++    parser.add_argument("--hack_triton_compiler",
++                        action='store_true',
++                        default=False,
++                        help="Modify the triton source to avoid backend query")
++    args = parser.parse_args()
++    if not args.o:
++        if args.benchmark:
++            args.o = "benchmarking_results.csv"
++        else:
++            args.o = get_default_tuning_result_filename()
++
++    return args
++
++
++def process_item(item):
++    M = item['M']
++    N = item['N']
++    K = item['K']
++    col_a = False if item['rowMajorA'] == 'T' else True
++    col_b = False if item['rowMajorB'] == 'T' else True
++    del item['M']
++    del item['N']
++    del item['K']
++    del item['rowMajorA']
++    del item['rowMajorB']
++    return M, N, K, col_a, col_b, item
++
++
++def type_name_to_bytes(ty_name):
++    if '32' in ty_name:
++        return 4
++    if '16' in ty_name:
++        return 2
++    if '8' in ty_name:
++        return 1
++    else:
++        print(f"Unrecognized input type name {ty_name}")
++        sys.exit(1)
++
++
++def format_output(unformatted):
++    if unformatted < 0.0001:
++        formatted = "{:.3e}".format(unformatted)
++    elif unformatted > 1000:
++        formatted = "{:.1f}".format(unformatted)
++    else:
++        formatted = "{:.2f}".format(unformatted)
++    return formatted
++
++
++def get_rocm_version():
++    torch_hip_version = torch.version.hip
++    vers = torch_hip_version.split('.')
++    ret_ver = '$rocm_version'
++    if len(vers) >= 2:
++        ret_ver = vers[0] + '.' + vers[1]
++    return ret_ver
++
++
++def main():
++    args = parse_args()
++    matrix_size_file = args.gemm_size_file
++    output_file = args.o
++    keepTmp = args.keep
++    run_bench = args.benchmark
++    jobs = args.jobs
++    iters = args.iters
++    skipWarmup = args.no_warmup
++    hack_triton = args.hack_triton_compiler
++
++    # Get GPU ids
++    ngpus = args.ngpus
++    gpu_ids = args.gpu_ids
++    if ngpus != 0 and gpu_ids:
++        print("--ngpus and --gpu_ids are mutually exclusive options")
++        return os.EX_USAGE
++    if ngpus == 0 and not gpu_ids:
++        ngpus = 1
++    if ngpus != 0:
++        gpus = range(ngpus)
++    if gpu_ids:
++        gpus = gpu_ids
++
++    if run_bench:
++        gpus = [gpus[0]]
++        jobs = 1
++
++    # Get element type
++    dtype_a = args.dtype_a
++    dtype_b = args.dtype_b
++    dtype_c = args.dtype_c
++    if not dtype_a in name_to_tl_types or not dtype_b in name_to_tl_types or not dtype_c in name_to_tl_types:
++        print(
++            f"Unsupported dtype_a {args.dtype_a} or dtype_b {args.dtype_b} or dtype_c {args.dtype_c}"
++        )
++        print("Supported types: ", list(name_to_tl_types.keys()))
++        sys.exit(1)
++    rotating_buffer_size = args.rotating_tensor
++    bias_vector = args.bias_vector
++    icache_flush = args.icache_flush
++    if icache_flush:
++        if not is_hip_available():
++            print("************************************************************************************************")
++            print("  `icache-flush` is disabled for this run.")
++            print("  `icache-flush` needs python-hip module, which is unavailable.")
++            print("  python-hip module can be installed as:")
++            print(f"      `python3 -m pip install -i https://test.pypi.org/simple hip-python~={get_rocm_version()}`")
++            print("************************************************************************************************")
++            icache_flush = False
++
++    mnks = []
++    # TODO: make it more robust to get user input
++    init_type = args.init_type
++    if matrix_size_file == "" or not os.path.isfile(matrix_size_file):
++        M = args.m
++        N = args.n
++        K = args.k
++        col_a = args.col_a
++        col_b = args.col_b
++        mnks = [(M, N, K, col_a, col_b, None)]
++    else:
++        with open(matrix_size_file) as file:
++            matrix_sizes = yaml.safe_load(file)
++        for item in matrix_sizes:
++            M, N, K, col_a, col_b, item = process_item(item)
++            mnks.append((M, N, K, col_a, col_b, item))
++
++    # Check correctness from given configs
++    if args.compare_wo_tuning:
++        for (M, N, K, col_a, col_b, myConfig) in mnks:
++            if myConfig is None:
++                raise Exception(
++                    "kernel config is None, need to provide a tuning config")
++            test_correctness(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c,
++                             init_type, myConfig, bias_vector, True)
++        return
++
++    configs_full = get_full_tuning_space()
++
++    start_time = datetime.now()
++    # Append to the output file so that we can save all results into one file
++    f_results = open(output_file, 'a')
++    if run_bench:
++        print(f"Benchmarking gemm with {dtype_a} inputs")
++        print("trans     M      N      K    TFLOPS   us")
++        f_results.write("trans,M,N,K,TFLOPS,us\n")
++    else:
++        print(f"Tuning {len(mnks)} gemm sizes starts at: {start_time}",
++              flush=True)
++
++    f_results.close()
++
++    ## Before tuning starts, clear cache and previously generated kernel files
++    run_bash_command("rm -rf ~/.triton/cache")
++    run_bash_command(f"rm -rf {get_filename_myKernels()}")
++
++    ## Modify triton compiler
++    ## Hacky !!!
++    if hack_triton:
++        patch_triton_compiler()
++
++    configs = []
++
++    ## Big for loop of tuning
++    ## Each iteration performs tuning for one gemm size
++    for (M, N, K, col_a, col_b, myConfig) in mnks:
++
++        f_results = open(output_file, 'a')
++
++        start_local_time = datetime.now()
++        # Obtain a pruned tuning space according to gemm size
++        # If running benchmark, use the provided config
++        pruned_configs = [myConfig] if run_bench else prune_configs(
++            M, N, K, configs_full, type_name_to_bytes(dtype_a),
++            type_name_to_bytes(dtype_b))
++
++        ## Only append new configs from the current gemm size
++        delta_configs = [
++            config for config in pruned_configs if config not in configs
++        ]
++        configs += delta_configs
++
++        ## Append new configs into the tuning space
++        generate_matmul_kernels(delta_configs)
++
++        row_a_str = 'N' if col_a else 'T'
++        row_b_str = 'N' if col_b else 'T'
++        size_str = f'SIZE: {M} {N} {K} {row_a_str}{row_b_str}'
++        if not run_bench:
++            print(f"{size_str} nConfigs: {len(pruned_configs)}",
++                  end=" ",
++                  flush=True)
++        else:
++            print(f"{row_a_str}{row_b_str}    {M:5d}  {N:5d}  {K:5d}    ",
++                  end="")
++            f_results.write(f"{row_a_str}{row_b_str},{M},{N},{K},")
++
++        # The main tuning funtion for one gemm size
++        verbose_level = 0
++        if args.time_breakdown:
++            verbose_level = 1
++        if args.verbose:
++            verbose_level = 2
++        # we consider bias size as M for now.
++        bias_size = M if bias_vector else 0
++        minTime, bestConfig, compile_time, profile_time, post_time = tune_gemm_config(
++            M,
++            N,
++            K,
++            col_a,
++            col_b,
++            dtype_a,
++            dtype_b,
++            dtype_c,
++            init_type,
++            pruned_configs,
++            run_bench,
++            jobs,
++            iters,
++            skipWarmup,
++            num_threads=args.num_threads,
++            gpus=gpus,
++            verbose=verbose_level,
++            rotating_buffer_size=rotating_buffer_size,
++            bias_size=bias_size,
++            icache_flush=icache_flush)
++
++        # post processing the numbers
++        perf_tflops = lambda us: 2 * M * N * K * 1e-12 / (us * 1e-6)
++        tri_tflops = perf_tflops(minTime)
++        formatted_tflops = format_output(tri_tflops)
++        minTime = format_output(minTime)
++        if not run_bench:
++            print(f'TFLOPS: {formatted_tflops} time(us): {minTime}',
++                  end=" ",
++                  flush=True)
++
++        bestConfig_compact_str = gen_configStr(bestConfig)
++        if not run_bench:
++            print(f'best_config: {bestConfig_compact_str}',
++                  end=" ",
++                  flush=True)
++
++        # write best config to tuning_results.yaml
++        if run_bench:
++            print(f"{formatted_tflops}     {minTime}")
++            f_results.write(f"{formatted_tflops},{minTime}\n")
++
++        sizeDict = {
++            'M': M,
++            'N': N,
++            'K': K,
++            'rowMajorA': row_a_str,
++            'rowMajorB': row_b_str
++        }
++        sizeDict.update(bestConfig)
++        if not run_bench:
++            f_results.write("- " + str(sizeDict) + " ")
++            f_results.write(
++                f'# TFLOPS: {formatted_tflops} time(us): {minTime}\n')
++
++        # remove generated files if asked to
++        if not keepTmp:
++            if not skipWarmup:
++                os.remove(get_filename_compile_driver())
++                try:
++                    os.remove(get_filename_compile_driver() +
++                              ".failed_configs")
++                except OSError:
++                    pass
++            for i in range(jobs):
++                generated_script = get_filename_profile_driver(M, N, K, i)
++                os.remove(generated_script)
++                for f in glob.glob(f"results_{i}.*"):
++                    os.remove(f)
++
++        # Check correctness if asked to
++        if args.compare:
++            print("correctness: ", end=" ", flush=True)
++            test_correctness(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c,
++                             init_type, bestConfig, bias_vector, False)
++        elif not run_bench:
++            print("", flush=True)
++
++        end_local_time = datetime.now()
++        if not run_bench:
++            print(
++                f">>> Elapsed time: {end_local_time - start_local_time} = {compile_time} (compile) + {profile_time} (profile) + {post_time} (post processing)",
++                flush=True)
++
++        f_results.close()
++        ## End big loop for tuning
++
++    end_time = datetime.now()
++    tuning_time = end_time - start_time
++    if not run_bench:
++        print(f"Tuning ends at: {end_time}")
++        print(f"Total tuning time (h:m:s): {tuning_time}")
++
++    if hack_triton:
++        print(
++            "Triton compiler is hacked, don't forget to git restore the changes :)"
++        )
++
++
++if __name__ == '__main__':
++    sys.exit(main())
+diff --git a/python/perf-kernels/tune_gemm/tune_gemm.sh b/python/perf-kernels/tune_gemm/tune_gemm.sh
+new file mode 100755
+index 000000000000..b49b57aa0aa3
+--- /dev/null
++++ b/python/perf-kernels/tune_gemm/tune_gemm.sh
+@@ -0,0 +1,27 @@
++#! /bin/bash
++
++## $1: driver program
++## $2: M
++## $3: N
++## $4: K
++## $5: 1: reduced tuning space
++
++if [[ $# -lt 4 ]];then
++    echo "Usage: ./tune_gemm.sh <driver program> M N K"
++    exit
++fi
++
++DRIVER=$1
++M=$2
++N=$3
++K=$4
++reduceSpace=$5
++
++DRIVER=$(echo $DRIVER | sed -e "s/matmul_grouped.py/matmul.py/g")
++
++# $DRIVER is the actual tuning scripts, it is the file matmul.py
++# -mnk are the size of input matrices, matrix (m, k) x (k, n)
++# --specify_size means using -mnk to specify size of input matrices
++# --rocprof means using rocprof to measure kernel time. If not set,
++# kernel time is from do_bench()
++python $DRIVER -m $M -n $N -k $K --specify_size --rocprof
+diff --git a/python/perf-kernels/tune_gemm/utils/file_generator.py b/python/perf-kernels/tune_gemm/utils/file_generator.py
+new file mode 100644
+index 000000000000..eea92cf6bf48
+--- /dev/null
++++ b/python/perf-kernels/tune_gemm/utils/file_generator.py
+@@ -0,0 +1,355 @@
++import os
++from .utils import *
++
++
++def read_config(config):
++    block_m = config.get('BLOCK_SIZE_M')
++    block_n = config.get('BLOCK_SIZE_N')
++    block_k = config.get('BLOCK_SIZE_K')
++    group_m = config.get('GROUP_SIZE_M')
++    split_k = config.get('SPLIT_K')
++    num_warps = config.get('num_warps')
++    num_stages = config.get('num_stages')
++    waves_per_eu = config.get('waves_per_eu')
++    mfma_instr_size = config.get('matrix_instr_nonkdim')
++    kpack = config.get('kpack')
++    return block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfma_instr_size, kpack
++
++
++def gen_configStr(config):
++    block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfmaInstrSize, kpack = read_config(
++        config)
++
++    ## {M}_{N}_{K} is removed since the same kernel can be used for differen gemm sizes
++    configStr = f"BM{block_m}_BN{block_n}_BK{block_k}_GM{group_m}_SK{split_k}_nW{num_warps}_nS{num_stages}_EU{waves_per_eu}_kP{kpack}_mfma{mfmaInstrSize}"
++
++    return configStr
++
++
++def generate_matmul_kernels(configs):
++    """
++    Generate kernels based on configs and append them to get_filename_myKernels()
++
++    Use the matmul_kernel template (../matmul_kernel.py) and append config to the
++    kernel name. E.g. matmul_kernel_BM256_BN256_BK64_GM1_SK1_nW1_nS0_EU0_kP2_mfma16()
++    """
++
++    if len(configs) == 0:
++        return
++
++    f_kernel = open(get_filename_myKernels(), 'a')
++
++    # write imports
++    import_str = """import triton
++import triton.language as tl"""
++    f_kernel.write(import_str)
++
++    with open(
++            os.path.dirname(os.path.abspath(__file__)) +
++            "/../matmul_kernel.py") as file:
++        matmul_kernel_code = file.read()
++
++    for config in configs:
++        configStr = gen_configStr(config)
++        # Copy the matmul_kernel with name replaced
++        matmul_kernel_config = matmul_kernel_code.replace(
++            "matmul_kernel", f"matmul_kernel_{configStr}")
++        matmul_kernel_config = matmul_kernel_config.replace(
++            "import triton.language as tl", "")
++        matmul_kernel_config = matmul_kernel_config.replace(
++            "import triton", "")
++        f_kernel.write(matmul_kernel_config)
++
++    f_kernel.close()
++
++
++## construct the configStr and generate the wrapper function matmul_{configStr}()
++## If `warmup` is set, the generated kernel will be **compiled**
++def gen_kernel_and_configStr_from_config(config, EVEN_K, dtype_a, dtype_b,
++                                         dtype_c, bias_size, warmup):
++    block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfmaInstrSize, kpack = read_config(
++        config)
++
++    configStr = gen_configStr(config)
++
++    use_bias = bias_size > 0
++
++    if warmup:
++        torch_dtype_a = 'fp16'
++        torch_dtype_b = 'fp16'
++        torch_dtype_c = 'fp16'
++        if dtype_a:
++            torch_dtype_a = tl_to_torch_types[name_to_tl_types[dtype_a]]
++        if dtype_b:
++            torch_dtype_b = tl_to_torch_types[name_to_tl_types[dtype_b]]
++        if dtype_c:
++            torch_dtype_c = tl_to_torch_types[name_to_tl_types[dtype_c]]
++
++        matmul_def_str = f"""
++def matmul_{configStr}(M, N, K, am, ak, bk, bn, cm, cn, biasn):
++    matmul_kernel_{configStr}.warmup(
++        {torch_dtype_a}, {torch_dtype_b}, {torch_dtype_c}, {torch_dtype_c},
++        M, N, K,
++        am, ak, bk, bn, cm, cn, biasn,
++        BLOCK_SIZE_M = {block_m},
++        BLOCK_SIZE_N = {block_n},
++        BLOCK_SIZE_K = {block_k},
++        GROUP_SIZE_M = {group_m},
++        SPLIT_K = {split_k},
++        num_warps = {num_warps},
++        num_stages = {num_stages},
++        waves_per_eu = {waves_per_eu},
++        matrix_instr_nonkdim = {mfmaInstrSize},
++        kpack = {kpack},
++        BIAS={use_bias},
++        EVEN_K={EVEN_K},
++        grid=(1,),
++    )
++    return None
++
++def try_compile_config_{configStr}(M, N, K, am, ak, bk, bn, cm, cn, biasn):
++    try:
++        matmul_{configStr}(M, N, K, am, ak, bk, bn, cm, cn, biasn)
++        return True
++    except Exception as e:
++        print(f'invalid config(compilation): {configStr}: ', e, flush=True)
++        return False
++"""
++    else:
++        matmul_def_str = f"""
++def matmul_{configStr}(a, b, c, bias, M, N, K, am, ak, bk, bn, cm, cn, biasn):
++    grid = triton.cdiv(M, {block_m}) * triton.cdiv(N, {block_n}), {split_k}
++    matmul_kernel_{configStr}[grid](
++        a, b, c, bias,
++        M, N, K,
++        am, ak, bk, bn, cm, cn, biasn,
++        BLOCK_SIZE_M = {block_m},
++        BLOCK_SIZE_N = {block_n},
++        BLOCK_SIZE_K = {block_k},
++        GROUP_SIZE_M = {group_m},
++        SPLIT_K = {split_k},
++        num_warps = {num_warps},
++        num_stages = {num_stages},
++        waves_per_eu = {waves_per_eu},
++        matrix_instr_nonkdim = {mfmaInstrSize},
++        kpack = {kpack},
++        BIAS = {use_bias},
++        EVEN_K = {EVEN_K}
++    )
++    return c
++"""
++    return configStr, matmul_def_str
++
++
++def generate_compile_driver(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c,
++                            init_type, configs, rotating_buffer_size,
++                            bias_size):
++    """
++    Generate a single file that contains all kernels in the tuning space.
++    This file is used to **compile** the kernels in parallel
++    """
++
++    filename = get_filename_compile_driver()
++    f_kernel = open(filename, 'w')
++
++    # write imports
++    import_str = f"""import torch
++import triton
++import triton.language as tl
++import argparse
++import sys
++import multiprocessing
++from tune_gemm import gen_rotating_tensors
++from {get_filename_without_extension(get_filename_myKernels())} import *
++"""
++
++    f_kernel.write(import_str + "\n")
++
++    for config in configs:
++        EVEN_K = True if K % config.get('BLOCK_SIZE_K') == 0 else False
++        configStr, matmul_def_str = gen_kernel_and_configStr_from_config(
++            config, EVEN_K, dtype_a, dtype_b, dtype_c, bias_size, True)
++        # Copy the matmul_kernel with name replaced
++        f_kernel.write(matmul_def_str + "\n")
++
++    # write compile_kernels
++    # pre string
++    stride_a_str = "1, M" if col_a else "M, 1"
++    stride_b_str = "1, N" if col_b else "N, 1"
++    stride_c_str = "N, 1"
++    compile_kernels_pre_str = f"""def compile_kernels(M, N, K, rotating_buffer_size, bias_size, num_threads):
++    thread_pool = multiprocessing.Pool(processes=num_threads)
++
++    assert bias_size == M or bias_size == 0
++
++    stride_bias = 1 if bias_size > 0 else 0
++    stride_am, stride_ak = {stride_a_str}
++    stride_bk, stride_bn = {stride_b_str}
++    stride_cm, stride_cn = {stride_c_str}
++    task_args = (M, N, K,
++                 stride_am, stride_ak,
++                 stride_bk, stride_bn,
++                 stride_cm, stride_cn, stride_bias)
++
++    results = []
++    config_names = []
++"""
++    f_kernel.write(compile_kernels_pre_str + "\n")
++
++    # warm up call of all matmul functions in parallel
++    for config in configs:
++        configStr = gen_configStr(config)
++        task_str = f"    results += [thread_pool.apply_async(try_compile_config_{configStr}, args=task_args)]\n" + \
++                   f"    config_names += ['{configStr}']\n"
++        f_kernel.write(task_str)
++
++    threadpool_str = """
++    failed_configs = []
++    for i in range(len(results)):
++        results[i].wait()
++        res = results[i].get()
++        if not res:
++            failed_configs += [config_names[i]]
++    thread_pool.close()
++    thread_pool.join()
++    if failed_configs:
++        with open("{filename}.failed_configs", "w") as f:
++            for cfg in failed_configs:
++                f.write(cfg + "\\n")
++""".format(filename=filename)
++    f_kernel.write(threadpool_str)
++
++    # def main and call compile_kernels
++    def_main_str = f"""
++def main():
++    parser = argparse.ArgumentParser(
++        prog="tune a specific gemm size",
++        allow_abbrev=False,)
++    parser.add_argument("-n", type=int, default=32, help='number of threads')
++    parser.add_argument("-rotating_tensor", type=int, default={rotating_buffer_size}, help='size of rotating buffer (MB), default: {rotating_buffer_size}')
++    args = parser.parse_args()
++    numThreads = args.n
++    rotating_buffer_size = args.rotating_tensor
++    """
++    compile_kernels_call_str = f'compile_kernels({M}, {N}, {K}, rotating_buffer_size, {bias_size}, numThreads)'
++
++    f_kernel.write(def_main_str)
++    f_kernel.write(compile_kernels_call_str + "\n\n")
++    f_kernel.write("""if __name__ == '__main__':
++   sys.exit(main())""")
++    f_kernel.close()
++
++    return filename
++
++
++def generate_profile_tasks(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c,
++                           init_type, configs, jobs, iters, run_bench,
++                           rotating_buffer_size, bias_size, icache_flush):
++    """
++    Open {len(jobs)} files
++    generated_kernelM-N-K-0.py, generated_kernelM-N-K-1.py, ..., generated_kernelM-N-K-{njobs-1}.py
++    and generate
++    1. matmul kernels of all configs
++    2. wrapper function matmul to invoke all the generated kernels
++    3. test_gemm to invoke matmul in a loop of {iters} iterations
++    """
++
++    filenames = []
++    for i in range(jobs):
++        filenames.append(get_filename_profile_driver(M, N, K, i))
++    f_kernel = [open(path, 'w') for path in filenames]
++
++    # write imports
++    import_str = f"""import torch
++import triton
++import triton.language as tl
++import argparse
++import sys
++import multiprocessing
++from tune_gemm import gen_rotating_tensors
++from {get_filename_without_extension(get_filename_myKernels())} import *
++"""
++    if icache_flush:
++        import_str += """
++from icache_flush import icache_flush
++"""
++    for fi in range(jobs):
++        f_kernel[fi].write(import_str + "\n")
++
++    idx = 0
++    for config in configs:
++        file_idx = idx % jobs
++        EVEN_K = True if K % config.get('BLOCK_SIZE_K') == 0 else False
++        configStr, matmul_def_str = gen_kernel_and_configStr_from_config(
++            config, EVEN_K, dtype_a, dtype_b, dtype_c, bias_size, False)
++        # Copy the matmul_kernel with name replaced
++        f_kernel[file_idx].write(matmul_def_str + "\n")
++        idx += 1
++
++    # write test_gemm
++    # pre string
++    test_gemm_pre_str = f"""def test_gemm(M, N, K, rotating_buffer_size, bias_size):
++    tensors = gen_rotating_tensors(M, N, K, '{dtype_a}', {col_a}, '{dtype_b}', {col_b}, '{dtype_c}',
++                                   1, '{init_type}', rotating_buffer_size, bias_size, device='cuda')
++
++    a = tensors['input_a'][0]
++    b = tensors['input_b'][0]
++    c = tensors['output_c'][0]
++    assert bias_size == M or bias_size == 0
++
++    stride_bias = tensors['bias'][0].stride(0) if bias_size > 0 else 0
++
++    try:
++        with open("{get_filename_compile_driver()}.failed_configs", "r") as f:
++            failed_configs = [cfg.strip() for cfg in f.readlines()]
++    except Exception:
++        failed_configs = []
++"""
++    for fi in range(jobs):
++        f_kernel[fi].write(test_gemm_pre_str + "\n")
++
++    # call all matmul_xxx functions
++    idx = 0
++    runs = iters if run_bench else 200
++    call_icache_flush = 'icache_flush()' if icache_flush else ''
++    for config in configs:
++        configStr = gen_configStr(config)
++        matmul_call_str = f"""
++    if '{configStr}' not in failed_configs:
++        rotating_num = tensors['rotating_num']
++        for i in range({runs}):
++            a = tensors['input_a'][i % rotating_num]
++            b = tensors['input_b'][i % rotating_num]
++            c = tensors['output_c'][i % rotating_num]
++            bias = tensors['bias'][i % rotating_num] if bias_size > 0 else None
++            bias_stride = bias.stride(0) if bias_size > 0 else 0"""
++        if icache_flush:
++            matmul_call_str += f"""
++            icache_flush()"""
++        matmul_call_str += f"""
++            d = matmul_{configStr}(a, b, c, bias, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0), c.stride(1), bias_stride)"""
++        f_kernel[idx % jobs].write(matmul_call_str + "\n")
++        idx += 1
++    # post string
++    for fi in range(jobs):
++        f_kernel[fi].write("    return d\n")
++
++    # def main and call test_gemm
++    def_main_str = f"""
++def main():
++    parser = argparse.ArgumentParser(
++        prog="tune a specific gemm size",
++        allow_abbrev=False,)
++    parser.add_argument("-n", type=int, default=1, help='number of threads')
++    parser.add_argument("-rotating_tensor", type=int, default={rotating_buffer_size}, help='size of rotating buffer (MB), default: {rotating_buffer_size}')
++    args = parser.parse_args()
++    numThreads = args.n
++    rotating_buffer_size = args.rotating_tensor
++    """
++    test_gemm_call_str = f'test_gemm({M}, {N}, {K}, rotating_buffer_size, {bias_size})'
++    for fi in range(jobs):
++        f_kernel[fi].write(def_main_str)
++        f_kernel[fi].write(test_gemm_call_str + "\n\n")
++        f_kernel[fi].write("""if __name__ == '__main__':
++   sys.exit(main())""")
++        f_kernel[fi].close()
+diff --git a/python/perf-kernels/tune_gemm/utils/utils.py b/python/perf-kernels/tune_gemm/utils/utils.py
+new file mode 100644
+index 000000000000..9b6b50ea626b
+--- /dev/null
++++ b/python/perf-kernels/tune_gemm/utils/utils.py
+@@ -0,0 +1,115 @@
++import torch
++import triton
++import triton.language as tl
++
++import os
++import subprocess
++from datetime import datetime
++
++TORCH_HAS_FP8E5B16 = hasattr(torch, 'float8_e5m2fnuz')
++TORCH_HAS_FP8E4B8 = hasattr(torch, 'float8_e4m3fnuz')
++tl_to_torch_types = {
++    tl.float16: torch.float16,
++    tl.bfloat16: torch.bfloat16,
++    tl.float32: torch.float32,
++    tl.int8: torch.int8,
++    tl.int32: torch.int32,
++}
++if TORCH_HAS_FP8E5B16:
++    tl_to_torch_types[tl.float8e5b16] = torch.float8_e5m2fnuz
++if TORCH_HAS_FP8E4B8:
++    tl_to_torch_types[tl.float8e4b8] = torch.float8_e4m3fnuz
++
++name_to_tl_types = {
++    'int8': tl.int8,
++    'int32': tl.int32,
++    'fp16': tl.float16,
++    'fp32': tl.float32,
++    'bf16': tl.bfloat16,
++    'fp8': tl.float8e4b8,
++    'bf8': tl.float8e5b16,
++}
++
++
++def run_bash_command_wrapper(commandstring, capture=True):
++    try:
++        run_bash_command(commandstring, capture)
++    except subprocess.CalledProcessError as e:
++        if not capture:
++            print(f"running {commandstring} one more time")
++        run_bash_command(commandstring, capture)
++
++
++def run_bash_command(commandstring, capture=True):
++    if capture:
++        proc = subprocess.run(commandstring,
++                              shell=True,
++                              check=True,
++                              executable='/bin/bash',
++                              stdout=subprocess.PIPE)
++        return proc.stdout.splitlines()
++    proc = subprocess.run(commandstring,
++                          shell=True,
++                          check=True,
++                          executable='/bin/bash')
++    return None
++
++
++def get_filename_myKernels():
++    path = os.path.dirname(os.path.abspath(__file__))
++    return f"{path}/../myKernels.py"
++
++
++def get_filename_without_extension(file_path):
++    base_name = os.path.basename(file_path)
++    file_name, _ = os.path.splitext(base_name)
++    return file_name
++
++
++def get_filename_compile_driver():
++    path = os.path.dirname(os.path.abspath(__file__))
++    return f"{path}/../compile_driver.py"
++
++
++def get_filename_profile_driver(M, N, K, job_id):
++    path = os.path.dirname(os.path.abspath(__file__))
++    return f"{path}/../profile_driver_{M}x{N}x{K}_{job_id}.py"
++
++
++def get_default_tuning_result_filename():
++    git_branch_name = run_bash_command("git rev-parse --abbrev-ref HEAD")
++    git_branch_name = git_branch_name[0].decode()
++    # handle branch name of "xxx/xxx" format
++    git_branch_name = git_branch_name.replace('/', '_')
++    git_commit_hash = run_bash_command("git rev-parse --short HEAD")
++    git_commit_hash = git_commit_hash[0].decode()
++
++    dt_string = datetime.now().strftime("%m-%d-%Y-%H:%M:%S")
++
++    path = os.path.dirname(os.path.abspath(__file__))
++    defaultName = f"{path}/../tuning_results_{git_branch_name}@{git_commit_hash}_{dt_string}.yaml"
++    return defaultName
++
++
++def patch_triton_compiler():
++    device = triton.runtime.driver.active.get_current_device()
++    stream = triton.runtime.driver.active.get_current_stream(device)
++    target = triton.runtime.driver.active.get_current_target()
++
++    triton_location_str = run_bash_command("pip show triton | grep Editable")
++    if not triton_location_str:
++        print("triton source not found from pip show triton")
++
++    triton_dir = triton_location_str[0].split()[-1].decode('utf-8')
++
++    jit_filename = os.path.join(triton_dir, "triton/runtime", "jit.py")
++
++    run_bash_command(f"sed -i 's/driver.active.get_current_device()/{device}/g' {jit_filename}")
++    run_bash_command(f"sed -i 's/driver.active.get_current_stream(device)/{stream}/g' {jit_filename}")
++
++    hip_driver_filename = os.path.join(triton_dir, "../third_party/amd/backend/", "driver.py")
++    cuda_driver_filename = os.path.join(triton_dir, "../third_party/nvidia/backend/", "driver.py")
++
++    run_bash_command(f"sed -i 's/import torch/return True/g' {hip_driver_filename}")
++    run_bash_command(f"sed -i 's/device = self.get_current_device()/return GPUTarget(\"hip\", \"{target.arch}\", 64)/g' {hip_driver_filename}")
++    run_bash_command(f"sed -i 's/import torch/return False/g' {cuda_driver_filename}")

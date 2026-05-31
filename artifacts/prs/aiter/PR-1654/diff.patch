@@ -1,0 +1,1266 @@
+diff --git a/.github/workflows/aiter-test.yaml b/.github/workflows/aiter-test.yaml
+index 19aa5ea4d5..8e1f58fcb5 100644
+--- a/.github/workflows/aiter-test.yaml
++++ b/.github/workflows/aiter-test.yaml
+@@ -29,7 +29,7 @@ jobs:
+ 
+   define-runners:
+     runs-on: ubuntu-latest
+-    needs: [check-signal]
++    # needs: [check-signal]
+     outputs:
+       standard_runners: ${{ steps.machines.outputs.standard_runners }}
+       multigpu_runners: ${{ steps.machines.outputs.multigpu_runners }}
+diff --git a/3rdparty/composable_kernel b/3rdparty/composable_kernel
+index f5573f56d9..d37c19e367 160000
+--- a/3rdparty/composable_kernel
++++ b/3rdparty/composable_kernel
+@@ -1 +1 @@
+-Subproject commit f5573f56d9d4981def16f575ddb14535b93bb9bb
++Subproject commit d37c19e3671907487f9ff0a5d51383001bbc2d59
+diff --git a/aiter/fused_moe.py b/aiter/fused_moe.py
+index 67dd0df318..2b215c4ae3 100644
+--- a/aiter/fused_moe.py
++++ b/aiter/fused_moe.py
+@@ -104,6 +104,7 @@ def fused_moe(
+     intermediate_pad=0,
+     bias1=None,
+     bias2=None,
++    splitk=0,
+ ):
+     if not block_size_M:
+         block_size_M = -1
+@@ -236,6 +237,7 @@ def fused_moe_(
+         intermediate_pad,
+         bias1,
+         bias2,
++        get_padded_M(M),  # only used in 2stage
+     )
+ 
+     block_size_M = metadata.block_m if block_size_M is None else block_size_M
+@@ -472,6 +474,33 @@ def get_block_size_M(token, topk, expert, inter_dim):
+     return sorted(tmp, key=lambda x: x[:2])[0][-1]
+ 
+ 
++@functools.lru_cache(maxsize=2048)
++def get_ksplit(token, topk, expert, inter_dim, model_dim):
++    aiter_ksplit = int(os.environ.get("AITER_KSPLIT", "0"))
++    if aiter_ksplit != 0:
++        return aiter_ksplit
++    # only for moe_blk gemm1 a8w8 decode scenario
++    if token * topk > expert:
++        return 0
++    cu_num = get_cu_num()
++    tileN = 128
++
++    tgM = token * topk  # decode tile num
++    tgN = (inter_dim * 2 + tileN - 1) // tileN
++
++    tg_num = tgN * tgM
++    # if all cu already active
++    if tg_num >= cu_num:
++        return 0
++    tilek = 256
++    split_max = (cu_num + tg_num - 1) // tg_num
++    # at least split = 2
++    for i in reversed(range(2, split_max + 1)):
++        if (model_dim % i == 0) and ((model_dim // i) % tilek == 0):
++            return i
++    return 0
++
++
+ cfg_2stages = None
+ # fmt: off
+ fused_moe_1stage_dict = {
+@@ -551,6 +580,7 @@ def get_2stage_cfgs(
+     intermediate_pad,
+     bias1,
+     bias2,
++    token_real,
+ ):
+     def get_cfg_2stages(tune_file):
+         import pandas as pd
+@@ -620,8 +650,22 @@ def FinalFunc():
+         )
+         logger.info("\033[0m")
+ 
++    def use_cfg():
++        problem_type = (activation, dtype, q_dtype_a, q_dtype_w, q_type)
++        bypass_type = (
++            ActivationType.Silu,
++            dtypes.bf16,
++            dtypes.fp8,
++            dtypes.fp8,
++            QuantType.per_1x128,
++        )
++        if problem_type == bypass_type and (token_real * topk) <= 128:  # bypass tuned
++            aiter.logger.info("bypass tuned results for fp8 blockscale")
++            return False
++        return True
++
+     # cfg = cfg_2stages.get(keys, None)
+-    cfg = cfg_2stages.get(keys, None) if cfg_2stages else None
++    cfg = cfg_2stages.get(keys, None) if cfg_2stages and use_cfg() else None
+     if cfg is None and os.environ.get("AITER_ONLINE_TUNE", "0") == "1":
+         lock_path = os.path.join(bd_dir, f"lock_fmoe_tune_{keys}")
+         mp_lock(lock_path, MainFunc=MainFunc, FinalFunc=FinalFunc)
+@@ -630,7 +674,7 @@ def FinalFunc():
+         cfg = cfg_2stages.get(keys, None) if cfg_2stages else None
+         if cfg is None:
+             logger.warning(f"Fmoe tuning not support for {keys}")
+-    if cfg is None:
++    if cfg is None or int(os.environ.get("AITER_HEURISTIC_ONLY", "0")):
+         ksplit = 0
+         kernelName1 = ""
+         kernelName2 = ""
+@@ -645,7 +689,7 @@ def FinalFunc():
+             doweight_stage1,
+         ) in fused_moe_1stage_dict[get_gfx()]:
+             if q_type == QuantType.per_1x128:
+-                run_1stage = True and (inter_dim % 256 == 0)
++                run_1stage = token > 32 and (inter_dim % 256 == 0)
+             elif q_type == QuantType.per_Token and q_dtype_w == dtypes.i8:
+                 run_1stage = token > 32
+             elif q_type == QuantType.per_Token and q_dtype_w == dtypes.fp8:
+@@ -657,11 +701,23 @@ def FinalFunc():
+             BLOCK_SIZE_M
+             if run_1stage
+             else (
+-                64
++                (64 if token > 32 else 16)
+                 if q_type == QuantType.per_1x128
+                 else get_block_size_M(token, topk, expert, inter_dim)
+             )
+         )
++        ksplit = (
++            ksplit
++            if (run_1stage)
++            else (
++                get_ksplit(token_real, topk, expert, inter_dim, model_dim)
++                if q_type == QuantType.per_1x128
++                else ksplit
++            )
++        )
++        aiter.logger.info(
++            f"run_1stage = {run_1stage}, ksplit = {ksplit} q_type = {q_type}"
++        )
+     else:
+         block_m = cfg["block_m"]
+         ksplit = cfg["ksplit"]
+@@ -717,14 +773,16 @@ def FinalFunc():
+             dtypes.fp16,
+             torch.uint32,
+             dtypes.fp4x2,
++            dtypes.fp8,
+         ]
+     ):
+         return MOEMetadata(
+             functools.partial(
+-                aiter.ck_moe_stage1_fwd,
++                ck_moe_stage1,
+                 kernelName=kernelName1,
+                 activation=activation,
+                 quant_type=q_type,
++                splitk=ksplit,
+             ),
+             functools.partial(
+                 aiter.ck_moe_stage2_fwd,
+@@ -814,6 +872,7 @@ def fused_moe_2stages(
+         intermediate_pad,
+         bias1,
+         bias2,
++        token_num,
+     )
+     if (
+         quant_type == QuantType.per_1x32
+@@ -1293,6 +1352,59 @@ def torch_moe_stage2(
+     return out.sum(1).to(dtype)
+ 
+ 
++def ck_moe_stage1(
++    hidden_states,
++    w1,  # [E, inter_dim*2, model_dim]
++    w2,  # [E, model_dim, inter_dim]
++    sorted_token_ids,  # [max_num_tokens_padded]
++    sorted_expert_ids,  # [max_num_m_blocks]
++    num_valid_ids,  # [1]
++    out,
++    topk,
++    block_m,
++    a1_scale,
++    w1_scale,
++    kernelName="",
++    sorted_weights=None,
++    quant_type=aiter.QuantType.No,
++    activation=ActivationType.Gelu,
++    splitk=1,
++):
++    token_num = hidden_states.shape[0]
++    tmp_out = (
++        torch.zeros(
++            (token_num, topk, w1.shape[1]), dtype=dtypes.fp32, device=out.device
++        )
++        if splitk > 1
++        else out
++    )
++    aiter.ck_moe_stage1_fwd(
++        hidden_states,
++        w1,
++        w2,
++        sorted_token_ids,
++        sorted_expert_ids,
++        num_valid_ids,
++        tmp_out,
++        topk,
++        kernelName,
++        w1_scale,
++        a1_scale,
++        block_m,
++        sorted_weights,
++        quant_type,
++        activation,
++        splitk,
++        out.dtype,
++    )
++    if splitk > 1:
++        if activation == ActivationType.Silu:
++            aiter.silu_and_mul(out, tmp_out.view(dtypes.fp32).to(out.dtype))
++        else:
++            aiter.gelu_and_mul(out, tmp_out.view(dtypes.fp32).to(out.dtype))
++    return out
++
++
+ def cktile_moe_stage1(
+     hidden_states,
+     w1,
+diff --git a/aiter/ops/moe_op.py b/aiter/ops/moe_op.py
+index f3c24e043b..0afd79c38e 100755
+--- a/aiter/ops/moe_op.py
++++ b/aiter/ops/moe_op.py
+@@ -223,17 +223,22 @@ def cmdGenFunc_ck_moe_stage(
+     sorted_weights: Optional[Tensor] = None,
+     quant_type: int = 0,
+     activation: int = 0,
++    splitk: int = 1,
++    dst_type: Optional[str] = None,
+ ):
+ 
+     mul_routed_weight_stage = 2 if sorted_weights is None else 1
++    is_splitk = splitk > 1
++    outtype = str2dtype_dict[dst_type] if is_splitk else out.dtype
+     md_name, blob_gen_cmd = get_moe_stage_module(
+         hidden_states.dtype,
+         w1.dtype,
+-        out.dtype,
++        outtype,
+         activation,
+         quant_type,
+         mul_routed_weight_stage,
+         getattr(w1, "is_shuffled", False),
++        is_splitk,
+     )
+     return {
+         "md_name": md_name,
+@@ -292,6 +297,8 @@ def ck_moe_stage1(
+     sorted_weights: Optional[Tensor] = None,
+     quant_type: int = 0,
+     activation: int = 0,
++    splitk: int = 1,
++    dst_type: Optional[str] = None,
+ ) -> None: ...
+ 
+ 
+@@ -431,6 +438,11 @@ def moe_cktile2stages_gemm2(
+     torch.int4: "i4",
+ }
+ 
++str2dtype_dict = {
++    "f16": dtypes.fp16,
++    "b16": dtypes.bf16,
++}
++
+ 
+ @functools.lru_cache(maxsize=1024)
+ def get_moe_stage_module(
+@@ -441,6 +453,7 @@ def get_moe_stage_module(
+     quant_type,
+     mul_routed_weight_stage,
+     preshuffle_mode=False,
++    is_splitk=False,
+ ):
+     if isinstance(activation, int):
+         activation = ActivationType(activation)
+@@ -455,6 +468,7 @@ def get_moe_stage_module(
+     if preshuffle_mode and weight_dtype == dtypes.fp4x2:
+         preshuffle_str = "--preshuffle"
+ 
++    splitk_str = "--issplitk" if is_splitk else ""
+     quant_type = (
+         QuantType.per_1x128 if quant_type == QuantType.per_128x128 else quant_type
+     )
+@@ -471,10 +485,11 @@ def get_moe_stage_module(
+             act,
+             quant_type,
+             f"mulWeightStage{mul_routed_weight_stage}",
++            "splitk" if is_splitk else "",
+         ]
+     )
+     blob_gen_cmd = [
+-        f"{AITER_CSRC_DIR}/ck_gemm_moe_2stages_codegen/gen_instances.py -a {Adtype} -b {Bdtype} -c {Cdtype} -q {quant_type} -act {act} -m {mul_routed_weight_stage} {preshuffle_str} -w {{}}"
++        f"{AITER_CSRC_DIR}/ck_gemm_moe_2stages_codegen/gen_instances.py -a {Adtype} -b {Bdtype} -c {Cdtype} -q {quant_type} -act {act} -m {mul_routed_weight_stage} {preshuffle_str} {splitk_str} -w {{}}"
+     ]
+ 
+     return md_name, blob_gen_cmd
+@@ -496,6 +511,8 @@ def ck_moe_stage1_fwd(
+     sorted_weights: Optional[Tensor] = None,
+     quant_type: QuantType = QuantType.No,
+     activation: ActivationType = ActivationType.Silu,
++    splitk: Optional[int] = 1,
++    dst_type: Optional[torch.dtype] = None,
+ ):
+     ck_moe_stage1(
+         hidden_states,
+@@ -513,6 +530,8 @@ def ck_moe_stage1_fwd(
+         sorted_weights,
+         quant_type.value,
+         activation.value,
++        splitk,
++        dtype2str_dict[dst_type],
+     )
+     return out
+ 
+diff --git a/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages.cu b/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages.cu
+index a5be94138e..322ea56c71 100644
+--- a/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages.cu
++++ b/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages.cu
+@@ -56,13 +56,23 @@ void ck_moe_stage1(torch::Tensor &hidden_states,     // [m, k], input token
+                    std::optional<int> block_m = 32,
+                    std::optional<torch::Tensor> sorted_weights = std::nullopt,
+                    int quant_type = 0,
+-                   int activation = 0)
++                   int activation = 0,
++                   int splitk = 1,
++                   std::optional<std::string> dst_type = std::nullopt)
+ {
+     const at::hip::OptionalHIPGuardMasqueradingAsCUDA device_guard(device_of(out));
+     at::hip::getCurrentHIPStream();
+ 
+-    TORCH_CHECK(out.dtype() == at::ScalarType::BFloat16 || out.dtype() == at::ScalarType::Half,
+-                "Out dtype only support BFloat16/Float16!")
++    if (splitk > 1)
++    {
++        TORCH_CHECK(out.dtype() == at::ScalarType::Float,
++                    "Out dtype only support Float when splitk > 1!")
++    }
++    else
++    {
++        TORCH_CHECK(out.dtype() == at::ScalarType::BFloat16 || out.dtype() == at::ScalarType::Half,
++                    "Out dtype only support BFloat16/Float16!")
++    }
+ 
+     int tokens = hidden_states.size(0);
+     int sorted_size = std::min(int64_t(tokens * topk * block_m.value()), sorted_token_ids.size(0));
+@@ -99,7 +109,7 @@ void ck_moe_stage1(torch::Tensor &hidden_states,     // [m, k], input token
+ 
+     kernel(at::hip::getCurrentHIPStream(),
+            tokens, sorted_size, N, K, topk,
+-           hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr, num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr);
++           hidden_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr, num_valid_ids_ptr, out_ptr, w1_scale_ptr, a1_scale_ptr, splitk);
+ }
+ 
+ void ck_moe_stage2(torch::Tensor &inter_states,      // [m, k], input token
+@@ -116,7 +126,9 @@ void ck_moe_stage2(torch::Tensor &inter_states,      // [m, k], input token
+                    std::optional<int> block_m = 32,
+                    std::optional<torch::Tensor> sorted_weights = std::nullopt,
+                    int quant_type = 0,
+-                   int activation = 0)
++                   int activation = 0,
++                   int splitk = 1,
++                   std::optional<std::string> dst_type = std::nullopt)
+ {
+     TORCH_CHECK(out.dtype() == at::ScalarType::BFloat16 || out.dtype() == at::ScalarType::Half,
+                 "Out dtype only support BFloat16/Float16!")
+@@ -155,5 +167,5 @@ void ck_moe_stage2(torch::Tensor &inter_states,      // [m, k], input token
+ 
+     kernel(at::hip::getCurrentHIPStream(),
+            tokens, sorted_size, N, K, topk,
+-           inter_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr, num_valid_ids_ptr, out_ptr, w2_scale_ptr, a2_scale_ptr);
++           inter_states_ptr, w1_ptr, w2_ptr, sorted_token_ids_ptr, sorted_expert_ids_ptr, sorted_weights_ptr, num_valid_ids_ptr, out_ptr, w2_scale_ptr, a2_scale_ptr, splitk);
+ }
+\ No newline at end of file
+diff --git a/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages.h b/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages.h
+index 7c22ab857b..f1ef022159 100644
+--- a/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages.h
++++ b/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages.h
+@@ -335,6 +335,19 @@ struct MulABScaleExpertWeightA8W8blkscale
+     }
+ };
+ 
++struct MulABScaleExpertWeightA8W8blkscaleSplitk
++{
++    template <typename E, typename C, typename D2>
++    __host__ __device__ constexpr void operator()(E& e, const C& c, const D2& d2) const;
++    template <>
++    __host__ __device__ constexpr void
++    operator()<float, float, float>(float& e, const float& c, const float& d2) const
++    {
++        (void)d2;
++        e = ck::type_convert<F16>(c);
++    }
++};
++
+ using MoeKernel = std::function<void(const hipStream_t& stream,
+                                      int,
+                                      int,
+@@ -350,7 +363,8 @@ using MoeKernel = std::function<void(const hipStream_t& stream,
+                                      void*&,
+                                      void*&,
+                                      std::optional<void*>,
+-                                     std::optional<void*>)>;
++                                     std::optional<void*>,
++                                     std::optional<int>)>;
+ 
+ template <typename A0DataType,
+           typename B0DataType,
+@@ -383,7 +397,8 @@ void ck_moe_stage1_gemm(const hipStream_t& stream,
+                         void*& num_valid_ids,     // [1]
+                         void*& out,               // [max_num_tokens_padded, inter_dim]
+                         std::optional<void*> w1_scale = std::nullopt, // [e, 1, n], gate(up) scale
+-                        std::optional<void*> a1_scale = std::nullopt  // [m, 1], token scale
++                        std::optional<void*> a1_scale = std::nullopt, // [m, 1], token scale
++                        std::optional<int>   splitk   = 1 // splitk
+ );
+ 
+ template <typename A0DataType,
+@@ -418,5 +433,6 @@ void ck_moe_stage2_gemm(
+     void*& num_valid_ids,     //[1]
+     void*& out,               // [m, out_dim]
+     std::optional<void*> w2_scale = std::nullopt, // [e, 1, n], gate(up) scale
+-    std::optional<void*> a2_scale = std::nullopt  // [max_num_tokens_padded, 1], token scale
++    std::optional<void*> a2_scale = std::nullopt, // [max_num_tokens_padded, 1], token scale
++    std::optional<int>   splitk   = 1 // splitk
+ );
+diff --git a/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages_common.cuh b/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages_common.cuh
+index 55cf72b4a9..aa7cd67366 100644
+--- a/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages_common.cuh
++++ b/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages_common.cuh
+@@ -1,40 +1,44 @@
+ // SPDX-License-Identifier: MIT
+ // Copyright (C) 2024-2025, Advanced Micro Devices, Inc. All rights reserved.
+ #pragma once
+-#include "gemm_moe_ck2stages.h"
+-#include "ck/tensor_operation/gpu/device/impl/device_moe_gemm.hpp"
+ #include "ck/tensor_operation/gpu/device/impl/device_gemm_multiple_d_xdl_cshuffle_v3.hpp"
++#include "ck/tensor_operation/gpu/device/impl/device_moe_gemm.hpp"
++#include "gemm_moe_ck2stages.h"
+ #include <iostream>
+ 
+-template <
+-    typename A0DataType,
+-    typename B0DataType,
+-    typename AccDataType,
+-    typename EDataType,
+-    typename CDEElementOp,
+-    PipelineVersion PipelineVer,
+-    int BLOCKSIZE,
+-    int MPerBlock,
+-    int NPerBlock,
+-    int KPerBlock,
+-    int MWaves,
+-    int NWaves,
+-    bool Nswizzle,
+-    bool PerTensorQuant,
+-    bool MulRoutedWeight,
+-    int ActOP>
+-void ck_moe_stage1_gemm(const hipStream_t &stream, int tokens, int sorted_size, int N, int K,
++template <typename A0DataType,
++          typename B0DataType,
++          typename AccDataType,
++          typename EDataType,
++          typename CDEElementOp,
++          PipelineVersion PipelineVer,
++          int BLOCKSIZE,
++          int MPerBlock,
++          int NPerBlock,
++          int KPerBlock,
++          int MWaves,
++          int NWaves,
++          bool Nswizzle,
++          bool PerTensorQuant,
++          bool MulRoutedWeight,
++          int ActOP>
++void ck_moe_stage1_gemm(const hipStream_t& stream,
++                        int tokens,
++                        int sorted_size,
++                        int N,
++                        int K,
+                         int topk,
+-                        void *&hidden_states,     // [m, k], input token
+-                        void *&w1,                // [e, n, k]/[e, 2*n, k], pre-shuffle([e, nr, kr, w])
+-                        void *&w2,                // [expert, dim, inter_dim], pre-shuffle([e, nr, kr, w])
+-                        void *&sorted_token_ids,  // [max_num_tokens_padded]
+-                        void *&sorted_expert_ids, // [max_num_m_blocks]
+-                        void *&sorted_weights,
+-                        void *&num_valid_ids,           // [1]
+-                        void *&out,                     // [max_num_tokens_padded, inter_dim]
+-                        std::optional<void *> w1_scale, // [e, 1, n], gate(up) scale
+-                        std::optional<void *> a1_scale  // [m, 1], token scale
++                        void*& hidden_states, // [m, k], input token
++                        void*& w1,            // [e, n, k]/[e, 2*n, k], pre-shuffle([e, nr, kr, w])
++                        void*& w2, // [expert, dim, inter_dim], pre-shuffle([e, nr, kr, w])
++                        void*& sorted_token_ids,  // [max_num_tokens_padded]
++                        void*& sorted_expert_ids, // [max_num_m_blocks]
++                        void*& sorted_weights,
++                        void*& num_valid_ids,          // [1]
++                        void*& out,                    // [max_num_tokens_padded, inter_dim]
++                        std::optional<void*> w1_scale, // [e, 1, n], gate(up) scale
++                        std::optional<void*> a1_scale, // [m, 1], token scale
++                        std::optional<int> splitk      // splitk
+ )
+ {
+     // ~~~~~~~~~~~~~~~~~~~~~~~~following start with ck things
+@@ -42,43 +46,47 @@ void ck_moe_stage1_gemm(const hipStream_t &stream, int tokens, int sorted_size,
+     ck::index_t StrideB = K;
+     ck::index_t StrideD = 0;
+     ck::index_t StrideE = N;
+-    ck::index_t KBatch = 1;
++    ck::index_t KBatch  = 1;
+     // using AccDataType = F32;
+     using CShuffleDataType = F32;
+-    using DsDataType = ck::Tuple<F32, F32, F32>;
++    using DsDataType       = ck::Tuple<F32, F32, F32>;
+ 
+     using A0Layout = Row;
+     using B0Layout = Col;
+     using D0Layout = Row;
+     using D1Layout = Col;
+-    using ELayout = Row;
++    using ELayout  = Row;
+     using D2Layout = ELayout;
+     using DsLayout = ck::Tuple<D0Layout, D1Layout, D2Layout>;
+ 
+     using PassThrough = ck::tensor_operation::element_wise::PassThrough;
+-    using AElementOp = PassThrough;
+-    using BElementOp = PassThrough;
++    using AElementOp  = PassThrough;
++    using BElementOp  = PassThrough;
+ 
+     static constexpr auto GemmSpec = ck::tensor_operation::device::GemmSpecialization::Default;
+-    static constexpr ck::index_t MNPerXDL = 16;
+-    static constexpr ck::index_t WAVES = BLOCKSIZE / 64;
++    static constexpr ck::index_t MNPerXDL    = 16;
++    static constexpr ck::index_t WAVES       = BLOCKSIZE / 64;
+     static constexpr ck::index_t MXDLPerWave = MPerBlock / (MNPerXDL * MWaves);
+     static constexpr ck::index_t NXDLPerWave = NPerBlock / (MNPerXDL * NWaves);
+-    // static constexpr ck::index_t NPerBlock = PipelineVer == ck::BlockGemmPipelineVersion::v1 ? 64 : 128;
+-    static constexpr ck::index_t CShuffleMXDLPerWave = ck::is_same_v<B0DataType, I4> ? 2 : MXDLPerWave;
+-    static constexpr ck::index_t CShuffleNXDLPerWave = ck::is_same_v<B0DataType, I4> ? 1 : NXDLPerWave;
++    // static constexpr ck::index_t NPerBlock = PipelineVer == ck::BlockGemmPipelineVersion::v1 ? 64
++    // : 128;
++    static constexpr ck::index_t CShuffleMXDLPerWave =
++        ck::is_same_v<B0DataType, I4> ? 2 : MXDLPerWave;
++    static constexpr ck::index_t CShuffleNXDLPerWave =
++        ck::is_same_v<B0DataType, I4> ? 1 : NXDLPerWave;
+     // Note: some fp8 instances didn't compile with AK1/BK1=16
+-    static constexpr ck::index_t K1 = (NPerBlock == 64 && sizeof(A0DataType) == 1 && sizeof(B0DataType) == 1) ? 8 : 16;
++    static constexpr ck::index_t K1 =
++        (NPerBlock == 64 && sizeof(A0DataType) == 1 && sizeof(B0DataType) == 1) ? 8 : 16;
+     static constexpr ck::index_t AK1 = K1 / sizeof(A0DataType);
+     static constexpr ck::index_t BK1 = ck::is_same_v<B0DataType, I4> ? 32 : K1 / sizeof(B0DataType);
+-    static constexpr ck::index_t EVec = 16 / sizeof(EDataType);
+-    static constexpr ck::index_t K0_A = KPerBlock / AK1;
+-    static constexpr ck::index_t K0_B = KPerBlock / BK1;
++    static constexpr ck::index_t EVec   = 16 / sizeof(EDataType);
++    static constexpr ck::index_t K0_A   = KPerBlock / AK1;
++    static constexpr ck::index_t K0_B   = KPerBlock / BK1;
+     static constexpr ck::index_t K0_M_A = BLOCKSIZE / K0_A;
+     static constexpr ck::index_t K0_N_B = BLOCKSIZE / K0_B;
+-    static constexpr ck::index_t D0Vec = 1;
+-    static constexpr ck::index_t D1Vec = PerTensorQuant ? 1 : EVec;
+-    static constexpr ck::index_t D2Vec = 1;
++    static constexpr ck::index_t D0Vec  = 1;
++    static constexpr ck::index_t D1Vec  = PerTensorQuant ? 1 : EVec;
++    static constexpr ck::index_t D2Vec  = 1;
+ 
+     using DeviceOpInstance = ck::tensor_operation::device::DeviceMoeGemm
+         // clang-format off
+@@ -88,7 +96,7 @@ void ck_moe_stage1_gemm(const hipStream_t &stream, int tokens, int sorted_size,
+ ///######|         |         |         |        |           |           |           |          |            |                 |            |            |             |               |      |      |      |      |    |    |     |     |     |     |                |               |               |               |               |               |          |                |               |               |              |               |               |          |            |            |                             |    S<C, D0, D1>|
+ ///###### RCR
+           <      Row,      Col, DsLayout, ELayout, A0DataType, B0DataType, DsDataType, EDataType, AccDataType, CShuffleDataType,
+-               AElementOp,  BElementOp, CDEElementOp,       GemmSpec,   
++               AElementOp,  BElementOp, CDEElementOp,       GemmSpec,
+                BLOCKSIZE,   MPerBlock,   NPerBlock,    KPerBlock,
+                AK1,   BK1,
+                MNPerXDL,   MNPerXDL,
+@@ -99,45 +107,45 @@ void ck_moe_stage1_gemm(const hipStream_t &stream, int tokens, int sorted_size,
+                ck::BlockGemmPipelineScheduler::Intrawave, PipelineVer, ActOP, Nswizzle, true, MulRoutedWeight, !PerTensorQuant, ck::index_t, A0DataType>;
+     // clang-format on
+ 
+-    auto a_element_op = AElementOp{};
+-    auto b_element_op = BElementOp{};
++    auto a_element_op   = AElementOp{};
++    auto b_element_op   = BElementOp{};
+     auto cde_element_op = CDEElementOp{};
+ 
+     constexpr ck::index_t NumDTensor = DsDataType::Size();
+ 
+-    constexpr auto I0 = ck::Number<0>{};
+-    constexpr auto I1 = ck::Number<1>{};
++    constexpr auto I0             = ck::Number<0>{};
++    constexpr auto I1             = ck::Number<1>{};
+     static constexpr auto DStride = PerTensorQuant ? I0 : I1;
+ 
+     // do GEMM
+     auto device_op = DeviceOpInstance{};
+ 
+-    auto invoker = device_op.MakeInvoker();
+-    auto argument =
+-        device_op.MakeArgument(sorted_token_ids,
+-                               sorted_expert_ids,
+-                               num_valid_ids,
+-                               hidden_states,
+-                               w1,
+-                               std::array<const void *, NumDTensor>{a1_scale.has_value() ? a1_scale.value() : nullptr,
+-                                                                    w1_scale.has_value() ? w1_scale.value() : nullptr,
+-                                                                    MulRoutedWeight ? sorted_weights : nullptr},
+-                               out,
+-                               tokens,
+-                               topk,
+-                               sorted_size,
+-                               N,
+-                               K,
+-                               StrideA,
+-                               StrideB,
+-                               std::array<ck::index_t, NumDTensor>{DStride, DStride, I0},
+-                               StrideE,
+-                               KBatch,
+-                               a_element_op,
+-                               b_element_op,
+-                               cde_element_op);
++    auto invoker  = device_op.MakeInvoker();
++    auto argument = device_op.MakeArgument(
++        sorted_token_ids,
++        sorted_expert_ids,
++        num_valid_ids,
++        hidden_states,
++        w1,
++        std::array<const void*, NumDTensor>{a1_scale.has_value() ? a1_scale.value() : nullptr,
++                                            w1_scale.has_value() ? w1_scale.value() : nullptr,
++                                            MulRoutedWeight ? sorted_weights : nullptr},
++        out,
++        tokens,
++        topk,
++        sorted_size,
++        N,
++        K,
++        StrideA,
++        StrideB,
++        std::array<ck::index_t, NumDTensor>{DStride, DStride, I0},
++        StrideE,
++        KBatch,
++        a_element_op,
++        b_element_op,
++        cde_element_op);
+ 
+-    if (!device_op.IsSupportedArgument(argument))
++    if(!device_op.IsSupportedArgument(argument))
+     {
+         throw std::runtime_error(
+             "wrong! device_gemm with the specified compilation parameters does "
+@@ -147,51 +155,74 @@ void ck_moe_stage1_gemm(const hipStream_t &stream, int tokens, int sorted_size,
+     invoker.Run(argument, StreamConfig{stream});
+ }
+ 
+-#define CK_MOE_STAGE1_GEMM_DEFINE(BLOCKSIZE, MPerfBlock, NPerBlock, KPerBlock, MWaves, NWaves, PipelineVer)                                                                                                                     \
+-    template void ck_moe_stage1_gemm<A0DataType, B0DataType, AccDataType, EDataType, CDEElementOp, PipelineVer, BLOCKSIZE, MPerfBlock, NPerBlock, KPerBlock, MWaves, NWaves, Nswizzle, PerTensorQuant, MulRoutedWeight, ActOP>( \
+-        const hipStream_t &stream,                                                                                                                                                                                              \
+-        int tokens, int sorted_size, int N, int K,                                                                                                                                                                              \
+-        int topk,                                                                                                                                                                                                               \
+-        void *&hidden_states,                                                                                                                                                                                                   \
+-        void *&w1,                                                                                                                                                                                                              \
+-        void *&w2,                                                                                                                                                                                                              \
+-        void *&sorted_token_ids,                                                                                                                                                                                                \
+-        void *&sorted_expert_ids,                                                                                                                                                                                               \
+-        void *&sorted_weights,                                                                                                                                                                                                  \
+-        void *&num_valid_ids,                                                                                                                                                                                                   \
+-        void *&out,                                                                                                                                                                                                             \
+-        std::optional<void *> w1_scale,                                                                                                                                                                                         \
+-        std::optional<void *> a1_scale);
++#define CK_MOE_STAGE1_GEMM_DEFINE(                                            \
++    BLOCKSIZE, MPerfBlock, NPerBlock, KPerBlock, MWaves, NWaves, PipelineVer) \
++    template void ck_moe_stage1_gemm<A0DataType,                              \
++                                     B0DataType,                              \
++                                     AccDataType,                             \
++                                     EDataType,                               \
++                                     CDEElementOp,                            \
++                                     PipelineVer,                             \
++                                     BLOCKSIZE,                               \
++                                     MPerfBlock,                              \
++                                     NPerBlock,                               \
++                                     KPerBlock,                               \
++                                     MWaves,                                  \
++                                     NWaves,                                  \
++                                     Nswizzle,                                \
++                                     PerTensorQuant,                          \
++                                     MulRoutedWeight,                         \
++                                     ActOP>(const hipStream_t& stream,        \
++                                            int tokens,                       \
++                                            int sorted_size,                  \
++                                            int N,                            \
++                                            int K,                            \
++                                            int topk,                         \
++                                            void*& hidden_states,             \
++                                            void*& w1,                        \
++                                            void*& w2,                        \
++                                            void*& sorted_token_ids,          \
++                                            void*& sorted_expert_ids,         \
++                                            void*& sorted_weights,            \
++                                            void*& num_valid_ids,             \
++                                            void*& out,                       \
++                                            std::optional<void*> w1_scale,    \
++                                            std::optional<void*> a1_scale,    \
++                                            std::optional<int> splitk);
+ 
+-template <
+-    typename A0DataType,
+-    typename B0DataType,
+-    typename AccDataType,
+-    typename EDataType,
+-    typename CDEElementOp,
+-    PipelineVersion PipelineVer,
+-    int BLOCKSIZE,
+-    int MPerBlock,
+-    int NPerBlock,
+-    int KPerBlock,
+-    int MWaves,
+-    int NWaves,
+-    bool Nswizzle,
+-    bool PerTensorQuant,
+-    bool MulRoutedWeight,
+-    int ActOP = 0>
+-void ck_moe_stage2_gemm(const hipStream_t &stream, int tokens, int sorted_size, int N, int K,
++template <typename A0DataType,
++          typename B0DataType,
++          typename AccDataType,
++          typename EDataType,
++          typename CDEElementOp,
++          PipelineVersion PipelineVer,
++          int BLOCKSIZE,
++          int MPerBlock,
++          int NPerBlock,
++          int KPerBlock,
++          int MWaves,
++          int NWaves,
++          bool Nswizzle,
++          bool PerTensorQuant,
++          bool MulRoutedWeight,
++          int ActOP = 0>
++void ck_moe_stage2_gemm(const hipStream_t& stream,
++                        int tokens,
++                        int sorted_size,
++                        int N,
++                        int K,
+                         int topk,
+-                        void *&inter_states,            // [max_num_tokens_padded, k], input token
+-                        void *&w1,                      // [e, n, k]/[e, 2*n, k], pre-shuffle([e, nr, kr, w])
+-                        void *&w2,                      // [expert, dim, inter_dim], pre-shuffle([e, nr, kr, w])
+-                        void *&sorted_token_ids,        // [max_num_tokens_padded]
+-                        void *&sorted_expert_ids,       // [max_num_m_blocks]
+-                        void *&sorted_weights,          // [max_num_tokens_padded]
+-                        void *&num_valid_ids,           //[1]
+-                        void *&out,                     // [m, out_dim]
+-                        std::optional<void *> w2_scale, // [e, 1, n], gate(up) scale
+-                        std::optional<void *> a2_scale  // [max_num_tokens_padded, 1], token scale
++                        void*& inter_states, // [max_num_tokens_padded, k], input token
++                        void*& w1,           // [e, n, k]/[e, 2*n, k], pre-shuffle([e, nr, kr, w])
++                        void*& w2, // [expert, dim, inter_dim], pre-shuffle([e, nr, kr, w])
++                        void*& sorted_token_ids,       // [max_num_tokens_padded]
++                        void*& sorted_expert_ids,      // [max_num_m_blocks]
++                        void*& sorted_weights,         // [max_num_tokens_padded]
++                        void*& num_valid_ids,          //[1]
++                        void*& out,                    // [m, out_dim]
++                        std::optional<void*> w2_scale, // [e, 1, n], gate(up) scale
++                        std::optional<void*> a2_scale, // [max_num_tokens_padded, 1], token scale
++                        std::optional<int> splitk      // splitk
+ )
+ {
+     // ~~~~~~~~~~~~~~~~~~~~~~~~following start with ck things
+@@ -199,45 +230,50 @@ void ck_moe_stage2_gemm(const hipStream_t &stream, int tokens, int sorted_size,
+     ck::index_t StrideB = K;
+     ck::index_t StrideD = 0;
+     ck::index_t StrideE = N;
+-    ck::index_t KBatch = 1;
++    ck::index_t KBatch  = 1;
+ 
+     // using AccDataType = F32;
+     using CShuffleDataType = F32;
+-    using DsDataType = ck::Tuple<F32, F32, F32>;
++    using DsDataType       = ck::Tuple<F32, F32, F32>;
+ 
+     using A0Layout = Row;
+     using B0Layout = Col;
+-    using ELayout = Row;
++    using ELayout  = Row;
+     using D0Layout = Row;
+     using D1Layout = Col;
+     using DsLayout = ck::Tuple<D0Layout, D1Layout, ELayout>;
+ 
+     using PassThrough = ck::tensor_operation::element_wise::PassThrough;
+-    using AElementOp = PassThrough;
+-    using BElementOp = PassThrough;
++    using AElementOp  = PassThrough;
++    using BElementOp  = PassThrough;
+ 
+     static constexpr auto GemmSpec = ck::tensor_operation::device::GemmSpecialization::Default;
+     // static constexpr ck::index_t BLOCKSIZE = 256;
+-    static constexpr ck::index_t WAVES = BLOCKSIZE / 64;
+-    static constexpr ck::index_t MNPerXDL = 16;
++    static constexpr ck::index_t WAVES       = BLOCKSIZE / 64;
++    static constexpr ck::index_t MNPerXDL    = 16;
+     static constexpr ck::index_t MXDLPerWave = MPerBlock / (MNPerXDL * MWaves);
+     static constexpr ck::index_t NXDLPerWave = NPerBlock / (MNPerXDL * NWaves);
+-    static constexpr ck::index_t CShuffleMXDLPerWave = ck::is_same_v<B0DataType, I4> ? 2 : MXDLPerWave;
+-    static constexpr ck::index_t CShuffleNXDLPerWave = ck::is_same_v<B0DataType, I4> ? 2 : NXDLPerWave;
+-    static constexpr ck::index_t CShuffleNLane = ck::is_same_v<B0DataType, I4> ? 32 : NPerBlock / 2 / NXDLPerWave; // 64
++    static constexpr ck::index_t CShuffleMXDLPerWave =
++        ck::is_same_v<B0DataType, I4> ? 2 : MXDLPerWave;
++    static constexpr ck::index_t CShuffleNXDLPerWave =
++        ck::is_same_v<B0DataType, I4> ? 2 : NXDLPerWave;
++    static constexpr ck::index_t CShuffleNLane =
++        ck::is_same_v<B0DataType, I4> ? 32 : NPerBlock / 2 / NXDLPerWave; // 64
+     static constexpr ck::index_t CShuffleMLane = BLOCKSIZE / CShuffleNLane;
+     // Note: some fp8 instances didn't compile with AK1/BK1=16
+-    static constexpr ck::index_t K1 = (KPerBlock == 64 && sizeof(A0DataType) == 1 && sizeof(B0DataType) == 1) ? 8 : 16;
++    static constexpr ck::index_t K1 =
++        (KPerBlock == 64 && sizeof(A0DataType) == 1 && sizeof(B0DataType) == 1) ? 8 : 16;
+     static constexpr ck::index_t AK1 = K1 / sizeof(A0DataType);
+-    static constexpr ck::index_t BK1 = ck::is_same_v<B0DataType, I4> ? 32 / sizeof(B0DataType) : K1 / sizeof(B0DataType);
+-    static constexpr ck::index_t EVec = 2;
++    static constexpr ck::index_t BK1 =
++        ck::is_same_v<B0DataType, I4> ? 32 / sizeof(B0DataType) : K1 / sizeof(B0DataType);
++    static constexpr ck::index_t EVec  = 2;
+     static constexpr ck::index_t D0Vec = 1;
+     static constexpr ck::index_t D1Vec = PerTensorQuant ? 1 : EVec;
+     static constexpr ck::index_t D2Vec = 1;
+-    static constexpr ck::index_t K0_A = KPerBlock / AK1;
+-    static constexpr ck::index_t K0_B = KPerBlock / BK1;
+-    static constexpr ck::index_t K0_M = BLOCKSIZE / K0_A;
+-    static constexpr ck::index_t K0_N = BLOCKSIZE / K0_B;
++    static constexpr ck::index_t K0_A  = KPerBlock / AK1;
++    static constexpr ck::index_t K0_B  = KPerBlock / BK1;
++    static constexpr ck::index_t K0_M  = BLOCKSIZE / K0_A;
++    static constexpr ck::index_t K0_N  = BLOCKSIZE / K0_B;
+ 
+     using DeviceOpInstance = ck::tensor_operation::device::DeviceMoeGemm
+         // clang-format off
+@@ -247,7 +283,7 @@ void ck_moe_stage2_gemm(const hipStream_t &stream, int tokens, int sorted_size,
+ ///#####|         |         |         |        |           |           |           |          |            |                 |            |            |             |               |      |      |      |      |    |    |     |     |     |     |                |               |               |               |               |               |          |                |               |               |              |               |               |          |            |            |                             |    S<C, D0, D1>|
+ ///##### RCR
+        <      Row,      Col, DsLayout, ELayout, A0DataType, B0DataType, DsDataType, EDataType, AccDataType, CShuffleDataType,
+-              AElementOp,  BElementOp, CDEElementOp,       GemmSpec,   
++              AElementOp,  BElementOp, CDEElementOp,       GemmSpec,
+               BLOCKSIZE,   MPerBlock,   NPerBlock,    KPerBlock,
+               AK1,   BK1,
+               MNPerXDL,   MNPerXDL,
+@@ -319,4 +355,5 @@ void ck_moe_stage2_gemm(const hipStream_t &stream, int tokens, int sorted_size,
+         void *&num_valid_ids,                                                                                                                                        \
+         void *&out,                                                                                                                                                  \
+         std::optional<void *> w2_scale,                                                                                                                              \
+-        std::optional<void *> a2_scale);
+\ No newline at end of file
++        std::optional<void *> a2_scale,                                                                                                                              \
++        std::optional<int>   splitk);
+diff --git a/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages_common.py b/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages_common.py
+index f849b42d44..20618c331d 100644
+--- a/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages_common.py
++++ b/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages_common.py
+@@ -358,6 +358,7 @@ def get_gemm1_kernels_list(
+     ActOP: str,
+     MulRoutedWeight: bool,
+     preshuffle: bool = False,
++    splitk: bool = False,
+ ) -> list:
+     arch = get_gfx()
+     if Adtype in bit16_list and Bdtype in bit16_list and Adtype == Adtype:
+@@ -403,7 +404,10 @@ def get_gemm1_kernels_list(
+         if tag == "a8w4":
+             kernel.CDEElementOp = "MulABScaleWint4"
+         elif tag == "a8w8blkscale":
+-            kernel.CDEElementOp = "MulABScaleExpertWeightA8W8blkscale"
++            if splitk:
++                kernel.CDEElementOp = "MulABScaleExpertWeightA8W8blkscaleSplitk"
++            else:
++                kernel.CDEElementOp = "MulABScaleExpertWeightA8W8blkscale"
+         elif tag == "a8w8" or tag == "a4w4" or tag == "a4w4_bns":
+             kernel.CDEElementOp = "MulABScale"
+         elif tag == "a16w16":
+diff --git a/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages_common_blockscale.cuh b/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages_common_blockscale.cuh
+index dcd6d096cc..41c918c992 100644
+--- a/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages_common_blockscale.cuh
++++ b/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages_common_blockscale.cuh
+@@ -33,7 +33,9 @@ void ck_moe_stage1_gemm(const hipStream_t &stream, int tokens, int sorted_size,
+                         void *&num_valid_ids,           // [1]
+                         void *&out,                     // [max_num_tokens_padded, inter_dim]
+                         std::optional<void *> w1_scale, // [e, 1, n], gate(up) scale
+-                        std::optional<void *> a1_scale  // [m, 1], token scale
++                        std::optional<void *> a1_scale, // [m, 1], token scale
++                        std::optional<int>    splitk     // splitk
++
+ )
+ {
+     // ~~~~~~~~~~~~~~~~~~~~~~~~following start with ck things
+@@ -45,8 +47,14 @@ void ck_moe_stage1_gemm(const hipStream_t &stream, int tokens, int sorted_size,
+ 
+     ck::index_t StrideA = K;
+     ck::index_t StrideB = K;
+-    ck::index_t StrideE = N;
+-    ck::index_t KBatch = 1;
++    ck::index_t SplitK = splitk.has_value() ? splitk.value() : 1;
++
++    ck::index_t KBatch = SplitK > 1 ? K / (SplitK * KPerBlock)  : 1;
++    if (KBatch > 1){
++        TORCH_CHECK((KBatch * KPerBlock * SplitK == K),
++        "K(", K, ") must be a multiple of KPerBlock(", KPerBlock, ") * splitk(", splitk.value(), ").\n");
++    }
++    ck::index_t StrideE = N * (KBatch > 1 ? 2 : 1);
+ 
+     using A0Layout = Row;
+     using B0Layout = Col;
+@@ -83,6 +91,7 @@ void ck_moe_stage1_gemm(const hipStream_t &stream, int tokens, int sorted_size,
+     static constexpr ck::index_t Scale_Block_M = 1;
+     static constexpr ck::index_t Scale_Block_N = 128;
+     static constexpr ck::index_t Scale_Block_K = 128;
++    static constexpr bool IsSplitK = std::is_same_v<CDEElementOp, MulABScaleExpertWeightA8W8blkscaleSplitk>;
+     using DeviceOpInstance = ck::tensor_operation::device::DeviceMoeGemmBlockScale
+         // clang-format off
+           <     Row,  Col,  DsLayout, ELayout,
+@@ -96,7 +105,7 @@ void ck_moe_stage1_gemm(const hipStream_t &stream, int tokens, int sorted_size,
+                 S<K0_A, K0_M_A, 1>, S<1, 0, 2>, S<1, 0, 2>, 2, AK1, AK1, 0,
+                 S<K0_B, K0_N_B, 1>, S<1, 0, 2>, S<1, 0, 2>, 2, BK1, BK1, 0,
+                 MXDLPerWave,    NXDLPerWave,   S<1, K0_M_A, 1, K0_A>, S<2, 1, 1, 1>,
+-                ck::BlockGemmPipelineScheduler::Intrawave, PipelineVer, ActOP, Nswizzle, true, MulRoutedWeight, int32_t, A0DataType>;
++                ck::BlockGemmPipelineScheduler::Intrawave, PipelineVer, ActOP, Nswizzle, true, IsSplitK, MulRoutedWeight, int32_t, A0DataType>;
+ 
+     // clang-format on
+ 
+@@ -157,7 +166,8 @@ void ck_moe_stage1_gemm(const hipStream_t &stream, int tokens, int sorted_size,
+         void *&num_valid_ids,                                                                                                                                                                                                   \
+         void *&out,                                                                                                                                                                                                             \
+         std::optional<void *> w1_scale,                                                                                                                                                                                         \
+-        std::optional<void *> a1_scale);
++        std::optional<void *> a1_scale,                                                                                                                                                                                         \
++        std::optional<int>   splitk);
+ 
+ template <
+     typename A0DataType,
+@@ -187,7 +197,8 @@ void ck_moe_stage2_gemm(const hipStream_t &stream, int tokens, int sorted_size,
+                         void *&num_valid_ids,           //[1]
+                         void *&out,                     // [m, out_dim]
+                         std::optional<void *> w2_scale, // [e, 1, n], gate(up) scale
+-                        std::optional<void *> a2_scale  // [max_num_tokens_padded, 1], token scale
++                        std::optional<void *> a2_scale, // [max_num_tokens_padded, 1], token scale
++                        std::optional<int>   splitk     // splitk
+ )
+ {
+     // ~~~~~~~~~~~~~~~~~~~~~~~~following start with ck things
+@@ -252,7 +263,7 @@ void ck_moe_stage2_gemm(const hipStream_t &stream, int tokens, int sorted_size,
+               S<K0_A, K0_M, 1>, S<1, 0, 2>, S<1, 0, 2>, 2, 16, 16, 0,
+               S<K0_B, K0_N, 1>, S<1, 0, 2>, S<1, 0, 2>, 2, 16, 16, 0,
+               MXDLPerWave,    NXDLPerWave,   S<1, K0_M, 1, K0_A>, S<2, 1, 1, 1>,
+-              ck::BlockGemmPipelineScheduler::Intrawave, PipelineVer, 0, false, false, MulRoutedWeight, int32_t, A0DataType>;
++              ck::BlockGemmPipelineScheduler::Intrawave, PipelineVer, 0, false, false, false, MulRoutedWeight, int32_t, A0DataType>;
+ 
+ 
+ 
+@@ -313,4 +324,5 @@ void ck_moe_stage2_gemm(const hipStream_t &stream, int tokens, int sorted_size,
+         void *&num_valid_ids,                                                                                                                                        \
+         void *&out,                                                                                                                                                  \
+         std::optional<void *> w2_scale,                                                                                                                              \
+-        std::optional<void *> a2_scale);
++        std::optional<void *> a2_scale,                                                                                                                              \
++        std::optional<int>   splitk);
+diff --git a/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages_common_mxfp4.cuh b/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages_common_mxfp4.cuh
+index 9321f5950a..f2315b1dd0 100644
+--- a/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages_common_mxfp4.cuh
++++ b/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages_common_mxfp4.cuh
+@@ -38,7 +38,8 @@ void ck_moe_stage1_gemm(const hipStream_t& stream,
+                         void*& num_valid_ids,          // [1]
+                         void*& out,                    // [max_num_tokens_padded, inter_dim]
+                         std::optional<void*> w1_scale, // [e, 1, n], gate(up) scale
+-                        std::optional<void*> a1_scale  // [m, 1], token scale
++                        std::optional<void*> a1_scale, // [m, 1], token scale
++                        std::optional<int>   splitk     // splitk
+ )
+ {
+     // ~~~~~~~~~~~~~~~~~~~~~~~~following start with ck things
+@@ -195,7 +196,8 @@ void ck_moe_stage1_gemm(const hipStream_t& stream,
+                                             void*& num_valid_ids,             \
+                                             void*& out,                       \
+                                             std::optional<void*> w1_scale,    \
+-                                            std::optional<void*> a1_scale);
++                                            std::optional<void*> a1_scale,    \
++                                            std::optional<int>   splitk);
+ 
+ template <typename A0DataType,
+           typename B0DataType,
+@@ -228,7 +230,8 @@ void ck_moe_stage2_gemm(const hipStream_t& stream,
+                         void*& num_valid_ids,          //[1]
+                         void*& out,                    // [m, out_dim]
+                         std::optional<void*> w2_scale, // [e, 1, n], gate(up) scale
+-                        std::optional<void*> a2_scale  // [max_num_tokens_padded, 1], token scale
++                        std::optional<void*> a2_scale, // [max_num_tokens_padded, 1], token scale
++                        std::optional<int>   splitk     // splitk
+ )
+ {
+     // ~~~~~~~~~~~~~~~~~~~~~~~~following start with ck things
+@@ -366,4 +369,5 @@ void ck_moe_stage2_gemm(const hipStream_t& stream,
+         void *&num_valid_ids,                                                                                                                                        \
+         void *&out,                                                                                                                                                  \
+         std::optional<void *> w2_scale,                                                                                                                              \
+-        std::optional<void *> a2_scale);
++        std::optional<void *> a2_scale,                                                                                                                              \
++        std::optional<int>   splitk);
+diff --git a/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages_common_mxfp4_bns.cuh b/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages_common_mxfp4_bns.cuh
+index 63d7b29d33..ac9d71be29 100644
+--- a/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages_common_mxfp4_bns.cuh
++++ b/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages_common_mxfp4_bns.cuh
+@@ -37,7 +37,8 @@ void ck_moe_stage1_gemm(const hipStream_t& stream,
+                         void*& num_valid_ids,          // [1]
+                         void*& out,                    // [max_num_tokens_padded, inter_dim]
+                         std::optional<void*> w1_scale, // [e, 1, n], gate(up) scale
+-                        std::optional<void*> a1_scale  // [m, 1], token scale
++                        std::optional<void*> a1_scale, // [m, 1], token scale
++                        std::optional<int>   splitk     // splitk
+ )
+ {
+     // ~~~~~~~~~~~~~~~~~~~~~~~~following start with ck things
+@@ -96,10 +97,10 @@ void ck_moe_stage1_gemm(const hipStream_t& stream,
+ ///######|         |         |         |        |           |           |           |          |            |                 |   Operation|   Operation|    Operation|               |      |      |      |      |    |    |     |     | Wave| Wave| Lengths_K0_M_K1|   ArrangeOrder|               |               |      PerVector|   PerVector_K1|          | Lengths_K0_N_K1|   ArrangeOrder|               |              |      PerVector|   PerVector_K1|          |  PerShuffle|  PerShuffle|         _NBlock_NWaveNPerXdl|   _NWaveNPerXdl|
+ ///######|         |         |         |        |           |           |           |          |            |                 |            |            |             |               |      |      |      |      |    |    |     |     |     |     |                |               |               |               |               |               |          |                |               |               |              |               |               |          |            |            |                             |    S<C, D0, D1>|
+ ///###### RCR
+-          <     Row,  Col,  DsLayout, ELayout, 
++          <     Row,  Col,  DsLayout, ELayout,
+                 A0DataType, A1DataType, B0DataType, B1DataType, DsDataType, EDataType, AccDataType, CShuffleDataType,
+-                AElementOp,  BElementOp, CDEElementOp,       GemmSpec, 
+-                32,      BLOCKSIZE,   
++                AElementOp,  BElementOp, CDEElementOp,       GemmSpec,
++                32,      BLOCKSIZE,
+                 MPerBlock,      NPerBlock,    128,
+                 AK1,   BK1,
+                 MNPerXDL,   MNPerXDL,
+@@ -193,7 +194,8 @@ void ck_moe_stage1_gemm(const hipStream_t& stream,
+                                             void*& num_valid_ids,             \
+                                             void*& out,                       \
+                                             std::optional<void*> w1_scale,    \
+-                                            std::optional<void*> a1_scale);
++                                            std::optional<void*> a1_scale,    \
++                                            std::optional<int>   splitk);
+ 
+ template <typename A0DataType,
+           typename B0DataType,
+@@ -226,7 +228,8 @@ void ck_moe_stage2_gemm(const hipStream_t& stream,
+                         void*& num_valid_ids,          //[1]
+                         void*& out,                    // [m, out_dim]
+                         std::optional<void*> w2_scale, // [e, 1, n], gate(up) scale
+-                        std::optional<void*> a2_scale  // [max_num_tokens_padded, 1], token scale
++                        std::optional<void*> a2_scale, // [max_num_tokens_padded, 1], token scale
++                        std::optional<int>   splitk     // splitk
+ )
+ {
+     // ~~~~~~~~~~~~~~~~~~~~~~~~following start with ck things
+@@ -285,10 +288,10 @@ void ck_moe_stage2_gemm(const hipStream_t& stream,
+ ///#####|         |         |         |        |           |           |           |          |            |                 |   Operation|   Operation|    Operation|               |      |      |      |      |    |    |     |     | Wave| Wave| Lengths_K0_M_K1|   ArrangeOrder|               |               |      PerVector|   PerVector_K1|          | Lengths_K0_N_K1|   ArrangeOrder|               |              |      PerVector|   PerVector_K1|          |  PerShuffle|  PerShuffle|         _NBlock_NWaveNPerXdl|   _NWaveNPerXdl|
+ ///#####|         |         |         |        |           |           |           |          |            |                 |            |            |             |               |      |      |      |      |    |    |     |     |     |     |                |               |               |               |               |               |          |                |               |               |              |               |               |          |            |            |                             |    S<C, D0, D1>|
+ ///##### RCR
+-          <     Row,  Col,  DsLayout, ELayout, 
++          <     Row,  Col,  DsLayout, ELayout,
+                 A0DataType, A1DataType, B0DataType, B1DataType, DsDataType, EDataType, AccDataType, CShuffleDataType,
+                 AElementOp,  BElementOp, CDEElementOp,       GemmSpec,
+-                32,      BLOCKSIZE,   
++                32,      BLOCKSIZE,
+                 MPerBlock,      NPerBlock,    128,
+                 AK1,   BK1,
+                 MNPerXDL,   MNPerXDL,
+@@ -364,4 +367,5 @@ void ck_moe_stage2_gemm(const hipStream_t& stream,
+         void *&num_valid_ids,                                                                                                                                        \
+         void *&out,                                                                                                                                                  \
+         std::optional<void *> w2_scale,                                                                                                                              \
+-        std::optional<void *> a2_scale);
+\ No newline at end of file
++        std::optional<void *> a2_scale,                                                                                                                              \
++        std::optional<int>   splitk);
+diff --git a/csrc/ck_gemm_moe_2stages_codegen/gen_instances.py b/csrc/ck_gemm_moe_2stages_codegen/gen_instances.py
+index 8062c548d0..38b7826094 100644
+--- a/csrc/ck_gemm_moe_2stages_codegen/gen_instances.py
++++ b/csrc/ck_gemm_moe_2stages_codegen/gen_instances.py
+@@ -715,6 +715,7 @@ def __init__(
+         activation,
+         mul_routed_weight_stage,
+         preshuffle,
++        splitk,
+     ):
+         self.working_path = working_path
+         self.a_dtype = a_dtype.upper()
+@@ -725,6 +726,7 @@ def __init__(
+         self.mul_routed_weight_stage = mul_routed_weight_stage
+         self.nswizzle = False
+         self.preshuffle = preshuffle
++        self.splitk = splitk
+ 
+     def generate_instance_and_lookUpTable(self):
+         _, gemm1_kernel_list = get_gemm1_kernels_list(
+@@ -736,6 +738,7 @@ def generate_instance_and_lookUpTable(self):
+             self.activation,
+             self.mul_routed_weight_stage == 1,
+             self.preshuffle,
++            self.splitk,
+         )
+         tag, gemm2_kernel_list = get_gemm2_kernels_list(
+             self.a_dtype,
+@@ -770,6 +773,9 @@ def generate_instance_and_lookUpTable(self):
+                         quanttype = "_mxfp4"
+                 else:
+                     quanttype = ""
++                gemm1_fp32 = (
++                    self.splitk and (kernel.stage == 1) and (quanttype == "_blockscale")
++                )
+                 if not os.path.exists(f_instance):
+                     with open(f_instance, "a") as f_ins:
+                         stage_instance = STG_INSTANCE_IMPL.format(
+@@ -777,7 +783,7 @@ def generate_instance_and_lookUpTable(self):
+                             A0DataType=self.a_dtype,
+                             B0DataType=self.b_dtype,
+                             AccDataType="F32" if self.a_dtype != "I8" else "I32",
+-                            EDataType=self.c_dtype,
++                            EDataType="F32" if gemm1_fp32 else self.c_dtype,
+                             CDEElementOp=kernel.CDEElementOp,
+                             Nswizzle=str(self.nswizzle).lower(),
+                             Quant=self.quant_type,
+@@ -806,7 +812,7 @@ def generate_instance_and_lookUpTable(self):
+                     A0DataType=self.a_dtype,
+                     B0DataType=self.b_dtype,
+                     AccDataType="F32" if self.a_dtype != "I8" else "I32",
+-                    EDataType=self.c_dtype,
++                    EDataType="F32" if gemm1_fp32 else self.c_dtype,
+                     CDEElementOp=kernel.CDEElementOp,
+                     Nswizzle=str(self.nswizzle).lower(),
+                     Quant=self.quant_type,
+@@ -832,11 +838,12 @@ def generate_instance_and_lookUpTable(self):
+             tag
+         ]
+         with open(f_gemm1_heuristic_dispatch, "a") as f_h:
++            gemm1_fp32 = self.splitk and (quanttype == "_blockscale")
+             gemm1_heuristic_dispatch_str = gemm1_heuristic_dispatch.format(
+                 A0DataType=self.a_dtype,
+                 B0DataType=self.b_dtype,
+                 AccDataType="F32" if self.a_dtype != "I8" else "I32",
+-                EDataType=self.c_dtype,
++                EDataType="F32" if gemm1_fp32 else self.c_dtype,
+                 CDEElementOp=kernel_list[0].CDEElementOp,
+                 Nswizzle=str(self.nswizzle).lower(),
+                 Quant=self.quant_type,
+@@ -949,6 +956,12 @@ def generate_instance_and_lookUpTable(self):
+         help="enable pre-shuffle weight mode",
+     )
+ 
++    parser.add_argument(
++        "--issplitk",
++        action="store_true",
++        help="enable moe_stage1 splitk mode",
++    )
++
+     args = parser.parse_args()
+     args.quant_type = (
+         "per_1x128" if args.quant_type == "per_128x128" else args.quant_type
+@@ -998,13 +1011,15 @@ def generate_instance_and_lookUpTable(self):
+                 act,
+                 routed_weight,
+                 preshuffle_mode,
++                False,  # splitk
+             )
+             codegen.generate_instance_and_lookUpTable()
+ 
+         # blk-quant moe
+         blk_quant_l = ["per_1x128"]
+-        for c_dtype, act, routed_weight, quant in itertools.product(
+-            c_dtypes, acts, routed_weight_l, blk_quant_l
++        blk_splitk_l = [False, True]
++        for c_dtype, act, routed_weight, quant, splitk in itertools.product(
++            c_dtypes, acts, routed_weight_l, blk_quant_l, blk_splitk_l
+         ):
+             codegen = ck_moe_2stage_gemm_codegen(
+                 args.working_path,
+@@ -1015,6 +1030,7 @@ def generate_instance_and_lookUpTable(self):
+                 act,
+                 routed_weight,
+                 preshuffle_mode,
++                splitk,
+             )
+             codegen.generate_instance_and_lookUpTable()
+ 
+@@ -1039,6 +1055,7 @@ def generate_instance_and_lookUpTable(self):
+                 act,
+                 routed_weight,
+                 preshuffle_mode,
++                False,  # splitk
+             )
+             codegen.generate_instance_and_lookUpTable()
+     else:
+@@ -1053,6 +1070,7 @@ def generate_instance_and_lookUpTable(self):
+                 args.activation,
+                 args.mul_routed_weight_stage,
+                 args.preshuffle,
++                args.issplitk,
+             )
+             codegen.generate_instance_and_lookUpTable()
+ 
+diff --git a/csrc/include/moe_ck.h b/csrc/include/moe_ck.h
+index a6d461415b..f9b06dfe9f 100644
+--- a/csrc/include/moe_ck.h
++++ b/csrc/include/moe_ck.h
+@@ -18,7 +18,9 @@ void ck_moe_stage1(torch::Tensor& hidden_states, // [m, k], input token
+                    std::optional<int> block_m,
+                    std::optional<torch::Tensor> sorted_weights,
+                    int quant_type,
+-                   int activation);
++                   int activation,
++                   int splitk,
++                   std::optional<std::string> dst_type);
+ 
+ void ck_moe_stage2(torch::Tensor& inter_states, // [m, k], input token
+                    torch::Tensor& w1, // [e, n, k]/[e, 2*n, k], pre-shuffle([e, nr, kr, w])
+@@ -34,4 +36,6 @@ void ck_moe_stage2(torch::Tensor& inter_states, // [m, k], input token
+                    std::optional<int> block_m,
+                    std::optional<torch::Tensor> sorted_weights, // [max_num_tokens_padded]);
+                    int quant_type,
+-                   int activation);
++                   int activation,
++                   int splitk,
++                   std::optional<std::string> dst_type);
+diff --git a/csrc/include/rocm_ops.hpp b/csrc/include/rocm_ops.hpp
+index b19c85495e..1546c72f32 100644
+--- a/csrc/include/rocm_ops.hpp
++++ b/csrc/include/rocm_ops.hpp
+@@ -831,7 +831,9 @@ namespace py = pybind11;
+           py::arg("block_m")        = 32,           \
+           py::arg("sorted_weights") = std::nullopt, \
+           py::arg("quant_type")     = 0,            \
+-          py::arg("activation")     = 0);               \
++          py::arg("activation")     = 0,            \
++          py::arg("splitk")         = 1,            \
++          py::arg("dst_type")       = std::nullopt);\
+                                                     \
+     m.def("ck_moe_stage2",                          \
+           &ck_moe_stage2,                           \
+@@ -849,7 +851,9 @@ namespace py = pybind11;
+           py::arg("block_m")        = 32,           \
+           py::arg("sorted_weights") = std::nullopt, \
+           py::arg("quant_type")     = 0,            \
+-          py::arg("activation")     = 0);
++          py::arg("activation")     = 0,            \
++          py::arg("splitk")         = 1,            \
++          py::arg("dst_type")       = std::nullopt);
+ 
+ #define MOE_CKTILE_2STAGES_PYBIND                   \
+     m.def("cktile_moe_gemm1",                       \

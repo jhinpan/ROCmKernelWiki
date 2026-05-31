@@ -16,6 +16,7 @@ tags:
 - buffer-instructions
 confidence: source-reported
 reproducibility: runnable
+artifact_dir: examples/bandwidth-microbench
 kernel_types:
 - bandwidth-bench
 - memcpy
@@ -222,6 +223,45 @@ result for a real read-streaming kernel, since DRAM refresh, row-activation
 overhead, and command-bus turnaround all subtract from the ideal. Treat this as
 the empirical roofline for any memory-bound gfx942 kernel — see
 [memory-bound pattern](../patterns/memory-bound.md).
+
+## Runnable example
+
+A portable, pure-HIP version of this benchmark that **builds and runs on
+gfx1201 (RDNA4)** lives in [`examples/bandwidth-microbench/`](../../examples/bandwidth-microbench/).
+It keeps the same design — persistent grid-stride, `UNROLL=8`, 128-bit
+non-temporal `float4` loads — and adds a CPU-checked correctness pass plus a
+size sweep. The MI308X CDNA3 figure above (~4.56 TB/s) is the source-reported
+number for gfx942; the example reports the **real measured** number for whatever
+GPU it runs on.
+
+```bash
+cd examples/bandwidth-microbench && ./build.sh
+```
+
+`build.sh` also greps the emitted ISA to confirm the wide non-temporal load:
+
+```
+	global_load_b128 v[13:16], v[4:5], off th:TH_LOAD_NT
+```
+
+Expected output captured on an RX 9070 XT (gfx1201, ROCm 7.2.3):
+
+```
+Device: AMD Radeon RX 9070 XT (gfx1201), 32 CUs, 2400 MHz
+
+Self-check: sum=16777216 ref=16777216 rel_err=0.000e+00 -> PASS
+
+size(MiB)    iters        GB/s
+64           50           510
+256          50           636
+1024         50           637
+2048         50           635
+
+RESULT: PASS
+```
+
+~637 GB/s sustained on the large working sets is ~99% of the card's ~645 GB/s
+GDDR6 peak read bandwidth.
 
 ## See also
 

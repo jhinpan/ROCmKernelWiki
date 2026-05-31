@@ -1,0 +1,639 @@
+diff --git a/aiter/fused_moe.py b/aiter/fused_moe.py
+index d18a34e52d..68be628b79 100644
+--- a/aiter/fused_moe.py
++++ b/aiter/fused_moe.py
+@@ -106,6 +106,43 @@ def fused_moe(
+     bias1=None,
+     bias2=None,
+ ):
++    # fast path for small batches
++    if os.environ.get('AITER_MOE_SMALL_BATCH', '0') == '1' and hidden_states.shape[0] <= 16 and hidden_states.dtype == torch.bfloat16 and expert_mask is None and activation == ActivationType.Silu and \
++        ((quant_type == QuantType.No and w1.dtype == torch.bfloat16) or (quant_type == QuantType.per_Token and w1.dtype == torch.float8_e4m3fnuz)):
++        B = hidden_states.shape[0]
++        E, N1, K1 = w1.shape
++        N2, K2 = w2.shape[1], w2.shape[2]
++        TOPK = topk_ids.shape[1]
++        assert N1 == 2 * K2
++        gemm1_out = torch.empty([B, TOPK, N1 // 2], dtype=hidden_states.dtype, device=hidden_states.device)
++        from aiter.ops.moe_op import moe_stage1_g1u1_small_batch1, moe_stage2_g1u1_small_batch1, moe_stage1_g1u1_small_batch, moe_stage2_g1u1_small_batch
++        if B == 1:
++            assert N1 == 2 * K2
++            gemm2_out = torch.zeros([1, N2], dtype=hidden_states.dtype, device=hidden_states.device)
++            moe_stage1_g1u1_small_batch1(hidden_states, w1, gemm1_out, topk_ids, topk_weight, w1_scale if w1_scale is not None else torch.empty((0, 1), dtype=torch.bfloat16))
++            moe_stage2_g1u1_small_batch1(gemm1_out, w2, gemm2_out, topk_ids, topk_weight, w2_scale if w2_scale is not None else torch.empty((0, 1), dtype=torch.bfloat16))
++            return gemm2_out
++        else:
++            BLOCK_M = 16
++            sorted_ids, sorted_weights, sorted_expert_ids, num_valid_ids, moe_buf = moe_sorting(
++                topk_ids,
++                topk_weight,
++                E,
++                K1,     # reduce dim is same with output dim
++                hidden_states.dtype,
++                BLOCK_M,
++                expert_mask,
++                num_local_tokens,
++                moe_sorting_dispatch_policy,
++            )
++
++            moe_stage1_g1u1_small_batch(hidden_states, w1, gemm1_out, sorted_ids, sorted_weights, sorted_expert_ids, num_valid_ids,
++                                        w1_scale if w1_scale is not None else torch.empty((0, 1), dtype=torch.bfloat16))
++            moe_stage2_g1u1_small_batch(gemm1_out, w2, moe_buf, sorted_ids, sorted_weights, sorted_expert_ids, num_valid_ids,
++                                        w2_scale if w2_scale is not None else torch.empty((0, 1), dtype=torch.bfloat16))
++
++            return moe_buf
++
+     if not block_size_M:
+         block_size_M = -1
+     return fused_moe_(
+diff --git a/aiter/ops/moe_op.py b/aiter/ops/moe_op.py
+index f3c24e043b..a18a164390 100755
+--- a/aiter/ops/moe_op.py
++++ b/aiter/ops/moe_op.py
+@@ -207,6 +207,54 @@ def moe_stage1_g1u1(
+ ) -> None: ...
+ 
+ 
++@compile_ops("module_moe_asm")
++def moe_stage1_g1u1_small_batch1(
++    hidden_states: Tensor,
++    w1: Tensor,
++    gemm1_out: Tensor,
++    topk_ids: Tensor,
++    topk_weight: Tensor,
++    w1_scale: Optional[Tensor],
++) -> None: ...
++
++
++@compile_ops("module_moe_asm")
++def moe_stage2_g1u1_small_batch1(
++    gemm1_out: Tensor,
++    w2: Tensor,
++    gemm2_out: Tensor,
++    topk_ids: Tensor,
++    topk_weight: Tensor,
++    w2_scale: Optional[Tensor],
++) -> None: ...
++
++
++@compile_ops("module_moe_asm")
++def moe_stage1_g1u1_small_batch(
++    hidden_states: Tensor,
++    w1: Tensor,
++    gemm1_out: Tensor,
++    sorted_ids: Tensor,
++    sorted_weights: Tensor,
++    sorted_expert_ids: Tensor,
++    num_valid_ids: Tensor,
++    w1_scale: Tensor
++) -> None: ...
++
++
++@compile_ops("module_moe_asm")
++def moe_stage2_g1u1_small_batch(
++    gemm1_out: Tensor,
++    w2: Tensor,
++    gemm2_out: Tensor,
++    sorted_ids: Tensor,
++    sorted_weights: Tensor,
++    sorted_expert_ids: Tensor,
++    num_valid_ids: Tensor,
++    w2_scale: Tensor
++) -> None: ...
++
++
+ def cmdGenFunc_ck_moe_stage(
+     hidden_states: Tensor,
+     w1: Tensor,
+diff --git a/csrc/include/moe_op.h b/csrc/include/moe_op.h
+index 27b7f5fbaa..75c734f86f 100644
+--- a/csrc/include/moe_op.h
++++ b/csrc/include/moe_op.h
+@@ -166,6 +166,38 @@ void moe_stage1_g1u1(
+     std::optional<torch::Tensor> w1_scale, // [expert, 1, inter_dim], gate(up) scale
+     std::optional<torch::Tensor> sorted_weights);
+ 
++void moe_stage1_g1u1_small_batch1(torch::Tensor& hidden_states,             // [token_cnt, dim] M,K
++                                  torch::Tensor& w1,                        // [expert, inter_dim*2, dim] N,K
++                                  torch::Tensor& gemm1_out,                 // [token_cnt, dim]
++                                  torch::Tensor& topk_ids,                  // [token_cnt, topk]
++                                  torch::Tensor& topk_weight,               // [token_cnt, topk]
++                                  torch::Tensor& w1_scale);                 // [expert, inter_dim*2, 1]
++
++void moe_stage2_g1u1_small_batch1(torch::Tensor& gemm1_out,
++                                  torch::Tensor& w2,
++                                  torch::Tensor& gemm2_out,
++                                  torch::Tensor& topk_ids,
++                                  torch::Tensor& topk_weight,
++                                  torch::Tensor& w2_scale);
++
++void moe_stage1_g1u1_small_batch(torch::Tensor& hidden_states,             // [token_cnt, dim] M,K
++                                 torch::Tensor& w1,                        // [expert, inter_dim*2, dim] N,K
++                                 torch::Tensor& gemm1_out,                 // [token_cnt, dim]
++                                 torch::Tensor& sorted_ids,                // [max_num_tokens_padded]
++                                 torch::Tensor& sorted_weights,            // [max_num_tokens_padded]
++                                 torch::Tensor& sorted_expert_ids,         // [max_num_m_blocks]
++                                 torch::Tensor& num_valid_ids,             // [1]
++                                 torch::Tensor& w1_scale);                 // [expert, inter_dim*2, 1]
++
++void moe_stage2_g1u1_small_batch(torch::Tensor& gemm1_out,
++                                 torch::Tensor& w2,
++                                 torch::Tensor& moe_buf,
++                                 torch::Tensor& sorted_ids,
++                                 torch::Tensor& sorted_weights,
++                                 torch::Tensor& sorted_expert_ids,
++                                 torch::Tensor& num_valid_ids,
++                                 torch::Tensor& w2_scale);
++
+ void topk_softmax_asm(torch::Tensor& topk_weights,         // [num_tokens, topk]
+                       torch::Tensor& topk_indices,         // [num_tokens, topk]
+                       torch::Tensor& token_expert_indices, // [num_tokens, topk]
+diff --git a/csrc/include/rocm_ops.hpp b/csrc/include/rocm_ops.hpp
+index 8fa39171e5..20bc21716f 100644
+--- a/csrc/include/rocm_ops.hpp
++++ b/csrc/include/rocm_ops.hpp
+@@ -1110,7 +1110,43 @@ namespace py = pybind11;
+           py::arg("a1_scale")       = std::nullopt,                            \
+           py::arg("w1_scale")       = std::nullopt,                            \
+           py::arg("sorted_weights") = std::nullopt);                           \
+-    m.def("moe_sum", &aiter::moe_sum, "moe_sum(Tensor! input, Tensor output) -> ()");
++    m.def("moe_sum", &aiter::moe_sum, "moe_sum(Tensor! input, Tensor output) -> ()");     \
++    m.def("moe_stage1_g1u1_small_batch1",                                      \
++          &moe_stage1_g1u1_small_batch1,                                       \
++          py::arg("hidden_states"),                                            \
++          py::arg("w1"),                                                       \
++          py::arg("gemm1_out"),                                                \
++          py::arg("topk_ids"),                                                 \
++          py::arg("topk_weight"),                                              \
++          py::arg("w1_scale"));                                                \
++    m.def("moe_stage2_g1u1_small_batch1",                                      \
++          &moe_stage2_g1u1_small_batch1,                                       \
++          py::arg("gemm1_out"),                                                \
++          py::arg("w2"),                                                       \
++          py::arg("gemm2_out"),                                                \
++          py::arg("topk_ids"),                                                 \
++          py::arg("topk_weight"),                                              \
++          py::arg("w2_scale"));                                                \
++    m.def("moe_stage1_g1u1_small_batch",                                       \
++          &moe_stage1_g1u1_small_batch,                                        \
++          py::arg("hidden_states"),                                            \
++          py::arg("w1"),                                                       \
++          py::arg("gemm1_out"),                                                \
++          py::arg("sorted_ids"),                                               \
++          py::arg("sorted_weights"),                                           \
++          py::arg("sorted_expert_ids"),                                        \
++          py::arg("num_valid_ids"),                                            \
++          py::arg("w1_scale"));                                                \
++    m.def("moe_stage2_g1u1_small_batch",                                       \
++          &moe_stage2_g1u1_small_batch,                                        \
++          py::arg("gemm1_out"),                                                \
++          py::arg("w2"),                                                       \
++          py::arg("moe_buf"),                                                  \
++          py::arg("sorted_ids"),                                               \
++          py::arg("sorted_weights"),                                           \
++          py::arg("sorted_expert_ids"),                                        \
++          py::arg("num_valid_ids"),                                            \
++          py::arg("w2_scale"));
+ 
+ #define MOE_TOPK_PYBIND             \
+     m.def("topk_sigmoid",           \
+diff --git a/csrc/py_itfs_cu/asm_fmoe.cu b/csrc/py_itfs_cu/asm_fmoe.cu
+index d22daf3058..ad2969cd51 100755
+--- a/csrc/py_itfs_cu/asm_fmoe.cu
++++ b/csrc/py_itfs_cu/asm_fmoe.cu
+@@ -73,7 +73,7 @@ struct __attribute__((packed)) KernelArgs
+ 
+ class FMoeKernel
+ {
+-    private:
++    protected:
+     hipModule_t module;
+     hipFunction_t kernel_func;
+     uint32_t sub_GU             = 512;
+@@ -870,3 +870,298 @@ void fmoe_fp8_blockscale_g1u1(torch::Tensor& out,               // [token_cnt, d
+     else
+         TORCH_CHECK(false, __func__, "Unsupported the type for fmoe_fp8_blockscale_g1u1");
+ }
++
++class FMoeSmallBatchKernel : public FMoeKernel
++{
++public:
++    struct __attribute__((packed)) Batch1KernelArgs
++    {
++        void* p_hidden_states;
++        void* p_w;
++        void* p_gemm_out;
++        void* p_topk_ids;
++        void* p_topk_weight;
++        void* p_w_scale;
++        int M;
++        int N;
++        int K;
++    };
++    struct __attribute__((packed)) BatchKernelArgs
++    {
++        void* p_hidden_states;
++        void* p_w;
++        void* p_gemm_out;
++        void* p_sorted_ids;
++        void* p_sorted_weights;
++        void* p_sorted_expert_ids;
++        void* p_num_valid_ids;
++        void* p_w_scale;
++        int M;
++        int N;
++        int K;
++        int topk;
++    };
++    using FMoeKernel::FMoeKernel;
++
++    void launch_batch1_kernel(uint wave_size,
++                              torch::Tensor& hidden_states,             // [token_cnt, dim] M,K
++                              torch::Tensor& w,                         // [expert, N, K]
++                              torch::Tensor& gemm_out,                  // [token_cnt, dim]
++                              torch::Tensor& topk_ids,                  // [token_cnt, topk]
++                              torch::Tensor& topk_weight,               // [token_cnt, topk]
++                              torch::Tensor& w_scale                    // [expert, N, 1]
++    )
++    {
++        auto M = hidden_states.size(0);
++        auto N = w.size(1);
++        auto K = w.size(2);
++        auto topk = topk_ids.size(1);
++        Batch1KernelArgs args = {
++            hidden_states.data_ptr(),
++            w.data_ptr(),
++            gemm_out.data_ptr(),
++            topk_ids.data_ptr(),
++            topk_weight.data_ptr(),
++            w_scale.data_ptr(),
++            static_cast<int>(M),
++            static_cast<int>(N),
++            static_cast<int>(K),
++        };
++        size_t arg_size = sizeof(args);
++        void* config[] = {HIP_LAUNCH_PARAM_BUFFER_POINTER,
++                          &args,
++                          HIP_LAUNCH_PARAM_BUFFER_SIZE,
++                          &arg_size,
++                          HIP_LAUNCH_PARAM_END};
++
++        const at::hip::OptionalHIPGuardMasqueradingAsCUDA device_guard(device_of(hidden_states));
++        const hipStream_t stream = at::hip::getCurrentHIPStream();
++        HIP_CALL(hipModuleLaunchKernel(
++            kernel_func, N / 32, topk, 1, wave_size, 1, 1, 0, stream, nullptr, (void**)&config));
++    }
++
++    void launch_batch_kernel(uint wave_size,
++                             uint topk,
++                             torch::Tensor& hidden_states,             // [token_cnt, dim] M,K
++                             torch::Tensor& w,                         // [expert, inter_dim*2, dim] N,K
++                             torch::Tensor& gemm_out,                  // [token_cnt, dim]
++                             torch::Tensor& sorted_ids,                // [max_num_tokens_padded]
++                             torch::Tensor& sorted_weights,            // [max_num_tokens_padded]
++                             torch::Tensor& sorted_expert_ids,         // [max_num_m_blocks]
++                             torch::Tensor& num_valid_ids,             // [1]
++                             torch::Tensor& w_scale)                   // [expert, inter_dim*2, 1]
++    {
++        auto M = hidden_states.size(0);
++        auto N = w.size(1);
++        auto K = w.size(2);
++        BatchKernelArgs args = {
++            hidden_states.data_ptr(),
++            w.data_ptr(),
++            gemm_out.data_ptr(),
++            sorted_ids.data_ptr(),
++            sorted_weights.data_ptr(),
++            sorted_expert_ids.data_ptr(),
++            num_valid_ids.data_ptr(),
++            w_scale.data_ptr(),
++            static_cast<int>(M),
++            static_cast<int>(N),
++            static_cast<int>(K),
++            static_cast<int>(topk),
++        };
++        size_t arg_size = sizeof(args);
++        void* config[] = {HIP_LAUNCH_PARAM_BUFFER_POINTER,
++                          &args,
++                          HIP_LAUNCH_PARAM_BUFFER_SIZE,
++                          &arg_size,
++                          HIP_LAUNCH_PARAM_END};
++
++        const at::hip::OptionalHIPGuardMasqueradingAsCUDA device_guard(device_of(hidden_states));
++        const hipStream_t stream = at::hip::getCurrentHIPStream();
++        HIP_CALL(hipModuleLaunchKernel(
++            kernel_func, N / 32, sorted_expert_ids.size(0), 1, wave_size, 1, 1, 0, stream, nullptr, (void**)&config));
++    }
++};
++
++void moe_stage1_g1u1_small_batch1(torch::Tensor& hidden_states,             // [token_cnt, dim] M,K
++                                  torch::Tensor& w1,                        // [expert, inter_dim*2, dim] N,K
++                                  torch::Tensor& gemm1_out,                 // [token_cnt, dim]
++                                  torch::Tensor& topk_ids,                  // [token_cnt, topk]
++                                  torch::Tensor& topk_weight,               // [token_cnt, topk]
++                                  torch::Tensor& w1_scale)                  // [expert, inter_dim*2, 1]
++{
++    FMoeSmallBatchKernel* impl_ptr = nullptr;
++    int dim = w1.size(2);
++
++    if(w1.dtype() == torch_fp8)
++    {
++        if(dim % 64 == 0 && dim >= 128)
++        {
++            static FMoeSmallBatchKernel kernel(
++                "_Z15moe_gemm_batch1PvS_S_S_PfS0_iii", "fmoe_2stages/fmoe_small_stage1_bf16_pertokenFp8_g1u1_16x32_batch1.co", 512);
++            impl_ptr = &kernel;
++        }
++        else
++            TORCH_CHECK(
++                false, __func__, " unsupported dim: ", dim);
++    }
++    else if (w1.dtype() == at::ScalarType::BFloat16)
++    {
++        if(dim % 32 == 0 && dim >= 64)
++        {
++            static FMoeSmallBatchKernel kernel(
++                "_Z15moe_gemm_batch1PvS_S_S_PfS0_iii", "fmoe_2stages/fmoe_small_stage1_bf16_pertokenBf16_g1u1_16x32_batch1.co", 512);
++            impl_ptr = &kernel;
++        }
++        else
++            TORCH_CHECK(
++                false, __func__, " unsupported dim: ", dim);
++    }
++    impl_ptr->launch_batch1_kernel(256,
++                                   hidden_states,
++                                   w1,
++                                   gemm1_out,
++                                   topk_ids,
++                                   topk_weight,
++                                   w1_scale);
++}
++
++void moe_stage2_g1u1_small_batch1(torch::Tensor& gemm1_out,
++                                  torch::Tensor& w2,
++                                  torch::Tensor& gemm2_out,
++                                  torch::Tensor& topk_ids,
++                                  torch::Tensor& topk_weight,
++                                  torch::Tensor& w2_scale)
++{
++    FMoeSmallBatchKernel* impl_ptr = nullptr;
++    int dim = w2.size(2);
++
++    if(w2.dtype() == torch_fp8)
++    {
++        if(dim % 64 == 0 && dim >= 128)
++        {
++            static FMoeSmallBatchKernel kernel(
++                "_Z15moe_gemm_batch1PvS_S_S_PfS0_iii", "fmoe_2stages/fmoe_small_stage2_bf16_pertokenFp8_g1u1_16x32_batch1.co", 512);
++            impl_ptr = &kernel;
++        }
++        else
++            TORCH_CHECK(
++                false, __func__, " unsupported dim: ", dim);
++    }
++    else if (w2.dtype() == at::ScalarType::BFloat16)
++    {
++        if(dim % 32 == 0 && dim >= 64)
++        {
++            static FMoeSmallBatchKernel kernel(
++                "_Z15moe_gemm_batch1PvS_S_S_PfS0_iii", "fmoe_2stages/fmoe_small_stage2_bf16_pertokenBf16_g1u1_16x32_batch1.co", 512);
++            impl_ptr = &kernel;
++        }
++        else
++            TORCH_CHECK(
++                false, __func__, " unsupported dim: ", dim);
++    }
++    impl_ptr->launch_batch1_kernel(64,
++                                   gemm1_out,
++                                   w2,
++                                   gemm2_out,
++                                   topk_ids,
++                                   topk_weight,
++                                   w2_scale);
++}
++
++void moe_stage1_g1u1_small_batch(torch::Tensor& hidden_states,             // [token_cnt, dim] M,K
++                                 torch::Tensor& w1,                        // [expert, inter_dim*2, dim] N,K
++                                 torch::Tensor& gemm1_out,                 // [token_cnt, dim]
++                                 torch::Tensor& sorted_ids,                // [max_num_tokens_padded]
++                                 torch::Tensor& sorted_weights,            // [max_num_tokens_padded]
++                                 torch::Tensor& sorted_expert_ids,         // [max_num_m_blocks]
++                                 torch::Tensor& num_valid_ids,             // [1]
++                                 torch::Tensor& w1_scale)                  // [expert, inter_dim*2, 1]
++{
++    FMoeSmallBatchKernel* impl_ptr = nullptr;
++    int dim = w1.size(2);
++    uint topk = gemm1_out.size(1);
++
++    if(w1.dtype() == torch_fp8)
++    {
++        if(dim % 64 == 0 && dim >= 128)
++        {
++            static FMoeSmallBatchKernel kernel(
++                "_Z14moe_gemm_batchPvS_S_S_PfS_S_S0_iiii", "fmoe_2stages/fmoe_small_stage1_bf16_pertokenFp8_g1u1_16x32_batch.co", 512);
++            impl_ptr = &kernel;
++        }
++        else
++            TORCH_CHECK(
++                false, __func__, " unsupported dim: ", dim);
++    }
++    else if (w1.dtype() == at::ScalarType::BFloat16)
++    {
++        if(dim % 32 == 0 && dim >= 64)
++        {
++            static FMoeSmallBatchKernel kernel(
++                "_Z14moe_gemm_batchPvS_S_S_PfS_S_S0_iiii", "fmoe_2stages/fmoe_small_stage1_bf16_pertokenBf16_g1u1_16x32_batch.co", 512);
++            impl_ptr = &kernel;
++        }
++        else
++            TORCH_CHECK(
++                false, __func__, " unsupported dim: ", dim);
++    }
++    impl_ptr->launch_batch_kernel(256,
++                                  topk,
++                                  hidden_states,
++                                  w1,
++                                  gemm1_out,
++                                  sorted_ids,
++                                  sorted_weights,
++                                  sorted_expert_ids,
++                                  num_valid_ids,
++                                  w1_scale);
++}
++
++void moe_stage2_g1u1_small_batch(torch::Tensor& gemm1_out,
++                                 torch::Tensor& w2,
++                                 torch::Tensor& moe_buf,
++                                 torch::Tensor& sorted_ids,
++                                 torch::Tensor& sorted_weights,
++                                 torch::Tensor& sorted_expert_ids,
++                                 torch::Tensor& num_valid_ids,
++                                 torch::Tensor& w2_scale)
++{
++    FMoeSmallBatchKernel* impl_ptr = nullptr;
++    int dim = w2.size(2);
++    uint topk = gemm1_out.size(1);
++
++    if(w2.dtype() == torch_fp8)
++    {
++        if(dim % 64 == 0 && dim >= 128)
++        {
++            static FMoeSmallBatchKernel kernel(
++                "_Z14moe_gemm_batchPvS_S_S_PfS_S_S0_iiii", "fmoe_2stages/fmoe_small_stage2_bf16_pertokenFp8_g1u1_16x32_batch.co", 512);
++            impl_ptr = &kernel;
++        }
++        else
++            TORCH_CHECK(
++                false, __func__, " unsupported dim: ", dim);
++    }
++    else if (w2.dtype() == at::ScalarType::BFloat16)
++    {
++        if(dim % 32 == 0 && dim >= 64)
++        {
++            static FMoeSmallBatchKernel kernel(
++                "_Z14moe_gemm_batchPvS_S_S_PfS_S_S0_iiii", "fmoe_2stages/fmoe_small_stage2_bf16_pertokenBf16_g1u1_16x32_batch.co", 512);
++            impl_ptr = &kernel;
++        }
++        else
++            TORCH_CHECK(
++                false, __func__, " unsupported dim: ", dim);
++    }
++    impl_ptr->launch_batch_kernel(64,
++                                  topk,
++                                  gemm1_out,
++                                  w2,
++                                  moe_buf,
++                                  sorted_ids,
++                                  sorted_weights,
++                                  sorted_expert_ids,
++                                  num_valid_ids,
++                                  w2_scale);
++}
+diff --git a/hsa/gfx942/fmoe_2stages/fmoe_small_stage1_bf16_pertokenBf16_g1u1_16x32_batch.co b/hsa/gfx942/fmoe_2stages/fmoe_small_stage1_bf16_pertokenBf16_g1u1_16x32_batch.co
+new file mode 100755
+index 0000000000..370788327d
+Binary files /dev/null and b/hsa/gfx942/fmoe_2stages/fmoe_small_stage1_bf16_pertokenBf16_g1u1_16x32_batch.co differ
+diff --git a/hsa/gfx942/fmoe_2stages/fmoe_small_stage1_bf16_pertokenBf16_g1u1_16x32_batch1.co b/hsa/gfx942/fmoe_2stages/fmoe_small_stage1_bf16_pertokenBf16_g1u1_16x32_batch1.co
+new file mode 100755
+index 0000000000..1e62454274
+Binary files /dev/null and b/hsa/gfx942/fmoe_2stages/fmoe_small_stage1_bf16_pertokenBf16_g1u1_16x32_batch1.co differ
+diff --git a/hsa/gfx942/fmoe_2stages/fmoe_small_stage1_bf16_pertokenFp8_g1u1_16x32_batch.co b/hsa/gfx942/fmoe_2stages/fmoe_small_stage1_bf16_pertokenFp8_g1u1_16x32_batch.co
+new file mode 100755
+index 0000000000..142fcf4b11
+Binary files /dev/null and b/hsa/gfx942/fmoe_2stages/fmoe_small_stage1_bf16_pertokenFp8_g1u1_16x32_batch.co differ
+diff --git a/hsa/gfx942/fmoe_2stages/fmoe_small_stage1_bf16_pertokenFp8_g1u1_16x32_batch1.co b/hsa/gfx942/fmoe_2stages/fmoe_small_stage1_bf16_pertokenFp8_g1u1_16x32_batch1.co
+new file mode 100755
+index 0000000000..25e46e8e94
+Binary files /dev/null and b/hsa/gfx942/fmoe_2stages/fmoe_small_stage1_bf16_pertokenFp8_g1u1_16x32_batch1.co differ
+diff --git a/hsa/gfx942/fmoe_2stages/fmoe_small_stage2_bf16_pertokenBf16_g1u1_16x32_batch.co b/hsa/gfx942/fmoe_2stages/fmoe_small_stage2_bf16_pertokenBf16_g1u1_16x32_batch.co
+new file mode 100755
+index 0000000000..161fbf59b3
+Binary files /dev/null and b/hsa/gfx942/fmoe_2stages/fmoe_small_stage2_bf16_pertokenBf16_g1u1_16x32_batch.co differ
+diff --git a/hsa/gfx942/fmoe_2stages/fmoe_small_stage2_bf16_pertokenBf16_g1u1_16x32_batch1.co b/hsa/gfx942/fmoe_2stages/fmoe_small_stage2_bf16_pertokenBf16_g1u1_16x32_batch1.co
+new file mode 100755
+index 0000000000..39145e886b
+Binary files /dev/null and b/hsa/gfx942/fmoe_2stages/fmoe_small_stage2_bf16_pertokenBf16_g1u1_16x32_batch1.co differ
+diff --git a/hsa/gfx942/fmoe_2stages/fmoe_small_stage2_bf16_pertokenFp8_g1u1_16x32_batch.co b/hsa/gfx942/fmoe_2stages/fmoe_small_stage2_bf16_pertokenFp8_g1u1_16x32_batch.co
+new file mode 100755
+index 0000000000..32d478a1d4
+Binary files /dev/null and b/hsa/gfx942/fmoe_2stages/fmoe_small_stage2_bf16_pertokenFp8_g1u1_16x32_batch.co differ
+diff --git a/hsa/gfx942/fmoe_2stages/fmoe_small_stage2_bf16_pertokenFp8_g1u1_16x32_batch1.co b/hsa/gfx942/fmoe_2stages/fmoe_small_stage2_bf16_pertokenFp8_g1u1_16x32_batch1.co
+new file mode 100755
+index 0000000000..16d9f2843a
+Binary files /dev/null and b/hsa/gfx942/fmoe_2stages/fmoe_small_stage2_bf16_pertokenFp8_g1u1_16x32_batch1.co differ
+diff --git a/op_tests/test_moe_2stage.py b/op_tests/test_moe_2stage.py
+index 4da2af1e12..a5e44f58aa 100644
+--- a/op_tests/test_moe_2stage.py
++++ b/op_tests/test_moe_2stage.py
+@@ -51,11 +51,14 @@ def test_fmoe(
+     hidden_pad=0,
+     intermediate_pad=0,
+     preshuffle=False,
++    use_raw_for_ref=False,
+ ):
+     if get_gfx() not in ["gfx950"] and qType == aiter.QuantType.per_1x32:
+         return
+     torch_quant = aiter.get_torch_quant(qType)
+     input = torch.randn((token, model_dim), dtype=dtype)
++    if qType == aiter.QuantType.per_128x128 or qType == aiter.QuantType.per_1x32:
++        use_raw_for_ref = False
+     if use_g1u1:
+         w1 = torch.randn((E, inter_dim * 2, model_dim), dtype=dtype)
+         if hidden_pad != 0 and intermediate_pad != 0:
+@@ -188,7 +191,7 @@ def weight_per_128x128_quant(weight, quant_dtype):
+ 
+     # # ######################## stage 1 start ###########
+     out1_ref = torch_moe_stage1(
+-        a1_qt,
++        input if use_raw_for_ref else a1_qt,
+         w1_qt,
+         w2_qt,
+         topk_weights,
+@@ -196,7 +199,7 @@ def weight_per_128x128_quant(weight, quant_dtype):
+         dtype=dtype,
+         activation=actType,
+         quant_type=qType,
+-        a1_scale=a1_scale,
++        a1_scale=torch.tensor([1], dtype=torch.float32) if use_raw_for_ref else a1_scale,
+         w1_scale=w1_scale,
+         w1_bias=exp_bias1,
+         doweight=doweight_stage1,
+@@ -220,7 +223,7 @@ def weight_per_128x128_quant(weight, quant_dtype):
+     a2_qt = a2_qt.view(token, topk, -1)
+ 
+     out2_ref = torch_moe_stage2(
+-        a2_qt,
++        out1_ref if use_raw_for_ref else a2_qt,
+         w1_qt,  # E, inter_dim*2, model_dim
+         w2_qt,  # E, model_dim, inter_dim
+         topk_weights,
+@@ -228,7 +231,7 @@ def weight_per_128x128_quant(weight, quant_dtype):
+         dtype=dtype,
+         quant_type=qType,
+         w2_scale=w2_scale,
+-        a2_scale=a2_scale,
++        a2_scale=torch.tensor([1], dtype=torch.float32) if use_raw_for_ref else a2_scale,
+         w2_bias=exp_bias2,
+         doweight=not doweight_stage1,
+     )
+@@ -409,6 +412,16 @@ def calc_diff(x: torch.Tensor, y: torch.Tensor):
+     -p t    # True.""",
+ )
+ 
++parser.add_argument(
++    "--use-raw-for-ref",
++    type=dtypes.str2bool,
++    nargs="?",
++    const=None,
++    default=False,
++    help="""Whether to use raw input instead of quant/dequant input for reference computation. Default is [False].
++    e.g.: --use-raw-for-ref t    # True.""",
++)
++
+ args = parser.parse_args()
+ if args.dtype is None:
+     l_dtype = [dtypes.d_dtypes[key] for key in l_dtype]
+@@ -461,6 +474,7 @@ def calc_diff(x: torch.Tensor, y: torch.Tensor):
+                     doweight_stage1=doweight_stage1,
+                     hidden_pad=hidden_pad,
+                     intermediate_pad=intermediate_pad,
++                    use_raw_for_ref=args.use_raw_for_ref,
+                 )
+                 df.append(ret)
+     elif (quant_type, aq_dtype, wq_dtype) == (
+@@ -485,6 +499,7 @@ def calc_diff(x: torch.Tensor, y: torch.Tensor):
+                         use_g1u1=True,
+                         doweight_stage1=doweight_stage1,
+                         preshuffle=preshuffle,
++                        use_raw_for_ref=args.use_raw_for_ref,
+                     )
+                     df.append(ret)
+     else:
+@@ -503,6 +518,7 @@ def calc_diff(x: torch.Tensor, y: torch.Tensor):
+                     wq_dtype,
+                     use_g1u1=True,
+                     doweight_stage1=doweight_stage1,
++                    use_raw_for_ref=args.use_raw_for_ref,
+                 )
+                 df.append(ret)
+ df = pd.DataFrame(df)

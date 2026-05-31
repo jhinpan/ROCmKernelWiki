@@ -1,0 +1,1139 @@
+diff --git a/.claude/skills/port-to-layout-api/SKILL.md b/.claude/skills/port-to-layout-api/SKILL.md
+new file mode 100644
+index 000000000..a444aaa27
+--- /dev/null
++++ b/.claude/skills/port-to-layout-api/SKILL.md
+@@ -0,0 +1,188 @@
++---
++name: port-to-layout-api
++description: >
++  Port FlyDSL GPU kernels from raw buffer_ops (create_buffer_resource,
++  buffer_load, buffer_store with manual byte-offset arithmetic) to the
++  layout API (make_buffer_tensor + logical_divide + copy_atom_call with
++  BufferCopy atoms). Use when a kernel uses raw buffer_ops and should
++  be migrated to the higher-level layout algebra for consistency and
++  readability.
++  Usage: /port-to-layout-api <kernel_file>
++tools: Read,Edit,Bash,Grep,Glob,Agent
++---
++
++# Port Kernel from Raw buffer_ops to Layout API
++
++Refactor FlyDSL GPU kernels from manual `buffer_ops` to the buffer-backed
++layout API (`make_buffer_tensor` + `copy_atom_call`).
++
++## When to Use
++
++- Kernel uses `buffer_ops.create_buffer_resource()` + `buffer_ops.buffer_load()` / `buffer_ops.buffer_store()`
++- Manual byte-offset or dword-offset arithmetic (shrui, elem_bytes, etc.)
++- Want to align with the layout algebra pattern used in norm/softmax kernels
++
++## Step-by-Step Process
++
++### Step 1: Identify the Memory Access Pattern
++
++Read the kernel and classify each buffer_load/buffer_store:
++
++| Pattern | Layout API Port | Example |
++|---------|----------------|---------|
++| Contiguous vec load along innermost dim | `make_buffer_tensor` + `BufferCopy128b` | Load 8xf16 from row |
++| Scalar load (vec_width=1) of metadata | Keep as `buffer_ops.buffer_load` | Position/slot/mask loads |
++| Scattered store (non-contiguous layout) | Keep as `buffer_ops.buffer_store` | Non-flash value_cache |
++| Contiguous vec store along innermost dim | `make_buffer_tensor` + `BufferCopy` | Store 8xf16 to output |
++
++### Step 2: Choose the Right BufferCopy Width
++
++Match `BufferCopy<N>b` to element type and vector width:
++
++```
++Total bits = VEC_WIDTH * elem_bits
++```
++
++| elem_type | VEC_WIDTH | Total bits | Copy Atom |
++|-----------|-----------|------------|-----------|
++| f16/bf16  | 8         | 128        | `BufferCopy128b()` |
++| f32       | 4         | 128        | `BufferCopy128b()` |
++| f32       | 1         | 32         | `BufferCopy32b()` |
++| i8        | 8         | 64         | `BufferCopy64b()` |
++| f16/bf16  | 1         | 16         | `BufferCopy16b()` |
++
++**Max supported**: 128 bits. No `BufferCopy256b` exists.
++For f32 with VEC_WIDTH=8 (256 bits), fall back to scalar path or split into two 128b loads.
++
++### Step 3: Replace buffer_ops with Layout API
++
++**Before (raw buffer_ops):**
++```python
++from flydsl.expr import buffer_ops
++from flydsl.expr.arith import ArithValue
++
++rsrc = buffer_ops.create_buffer_resource(Input, max_size=True)
++
++elem_bytes = 2  # f16
++row_soffset = ArithValue(bid) * (N * elem_bytes)
++thr_col_bytes = ArithValue(tid) * (VEC_WIDTH * elem_bytes)
++col_bytes = ArithValue(thr_col_bytes) + (tile_i * tile_cols * elem_bytes)
++dw = col_bytes.shrui(arith.constant(2, type=T.i32))
++
++raw_data = buffer_ops.buffer_load(
++    rsrc, dw, vec_width=vec_dwords, dtype=T.i32,
++    soffset_bytes=row_soffset, mask=is_valid,
++)
++vec_f16 = vector.bitcast(vec_type_f16, raw_data)
++```
++
++**After (layout API):**
++```python
++# Wrap tensor in buffer descriptor
++Input_buf = fx.rocdl.make_buffer_tensor(Input)
++
++# Slice row for this block, tile by VEC_WIDTH
++row_in = fx.slice(Input_buf, (bid, None))
++in_div = fx.logical_divide(row_in, fx.make_layout(VEC_WIDTH, 1))
++
++# Copy atom: 8 x f16 = 128 bits
++copy_atom = fx.make_copy_atom(fx.rocdl.BufferCopy128b(), 16)
++vec_reg_ty = fx.MemRefType.get(
++    T.f16, fx.LayoutType.get(VEC_WIDTH, 1), fx.AddressSpace.Register
++)
++vec_reg_lay = fx.make_layout(VEC_WIDTH, 1)
++
++# Load
++idx = tid + tile_i * BLOCK_THREADS
++r = fx.memref_alloca(vec_reg_ty, vec_reg_lay)
++fx.copy_atom_call(copy_atom, fx.slice(in_div, (None, idx)), r)
++vec_f16 = ArithValue(fx.memref_load_vec(r))
++```
++
++### Step 4: Handle Multi-Dimensional Tensors
++
++For 2D tensors `[M, N]`:
++```python
++buf = fx.rocdl.make_buffer_tensor(tensor)
++row = fx.slice(buf, (row_idx, None))          # 1D: N elements
++div = fx.logical_divide(row, fx.make_layout(VEC_WIDTH, 1))
++```
++
++For 3D tensors `[A, B, C]`:
++```python
++buf = fx.rocdl.make_buffer_tensor(tensor)
++slice_bc = fx.slice(buf, (a_idx, b_idx, None))  # 1D: C elements
++div = fx.logical_divide(slice_bc, fx.make_layout(VEC_WIDTH, 1))
++```
++
++For tiled access (grid tiles across a dimension):
++```python
++row = fx.slice(buf, (row_idx, None))
++tiled = fx.logical_divide(row, fx.make_layout(tile_cols, 1))
++tile = fx.slice(tiled, (None, tile_idx))
++div = fx.logical_divide(tile, fx.make_layout(VEC_WIDTH, 1))
++# Load: fx.copy_atom_call(copy_atom, fx.slice(div, (None, tid)), r)
++```
++
++### Step 5: Handle Masking / Bounds
++
++The layout API's `copy_atom_call` does NOT accept a mask parameter.
++
++**For loads**: With `make_buffer_tensor` using max_size (0xFFFFFFFF num_records),
++out-of-bounds loads read adjacent memory or return 0 at allocation boundary.
++Guard results with `arith.select(is_valid, value, zero)` as needed.
++
++**For stores**: Wrap in a conditional to prevent OOB writes:
++```python
++if is_valid:
++    _store_vec(val, out_div, idx)
++```
++
++### Step 6: Keep Scalar Accesses as buffer_ops
++
++Not everything should use the layout API. Keep `buffer_ops` for:
++- Scalar metadata loads: `buffer_ops.buffer_load(rsrc, idx, vec_width=1, dtype=T.i32)`
++- Scattered stores where elements are non-contiguous in memory
++- Single-element stores (e.g., writing one scale value per block)
++
++### Step 7: Remove Dead Code
++
++After porting, remove:
++- `elem_bytes` / `vec_dwords` constants (no longer needed)
++- `row_soffset` / `thr_col_bytes` byte-offset computations
++- `shrui(..., 2)` dword conversion
++- `vector.bitcast` from i32 to element type (loads produce the right type)
++
++## Known Limitation: Dynamic Tensor Shapes & JIT Cache
++
++`make_buffer_tensor` defaults to `max_size=True`, which sets `num_records` to
++`0xFFFFFFFF`. This is necessary because the JIT cache reuses compiled kernels
++for tensors of different shapes (the cache key includes dtype but not shape).
++If `max_size=False` were used, the `num_records` from the first traced shape
++would silently truncate larger tensors in subsequent calls.
++
++Always use `fx.rocdl.make_buffer_tensor(tensor)` (default `max_size=True`).
++Only use `make_buffer_tensor(tensor, max_size=False)` when you are certain the
++tensor shape never changes across JIT-cached invocations.
++
++## Known Limitation: soffset Regression
++
++The layout API currently hardcodes `soffset=0` in `CopyAtomCallLowering`
++(`lib/Conversion/FlyToROCDL/FlyToROCDL.cpp`). This means wave-uniform row
++offsets (e.g., `bid * N`) are folded into voffset (VGPR) instead of soffset
++(SGPR), causing:
++
++1. Extra VGPR pressure
++2. Extra VALU instructions
++3. Wasted soffset hardware field
++
++This is a known trade-off for API consistency. The fix (extending BufferFatPtr
++to carry a separate soffset) is tracked separately.
++
++## Validation Checklist
++
++- [ ] Kernel compiles without errors
++- [ ] Correctness matches reference (same tolerances as before)
++- [ ] Performance is within acceptable range (may regress slightly due to soffset)
++- [ ] gfx950 compile test passes (`COMPILE_ONLY=1 ARCH=gfx950`)
++- [ ] No unused imports or dead variables left behind
+diff --git a/kernels/fused_rope_cache_kernel.py b/kernels/fused_rope_cache_kernel.py
+index 38ccd91d5..07cbbeeea 100644
+--- a/kernels/fused_rope_cache_kernel.py
++++ b/kernels/fused_rope_cache_kernel.py
+@@ -26,7 +26,7 @@
+ import flydsl.compiler as flyc
+ import flydsl.expr as fx
+ 
+-from flydsl.expr import arith, vector, range_constexpr
++from flydsl.expr import vector, range_constexpr
+ from flydsl.expr.arith import ArithValue
+ from flydsl.expr.typing import T
+ from flydsl.expr import buffer_ops
+@@ -43,51 +43,65 @@ def _layout_to_dword_off(coord, layout, elem_bytes):
+ 
+     crd2idx(coord, layout) → element offset (index) → byte offset (i32) → dword offset (i32).
+     """
+-    elem_off = arith.index_cast(T.i32, crd2idx(coord, layout))
++    elem_off = ArithValue(crd2idx(coord, layout)).index_cast(T.i32)
+     return (ArithValue(elem_off) * elem_bytes) >> fx.Int32(2)
+ 
+ 
+-def _apply_neox_rope(qk_rsrc, qk_dw, cos_rsrc, sin_rsrc, cos_dw,
+-                     pair_rsrc, pair_dw, is_first_half,
+-                     vec_dwords, vec_type_e, i32_vec_ty):
+-    """Load, rotate (NeoX), and return the rotated vector as i32.
++def _make_rope_copy_helpers(elem_type, elem_bits):
++    """Build copy atom and register types for RoPE vector loads/stores."""
++    copy_atom = fx.make_copy_atom(fx.rocdl.BufferCopy128b(), elem_bits)
++    vec_reg_ty = fx.MemRefType.get(
++        elem_type, fx.LayoutType.get(VEC_WIDTH, 1), fx.AddressSpace.Register
++    )
++    vec_reg_lay = fx.make_layout(VEC_WIDTH, 1)
++    return copy_atom, vec_reg_ty, vec_reg_lay
++
++
++def _load_vec_buf(copy_atom, vec_reg_ty, vec_reg_lay, div_tensor, idx):
++    """Vector load via layout API: div_tensor[:, idx] → register vec."""
++    r = fx.memref_alloca(vec_reg_ty, vec_reg_lay)
++    fx.copy_atom_call(copy_atom, fx.slice(div_tensor, (None, idx)), r)
++    return ArithValue(fx.memref_load_vec(r))
++
++
++def _store_vec_buf(copy_atom, vec_reg_ty, vec_reg_lay, val, div_tensor, idx):
++    """Vector store via layout API: register vec → div_tensor[:, idx]."""
++    r = fx.memref_alloca(vec_reg_ty, vec_reg_lay)
++    fx.memref_store_vec(val, r)
++    fx.copy_atom_call(copy_atom, r, fx.slice(div_tensor, (None, idx)))
++
++
++def _apply_neox_rope(qk_div, cos_div, sin_div, pair_div,
++                     qk_tid, cos_tid, pair_tid, is_first_half,
++                     copy_atom, vec_reg_ty, vec_reg_lay):
++    """Load, rotate (NeoX), and return the rotated vector.
+ 
+     Performs:
+       out[first_half]  = qk * cos - pair * sin
+       out[second_half] = qk * cos + pair * sin
+ 
++    Uses buffer-backed tensor layout API for vector loads.
++
+     Args:
+-        qk_rsrc:       buffer resource for Q or K
+-        qk_dw:         dword offset of the current thread's vec in qk_rsrc
+-        cos_rsrc:      buffer resource for CosCache
+-        sin_rsrc:      buffer resource for SinCache
+-        cos_dw:        dword offset into cos/sin (shared for both halves)
+-        pair_rsrc:     buffer resource for the paired-half vec (same as qk_rsrc)
+-        pair_dw:       dword offset of the partner vec in pair_rsrc
+-        is_first_half: i1 predicate — true when tid < vecs_per_half
+-        vec_dwords:    number of i32 dwords per vector load
+-        vec_type_e:    MLIR vector type in element dtype (e.g. vec<8xbf16>)
+-        i32_vec_ty:    MLIR vector type in i32 (e.g. vec<4xi32>)
++        qk_tid:   index into qk_div for current thread's vector
++        cos_tid:  index into cos_div/sin_div (tid % vecs_per_half)
++        pair_tid: index into pair_div for partner vector
+ 
+     Returns:
+-        rot_i32: rotated vector as i32 vector, ready for buffer_store
++        rot_e: rotated vector in element type
+     """
+-    def _load_e(rsrc, dw):
+-        raw = buffer_ops.buffer_load(rsrc, dw, vec_width=vec_dwords, dtype=T.i32)
+-        return vector.bitcast(vec_type_e, raw)
+-
+-    qk_e   = _load_e(qk_rsrc,   qk_dw)
+-    cos_e  = _load_e(cos_rsrc,  cos_dw)
+-    sin_e  = _load_e(sin_rsrc,  cos_dw)
+-    pair_e = _load_e(pair_rsrc, pair_dw)
++    qk_e   = _load_vec_buf(copy_atom, vec_reg_ty, vec_reg_lay, qk_div, qk_tid)
++    cos_e  = _load_vec_buf(copy_atom, vec_reg_ty, vec_reg_lay, cos_div, cos_tid)
++    sin_e  = _load_vec_buf(copy_atom, vec_reg_ty, vec_reg_lay, sin_div, cos_tid)
++    pair_e = _load_vec_buf(copy_atom, vec_reg_ty, vec_reg_lay, pair_div, pair_tid)
+ 
+     # NeoX sign: first half uses -sin, second half uses +sin
+     qk_cos   = ArithValue(qk_e) * ArithValue(cos_e)
+     pair_sin = ArithValue(pair_e) * ArithValue(sin_e)
+-    sin_term = arith.select(is_first_half, arith.negf(pair_sin), pair_sin)
++    sin_term = ArithValue(is_first_half).select(-pair_sin, pair_sin)
+     rot_e    = ArithValue(qk_cos) + ArithValue(sin_term)
+ 
+-    return vector.bitcast(i32_vec_ty, rot_e)
++    return rot_e
+ 
+ 
+ def build_fused_rope_cache_module(
+@@ -191,50 +205,50 @@ def q_rope_kernel(
+         tid = fx.thread_idx.x   # 0..63
+ 
+         elem_type = dtype_to_elem_type(dtype_str)
+-        vec_type_e = T.vec(VEC_WIDTH, elem_type)
+-        i32_vec_ty = T.vec(vec_dwords, T.i32)
++        elem_bits = 16  # bf16/f16 only
+ 
+-        # Buffer resources at top level (not inside scf.if)
+-        q_rsrc = buffer_ops.create_buffer_resource(Q, max_size=True)
++        # Buffer-backed tensors via layout API
++        Q_buf = fx.rocdl.make_buffer_tensor(Q)
++        Qo_buf = fx.rocdl.make_buffer_tensor(Q_out)
++        Cos_buf = fx.rocdl.make_buffer_tensor(CosCache)
++        Sin_buf = fx.rocdl.make_buffer_tensor(SinCache)
+         pos_rsrc = buffer_ops.create_buffer_resource(Positions, max_size=True)
+-        cos_rsrc = buffer_ops.create_buffer_resource(CosCache, max_size=True)
+-        sin_rsrc = buffer_ops.create_buffer_resource(SinCache, max_size=True)
+-        qo_rsrc = buffer_ops.create_buffer_resource(Q_out, max_size=True)
+ 
+-        # Layouts (materialized inside kernel where MLIR context is active)
+-        q_layout = fx.make_layout(_q_shape, _q_stride)
+-        cos_sin_layout = fx.make_layout(_cos_shape, _cos_stride)
++        copy_atom, vec_reg_ty, vec_reg_lay = _make_rope_copy_helpers(elem_type, elem_bits)
+ 
+-        if arith.cmpi(arith.CmpIPredicate.ult, tid, fx.Int32(vecs_per_head)):
++        if tid < fx.Int32(vecs_per_head):
+             pid_t = pid // num_q_heads
+             pid_hq = pid % num_q_heads
+ 
+             # Load position
+             pos_val = buffer_ops.buffer_load(pos_rsrc, pid_t, vec_width=1, dtype=T.i32)
+ 
+-            # -- Q address via crd2idx --
+-            q_coord = (pid_t, fx.Int32(pid_hq), tid)
+-            q_dw = _layout_to_dword_off(q_coord, q_layout, elem_bytes)
++            # Q[pid_t, pid_hq, :] tiled by VEC_WIDTH
++            q_row = fx.slice(Q_buf, (pid_t, fx.Int32(pid_hq), None))
++            q_div = fx.logical_divide(q_row, fx.make_layout(VEC_WIDTH, 1))
++
++            # Q_out[pid_t, pid_hq, :] tiled by VEC_WIDTH
++            qo_row = fx.slice(Qo_buf, (pid_t, fx.Int32(pid_hq), None))
++            qo_div = fx.logical_divide(qo_row, fx.make_layout(VEC_WIDTH, 1))
+ 
+-            # -- cos/sin address via crd2idx --
+-            # tid % vecs_per_half wraps second-half threads [vecs_per_half, vecs_per_head)
+-            # back to [0, vecs_per_half): NeoX uses the same cos/sin for both halves;
+-            # only the sign of the sin term differs (handled by is_first_half select below).
++            # cos/sin[pos_val, :] tiled by VEC_WIDTH
++            cos_row = fx.slice(Cos_buf, (pos_val, None))
++            cos_div = fx.logical_divide(cos_row, fx.make_layout(VEC_WIDTH, 1))
++            sin_row = fx.slice(Sin_buf, (pos_val, None))
++            sin_div = fx.logical_divide(sin_row, fx.make_layout(VEC_WIDTH, 1))
++
++            # NeoX rotation: pair with opposite half
++            is_first_half = tid < fx.Int32(vecs_per_half)
++            pair_tid = ArithValue(is_first_half).select(tid + vecs_per_half, tid - vecs_per_half)
++            # tid % vecs_per_half wraps into cos/sin range
+             cos_vec_idx = tid % vecs_per_half
+-            cos_coord = (pos_val, fx.Int32(cos_vec_idx))
+-            cos_dw = _layout_to_dword_off(cos_coord, cos_sin_layout, elem_bytes)
+-
+-            # -- Paired-half load + NeoX rotation --
+-            is_first_half = arith.cmpi(arith.CmpIPredicate.ult, tid, fx.Int32(vecs_per_half))
+-            pair_tid = arith.select(is_first_half, tid + vecs_per_half, tid - vecs_per_half)
+-            pair_coord = (pid_t, fx.Int32(pid_hq), pair_tid)
+-            pair_dw = _layout_to_dword_off(pair_coord, q_layout, elem_bytes)
+-            rot_i32 = _apply_neox_rope(
+-                q_rsrc, q_dw, cos_rsrc, sin_rsrc, cos_dw,
+-                q_rsrc, pair_dw, is_first_half,
+-                vec_dwords, vec_type_e, i32_vec_ty,
++
++            rot_e = _apply_neox_rope(
++                q_div, cos_div, sin_div, q_div,
++                tid, cos_vec_idx, pair_tid, is_first_half,
++                copy_atom, vec_reg_ty, vec_reg_lay,
+             )
+-            buffer_ops.buffer_store(rot_i32, qo_rsrc, q_dw)
++            _store_vec_buf(copy_atom, vec_reg_ty, vec_reg_lay, rot_e, qo_div, tid)
+ 
+     # ----- Kernel 2: K RoPE + KV cache write -----
+     # Grid: (T * KH, 1, 1), one program per (token, kv_head)
+@@ -257,65 +271,79 @@ def k_cache_kernel(
+         elem_type = dtype_to_elem_type(dtype_str)
+         vec_type_e = T.vec(VEC_WIDTH, elem_type)
+         i32_vec_ty = T.vec(vec_dwords, T.i32)
+-
+-        # Buffer resources at top level
+-        k_rsrc = buffer_ops.create_buffer_resource(K, max_size=True)
+-        v_rsrc = buffer_ops.create_buffer_resource(V, max_size=True)
++        elem_bits = 16  # bf16/f16 only
++
++        # Buffer-backed tensors via layout API
++        K_buf = fx.rocdl.make_buffer_tensor(K)
++        V_buf = fx.rocdl.make_buffer_tensor(V)
++        Ko_buf = fx.rocdl.make_buffer_tensor(K_out)
++        Cos_buf = fx.rocdl.make_buffer_tensor(CosCache)
++        Sin_buf = fx.rocdl.make_buffer_tensor(SinCache)
+         pos_rsrc = buffer_ops.create_buffer_resource(Positions, max_size=True)
+-        cos_rsrc = buffer_ops.create_buffer_resource(CosCache, max_size=True)
+-        sin_rsrc = buffer_ops.create_buffer_resource(SinCache, max_size=True)
+         slot_rsrc = buffer_ops.create_buffer_resource(SlotMapping, max_size=True)
++        # KV cache: keep buffer_ops for complex scattered writes
+         kc_rsrc = buffer_ops.create_buffer_resource(KeyCache, max_size=True)
+         vc_rsrc = buffer_ops.create_buffer_resource(ValueCache, max_size=True)
+-        ko_rsrc = buffer_ops.create_buffer_resource(K_out, max_size=True)
+ 
+-        # Layouts (materialized inside kernel where MLIR context is active)
++        copy_atom, vec_reg_ty, vec_reg_lay = _make_rope_copy_helpers(elem_type, elem_bits)
++
++        # Layouts for KV cache (used in non-layout-API scatter paths)
+         kv_layout = fx.make_layout(_kv_shape, _kv_stride)
+-        cos_sin_layout = fx.make_layout(_cos_shape, _cos_stride)
+ 
+-        if arith.cmpi(arith.CmpIPredicate.ult, tid, fx.Int32(vecs_per_head)):
++        if tid < fx.Int32(vecs_per_head):
+             pid_t = pid // num_kv_heads
+             pid_hk = pid % num_kv_heads
+ 
+             # Load position
+             pos_val = buffer_ops.buffer_load(pos_rsrc, pid_t, vec_width=1, dtype=T.i32)
+ 
+-            # -- K/V address via crd2idx --
+-            kv_coord = (pid_t, fx.Int32(pid_hk), tid)
+-            k_dw = _layout_to_dword_off(kv_coord, kv_layout, elem_bytes)
++            # K[pid_t, pid_hk, :] tiled by VEC_WIDTH
++            k_row = fx.slice(K_buf, (pid_t, fx.Int32(pid_hk), None))
++            k_div = fx.logical_divide(k_row, fx.make_layout(VEC_WIDTH, 1))
++
++            # K_out[pid_t, pid_hk, :] tiled by VEC_WIDTH
++            ko_row = fx.slice(Ko_buf, (pid_t, fx.Int32(pid_hk), None))
++            ko_div = fx.logical_divide(ko_row, fx.make_layout(VEC_WIDTH, 1))
+ 
+-            # -- cos/sin address via crd2idx --
+-            # tid % vecs_per_half wraps second-half threads [vecs_per_half, vecs_per_head)
+-            # back to [0, vecs_per_half): NeoX uses the same cos/sin for both halves;
+-            # only the sign of the sin term differs (handled by is_first_half select below).
++            # cos/sin[pos_val, :] tiled by VEC_WIDTH
++            cos_row = fx.slice(Cos_buf, (pos_val, None))
++            cos_div = fx.logical_divide(cos_row, fx.make_layout(VEC_WIDTH, 1))
++            sin_row = fx.slice(Sin_buf, (pos_val, None))
++            sin_div = fx.logical_divide(sin_row, fx.make_layout(VEC_WIDTH, 1))
++
++            # NeoX rotation
++            is_first_half = tid < fx.Int32(vecs_per_half)
++            pair_tid = ArithValue(is_first_half).select(tid + vecs_per_half, tid - vecs_per_half)
+             cos_vec_idx = tid % vecs_per_half
+-            cos_coord = (pos_val, fx.Int32(cos_vec_idx))
+-            cos_dw = _layout_to_dword_off(cos_coord, cos_sin_layout, elem_bytes)
+-
+-            # -- Paired-half load + NeoX rotation --
+-            is_first_half = arith.cmpi(arith.CmpIPredicate.ult, tid, fx.Int32(vecs_per_half))
+-            pair_tid = arith.select(is_first_half, tid + vecs_per_half, tid - vecs_per_half)
+-            pair_coord = (pid_t, fx.Int32(pid_hk), pair_tid)
+-            pair_dw = _layout_to_dword_off(pair_coord, kv_layout, elem_bytes)
+-            k_rot_i32 = _apply_neox_rope(
+-                k_rsrc, k_dw, cos_rsrc, sin_rsrc, cos_dw,
+-                k_rsrc, pair_dw, is_first_half,
+-                vec_dwords, vec_type_e, i32_vec_ty,
++
++            k_rot_e = _apply_neox_rope(
++                k_div, cos_div, sin_div, k_div,
++                tid, cos_vec_idx, pair_tid, is_first_half,
++                copy_atom, vec_reg_ty, vec_reg_lay,
+             )
+-            buffer_ops.buffer_store(k_rot_i32, ko_rsrc, k_dw)
++            _store_vec_buf(copy_atom, vec_reg_ty, vec_reg_lay, k_rot_e, ko_div, tid)
+ 
+             # --- KV Cache write ---
+             slot_val = buffer_ops.buffer_load(slot_rsrc, pid_t, vec_width=1, dtype=T.i32)
+ 
+-            if arith.cmpi(arith.CmpIPredicate.sge, slot_val, fx.Int32(0)):
++            if slot_val >= fx.Int32(0):
+                 pid_t_slot = ArithValue(slot_val) // block_size
+                 pid_b = ArithValue(slot_val) % block_size
+ 
+-                # Load V for cache write (same offset as K)
+-                v_raw = buffer_ops.buffer_load(v_rsrc, k_dw, vec_width=vec_dwords, dtype=T.i32)
++                # Load V via layout API
++                v_row = fx.slice(V_buf, (pid_t, fx.Int32(pid_hk), None))
++                v_div = fx.logical_divide(v_row, fx.make_layout(VEC_WIDTH, 1))
++                v_e = _load_vec_buf(copy_atom, vec_reg_ty, vec_reg_lay, v_div, tid)
++
++                # Bitcast for KV cache stores (buffer_ops needs i32 vecs)
++                k_rot_i32 = vector.bitcast(i32_vec_ty, k_rot_e)
++                v_raw = vector.bitcast(i32_vec_ty, v_e)
++
++                # KV cache dword offset for stores (scattered, keep buffer_ops)
++                kv_coord = (pid_t, fx.Int32(pid_hk), tid)
++                k_dw = _layout_to_dword_off(kv_coord, kv_layout, elem_bytes)
+ 
+                 if flash_layout:
+-                    # -- Flash KV cache: [num_blocks, BS, KH, D] via crd2idx --
+                     kc_flash_layout = fx.make_layout(
+                         (None, block_size, num_kv_heads, vecs_per_head),
+                         (block_size * num_kv_heads * head_dim,
+@@ -327,10 +355,9 @@ def k_cache_kernel(
+                     kc_dw = _layout_to_dword_off(kc_coord, kc_flash_layout, elem_bytes)
+ 
+                     buffer_ops.buffer_store(k_rot_i32, kc_rsrc, kc_dw)
+-                    # value_cache: same layout
+                     buffer_ops.buffer_store(v_raw, vc_rsrc, kc_dw)
+                 else:
+-                    # -- Non-flash key_cache: [num_blocks, KH, D//x, BS, x] via crd2idx --
++                    # Non-flash key_cache: [num_blocks, KH, D//x, BS, x]
+                     d_start = ArithValue(tid) * VEC_WIDTH
+                     dim_group = d_start // x_size
+                     dim_within = d_start % x_size
+@@ -348,12 +375,7 @@ def k_cache_kernel(
+ 
+                     buffer_ops.buffer_store(k_rot_i32, kc_rsrc, kc_dw_nf)
+ 
+-                    # -- Non-flash value_cache: [num_blocks, KH, D, BS] scalar stores --
+-                    # Scalar stores required: stride-1 dim is block_size (not D), so
+-                    # consecutive elements along D are block_size apart in memory —
+-                    # a vector store would scatter across non-contiguous addresses.
+-                    v_e = vector.bitcast(vec_type_e, v_raw)
+-
++                    # Non-flash value_cache: scalar stores (non-contiguous layout)
+                     vc_nf_layout = fx.make_layout(
+                         (None, num_kv_heads, head_dim, block_size),
+                         (num_kv_heads * head_dim * block_size,
+@@ -365,7 +387,7 @@ def k_cache_kernel(
+                         v_scalar = vector.extract(v_e, static_position=[vi])
+                         d_idx = ArithValue(tid) * VEC_WIDTH + vi
+                         vc_coord = (pid_t_slot, pid_hk, d_idx, pid_b)
+-                        vc_elem_off = arith.index_cast(T.i32, crd2idx(vc_coord, vc_nf_layout))
++                        vc_elem_off = ArithValue(crd2idx(vc_coord, vc_nf_layout)).index_cast(T.i32)
+                         buffer_ops.buffer_store(v_scalar, vc_rsrc, vc_elem_off)
+ 
+     @flyc.jit
+diff --git a/kernels/layernorm_kernel.py b/kernels/layernorm_kernel.py
+index 4b3336112..d8ceaafd8 100644
+--- a/kernels/layernorm_kernel.py
++++ b/kernels/layernorm_kernel.py
+@@ -16,13 +16,13 @@
+ from flydsl.compiler.kernel_function import CompilationContext
+ 
+ from flydsl.expr import arith, vector, gpu, range_constexpr
++from flydsl.expr.arith import ArithValue
+ from flydsl.expr.typing import T, Int32
+ 
+ from flydsl.utils.smem_allocator import SmemAllocator, SmemPtr
+ from flydsl.runtime.device import get_rocm_arch as get_hip_arch
+ 
+ from flydsl._mlir import ir
+-from flydsl.expr import buffer_ops
+ 
+ 
+ KERNEL_NAME = "layernorm"
+@@ -101,7 +101,7 @@ def block_reduce_add2(val0, val1):
+             w1 = wave_reduce_add(val1)
+ 
+             if lane == fx.Int32(0):
+-                wave_idx = arith.index_cast(T.index, wave)
++                wave_idx = ArithValue(wave).index_cast(T.index)
+                 s_sum.store(w0, [wave_idx])
+                 s_sumsq.store(w1, [wave_idx])
+             gpu.barrier()
+@@ -109,7 +109,7 @@ def block_reduce_add2(val0, val1):
+             if wave == fx.Int32(0):
+                 in_range = lane < RED_SLOTS
+                 lane_safe = in_range.select(lane, fx.Int32(0))
+-                lane_safe_idx = arith.index_cast(T.index, lane_safe)
++                lane_safe_idx = ArithValue(lane_safe).index_cast(T.index)
+                 v0 = s_sum.load([lane_safe_idx])
+                 v1 = s_sumsq.load([lane_safe_idx])
+                 z = fx.Float32(0.0)
+@@ -153,7 +153,6 @@ def compute_mean_rstd(sum_val, sumsq_val):
+             from flydsl.expr.arith import ArithValue
+ 
+             num_tiles_py = 4
+-            tile_cols = BLOCK_THREADS * VEC_WIDTH
+ 
+             c_zero_f = arith.constant(0.0, type=compute_type)
+             thread_sum = c_zero_f
+@@ -164,38 +163,40 @@ def compute_mean_rstd(sum_val, sumsq_val):
+             vec_type_c = T.vec(VEC_WIDTH, compute_type)
+             vec_type_e = T.vec(VEC_WIDTH, elem_type)
+ 
+-            elem_bytes = 4 if dtype_str == "f32" else 2
+-            vec_dwords = (VEC_WIDTH * elem_bytes) // 4
++            # ── Layout API: buffer-backed tensors + tiled access ─────
++            Input_buf = fx.rocdl.make_buffer_tensor(Input)
++            Output_buf = fx.rocdl.make_buffer_tensor(Output)
++            Gamma_buf = fx.rocdl.make_buffer_tensor(Gamma)
++            Beta_buf = fx.rocdl.make_buffer_tensor(Beta)
+ 
+-            in_rsrc = buffer_ops.create_buffer_resource(Input, max_size=True)
+-            out_rsrc = buffer_ops.create_buffer_resource(Output, max_size=True)
+-            gamma_rsrc = buffer_ops.create_buffer_resource(Gamma, max_size=True)
+-            beta_rsrc = buffer_ops.create_buffer_resource(Beta, max_size=True)
++            row_in = fx.slice(Input_buf, (bid, None))
++            row_out = fx.slice(Output_buf, (bid, None))
+ 
+-            row_soffset = ArithValue(bid) * (N * elem_bytes)
+-            thr_col_bytes = ArithValue(tid) * (VEC_WIDTH * elem_bytes)
++            in_div = fx.logical_divide(row_in, fx.make_layout(VEC_WIDTH, 1))
++            out_div = fx.logical_divide(row_out, fx.make_layout(VEC_WIDTH, 1))
++            gamma_div = fx.logical_divide(Gamma_buf, fx.make_layout(VEC_WIDTH, 1))
++            beta_div = fx.logical_divide(Beta_buf, fx.make_layout(VEC_WIDTH, 1))
+ 
+-            def _load_vec_buf(rsrc, col_byte_off, soff=None):
+-                dw = col_byte_off >> fx.Int32(2)
+-                raw = buffer_ops.buffer_load(
+-                    rsrc, dw, vec_width=vec_dwords, dtype=T.i32,
+-                    soffset_bytes=soff,
+-                )
+-                if vec_dwords == VEC_WIDTH:
+-                    return raw.bitcast(vec_type_e)
+-                return vector.bitcast(vec_type_e, raw)
+-
+-            def _store_vec_buf(data, rsrc, col_byte_off, soff=None):
+-                dw = col_byte_off >> fx.Int32(2)
+-                buffer_ops.buffer_store(
+-                    data, rsrc, dw,
+-                    soffset_bytes=soff,
+-                )
++            copy_atom = fx.make_copy_atom(fx.rocdl.BufferCopy128b(), elem_bits)
++            vec_reg_ty = fx.MemRefType.get(
++                elem_type, fx.LayoutType.get(VEC_WIDTH, 1), fx.AddressSpace.Register
++            )
++            vec_reg_lay = fx.make_layout(VEC_WIDTH, 1)
++
++            def _load_vec(div_tensor, idx):
++                r = fx.memref_alloca(vec_reg_ty, vec_reg_lay)
++                fx.copy_atom_call(copy_atom, fx.slice(div_tensor, (None, idx)), r)
++                return ArithValue(fx.memref_load_vec(r))
++
++            def _store_vec(val, div_tensor, idx):
++                r = fx.memref_alloca(vec_reg_ty, vec_reg_lay)
++                fx.memref_store_vec(val, r)
++                fx.copy_atom_call(copy_atom, r, fx.slice(div_tensor, (None, idx)))
+ 
+             # ── Pass 1: load input, accumulate sum / sumsq ───────────────
+             for tile_i in range_constexpr(num_tiles_py):
+-                col_bytes = ArithValue(thr_col_bytes) + (tile_i * tile_cols * elem_bytes)
+-                vec_e = _load_vec_buf(in_rsrc, col_bytes, soff=row_soffset)
++                idx = tid + tile_i * BLOCK_THREADS
++                vec_e = _load_vec(in_div, idx)
+ 
+                 if cache_as_elem:
+                     in_local.append(vec_e)
+@@ -225,8 +226,8 @@ def _store_vec_buf(data, rsrc, col_byte_off, soff=None):
+             mean_splat_av = ArithValue(mean_splat)
+             rstd_splat_av = ArithValue(rstd_splat)
+ 
+-            g_e_cur = _load_vec_buf(gamma_rsrc, thr_col_bytes)
+-            b_e_cur = _load_vec_buf(beta_rsrc, thr_col_bytes)
++            g_e_cur = _load_vec(gamma_div, tid)
++            b_e_cur = _load_vec(beta_div, tid)
+             g_cur = (
+                 g_e_cur
+                 if dtype_str == "f32"
+@@ -241,9 +242,9 @@ def _store_vec_buf(data, rsrc, col_byte_off, soff=None):
+             # ── Pass 2: normalize + affine + store ───────────────────────
+             for tile_i in range_constexpr(num_tiles_py):
+                 if tile_i + 1 < num_tiles_py:
+-                    next_col_bytes = ArithValue(thr_col_bytes) + ((tile_i + 1) * tile_cols * elem_bytes)
+-                    g_e_next = _load_vec_buf(gamma_rsrc, next_col_bytes)
+-                    b_e_next = _load_vec_buf(beta_rsrc, next_col_bytes)
++                    next_idx = tid + (tile_i + 1) * BLOCK_THREADS
++                    g_e_next = _load_vec(gamma_div, next_idx)
++                    b_e_next = _load_vec(beta_div, next_idx)
+                     g_next = (
+                         g_e_next
+                         if dtype_str == "f32"
+@@ -296,10 +297,8 @@ def _store_vec_buf(data, rsrc, col_byte_off, soff=None):
+                 else:
+                     out_e = y_val.truncf(vec_type_e)
+ 
+-                out_col_bytes = ArithValue(thr_col_bytes) + (tile_i * tile_cols * elem_bytes)
+-                i32_vec_ty = T.vec(vec_dwords, T.i32)
+-                out_vec = vector.bitcast(i32_vec_ty, out_e) if vec_dwords != VEC_WIDTH else out_e.bitcast(i32_vec_ty)
+-                _store_vec_buf(out_vec, out_rsrc, out_col_bytes, soff=row_soffset)
++                out_idx = tid + tile_i * BLOCK_THREADS
++                _store_vec(out_e, out_div, out_idx)
+ 
+                 g_cur = g_next
+                 b_cur = b_next
+@@ -310,22 +309,30 @@ def _store_vec_buf(data, rsrc, col_byte_off, soff=None):
+             # ==============================================================
+             from flydsl.expr.arith import ArithValue
+ 
+-            row_in = fx.slice(Input, (bid, None))
+-            row_out = fx.slice(Output, (bid, None))
++            Input_buf = fx.rocdl.make_buffer_tensor(Input)
++            Output_buf = fx.rocdl.make_buffer_tensor(Output)
++            Gamma_buf = fx.rocdl.make_buffer_tensor(Gamma)
++            Beta_buf = fx.rocdl.make_buffer_tensor(Beta)
++
++            row_in = fx.slice(Input_buf, (bid, None))
++            row_out = fx.slice(Output_buf, (bid, None))
+ 
+             c_zero_f = arith.constant(0.0, type=compute_type)
+             thread_sum = c_zero_f
+             thread_sumsq = c_zero_f
+ 
+-            copy_atom_s = fx.make_copy_atom(fx.UniversalCopy(elem_bits), elem_bits)
++            copy_atom_s = fx.make_copy_atom(
++                fx.rocdl.BufferCopy16b() if elem_bits <= 16 else fx.rocdl.BufferCopy32b(),
++                elem_bits,
++            )
+             scalar_reg_ty = fx.MemRefType.get(
+                 elem_type, fx.LayoutType.get(1, 1), fx.AddressSpace.Register
+             )
+             scalar_reg_lay = fx.make_layout(1, 1)
+ 
+             row_div = fx.logical_divide(row_in, fx.make_layout(1, 1))
+-            gamma_div = fx.logical_divide(Gamma, fx.make_layout(1, 1))
+-            beta_div = fx.logical_divide(Beta, fx.make_layout(1, 1))
++            gamma_div = fx.logical_divide(Gamma_buf, fx.make_layout(1, 1))
++            beta_div = fx.logical_divide(Beta_buf, fx.make_layout(1, 1))
+             out_div = fx.logical_divide(row_out, fx.make_layout(1, 1))
+ 
+             def _load_scalar(divided_tensor, index):
+@@ -416,7 +423,7 @@ def launch_layernorm(
+         with ir.InsertionPoint(ctx.gpu_module_body):
+             allocator.finalize()
+ 
+-        idx_m = arith.index_cast(T.index, m_in)
++        idx_m = ArithValue(m_in).index_cast(T.index)
+         launcher = layernorm_kernel(Input, Gamma, Beta, Output)
+         launcher.launch(
+             grid=(idx_m, 1, 1),
+diff --git a/kernels/rmsnorm_kernel.py b/kernels/rmsnorm_kernel.py
+index 31f5a021a..b22681e36 100644
+--- a/kernels/rmsnorm_kernel.py
++++ b/kernels/rmsnorm_kernel.py
+@@ -15,12 +15,12 @@
+ from flydsl.compiler.kernel_function import CompilationContext
+ 
+ from flydsl.expr import arith, vector, gpu, range_constexpr
++from flydsl.expr.arith import ArithValue
+ from flydsl.expr.typing import T, Int32
+ from flydsl.utils.smem_allocator import SmemAllocator, SmemPtr
+ from flydsl.runtime.device import get_rocm_arch as get_hip_arch
+ 
+ from flydsl._mlir import ir
+-from flydsl.expr import buffer_ops
+ 
+ 
+ KERNEL_NAME = "rmsnorm"
+@@ -98,7 +98,7 @@ def block_reduce_add2(val0, val1):
+             w1 = wave_reduce_add(val1)
+ 
+             if lane == fx.Int32(0):
+-                wave_idx = arith.index_cast(T.index, wave)
++                wave_idx = ArithValue(wave).index_cast(T.index)
+                 s_red.store(w0, [wave_idx])
+                 s_red2.store(w1, [wave_idx])
+             gpu.barrier()
+@@ -106,7 +106,7 @@ def block_reduce_add2(val0, val1):
+             if wave == fx.Int32(0):
+                 in_range = lane < RED_SLOTS
+                 lane_safe = in_range.select(lane, fx.Int32(0))
+-                lane_safe_idx = arith.index_cast(T.index, lane_safe)
++                lane_safe_idx = ArithValue(lane_safe).index_cast(T.index)
+                 v0 = s_red.load([lane_safe_idx])
+                 v1 = s_red2.load([lane_safe_idx])
+                 z = fx.Float32(0.0)
+@@ -131,29 +131,37 @@ def block_reduce_add2(val0, val1):
+             from flydsl.expr.arith import ArithValue
+ 
+             num_tiles = N // tile_cols
+-            elem_bytes = 4 if dtype_str == "f32" else 2
+-            vec_dwords = (VEC_WIDTH * elem_bytes) // 4
+ 
+             vec_type_c = T.vec(VEC_WIDTH, compute_type)
+             vec_type_e = T.vec(VEC_WIDTH, elem_type)
+ 
+-            in_rsrc = buffer_ops.create_buffer_resource(Input, max_size=True)
+-            out_rsrc = buffer_ops.create_buffer_resource(Output, max_size=True)
+-            gamma_rsrc = buffer_ops.create_buffer_resource(Gamma, max_size=True)
++            # ── Layout API: buffer-backed tensors + tiled access ─────
++            Input_buf = fx.rocdl.make_buffer_tensor(Input)
++            Output_buf = fx.rocdl.make_buffer_tensor(Output)
++            Gamma_buf = fx.rocdl.make_buffer_tensor(Gamma)
+ 
+-            row_soffset = ArithValue(bid) * (N * elem_bytes)
+-            thr_col_bytes = ArithValue(tid) * (VEC_WIDTH * elem_bytes)
++            row_in = fx.slice(Input_buf, (bid, None))
++            row_out = fx.slice(Output_buf, (bid, None))
+ 
+-            def _load_vec(rsrc, col_byte_off, soff=None):
+-                dw = col_byte_off >> fx.Int32(2)
+-                raw = buffer_ops.buffer_load(rsrc, dw, vec_width=vec_dwords, dtype=T.i32, soffset_bytes=soff)
+-                if vec_dwords == VEC_WIDTH:
+-                    return raw.bitcast(vec_type_e)
+-                return vector.bitcast(vec_type_e, raw)
++            in_div = fx.logical_divide(row_in, fx.make_layout(VEC_WIDTH, 1))
++            out_div = fx.logical_divide(row_out, fx.make_layout(VEC_WIDTH, 1))
++            gamma_div = fx.logical_divide(Gamma_buf, fx.make_layout(VEC_WIDTH, 1))
+ 
+-            def _store_vec(data, rsrc, col_byte_off, soff=None):
+-                dw = col_byte_off >> fx.Int32(2)
+-                buffer_ops.buffer_store(data, rsrc, dw, soffset_bytes=soff)
++            copy_atom = fx.make_copy_atom(fx.rocdl.BufferCopy128b(), elem_bits)
++            vec_reg_ty = fx.MemRefType.get(
++                elem_type, fx.LayoutType.get(VEC_WIDTH, 1), fx.AddressSpace.Register
++            )
++            vec_reg_lay = fx.make_layout(VEC_WIDTH, 1)
++
++            def _load_vec(div_tensor, idx):
++                r = fx.memref_alloca(vec_reg_ty, vec_reg_lay)
++                fx.copy_atom_call(copy_atom, fx.slice(div_tensor, (None, idx)), r)
++                return ArithValue(fx.memref_load_vec(r))
++
++            def _store_vec(val, div_tensor, idx):
++                r = fx.memref_alloca(vec_reg_ty, vec_reg_lay)
++                fx.memref_store_vec(val, r)
++                fx.copy_atom_call(copy_atom, r, fx.slice(div_tensor, (None, idx)))
+ 
+             c_zero_f = arith.constant(0.0, type=compute_type)
+             thread_sumsq = c_zero_f
+@@ -163,8 +171,8 @@ def _store_vec(data, rsrc, col_byte_off, soff=None):
+ 
+             # Pass 1: load + cache + sumsq
+             for tile_i in range_constexpr(num_tiles):
+-                col_bytes = ArithValue(thr_col_bytes) + (tile_i * tile_cols * elem_bytes)
+-                vec_e = _load_vec(in_rsrc, col_bytes, soff=row_soffset)
++                idx = tid + tile_i * BLOCK_THREADS
++                vec_e = _load_vec(in_div, idx)
+ 
+                 if cache_as_elem:
+                     in_local.append(vec_e)
+@@ -187,9 +195,9 @@ def _store_vec(data, rsrc, col_byte_off, soff=None):
+ 
+             # Pass 2: normalize + gamma + store (reuse cached input)
+             for tile_i in range_constexpr(num_tiles):
+-                col_bytes = ArithValue(thr_col_bytes) + (tile_i * tile_cols * elem_bytes)
++                idx = tid + tile_i * BLOCK_THREADS
+ 
+-                g_e = _load_vec(gamma_rsrc, col_bytes)
++                g_e = _load_vec(gamma_div, idx)
+                 g = g_e if dtype_str == "f32" else g_e.extf(vec_type_c)
+ 
+                 x = in_local[tile_i]
+@@ -228,10 +236,8 @@ def _store_vec(data, rsrc, col_byte_off, soff=None):
+                 else:
+                     out_e = y_val.truncf(vec_type_e)
+ 
+-                out_col = ArithValue(thr_col_bytes) + (tile_i * tile_cols * elem_bytes)
+-                i32_vec_ty = T.vec(vec_dwords, T.i32)
+-                out_vec = vector.bitcast(i32_vec_ty, out_e) if vec_dwords != VEC_WIDTH else out_e.bitcast(i32_vec_ty)
+-                _store_vec(out_vec, out_rsrc, out_col, soff=row_soffset)
++                out_idx = tid + tile_i * BLOCK_THREADS
++                _store_vec(out_e, out_div, out_idx)
+ 
+         else:
+             # ==============================================================
+@@ -239,15 +245,22 @@ def _store_vec(data, rsrc, col_byte_off, soff=None):
+             # ==============================================================
+             from flydsl.expr.arith import ArithValue
+ 
+-            row_in = fx.slice(Input, (bid, None))
+-            row_out = fx.slice(Output, (bid, None))
++            Input_buf = fx.rocdl.make_buffer_tensor(Input)
++            Output_buf = fx.rocdl.make_buffer_tensor(Output)
++            Gamma_buf = fx.rocdl.make_buffer_tensor(Gamma)
++
++            row_in = fx.slice(Input_buf, (bid, None))
++            row_out = fx.slice(Output_buf, (bid, None))
+ 
+-            copy_atom_s = fx.make_copy_atom(fx.UniversalCopy(elem_bits), elem_bits)
++            copy_atom_s = fx.make_copy_atom(
++                fx.rocdl.BufferCopy16b() if elem_bits <= 16 else fx.rocdl.BufferCopy32b(),
++                elem_bits,
++            )
+             scalar_reg_ty = fx.MemRefType.get(elem_type, fx.LayoutType.get(1, 1), fx.AddressSpace.Register)
+             scalar_reg_lay = fx.make_layout(1, 1)
+ 
+             row_div = fx.logical_divide(row_in, fx.make_layout(1, 1))
+-            gamma_div = fx.logical_divide(Gamma, fx.make_layout(1, 1))
++            gamma_div = fx.logical_divide(Gamma_buf, fx.make_layout(1, 1))
+             out_div = fx.logical_divide(row_out, fx.make_layout(1, 1))
+ 
+             def _load_scalar(divided_tensor, index):
+@@ -317,7 +330,7 @@ def launch_rmsnorm(
+         with ir.InsertionPoint(ctx.gpu_module_body):
+             allocator.finalize()
+ 
+-        idx_m = arith.index_cast(T.index, m_in)
++        idx_m = ArithValue(m_in).index_cast(T.index)
+         launcher = rmsnorm_kernel(Input, Gamma, Gamma, Output)
+         launcher.launch(
+             grid=(idx_m, 1, 1),
+diff --git a/kernels/softmax_kernel.py b/kernels/softmax_kernel.py
+index e2501659c..870add5b6 100644
+--- a/kernels/softmax_kernel.py
++++ b/kernels/softmax_kernel.py
+@@ -18,13 +18,13 @@
+ from flydsl.compiler.kernel_function import CompilationContext
+ 
+ from flydsl.expr import arith, vector, gpu, range_constexpr
++from flydsl.expr.arith import ArithValue
+ from flydsl.expr.typing import T, Int32
+ 
+ from flydsl.utils.smem_allocator import SmemAllocator, SmemPtr
+ from flydsl.runtime.device import get_rocm_arch as get_hip_arch
+ 
+ from flydsl._mlir import ir
+-from flydsl.expr import buffer_ops
+ 
+ 
+ KERNEL_NAME = "softmax_kernel"
+@@ -97,14 +97,14 @@ def block_reduce(val, mode):
+             w = wave_reduce(val, mode)
+ 
+             if lane == fx.Int32(0):
+-                wave_idx = arith.index_cast(T.index, wave)
++                wave_idx = ArithValue(wave).index_cast(T.index)
+                 s_red.store(w, [wave_idx])
+             gpu.barrier()
+ 
+             if wave == fx.Int32(0):
+                 in_range = lane < RED_SLOTS
+                 lane_safe = in_range.select(lane, fx.Int32(0))
+-                lane_safe_idx = arith.index_cast(T.index, lane_safe)
++                lane_safe_idx = ArithValue(lane_safe).index_cast(T.index)
+                 v = s_red.load([lane_safe_idx])
+                 z = neutral
+                 ww = in_range.select(v, z)
+@@ -125,36 +125,43 @@ def block_reduce(val, mode):
+             from flydsl.expr.arith import ArithValue
+ 
+             num_tiles = N // tile_cols
+-            elem_bytes = 4 if dtype_str == "f32" else 2
+-            vec_dwords = (VEC_WIDTH * elem_bytes) // 4
+ 
+             vec_type_c = T.vec(VEC_WIDTH, compute_type)
+             vec_type_e = T.vec(VEC_WIDTH, elem_type)
+ 
+-            a_rsrc = buffer_ops.create_buffer_resource(A, max_size=True)
+-            c_rsrc = buffer_ops.create_buffer_resource(C, max_size=True)
++            # ── Layout API: buffer-backed tensors + tiled access ─────
++            A_buf = fx.rocdl.make_buffer_tensor(A)
++            C_buf = fx.rocdl.make_buffer_tensor(C)
+ 
+-            row_soffset = ArithValue(bid) * (N * elem_bytes)
+-            thr_col_bytes = ArithValue(tid) * (VEC_WIDTH * elem_bytes)
++            row_a = fx.slice(A_buf, (bid, None))
++            row_c = fx.slice(C_buf, (bid, None))
+ 
+-            def _load_vec(rsrc, col_byte_off, soff=None):
+-                dw = col_byte_off >> fx.Int32(2)
+-                raw = buffer_ops.buffer_load(rsrc, dw, vec_width=vec_dwords, dtype=T.i32, soffset_bytes=soff)
+-                if vec_dwords == VEC_WIDTH:
+-                    return raw.bitcast(vec_type_e)
+-                return vector.bitcast(vec_type_e, raw)
++            a_div = fx.logical_divide(row_a, fx.make_layout(VEC_WIDTH, 1))
++            c_div = fx.logical_divide(row_c, fx.make_layout(VEC_WIDTH, 1))
+ 
+-            def _store_vec(data, rsrc, col_byte_off, soff=None):
+-                dw = col_byte_off >> fx.Int32(2)
+-                buffer_ops.buffer_store(data, rsrc, dw, soffset_bytes=soff)
++            copy_atom = fx.make_copy_atom(fx.rocdl.BufferCopy128b(), elem_bits)
++            vec_reg_ty = fx.MemRefType.get(
++                elem_type, fx.LayoutType.get(VEC_WIDTH, 1), fx.AddressSpace.Register
++            )
++            vec_reg_lay = fx.make_layout(VEC_WIDTH, 1)
++
++            def _load_vec(div_tensor, idx):
++                r = fx.memref_alloca(vec_reg_ty, vec_reg_lay)
++                fx.copy_atom_call(copy_atom, fx.slice(div_tensor, (None, idx)), r)
++                return ArithValue(fx.memref_load_vec(r))
++
++            def _store_vec(val, div_tensor, idx):
++                r = fx.memref_alloca(vec_reg_ty, vec_reg_lay)
++                fx.memref_store_vec(val, r)
++                fx.copy_atom_call(copy_atom, r, fx.slice(div_tensor, (None, idx)))
+ 
+             # 1. Load + compute local max
+             row_buffer = []
+             thread_max = c_neg_inf
+ 
+             for tile_i in range_constexpr(num_tiles):
+-                col_bytes = thr_col_bytes + (tile_i * tile_cols * elem_bytes)
+-                vec_e = _load_vec(a_rsrc, col_bytes, soff=row_soffset)
++                idx = tid + tile_i * BLOCK_THREADS
++                vec_e = _load_vec(a_div, idx)
+                 x = vec_e if dtype_str == "f32" else vec_e.extf(vec_type_c)
+                 row_buffer.append(x)
+                 red_max = vector.reduction(compute_type, vector.CombiningKind.MAXNUMF, x)
+@@ -192,10 +199,8 @@ def _store_vec(data, rsrc, col_byte_off, soff=None):
+                 else:
+                     out_e = norm_vec.truncf(vec_type_e)
+ 
+-                out_col = thr_col_bytes + (tile_i * tile_cols * elem_bytes)
+-                i32_vec_ty = T.vec(vec_dwords, T.i32)
+-                out_i32 = vector.bitcast(i32_vec_ty, out_e) if vec_dwords != VEC_WIDTH else out_e.bitcast(i32_vec_ty)
+-                _store_vec(out_i32, c_rsrc, out_col, soff=row_soffset)
++                out_idx = tid + tile_i * BLOCK_THREADS
++                _store_vec(out_e, c_div, out_idx)
+ 
+         else:
+             # ==============================================================
+@@ -203,10 +208,16 @@ def _store_vec(data, rsrc, col_byte_off, soff=None):
+             # ==============================================================
+             from flydsl.expr.arith import ArithValue
+ 
+-            row_a = fx.slice(A, (bid, None))
+-            row_c = fx.slice(C, (bid, None))
++            A_buf = fx.rocdl.make_buffer_tensor(A)
++            C_buf = fx.rocdl.make_buffer_tensor(C)
++
++            row_a = fx.slice(A_buf, (bid, None))
++            row_c = fx.slice(C_buf, (bid, None))
+ 
+-            copy_atom_s = fx.make_copy_atom(fx.UniversalCopy(elem_bits), elem_bits)
++            copy_atom_s = fx.make_copy_atom(
++                fx.rocdl.BufferCopy16b() if elem_bits <= 16 else fx.rocdl.BufferCopy32b(),
++                elem_bits,
++            )
+             scalar_reg_ty = fx.MemRefType.get(elem_type, fx.LayoutType.get(1, 1), fx.AddressSpace.Register)
+             scalar_reg_lay = fx.make_layout(1, 1)
+ 
+@@ -286,7 +297,7 @@ def launch_softmax(
+         with ir.InsertionPoint(ctx.gpu_module_body):
+             allocator.finalize()
+ 
+-        idx_m = arith.index_cast(T.index, m_in)
++        idx_m = ArithValue(m_in).index_cast(T.index)
+         launcher = softmax_kernel(A, C, C, C)
+         launcher.launch(
+             grid=(idx_m, 1, 1),
+diff --git a/tests/kernels/test_quant.py b/tests/kernels/test_quant.py
+index a705acc9b..64d4b982c 100644
+--- a/tests/kernels/test_quant.py
++++ b/tests/kernels/test_quant.py
+@@ -92,16 +92,10 @@ def build_quant_module(N):
+     num_tiles = (N + tile_cols - 1) // tile_cols
+     RED_SLOTS = max(1, BLOCK_THREADS // WARP_SIZE)
+ 
+-    elem_bytes_f16 = 2
+-    elem_bytes_i8 = 1
+-
+     allocator = SmemAllocator(None, arch=arch)
+     red_offset = allocator._align(allocator.ptr, 16)
+     allocator.ptr = red_offset + RED_SLOTS * 4  # f32 scratch
+ 
+-    vec_dwords_f16 = (VEC_WIDTH * elem_bytes_f16) // 4   # 4
+-    vec_dwords_i8 = (VEC_WIDTH * elem_bytes_i8) // 4     # 2
+-
+     @flyc.kernel
+     def quant_kernel(Input: fx.Tensor, Output: fx.Tensor, Scales: fx.Tensor):
+         bid = fx.block_idx.x
+@@ -152,19 +146,36 @@ def block_reduce_max(val):
+             c0_idx = arith.constant(0, index=True)
+             return s_red.load([c0_idx])
+ 
+-        # ── Buffer resources ─────────────────────────────────────────────
+-        in_rsrc = buffer_ops.create_buffer_resource(Input, max_size=True)
+-        out_rsrc = buffer_ops.create_buffer_resource(Output, max_size=True)
++        # ── Layout API: buffer-backed tensors ────────────────────────────
++        Input_buf = fx.rocdl.make_buffer_tensor(Input)
+         scales_rsrc = buffer_ops.create_buffer_resource(Scales, max_size=True)
++        # i8 output: keep buffer_ops (BufferCopy64b unsupported by LLVM backend)
++        out_rsrc = buffer_ops.create_buffer_resource(Output, max_size=True)
+ 
+-        vec_type_f16 = T.vec(VEC_WIDTH, T.f16)
+-        vec_type_f32 = T.vec(VEC_WIDTH, T.f32)
++        # Slice row for this block, tile by VEC_WIDTH
++        row_in = fx.slice(Input_buf, (bid, None))
++        in_div = fx.logical_divide(row_in, fx.make_layout(VEC_WIDTH, 1))
++
++        # Copy atom for f16 loads: 8 x f16 = 128b
++        copy_atom_in = fx.make_copy_atom(fx.rocdl.BufferCopy128b(), 16)
+ 
+-        row_soffset_in = ArithValue(bid) * (N * elem_bytes_f16)
++        vec_reg_ty_f16 = fx.MemRefType.get(
++            T.f16, fx.LayoutType.get(VEC_WIDTH, 1), fx.AddressSpace.Register
++        )
++        vec_reg_lay = fx.make_layout(VEC_WIDTH, 1)
++
++        elem_bytes_i8 = 1
++        vec_dwords_i8 = (VEC_WIDTH * elem_bytes_i8) // 4  # 2
+         row_soffset_out = ArithValue(bid) * (N * elem_bytes_i8)
+-        thr_col_bytes_f16 = ArithValue(tid) * (VEC_WIDTH * elem_bytes_f16)
+         thr_col_bytes_i8 = ArithValue(tid) * (VEC_WIDTH * elem_bytes_i8)
+ 
++        def _load_vec_f16(div_tensor, idx):
++            r = fx.memref_alloca(vec_reg_ty_f16, vec_reg_lay)
++            fx.copy_atom_call(copy_atom_in, fx.slice(div_tensor, (None, idx)), r)
++            return ArithValue(fx.memref_load_vec(r))
++
++        vec_type_f32 = T.vec(VEC_WIDTH, T.f32)
++
+         # abs via sign-bit clearing (|x| = bitcast(bitcast(x, i32) & 0x7FFFFFFF, f32))
+         i32_vec_ty = T.vec(VEC_WIDTH, T.i32)
+         abs_mask = arith.constant_vector(0x7FFFFFFF, i32_vec_ty)
+@@ -175,16 +186,11 @@ def block_reduce_max(val):
+ 
+         # ── Pass 1: load f16 → f32, compute row max|val|, cache ──────────
+         for tile_i in range_constexpr(num_tiles):
+-            col_bytes = ArithValue(thr_col_bytes_f16) + (tile_i * tile_cols * elem_bytes_f16)
++            idx = tid + tile_i * BLOCK_THREADS
+             col_end = ArithValue(tid) * VEC_WIDTH + (tile_i * tile_cols + VEC_WIDTH)
+             is_valid = col_end <= N
+ 
+-            dw_in = col_bytes.shrui(arith.constant(2, type=T.i32))
+-            raw_data = buffer_ops.buffer_load(
+-                in_rsrc, dw_in, vec_width=vec_dwords_f16,
+-                dtype=T.i32, soffset_bytes=row_soffset_in, mask=is_valid,
+-            )
+-            vec_f16 = vector.bitcast(vec_type_f16, raw_data)
++            vec_f16 = _load_vec_f16(in_div, idx)
+             vec_f32 = vec_f16.extf(vec_type_f32)
+             cached_vecs.append(vec_f32)
+ 
+diff --git a/tests/kernels/test_vec_add.py b/tests/kernels/test_vec_add.py
+index dd1b29de6..ffd97bb6d 100644
+--- a/tests/kernels/test_vec_add.py
++++ b/tests/kernels/test_vec_add.py
+@@ -38,6 +38,11 @@ def vecAddKernel(
+ 
+     tile_elems = block_dim * vec_width
+ 
++    # Wrap in buffer-descriptor-backed tensors for AMD buffer load/store
++    A = fx.rocdl.make_buffer_tensor(A)
++    B = fx.rocdl.make_buffer_tensor(B)
++    C = fx.rocdl.make_buffer_tensor(C)
++
+     tA = fx.logical_divide(A, fx.make_layout(tile_elems, 1))
+     tB = fx.logical_divide(B, fx.make_layout(tile_elems, 1))
+     tC = fx.logical_divide(C, fx.make_layout(tile_elems, 1))
+@@ -50,11 +55,10 @@ def vecAddKernel(
+     tB = fx.logical_divide(tB, fx.make_layout(vec_width, 1))
+     tC = fx.logical_divide(tC, fx.make_layout(vec_width, 1))
+ 
+-    copy_bits = vec_width * 32
+     RABMemRefTy = fx.MemRefType.get(
+         fx.T.f32(), fx.LayoutType.get(vec_width, 1), fx.AddressSpace.Register
+     )
+-    copyAtom = fx.make_copy_atom(fx.UniversalCopy(copy_bits), fx.Float32)
++    copyAtom = fx.make_copy_atom(fx.rocdl.BufferCopy128b(), fx.Float32)
+ 
+     rA = fx.memref_alloca(RABMemRefTy, fx.make_layout(vec_width, 1))
+     rB = fx.memref_alloca(RABMemRefTy, fx.make_layout(vec_width, 1))

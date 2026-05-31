@@ -1,0 +1,576 @@
+diff --git a/aiter/jit/utils/chip_info.py b/aiter/jit/utils/chip_info.py
+index 7cc0a0a48d..3e2659d78d 100644
+--- a/aiter/jit/utils/chip_info.py
++++ b/aiter/jit/utils/chip_info.py
+@@ -19,6 +19,8 @@ def get_gfx():
+                     return line.split(":")[-1].strip()
+         except Exception as e:
+             raise RuntimeError(f"Get GPU arch from rcominfo failed {str(e)}")
++    elif ";" in gfx:
++        gfx = gfx.split(";")[-1]
+     return gfx
+ 
+ 
+diff --git a/aiter/ops/gemm_op_a4w4.py b/aiter/ops/gemm_op_a4w4.py
+index d1313d20b2..3ba696bfab 100644
+--- a/aiter/ops/gemm_op_a4w4.py
++++ b/aiter/ops/gemm_op_a4w4.py
+@@ -49,6 +49,7 @@ def gemm_a4w4_asm(
+     bias: Tensor,  # bias:[1, N] f32
+     alpha: Optional[float] = 1.0,
+     beta: Optional[float] = 0.0,
++    bpreshuffle: Optional[bool] = True,
+ ) -> torch.Tensor: ...
+ 
+ 
+diff --git a/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages.cu b/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages.cu
+index 41ee7487a2..bbc95fb50d 100644
+--- a/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages.cu
++++ b/csrc/ck_gemm_moe_2stages_codegen/gemm_moe_ck2stages.cu
+@@ -75,7 +75,7 @@ void ck_moe_stage1(torch::Tensor &hidden_states,     // [m, k], input token
+     void *num_valid_ids_ptr = num_valid_ids.data_ptr();
+     void *sorted_weights_ptr = sorted_weights.has_value() ? sorted_weights.value().data_ptr() : nullptr;
+     void *out_ptr = out.data_ptr();
+-    void *w1_scale_ptr = w1_scale.has_value() ? w1_scale.value().transpose(0, 1).data_ptr() : nullptr;
++    void *w1_scale_ptr = w1_scale.has_value() ? w1_scale.value().data_ptr() : nullptr;
+     void *a1_scale_ptr = a1_scale.has_value() ? a1_scale.value().data_ptr() : nullptr;
+     if (!hidden_states_ptr || !w1_ptr || !w2_ptr || !sorted_token_ids_ptr || !sorted_expert_ids_ptr || !num_valid_ids_ptr || !out_ptr)
+     {
+diff --git a/csrc/include/asm_gemm_a4w4.h b/csrc/include/asm_gemm_a4w4.h
+index 52cf26f133..5b63af5541 100644
+--- a/csrc/include/asm_gemm_a4w4.h
++++ b/csrc/include/asm_gemm_a4w4.h
+@@ -3,11 +3,12 @@
+ // Copyright (C) 2024-2025, Advanced Micro Devices, Inc. All rights reserved.
+ #include <torch/extension.h>
+ 
+-torch::Tensor gemm_a4w4_asm(torch::Tensor &A,       // A:[M, K/2] f4x2
+-                            torch::Tensor &B,       // B:[N, K/2] f4x2
+-                            torch::Tensor &A_scale, // A_scale:[M, K/32] e8m0 paded
+-                            torch::Tensor &B_scale, // B_scale:[N, K/32] e8m0 paded
+-                            torch::Tensor &out,     // Out:[M, N] bf16
+-                            torch::Tensor &bias,    // bias:[M, N] f32
+-                            std::optional<float> alpha = 1.0,
+-                            std::optional<float> beta = 0.0);
++torch::Tensor gemm_a4w4_asm(torch::Tensor& A,       // A:[M, K/2] f4x2
++                            torch::Tensor& B,       // B:[N, K/2] f4x2
++                            torch::Tensor& A_scale, // A_scale:[M, K/32] e8m0 paded
++                            torch::Tensor& B_scale, // B_scale:[N, K/32] e8m0 paded
++                            torch::Tensor& out,     // Out:[M, N] bf16
++                            torch::Tensor& bias,    // bias:[M, N] f32
++                            std::optional<float> alpha      = 1.0,
++                            std::optional<float> beta       = 0.0,
++                            std::optional<bool> bpreshuffle = true);
+diff --git a/csrc/include/rocm_ops.hpp b/csrc/include/rocm_ops.hpp
+index 2b3484de7c..1a38687e78 100644
+--- a/csrc/include/rocm_ops.hpp
++++ b/csrc/include/rocm_ops.hpp
+@@ -309,7 +309,8 @@
+           py::arg("out"),         \
+           py::arg("bias"),        \
+           py::arg("alpha") = 1.0, \
+-          py::arg("beta")  = 0.0);
++          py::arg("beta") = 0.0, \
++          py::arg("bpreshuffle")  = true);
+ 
+ #define GEMM_A4W4_BLOCKSCALE_PYBIND \
+     m.def("gemm_a4w4_blockscale",   \
+diff --git a/csrc/kernels/quant_kernels.cu b/csrc/kernels/quant_kernels.cu
+index 252daf6f9b..c12158a48a 100644
+--- a/csrc/kernels/quant_kernels.cu
++++ b/csrc/kernels/quant_kernels.cu
+@@ -460,7 +460,7 @@ void static_per_tensor_quant(torch::Tensor& out,         // [..., d]
+         AITER_DISPATCH_FLOATING16_TYPES(input.scalar_type(), "scaled_quant_kernel", [&] {
+             using input_dtype = typename t2ck<scalar_t>::type;
+             aiter::scaled_quant_kernel<<<grid, block, 0, stream>>>(
+-                reinterpret_cast<ck_tile::int8_t*>(out.data_ptr()),
++                reinterpret_cast<FP8_TYPE*>(out.data_ptr()),
+                 reinterpret_cast<input_dtype*>(input.data_ptr()),
+                 scale.data_ptr<float>(),
+                 cols);
+diff --git a/csrc/py_itfs_cu/asm_gemm_a4w4.cu b/csrc/py_itfs_cu/asm_gemm_a4w4.cu
+index e8260c4cb6..6f6b793ab3 100644
+--- a/csrc/py_itfs_cu/asm_gemm_a4w4.cu
++++ b/csrc/py_itfs_cu/asm_gemm_a4w4.cu
+@@ -1,20 +1,20 @@
+ // SPDX-License-Identifier: MIT
+ // Copyright (C) 2024-2025, Advanced Micro Devices, Inc. All rights reserved.
+-#include <hip/hip_runtime.h>
+-#include <torch/all.h>
++#include "aiter_hip_common.h"
+ #include <ATen/cuda/CUDAContext.h>
+ #include <c10/cuda/CUDAGuard.h>
+-#include "aiter_hip_common.h"
++#include <hip/hip_runtime.h>
++#include <torch/all.h>
+ 
+ struct __attribute__((packed)) KernelArgs
+ {
+-    void *ptr_D;
++    void* ptr_D;
+     p2 _p0;
+-    void *ptr_C;
++    void* ptr_C;
+     p2 _p1;
+-    void *ptr_A;
++    void* ptr_A;
+     p2 _p2;
+-    void *ptr_B;
++    void* ptr_B;
+     p2 _p3;
+     float alpha;
+     p3 _p4;
+@@ -43,9 +43,9 @@ struct __attribute__((packed)) KernelArgs
+     p3 _p15;
+     unsigned int K;
+     p3 _p16;
+-    void *ptr_ScaleA;
++    void* ptr_ScaleA;
+     p2 _p17;
+-    void *ptr_ScaleB;
++    void* ptr_ScaleB;
+     p2 _p18;
+     unsigned int stride_ScaleA0;
+     p3 _p19;
+@@ -59,39 +59,39 @@ struct __attribute__((packed)) KernelArgs
+ 
+ // A4W4 asm gemm kernel
+ // D=A*B*alpha+beta*C
+-torch::Tensor gemm_a4w4_asm(torch::Tensor &A,       // A:[M, K/2] f4x2
+-                            torch::Tensor &B,       // B:[N, K/2] f4x2
+-                            torch::Tensor &A_scale, // A_scale:[M, K/32] e8m0 paded
+-                            torch::Tensor &B_scale, // B_scale:[N, K/32] e8m0 paded
+-                            torch::Tensor &out,     // Out:[M, N] bf16
+-                            torch::Tensor &bias,    // bias:[M, N] f32
+-                            std::optional<float> alpha = 1.0,
+-                            std::optional<float> beta = 0.0)
++torch::Tensor gemm_a4w4_asm(torch::Tensor& A,       // A:[M, K/2] f4x2
++                            torch::Tensor& B,       // B:[N, K/2] f4x2
++                            torch::Tensor& A_scale, // A_scale:[M, K/32] e8m0 paded
++                            torch::Tensor& B_scale, // B_scale:[N, K/32] e8m0 paded
++                            torch::Tensor& out,     // Out:[M, N] bf16
++                            torch::Tensor& bias,    // bias:[M, N] f32
++                            std::optional<float> alpha      = 1.0,
++                            std::optional<float> beta       = 0.0,
++                            std::optional<bool> bpreshuffle = true)
+ {
+-    TORCH_CHECK(out.dtype() == torch::ScalarType::BFloat16,
+-                __func__, " only support BFloat16 output now!");
++    TORCH_CHECK(
++        out.dtype() == torch::ScalarType::BFloat16, __func__, " only support BFloat16 output now!");
+     int Mdim = A.size(0);
+     int Ndim = B.size(0);
+-    int Kdim = A.size(1) * 2; // always fp4_x2
+-
++    int Kdim = A.size(1) * 2; // always fp4_x2F
+     KernelArgs args;
+     size_t arg_size = sizeof(args);
+-    args.ptr_D = (void *)out.data_ptr();
+-    args.ptr_C = (void *)bias.data_ptr();
+-    args.ptr_A = (void *)A.data_ptr();
+-    args.ptr_B = (void *)B.data_ptr();
++    args.ptr_D      = (void*)out.data_ptr();
++    args.ptr_C      = (void*)bias.data_ptr();
++    args.ptr_A      = (void*)A.data_ptr();
++    args.ptr_B      = (void*)B.data_ptr();
+ 
+-    args.alpha = alpha.value();
+-    args.beta = beta.value();
++    args.alpha     = alpha.value();
++    args.beta      = beta.value();
+     args.stride_C0 = out.stride(0);
+     args.stride_A0 = A.stride(0) * 2; // always fp4_x2
+     args.stride_B0 = B.stride(0) * 2; // always fp4_x2
+-    args.M = Mdim;
+-    args.N = Ndim;
+-    args.K = Kdim;
++    args.M         = Mdim;
++    args.N         = Ndim;
++    args.K         = Kdim;
+ 
+-    args.ptr_ScaleA = (void *)A_scale.data_ptr();
+-    args.ptr_ScaleB = (void *)B_scale.data_ptr();
++    args.ptr_ScaleA     = (void*)A_scale.data_ptr();
++    args.ptr_ScaleB     = (void*)B_scale.data_ptr();
+     args.stride_ScaleA0 = A_scale.stride(0);
+     args.stride_ScaleB0 = B_scale.stride(0);
+ 
+@@ -99,21 +99,34 @@ torch::Tensor gemm_a4w4_asm(torch::Tensor &A,       // A:[M, K/2] f4x2
+     const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+ 
+     // TODO should get from kernel
+-    int SUBM = 256;
+-    int SUBN = 256;
+-    static AiterAsmKernel noSplitK_impl("_ZN5aiter33f4gemm_bf16_per1x32Fp4_tn_256x256E", "f4gemm/f4gemm_bf16_per1x32Fp4_tn_256x256.co");
+-    AiterAsmKernel *impl_ptr = &noSplitK_impl;
++    int tg_group_size = 32;
++    int SUBM          = 256;
++    int SUBN          = 256;
++    int gdx           = (Ndim + SUBN - 1) / SUBN;
++    int gdy           = (Mdim + SUBM - 1) / SUBM;
++    int gdz           = 1;
++
++    static AiterAsmKernel noSplitK_impl("_ZN5aiter33f4gemm_bf16_per1x32Fp4_tn_256x256E",
++                                        "f4gemm/f4gemm_bf16_per1x32Fp4_tn_256x256.co");
++    static AiterAsmKernel noSplitK_bpreshuffle_impl(
++        "_ZN5aiter45f4gemm_bf16_per1x32Fp4_tn_bpreshuffle_256x256E",
++        "f4gemm/f4gemm_bf16_per1x32Fp4_tn_bpreshuffle_256x256.co");
++    AiterAsmKernel* impl_ptr = &noSplitK_bpreshuffle_impl;
+     // if (ks > 0)
+     //     impl_ptr = &splitK_impl;
++    if(bpreshuffle == false)
++    {
++        impl_ptr = &noSplitK_impl;
++    }
+ 
+     impl_ptr->launch_kernel({&args,
+                              &arg_size,
+-                             (Ndim + SUBN - 1) / SUBN, // gdx
+-                             (Mdim + SUBM - 1) / SUBM, // gdy
+-                             1,                        // gdz
+-                             256,                      // bdx: 4 wv64
+-                             1,                        // bdy
+-                             1,                        // bdz
++                             gdx, // gdx
++                             gdy, // gdy
++                             gdz, // gdz
++                             256, // bdx: 4 wv64
++                             1,   // bdy
++                             1,   // bdz
+                              stream});
+     return out;
+ }
+diff --git a/hsa/gfx942/fmoe_2stages/tune.py b/hsa/gfx942/fmoe_2stages/tune.py
+index 15c9509620..06b3434099 100644
+--- a/hsa/gfx942/fmoe_2stages/tune.py
++++ b/hsa/gfx942/fmoe_2stages/tune.py
+@@ -26,6 +26,7 @@
+     convert_int8_to_uint32_int4,
+ )
+ from aiter import dtypes
++from aiter import ActivationType as ActivationType
+ 
+ sys.path.insert(0, f"{AITER_CSRC_DIR}/ck_gemm_moe_2stages_codegen/")
+ from gemm_moe_ck2stages_common import get_gemm1_kernels_list, get_gemm2_kernels_list
+diff --git a/hsa/gfx950/f4gemm/f4gemm_bf16_per1x32Fp4_tn_bpreshuffle_256x256.co b/hsa/gfx950/f4gemm/f4gemm_bf16_per1x32Fp4_tn_bpreshuffle_256x256.co
+new file mode 100755
+index 0000000000..b6af087111
+Binary files /dev/null and b/hsa/gfx950/f4gemm/f4gemm_bf16_per1x32Fp4_tn_bpreshuffle_256x256.co differ
+diff --git a/op_tests/test_gemm_a4w4.py b/op_tests/test_gemm_a4w4.py
+index ed84082a38..93c4ac422e 100644
+--- a/op_tests/test_gemm_a4w4.py
++++ b/op_tests/test_gemm_a4w4.py
+@@ -6,13 +6,16 @@
+ from aiter.test_common import checkAllclose, benchmark, perftest
+ from aiter import dtypes
+ from aiter.utility import fp4_utils
++from aiter.ops.shuffle import shuffle_weight
+ import random
+ import itertools
+ import argparse
++import pandas as pd
+ 
+ torch.set_default_device("cuda")
+ torch.set_printoptions(sci_mode=False)
+ SCALE_GROUP_SIZE = 32
++pd.set_option("display.max_columns", 200)
+ 
+ 
+ @perftest(num_iters=5)
+@@ -34,17 +37,33 @@ def run_torch(x, w, x_scales, w_scales, dtype):
+     return torch.mm(x_f32, w_f32.T).to(dtype)[:m, :n]
+ 
+ 
++@perftest()
++def run_gemm_ck(x, weight, x_scale, w_scale, out):
++    return aiter.gemm_a4w4_blockscale(x, weight, x_scale, w_scale, out)
++
++
+ @perftest()
+ def run_triton(x, w, x_scales, w_scales, out, dtype=dtypes.bf16):
+     from aiter.ops.triton.gemm_afp4wfp4 import gemm_afp4wfp4
+ 
+-    gemm_afp4wfp4(x, w, out, x_scales, w_scales, dtype)
++    gemm_afp4wfp4(x, w, x_scales, w_scales, dtype, out)
+     return out
+ 
+ 
+ @perftest()
+-def run_gemm_asm(x, weightshuffle, x_scale, w_scale, out, bias=None, dtype=dtypes.bf16):
+-    return aiter.gemm_a4w4_asm(x, weightshuffle, x_scale, w_scale, out, bias)
++def run_gemm_asm(
++    x,
++    weightshuffle,
++    x_scale,
++    w_scale,
++    out,
++    bias=None,
++    dtype=dtypes.bf16,
++    bpreshuffle=True,
++):
++    return aiter.gemm_a4w4_asm(
++        x, weightshuffle, x_scale, w_scale, out, bias, bpreshuffle=bpreshuffle
++    )
+ 
+ 
+ @benchmark()
+@@ -60,34 +79,70 @@ def test_gemm(dtype, M, N, K):
+     _, w_scales = quant_func(w, shuffle=False)
+     x, x_scales_shuffle = quant_func(x, shuffle=True)
+     w, w_scales_shuffle = quant_func(w, shuffle=True)
++    wshuffle = shuffle_weight(w, layout=(16, 16))
+     out1 = torch.empty(M, N, dtype=dtype)
+     out2 = torch.empty((M + 255) // 256 * 256, N, dtype=dtype)
++    out3 = torch.empty((M + 255) // 256 * 256, N, dtype=dtype)
+     bias_f32 = torch.zeros(M, N, dtype=dtype)
+     x_scales = x_scales.view(torch.uint8)
+     w_scales = w_scales.view(torch.uint8)
+ 
+     a, avg_a = run_torch(x, w, x_scales, w_scales, dtype)
+     b, avg_b = run_triton(x, w.T, x_scales, w_scales, out1, dtype)
+-    err0 = checkAllclose(a, b, msg="triton")
++
++    err0 = checkAllclose(a, b, msg="triton        ")
+     avg_c = None
+     tflops_c = None
+     tbs_c = None
+-    c, avg_c = run_gemm_asm(x, w, x_scales_shuffle, w_scales_shuffle, out2, bias_f32)
+-    err1 = checkAllclose(a, c[:M], msg="asm   ")
++    c, avg_c = run_gemm_asm(
++        x,
++        wshuffle,
++        x_scales_shuffle,
++        w_scales_shuffle,
++        out2,
++        bias_f32,
++        bpreshuffle=True,
++    )
++    err1 = checkAllclose(a, c[:M], msg="asm_bshuffle  ")
+     tflops_c = M * N * K * 2 / avg_c / 1e6
+     tbs_c = (x.nbytes + w.nbytes) / avg_c / 1e6
++
++    avg_c2 = None
++    tflops_c2 = None
++    tbs_c2 = None
++    c2, avg_c2 = run_gemm_asm(
++        x, w, x_scales_shuffle, w_scales_shuffle, out2, bias_f32, bpreshuffle=False
++    )
++    err1_ = checkAllclose(a, c2[:M], msg="asm_NObshuffle ")
++    tflops_c2 = M * N * K * 2 / avg_c2 / 1e6
++    tbs_c2 = (x.nbytes + w.nbytes) / avg_c2 / 1e6
++
++    avg_d = None
++    tflops_d = None
++    tbs_d = None
++    d, avg_d = run_gemm_ck(x, wshuffle, x_scales_shuffle, w_scales_shuffle, out3)
++    err2 = checkAllclose(a, d[:M], msg="ck            ")
++    tflops_d = M * N * K * 2 / avg_d / 1e6
++    tbs_d = (x.nbytes + w.nbytes) / avg_d / 1e6
++
+     return {
+         "triton": avg_b,
+-        "asm": avg_c,
++        "asm bpreshuffle": avg_c,
++        "asm no bpreshuffle": avg_c2,
++        "ck": avg_d,
+         "triton err": err0,
+-        "asm err": err1,
+-        "asm TFLPOS": tflops_c,
+-        "asm TB/s": tbs_c,
++        "asm bpreshuffle err": err1,
++        "asm no bpreshuffle err": err1_,
++        "ck err": err2,
++        "asm bpreshuffle TFLPOS": tflops_c,
++        "asm no bpreshuffle TFLPOS": tflops_c2,
++        "ck TFLPOS": tflops_d,
++        "asm bpreshuffle TB/s": tbs_c,
++        "asm no bpreshuffle TB/s": tbs_c2,
++        "ck TB/s": tbs_d,
+     }
+ 
+ 
+-import pandas as pd
+-
+ l_dtype = ["bf16"]
+ l_mnk = [
+     # pure_compute
+@@ -104,6 +159,7 @@ def test_gemm(dtype, M, N, K):
+     (64, 16384, 53248),
+     (64, 18432, 16384),
+     (64, 16384, 16384),
++    (64, 106496, 16384),
+     (32, 106496, 16384),
+     (32, 16384, 53248),
+     (32, 18432, 16384),
+@@ -139,6 +195,11 @@ def test_gemm(dtype, M, N, K):
+     (4096, 8192, 1024),
+     (8192, 8192, 1024),
+     (16384, 8192, 1024),
++    # for asm
++    (16384, 16384, 16384),
++    (32768, 32768, 32768),
++    (51200, 18432, 16384),
++    (51200, 16384, 16384),
+ ]
+ 
+ parser = argparse.ArgumentParser(description="config input of test")
+diff --git a/op_tests/test_gemm_a4w4_blockscale.py b/op_tests/test_gemm_a4w4_blockscale.py
+deleted file mode 100755
+index 0089d2f2b7..0000000000
+--- a/op_tests/test_gemm_a4w4_blockscale.py
++++ /dev/null
+@@ -1,154 +0,0 @@
+-# SPDX-License-Identifier: MIT
+-# Copyright (C) 2024-2025, Advanced Micro Devices, Inc. All rights reserved.
+-
+-import torch
+-import aiter
+-from aiter.test_common import checkAllclose, perftest, benchmark
+-from aiter import dtypes
+-from aiter.utility import fp4_utils
+-from aiter.ops.shuffle import shuffle_weight
+-import pandas as pd
+-import argparse
+-
+-torch.set_default_device("cuda")
+-torch.set_printoptions(sci_mode=False)
+-torch.random.manual_seed(0)
+-SCALE_GROUP_SIZE = 32
+-block_shape = (128, 128)
+-
+-
+-def run_torch(x, w, x_scales, w_scales, dtype):
+-    m, k = x.shape
+-    n, k = w.shape
+-    # First convert the x and w inputs to f32.
+-    x_f32 = fp4_utils.mxfp4_to_f32(x)
+-    w_f32 = fp4_utils.mxfp4_to_f32(w)
+-    # Next convert the e8m0 scales to f32.
+-    x_scales = x_scales[:m]
+-    x_scales = x_scales.repeat_interleave(SCALE_GROUP_SIZE, dim=1)
+-    x_scales_f32 = fp4_utils.e8m0_to_f32(x_scales)
+-    x_f32 = x_f32 * x_scales_f32
+-    w_scales = w_scales[:n]
+-    w_scales = w_scales.repeat_interleave(SCALE_GROUP_SIZE, dim=1)
+-    w_scales_f32 = fp4_utils.e8m0_to_f32(w_scales)
+-    w_f32 = w_f32 * w_scales_f32
+-    return torch.mm(x_f32, w_f32.T).to(dtype)[:m, :n]
+-
+-
+-@perftest()
+-def run_gemm_ck(x, weight, x_scale, w_scale, out):
+-    return aiter.gemm_a4w4_blockscale(x, weight, x_scale, w_scale, out)
+-
+-
+-@benchmark()
+-def test_gemm(dtype, m, n, k):
+-    from aiter.jit.utils.chip_info import get_gfx
+-
+-    if get_gfx() not in ["gfx950"]:
+-        return
+-
+-    quant_func = aiter.get_triton_quant(aiter.QuantType.per_1x32)
+-    x = torch.randn((m, k), dtype=dtype)
+-    w = torch.randn((n, k), dtype=dtype)
+-    _, x_scales = quant_func(x, shuffle=False)
+-    _, w_scales = quant_func(w, shuffle=False)
+-    x, x_scales_shuffle = quant_func(x, shuffle=True)
+-    w, w_scales_shuffle = quant_func(w, shuffle=True)
+-    w_shuffle = shuffle_weight(w)
+-    out_ck = torch.empty((m + 255) // 256 * 256, n, dtype=dtype)
+-    x_scales = x_scales.view(torch.uint8)
+-    w_scales = w_scales.view(torch.uint8)
+-
+-    a = run_torch(x, w, x_scales, w_scales, dtype)
+-    b, avg_b = run_gemm_ck(x, w_shuffle, x_scales_shuffle, w_scales_shuffle, out_ck)
+-
+-    err1 = checkAllclose(a, b[:m], msg="ck   ")
+-    tflops_b = m * n * k * 2 / avg_b / 1e6
+-    tbs_b = (x.nbytes + w.nbytes) / avg_b / 1e6
+-    return {
+-        "ck": avg_b,
+-        "ck err": err1,
+-        "ck TFLPOS": tflops_b,
+-        "ck TB/s": tbs_b,
+-    }
+-
+-
+-l_dtype = ["bf16"]
+-l_mnk = [
+-    # decode
+-    (1, 16384, 16384),
+-    (1, 106496, 16384),
+-    (1, 16384, 53248),
+-    (1, 18432, 16384),
+-    (4, 16384, 16384),
+-    (4, 106496, 16384),
+-    (4, 16384, 53248),
+-    (4, 18432, 16384),
+-    (8, 16384, 16384),
+-    (8, 106496, 16384),
+-    (8, 16384, 53248),
+-    (8, 18432, 16384),
+-    (16, 16384, 16384),
+-    (16, 106496, 16384),
+-    (16, 16384, 53248),
+-    (16, 18432, 16384),
+-    (32, 16384, 16384),
+-    (32, 106496, 16384),
+-    (32, 16384, 53248),
+-    (32, 18432, 16384),
+-    (64, 16384, 16384),
+-    (64, 106496, 16384),
+-    (64, 16384, 53248),
+-    (64, 18432, 16384),
+-    (128, 16384, 16384),
+-    (128, 106496, 16384),
+-    (128, 16384, 53248),
+-    (128, 18432, 16384),
+-    (256, 16384, 16384),
+-    (256, 106496, 16384),
+-    (256, 16384, 53248),
+-    (256, 18432, 16384),
+-    (16384, 16384, 16384),
+-    (16384, 106496, 16384),
+-    (16384, 16384, 53248),
+-    (16384, 18432, 16384),
+-]
+-
+-
+-parser = argparse.ArgumentParser(description="config input of test")
+-parser.add_argument(
+-    "-d",
+-    "--dtype",
+-    type=str,
+-    choices=l_dtype,
+-    nargs="?",
+-    const=None,
+-    default=None,
+-    help="data type",
+-)
+-parser.add_argument(
+-    "-s",
+-    "--shape",
+-    type=dtypes.str2tuple,
+-    choices=l_mnk,
+-    nargs="?",
+-    const=None,
+-    default=None,
+-    help="shape",
+-)
+-
+-args = parser.parse_args()
+-if args.dtype is None:
+-    l_dtype = [dtypes.d_dtypes[key] for key in l_dtype]
+-else:
+-    l_dtype = [dtypes.d_dtypes[args.dtype]]
+-if args.shape is not None:
+-    l_mnk = [args.shape]
+-
+-df = []
+-for dtype in l_dtype:
+-    for m, n, k in l_mnk:
+-        ret = test_gemm(dtype, m, n, k)
+-        df.append(ret)
+-df = pd.DataFrame(df)
+-aiter.logger.info(f"summary:\n{df}")

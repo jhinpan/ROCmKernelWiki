@@ -1,0 +1,1353 @@
+diff --git a/aiter/ops/triton/utils/_triton/tunning/.gitignore b/aiter/ops/triton/utils/_triton/tunning/.gitignore
+new file mode 100644
+index 0000000000..85ab964ee5
+--- /dev/null
++++ b/aiter/ops/triton/utils/_triton/tunning/.gitignore
+@@ -0,0 +1,4 @@
++*.csv
++*.log
++*.json
++.rocprofv3/
+\ No newline at end of file
+diff --git a/aiter/ops/triton/utils/_triton/tunning/README.md b/aiter/ops/triton/utils/_triton/tunning/README.md
+new file mode 100644
+index 0000000000..12b2c08964
+--- /dev/null
++++ b/aiter/ops/triton/utils/_triton/tunning/README.md
+@@ -0,0 +1,71 @@
++# Triton GEMM tunning script
++
++single case testing:
++rocprofv3 --kernel-trace -f csv -o res -- python3 ut.py 4 2112 7168 8 32 1024 1 2 1 1 16 0 7
++
++**Running tunning script**
++
++Example 1: Tunning for A16W16 GEMM using default BLOCK_SIZE ranges using GPU 0, see screen.py for deafult range
++
++    python3 screen.py \
++        64 8192 3584 0 \
++        ut_a16w16_gemm.py \
++        > example1.out
++
++Example 2: Background tunning for A8W8 GEMM blockscale using specific `BLOCK_SIZE_K` ranges using GPU 0 ~ 6, because A8W8 blockscale gemm requires only `BLOCK_SIZE_K=128`
++    
++    N=2112
++    K=7168
++    for M_G in "8 0" "16 1" "32 2" "64 3" "128 4" "256 5" "8192 6"; do
++        set -- $M_G
++        M=$1
++        G=$2
++        nohup python3 screen.py \
++            $M $N $K $G \
++            ut_a8w8_gemm_blockscale.py \
++            --block-size-k-range 128 \
++            > example2-M=$M-N=$N-K=$K-G=$G.out &
++    done
++
++Example 3: Background tunning for AFP4WFP4 GEMM. In this case `BLOCK_SZIE_M` has to meet the following requirements: `1) BLOCK_SIZE_M < 32 for M < 32, 2) BLOCK_SIZE_M >= 32 for M >= 32`. `BLOCK_SIZE_K` has to meet the following requirements: `BLOCK_SIZE_K >= 256`. If we still use the default settings, GEMM will give assertion errors, screen.py will skip those cases first time it hits assert errors and skip all other cases that shares the same BLOCK_SIZE. See the generated *.log files and termeinal output (example3.out) for more details. It will take a few minutes for screen.py to skip through those failed configs, so if you want to save those few minutes, you have to set dedicated `--block-size-m-range` for each `M` to skip invalid `BLOCK_SZIE_M`. This example also enables verbose printout that shows the pre-pruned cases and the error messages that triggers exclusions of cases on-the-fly.
++
++    N=7168
++    K=2048
++    G=0
++    python3 screen.py \
++        64 $N $K $G \
++        ut_afp4wfp4_gemm_preshuffle.py \
++        --block-size-k-range 256 512 1024 \
++        --overwrite \
++        --verbose \
++        > example3.out
++    
++**Viewing results and generate JSON config files**
++
++Example 1:
++
++    python view-screen.py ut_a16w16_gemm.py --n-list 8192 --k-list 3584
++
++Example 2: 
++
++    N=2112
++    K=7168
++    python view-screen.py ut_a8w8_gemm_blockscale.py --n-list $N --k-list $K
++
++Example 3:
++
++    N=2112
++    K=7168
++    python view-screen.py ut_afp4wfp4_gemm_preshuffle.py --n-list $N --k-list $K
++
++**Verify performance**
++
++To verify that your tunned JSON config files actually is performant and can be correctly picked up by AITER, first you have to copy the generated JSON config files into `<path_to_aiter_root>/aiter/ops/triton/configs/gemm`:
++
++    cp *.json <path_to_aiter_root>/aiter/ops/triton/configs/gemm/
++
++then, you can run, for example,
++
++    python verify-perf.py 32 2112 7168 ut_a8w8_gemm_blockscale_preshuffle.py
++
++and check the kernel name (with config suffix) and runtime to see if both kernel name and runtime match those inside the JSON config files. If the kernel name and runtime do not match, it could be that your JSON file name is wrong. You have to go to the file where the kernel resides and check the `_get_config` function to check the `config_name` arguments.
+\ No newline at end of file
+diff --git a/aiter/ops/triton/utils/_triton/tunning/_utils.py b/aiter/ops/triton/utils/_triton/tunning/_utils.py
+new file mode 100644
+index 0000000000..80d67aed03
+--- /dev/null
++++ b/aiter/ops/triton/utils/_triton/tunning/_utils.py
+@@ -0,0 +1,150 @@
++import os
++import triton
++from triton.testing import runtime
++import torch
++import triton.language as tl
++
++
++@triton.jit
++def split_dummy(d_ptr):
++    pid = tl.program_id(axis=0)
++    x = tl.load(d_ptr + pid)
++    x = x + 1
++    tl.store(d_ptr + pid, x)
++    return
++
++
++def run_profile(fn: callable, n_run: int = 250):
++    di = runtime.driver.active.get_device_interface()
++    cache = runtime.driver.active.get_empty_cache_for_benchmark()
++    for _ in range(n_run):
++        cache.zero_()
++        di.synchronize()
++        fn()
++        di.synchronize()
++    d = torch.empty(128, dtype=torch.float32, device="cuda")
++    cache.zero_()
++    di.synchronize()
++    split_dummy[(128,)](d)
++    di.synchronize()
++
++
++config_parms_key = [
++    "BLOCK_SIZE_M",
++    "BLOCK_SIZE_N",
++    "BLOCK_SIZE_K",
++    "GROUP_SIZE_M",
++    "num_warps",
++    "num_stages",
++    "waves_per_eu",
++    "matrix_instr_nonkdim",
++    "cache_modifier",
++    "NUM_KSPLIT",
++]
++
++
++def get_config_list(argv: list[str]) -> list[dict | None]:
++    config_argv = argv
++    num_config_parms_key = len(config_parms_key)
++    config_list = []
++    while len(config_argv) >= num_config_parms_key:
++        config_list.append(
++            {
++                config_parms_key[i]: int(config_argv[i])
++                for i in range(num_config_parms_key)
++            }
++        )
++        config_list[-1]["cache_modifier"] = (
++            ".cg" if config_list[-1]["cache_modifier"] == 0 else None
++        )
++        config_argv = config_argv[num_config_parms_key:]
++
++    if len(config_list) == 0:
++        config_list = [None]
++
++    return config_list
++
++
++def get_input_shape(argv: list[str]) -> list[int]:
++    return [int(v) for v in argv]
++
++
++def get_input_shape_and_config_list(
++    argv: list[str], shape_size: int = 3
++) -> tuple[list[int], list[dict | None]]:
++    input_shape = get_input_shape(argv[1 : shape_size + 1])
++    config_list = get_config_list(argv[shape_size + 1 :])
++    return input_shape, config_list
++
++
++def read_screen_file(filename, case_data):
++    err_lines_limit = 100000
++    if os.path.isfile(filename):
++        with open(filename, "r") as f:
++            for newline in f:
++                try:
++                    err_lines = 0
++                    while not newline.startswith("screencase"):
++                        newline = f.readline()
++                        err_lines += 1
++                        if err_lines >= err_lines_limit:
++                            break
++                    screencaseline = newline[:]
++                    err_lines = 0
++                    while not newline.strip().endswith("(us)"):
++                        if newline.startswith("screencase"):
++                            screencaseline = newline[:]
++                        newline = f.readline()
++                        err_lines += 1
++                        if err_lines >= err_lines_limit:
++                            break
++                    r = float(newline.strip().split()[0])
++                    # if int(screencaseline[len("screencase")+1:].strip().split()[-1]) == 1: continue # remove this comment to consider only split-k case
++                    # if int(screencaseline[len("screencase")+1:].strip().split()[-1]) != 1: continue # remove this comment to consider only split-k case
++                    # if int(screencaseline[len("screencase")+1:].strip().split()[2]) != 128: continue # remove this comment to consider only BK=128
++                    case_data.append(
++                        [r, screencaseline[len("screencase") + 1 :].strip()]
++                    )
++                except IndexError:
++                    break
++
++
++def pre_pruning_rules(M: int, N: int, K: int, config_list: list[int], verbose: bool):
++    (
++        BLOCK_SIZE_M,
++        BLOCK_SIZE_N,
++        BLOCK_SIZE_K,
++        GROUP_SIZE_M,
++        num_warps,
++        num_stages,
++        waves_per_eu,
++        matrix_instr_nonkdim,
++        cache_modifier,
++        NUM_KSPLIT,
++    ) = config_list
++    # remove cases
++    if BLOCK_SIZE_K >= 2 * (K // NUM_KSPLIT):
++        if verbose:
++            print(
++                f"Remove case {config_list} because BLOCK_SIZE_K >= 2 * (K // NUM_KSPLIT)"
++            )
++        return True
++    if NUM_KSPLIT > 1 and GROUP_SIZE_M > 1:
++        if verbose:
++            print(
++                f"Remove case {config_list} because NUM_KSPLIT > 1 and GROUP_SIZE_M > 1"
++            )
++        return True
++    if BLOCK_SIZE_K == K // NUM_KSPLIT and num_stages > 1:  # k_itr == 1 case
++        if verbose:
++            print(
++                f"Remove case {config_list} because BLOCK_SIZE_K == K // NUM_KSPLIT and num_stages > 1"
++            )
++        return True
++    if BLOCK_SIZE_K < K // NUM_KSPLIT and num_stages == 1:  # k_itr > 1 case
++        if verbose:
++            print(
++                f"Remove case {config_list} because BLOCK_SIZE_K < K // NUM_KSPLIT and num_stages == 1"
++            )
++        return True
++    return False
+diff --git a/aiter/ops/triton/utils/_triton/tunning/rprof.py b/aiter/ops/triton/utils/_triton/tunning/rprof.py
+new file mode 100644
+index 0000000000..deb454393b
+--- /dev/null
++++ b/aiter/ops/triton/utils/_triton/tunning/rprof.py
+@@ -0,0 +1,69 @@
++import pandas as pd
++import numpy as np
++import argparse
++
++parser = argparse.ArgumentParser(description="")
++parser.add_argument("filename", type=str, help="")
++parser.add_argument("-k", type=str, nargs="+", help="list of keywords for kernel names")
++parser.add_argument("-m", type=float, help="Memory (GB)", default=0)
++parser.add_argument("-f", type=float, help="Operations (TFLOPS)", default=0)
++args = parser.parse_args()
++
++filename = args.filename
++kernel_name_key_list = args.k
++mem = args.m
++flops = args.f
++runtime_list = None
++
++df_raw = pd.read_csv(filename)
++
++df_split = []
++split_dummy_idx = (df_raw["Kernel_Name"] == "split_dummy").to_numpy().nonzero()[0]
++if len(split_dummy_idx) > 0:
++    split_dummy_idx = np.insert(split_dummy_idx, 0, 0)
++    for i in range(len(split_dummy_idx) - 1):
++        df_split.append(df_raw.iloc[split_dummy_idx[i] : split_dummy_idx[i + 1]])
++else:
++    df_split = [df_raw]
++
++for df in df_split:
++    all_kernel_name = df["Kernel_Name"]
++    unique_kernel_name_list = list({v: 1 for v in all_kernel_name}.keys())
++    target_kernel_list = []
++    for a_unique_kernel_name in unique_kernel_name_list:
++        for a_kernel_name_key in kernel_name_key_list:
++            if a_kernel_name_key in a_unique_kernel_name:
++                target_kernel_list.append(a_unique_kernel_name)
++                break
++
++    kernel_runtime_list_list = []
++    print("Kernel detected:")
++    for a_target_kernel_name in target_kernel_list:
++        print(f"\t{a_target_kernel_name}")
++        df_tmp = df[df["Kernel_Name"] == a_target_kernel_name]
++        duration = (df_tmp["End_Timestamp"] - df_tmp["Start_Timestamp"]).to_numpy()
++        kernel_runtime_list_list.append(duration)
++
++    runtime_list = kernel_runtime_list_list[0]
++    for i in range(1, len(kernel_runtime_list_list)):
++        runtime_list = runtime_list + kernel_runtime_list_list[i]
++
++    runtime_list = runtime_list / 1e3
++    sort_idx = np.argsort(runtime_list)
++    p50_idx = sort_idx[len(sort_idx) // 2]
++    p25_idx = sort_idx[len(sort_idx) // 4]
++    p75_idx = sort_idx[len(sort_idx) // 4 * 3]
++    runtime = runtime_list[p50_idx]
++    runtime_25 = runtime_list[p25_idx]
++    runtime_75 = runtime_list[p75_idx]
++
++    # print(f"{runtime : .3f}, {runtime_25 : .3f}, {runtime_75 : .3f}")
++
++    print(f"{runtime : .3f} (us)")
++    if mem > 0:
++        print(f"{(mem) : .6e} (GB)")
++        print(f"{(mem/runtime*1e6) : .2f} (GB/s)")
++
++    if flops > 0:
++        print(f"{(flops) : .6e} (TLOPS)")
++        print(f"{(flops/runtime*1e6) : .2f} (TLOPS/s)")
+diff --git a/aiter/ops/triton/utils/_triton/tunning/screen.py b/aiter/ops/triton/utils/_triton/tunning/screen.py
+new file mode 100644
+index 0000000000..e2f6c0ea44
+--- /dev/null
++++ b/aiter/ops/triton/utils/_triton/tunning/screen.py
+@@ -0,0 +1,363 @@
++from itertools import product
++import os
++import sys
++import triton
++import argparse
++import subprocess
++from _utils import pre_pruning_rules
++
++
++def echo_to_file(msg: str, filename: str, clear: bool = False):
++    if clear:
++        os.popen(f"echo '{msg}' > {filename}").read()
++    else:
++        os.popen(f"echo '{msg}' >> {filename}").read()
++
++
++def date_to_file(filename: str):
++    os.popen(f"date >> {filename}").read()
++
++
++def parse_args():
++    parser = argparse.ArgumentParser()
++    parser.add_argument("M", type=int, help="M dim")
++    parser.add_argument("N", type=int, help="N dim")
++    parser.add_argument("K", type=int, help="K dim")
++    parser.add_argument("G", type=int, help="GPU card ID")
++    parser.add_argument("F", type=str, help="Unit test filename")
++    parser.add_argument(
++        "--block-size-m-range",
++        nargs="+",
++        type=int,
++        help="BLOCK_SIZE_M range",
++        default=[],
++    )
++    parser.add_argument(
++        "--block-size-n-range",
++        nargs="+",
++        type=int,
++        help="BLOCK_SIZE_N range",
++        default=[],
++    )
++    parser.add_argument(
++        "--block-size-k-range",
++        nargs="+",
++        type=int,
++        help="BLOCK_SIZE_K range",
++        default=[],
++    )
++    parser.add_argument(
++        "--num-ksplit-range",
++        nargs="+",
++        type=int,
++        help="NUM_KSPLIT range (only included the elements by which K is divisible)",
++        default=[3, 4, 7, 8, 14, 16, 28],
++    )
++    parser.add_argument(
++        "--group-size-m-range",
++        nargs="+",
++        type=int,
++        help="GROUP_SIZE_M range",
++        default=[1, 4, 8],
++    )
++    parser.add_argument(
++        "--num-warps-range",
++        nargs="+",
++        type=int,
++        help="GROUP_SIZE_M range",
++        default=[1, 4, 8],
++    )
++    parser.add_argument(
++        "--num-stages-range",
++        nargs="+",
++        type=int,
++        help="GROUP_SIZE_M range",
++        default=[1, 2],
++    )
++    parser.add_argument(
++        "--waves-per-eu-range",
++        nargs="+",
++        type=int,
++        help="GROUP_SIZE_M range",
++        default=[1, 2, 4, 6, 8],
++    )
++    parser.add_argument(
++        "--matrix-instr-nonkdim-range",
++        nargs="+",
++        type=int,
++        help="matrix_instr_nonkdim range",
++        default=[16],
++    )
++    parser.add_argument(
++        "--cache-modifier-range",
++        nargs="+",
++        type=int,
++        help="cache_modifier range (0 = '.cg', 1 = null)",
++        default=[0, 1],
++    )
++    parser.add_argument(
++        "--overwrite",
++        action="store_true",
++        help="Force overwrite log files",
++        default=False,
++    )
++    parser.add_argument(
++        "--verbose",
++        action="store_true",
++        help="verbose print",
++        default=False,
++    )
++
++    args = parser.parse_args()
++    return args
++
++
++def main():
++    args = parse_args()
++    M = getattr(args, "M")
++    N = getattr(args, "N")
++    K = getattr(args, "K")
++    G = getattr(args, "G")
++    ut_filename = getattr(args, "F")
++    block_size_m_range = getattr(args, "block_size_m_range")
++    block_size_n_range = getattr(args, "block_size_n_range")
++    block_size_k_range = getattr(args, "block_size_k_range")
++    num_ksplit_range = getattr(args, "num_ksplit_range")
++    group_size_m_range = getattr(args, "group_size_m_range")
++    num_warps_range = getattr(args, "num_warps_range")
++    num_stages_range = getattr(args, "num_stages_range")
++    waves_per_eu_range = getattr(args, "waves_per_eu_range")
++    matrix_instr_nonkdim_range = getattr(args, "matrix_instr_nonkdim_range")
++    cache_modifier_range = getattr(args, "cache_modifier_range")
++
++    force_overwrite = getattr(args, "overwrite")
++    verbose = getattr(args, "verbose")
++
++    assert M == triton.next_power_of_2(M), "M has to be power of 2"
++    assert os.path.isfile(ut_filename), f"{ut_filename} not found"
++    assert all(
++        [v == triton.next_power_of_2(v) for v in block_size_m_range]
++    ), "All possible BLOCK_SIZE_M must be power of 2"
++    assert all(
++        [v == triton.next_power_of_2(v) for v in block_size_n_range]
++    ), "All possible BLOCK_SIZE_N must be power of 2"
++    assert all(
++        [v == triton.next_power_of_2(v) for v in block_size_k_range]
++    ), "All possible BLOCK_SIZE_K must be power of 2"
++
++    # default m, n, k, split-k range
++    if len(block_size_m_range) == 0:
++        block_size_m_range = [4, 8]
++        possible_ms = [16, 32, 64, 128, 256, 512]
++        block_size_m_range += [v for v in possible_ms if v <= M]
++
++    if len(block_size_n_range) == 0:
++        block_size_n_range = [16]
++        possible_ns = [32, 64, 128, 256]
++        block_size_n_range += [v for v in possible_ns if v <= N]
++
++    if len(block_size_k_range) == 0:
++        block_size_k_range = [128]
++        possible_ks = [256, 512, 1024]
++        block_size_k_range += [v for v in possible_ks if v <= K]
++
++    spk_range = [1]
++    for spk in num_ksplit_range:
++        if K % spk == 0 and spk not in spk_range:
++            spk_range.append(spk)
++
++    ############################################################
++    # # for AFP4WFP4_GEMM_preshuffe
++    # if M >= 256:
++    #     Ms = [32, 64, 128, 256]
++    # elif M >= 128:
++    #     Ms = [32, 64, 128]
++    # elif M >= 64:
++    #     Ms = [32, 64]
++    # elif M >= 32:
++    #     Ms = [32]
++    # else:
++    #     Ms = [4, 8, 16]
++    # Ns = [32, 64, 128]
++    # Ks = [256, 512, 1024]
++    ############################################################
++
++    ############################################################
++    # # for a8w8_GEMM_blockscale/a8w8_GEMM_blockscale_preshuffe/a16w8_GEMM_blockscale/a16w8_GEMM_blockscale_preshuffe, Ks can only be 128
++    # k_range = [128]
++    ############################################################
++
++    parms = {
++        "BLOCK_SIZE_M": block_size_m_range,
++        "BLOCK_SIZE_N": block_size_n_range,
++        "BLOCK_SIZE_K": block_size_k_range,
++        "GROUP_SIZE_M": group_size_m_range,
++        "num_warps": num_warps_range,
++        "num_stages": num_stages_range,
++        "waves_per_eu": waves_per_eu_range,
++        "matrix_instr_nonkdim": matrix_instr_nonkdim_range,
++        "cache_modifier": cache_modifier_range,
++        "NUM_KSPLIT": spk_range,
++    }
++    print("Raw tunning space:", flush=True)
++    for k, v in parms.items():
++        print(f"\t{k} = {v}", flush=True)
++
++    parms_comb_list = list(product(*parms.values()))
++    parms_comb_list_pruned = []
++    print()
++    print("Pre-pruning cases...", flush=True)
++    n_case_remove = 0
++    for config_list in parms_comb_list:
++        if pre_pruning_rules(M, N, K, config_list, verbose=verbose):
++            n_case_remove += 1
++            continue
++        parms_comb_list_pruned.append(config_list)
++    print(f"{n_case_remove} cases are removed during pre-pruning", flush=True)
++    print(f"Total number of cases to run: {len(parms_comb_list_pruned)}", flush=True)
++    print()
++    parms_comb_list = parms_comb_list_pruned
++    file_tag = f"{ut_filename}-{M}-{N}-{K}"
++    log_filename = f"screen-{file_tag}.log"
++    print(f"Screening results will be output to {log_filename}", flush=True)
++    print()
++    assert force_overwrite or not os.path.isfile(
++        log_filename
++    ), f"{log_filename} exists, please save your file somewhere else or use --overwrite to force overwrite log files"
++    s = " ".join([str(v) for v in parms.keys()])
++    echo_to_file(f"Number of combinations = {len(parms_comb_list)}", log_filename, True)
++    echo_to_file(f"{s}", log_filename)
++    i_comb_start = 0
++    comb_max_batch = 100
++    date_to_file(log_filename)
++    env = os.environ.copy()
++    env["HIP_VISIBLE_DEVICES"] = f"{G}"
++    exclude_mnk = {}
++    while i_comb_start < len(parms_comb_list):
++        skip_i_comb_start = i_comb_start
++        skip_i_comb_end = i_comb_start
++        while (
++            i_comb_start < len(parms_comb_list)
++            and tuple(parms_comb_list[i_comb_start][0:3]) in exclude_mnk
++        ):
++            skip_i_comb_end = i_comb_start
++            i_comb_start += 1
++        if skip_i_comb_end > skip_i_comb_start:
++            mnk_str = f"(BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K) = {parms_comb_list[skip_i_comb_start][:3]}"
++            print(
++                f"Skipping case {skip_i_comb_start} ~ {skip_i_comb_end}: {mnk_str}",
++                flush=True,
++            )
++        if i_comb_start >= len(parms_comb_list):
++            break
++        i_comb_end = i_comb_start + 1
++        while (
++            i_comb_end < len(parms_comb_list)
++            and i_comb_end - i_comb_start < comb_max_batch
++            and parms_comb_list[i_comb_start][0:3] == parms_comb_list[i_comb_end][0:3]
++        ):
++            i_comb_end += 1
++
++        mnk_str = f"(BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K) = {parms_comb_list[i_comb_start][:3]}"
++        print(f"Running case {i_comb_start} ~ {i_comb_end - 1}: {mnk_str}", flush=True)
++        echo_to_file(
++            f"Running case {i_comb_start} ~ {i_comb_end - 1}: {mnk_str}", log_filename
++        )
++        comb_str = ""
++        for a_comb in parms_comb_list[i_comb_start:i_comb_end]:
++            comb_str += " ".join([str(v) for v in a_comb])
++            comb_str += " "
++        comb_str = comb_str.strip()
++
++        cmd = f"""rocprofv3 --kernel-trace -f csv -o res-{file_tag} -- python3 {ut_filename} {M} {N} {K} {comb_str}"""
++        cmd = cmd.split(" ")
++
++        rocprof_filename = f"res-{file_tag}_kernel_trace.csv"
++
++        if os.path.isfile(rocprof_filename):
++            process = subprocess.Popen(
++                ["rm", rocprof_filename],
++                stdout=subprocess.PIPE,
++                stderr=subprocess.PIPE,
++                text=True,
++            )
++            process.communicate()
++
++        process = subprocess.Popen(
++            cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
++        )
++        stdout_data, stderr_data = process.communicate()
++
++        if process.returncode == 0:
++            if os.path.isfile(rocprof_filename):
++                cmd_rprof = f"""python3 rprof.py {rocprof_filename} -k gemm"""
++                cmd_rprof = cmd_rprof.split(" ")
++                process = subprocess.Popen(
++                    cmd_rprof, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
++                )
++                stdout_data, stderr_data = process.communicate()
++                if process.returncode == 0:
++                    prof_output = stdout_data.split("\n")
++                    if prof_output[-1].strip() == "":
++                        prof_output.pop()
++                    number_of_kernel_runtime = prof_output.count("Kernel detected:")
++                    assert (i_comb_end - i_comb_start) == number_of_kernel_runtime
++
++                    prof_output_i = 0
++
++                    for a_comb in parms_comb_list[i_comb_start:i_comb_end]:
++                        s = " ".join([str(v) for v in a_comb])
++                        echo_to_file(f"screencase {s}", log_filename)
++                        assert prof_output[prof_output_i] == "Kernel detected:"
++                        prof_output_i += 1
++                        while (
++                            prof_output_i < len(prof_output)
++                            and prof_output[prof_output_i] != "Kernel detected:"
++                        ):
++                            echo_to_file(prof_output[prof_output_i], log_filename)
++                            prof_output_i += 1
++                else:
++                    if verbose:
++                        print(f"[Error]: {rocprof_filename} reading error:", flush=True)
++                        for stderr_str in stderr_data:
++                            print(f"\t{stderr_str}", flush=True)
++            else:
++                if verbose:
++                    print(f"[Error]: {rocprof_filename} not found", flush=True)
++        else:
++            stderr_data = stderr_data.split("\n")
++            if verbose:
++                print("[Error]: when running rocprof, error message:", flush=True)
++            for i_line, aline in enumerate(stderr_data):
++                if (
++                    "exceeds triton maximum tensor numel" in aline
++                    or "OutOfResources" in aline
++                    or "AssertionError" in aline
++                ):
++                    if verbose:
++                        print("\t...", flush=True)
++                        for j_line in range(
++                            max(0, i_line - 5), min(len(stderr_data), i_line + 5)
++                        ):
++                            print(f"\t{stderr_data[j_line]}", flush=True)
++                        print("\t...", flush=True)
++                    break
++            else:
++                if verbose:
++                    print("\tUn-identified error:", flush=True)
++                    for stderr_str in stderr_data:
++                        print(f"\t{stderr_str}", flush=True)
++
++            exclude_mnk[tuple(parms_comb_list[i_comb_start][:3])] = 1
++
++            if verbose:
++                print(f"Excluding all {mnk_str} cases", flush=True)
++                print()
++
++        i_comb_start = i_comb_end
++        date_to_file(log_filename)
++    echo_to_file("Screen complete", log_filename)
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/aiter/ops/triton/utils/_triton/tunning/ut_a16w16_gemm.py b/aiter/ops/triton/utils/_triton/tunning/ut_a16w16_gemm.py
+new file mode 100644
+index 0000000000..82fc0d2054
+--- /dev/null
++++ b/aiter/ops/triton/utils/_triton/tunning/ut_a16w16_gemm.py
+@@ -0,0 +1,42 @@
++import sys
++from _utils import (
++    run_profile,
++    get_input_shape_and_config_list,
++)
++
++############################################################
++# <import>
++import torch
++import triton
++from aiter.ops.triton.gemm.basic.gemm_a16w16 import gemm_a16w16
++from op_tests.triton_tests.gemm.basic.test_gemm_a16w16 import (
++    generate_gemm_a16w16_inputs,
++)
++
++############################################################
++
++input_shape, config_list = get_input_shape_and_config_list(sys.argv, shape_size=3)
++
++############################################################
++# <generate input>
++dtype = torch.bfloat16
++x, w, bias, _, y = generate_gemm_a16w16_inputs(
++    *input_shape,
++    dtype,
++    output=True,
++    bias=True,
++)
++############################################################
++
++for config in config_list:
++    if config is not None:
++        config = config.copy()
++        config["SPLITK_BLOCK_SIZE"] = triton.cdiv(input_shape[2], config["NUM_KSPLIT"])
++
++    def fn():
++        ############################################################
++        # <run API>
++        gemm_a16w16(x, w, bias, dtype, y, config=config)
++        ############################################################
++
++    run_profile(fn)
+diff --git a/aiter/ops/triton/utils/_triton/tunning/ut_a16w8_gemm_blockscale_preshuffle.py b/aiter/ops/triton/utils/_triton/tunning/ut_a16w8_gemm_blockscale_preshuffle.py
+new file mode 100644
+index 0000000000..987ed4519b
+--- /dev/null
++++ b/aiter/ops/triton/utils/_triton/tunning/ut_a16w8_gemm_blockscale_preshuffle.py
+@@ -0,0 +1,47 @@
++import sys
++from _utils import (
++    run_profile,
++    get_input_shape_and_config_list,
++)
++
++############################################################
++# <import>
++import torch
++from aiter.ops.triton.gemm.basic.gemm_a16w8_blockscale import (
++    gemm_a16w8_blockscale_preshuffle,
++)
++from op_tests.triton_tests.gemm.basic.test_gemm_a16w8_blockscale import (
++    generate_gemm_a16w8_blockscale_inputs,
++)
++
++############################################################
++
++input_shape, config_list = get_input_shape_and_config_list(sys.argv, shape_size=3)
++
++############################################################
++# <generate input>
++dtype = torch.bfloat16
++shuffle = True
++block_shape_n, block_shape_k = 128, 128
++x, weight, weight_triton, w_scale, y = generate_gemm_a16w8_blockscale_inputs(
++    *input_shape,
++    block_shape_n,
++    block_shape_k,
++    dtype=dtype,
++    output=True,
++    shuffle=shuffle,
++)
++############################################################
++
++for config in config_list:
++    assert config is None or config["BLOCK_SIZE_K"] == 128
++
++    def fn():
++        ############################################################
++        # <run API>
++        gemm_a16w8_blockscale_preshuffle(
++            x, weight_triton, w_scale, dtype, y, prequant=False, config=config
++        )
++        ############################################################
++
++    run_profile(fn)
+diff --git a/aiter/ops/triton/utils/_triton/tunning/ut_a8w8_gemm_blockscale.py b/aiter/ops/triton/utils/_triton/tunning/ut_a8w8_gemm_blockscale.py
+new file mode 100644
+index 0000000000..b184144a98
+--- /dev/null
++++ b/aiter/ops/triton/utils/_triton/tunning/ut_a8w8_gemm_blockscale.py
+@@ -0,0 +1,48 @@
++import sys
++from _utils import (
++    run_profile,
++    get_input_shape_and_config_list,
++)
++
++############################################################
++# <import>
++import torch
++from aiter.ops.triton.gemm.basic.gemm_a8w8_blockscale import gemm_a8w8_blockscale
++from op_tests.triton_tests.gemm.basic.test_gemm_a8w8_blockscale import (
++    generate_gemm_a8w8_blockscale_inputs,
++)
++
++############################################################
++
++input_shape, config_list = get_input_shape_and_config_list(sys.argv, shape_size=3)
++
++############################################################
++# <generate input>
++dtype = torch.bfloat16
++shuffle = False
++block_shape_n, block_shape_k = 128, 128
++x, weight, weight_triton, x_scale, x_scale_shuffled, w_scale, y = (
++    generate_gemm_a8w8_blockscale_inputs(
++        *input_shape,
++        block_shape_n,
++        block_shape_k,
++        dtype=dtype,
++        layout="TN",
++        output=True,
++        shuffle=shuffle,
++    )
++)
++############################################################
++
++for config in config_list:
++    assert config is None or config["BLOCK_SIZE_K"] == 128
++
++    def fn():
++        ############################################################
++        # <run API>
++        gemm_a8w8_blockscale(
++            x, weight_triton, x_scale_shuffled, w_scale, dtype, y, config=config
++        )
++        ############################################################
++
++    run_profile(fn)
+diff --git a/aiter/ops/triton/utils/_triton/tunning/ut_a8w8_gemm_blockscale_preshuffle.py b/aiter/ops/triton/utils/_triton/tunning/ut_a8w8_gemm_blockscale_preshuffle.py
+new file mode 100644
+index 0000000000..7c818cd482
+--- /dev/null
++++ b/aiter/ops/triton/utils/_triton/tunning/ut_a8w8_gemm_blockscale_preshuffle.py
+@@ -0,0 +1,50 @@
++import sys
++from _utils import (
++    run_profile,
++    get_input_shape_and_config_list,
++)
++
++############################################################
++# <import>
++import torch
++from aiter.ops.triton.gemm.basic.gemm_a8w8_blockscale import (
++    gemm_a8w8_blockscale_preshuffle,
++)
++from op_tests.triton_tests.gemm.basic.test_gemm_a8w8_blockscale import (
++    generate_gemm_a8w8_blockscale_inputs,
++)
++
++############################################################
++
++input_shape, config_list = get_input_shape_and_config_list(sys.argv, shape_size=3)
++
++############################################################
++# <generate input>
++dtype = torch.bfloat16
++shuffle = True
++block_shape_n, block_shape_k = 128, 128
++x, weight, weight_triton, x_scale, x_scale_shuffled, w_scale, y = (
++    generate_gemm_a8w8_blockscale_inputs(
++        *input_shape,
++        block_shape_n,
++        block_shape_k,
++        dtype=dtype,
++        layout="TN",
++        output=True,
++        shuffle=shuffle,
++    )
++)
++############################################################
++
++for config in config_list:
++    assert config is None or config["BLOCK_SIZE_K"] == 128
++
++    def fn():
++        ############################################################
++        # <run API>
++        gemm_a8w8_blockscale_preshuffle(
++            x, weight_triton, x_scale_shuffled, w_scale, dtype, y, config=config
++        )
++        ############################################################
++
++    run_profile(fn)
+diff --git a/aiter/ops/triton/utils/_triton/tunning/ut_a8w8_gemm_per_token_scale.py b/aiter/ops/triton/utils/_triton/tunning/ut_a8w8_gemm_per_token_scale.py
+new file mode 100644
+index 0000000000..6cbc440971
+--- /dev/null
++++ b/aiter/ops/triton/utils/_triton/tunning/ut_a8w8_gemm_per_token_scale.py
+@@ -0,0 +1,40 @@
++import sys
++from _utils import (
++    run_profile,
++    get_input_shape_and_config_list,
++)
++
++############################################################
++# <import>
++import torch
++from aiter.ops.triton.gemm.basic.gemm_a8w8_per_token_scale import (
++    gemm_a8w8_per_token_scale,
++)
++from op_tests.triton_tests.gemm.basic.test_gemm_a8w8_per_token_scale import (
++    generate_gemm_a8w8_per_token_scale_inputs,
++)
++
++############################################################
++
++input_shape, config_list = get_input_shape_and_config_list(sys.argv, shape_size=3)
++
++############################################################
++# <generate input>
++dtype = torch.bfloat16
++x, weight, x_scale, w_scale, y = generate_gemm_a8w8_per_token_scale_inputs(
++    *input_shape,
++    dtype=dtype,
++    layout="TN",
++    output=True,
++)
++############################################################
++
++for config in config_list:
++
++    def fn():
++        ############################################################
++        # <run API>
++        gemm_a8w8_per_token_scale(x, weight, x_scale, w_scale, dtype, y, config=config)
++        ############################################################
++
++    run_profile(fn)
+diff --git a/aiter/ops/triton/utils/_triton/tunning/ut_afp4wfp4_gemm.py b/aiter/ops/triton/utils/_triton/tunning/ut_afp4wfp4_gemm.py
+new file mode 100644
+index 0000000000..8a672e29b8
+--- /dev/null
++++ b/aiter/ops/triton/utils/_triton/tunning/ut_afp4wfp4_gemm.py
+@@ -0,0 +1,44 @@
++import sys
++from _utils import (
++    run_profile,
++    get_input_shape_and_config_list,
++)
++
++############################################################
++# <import>
++import torch
++from aiter.ops.triton.gemm.basic.gemm_afp4wfp4 import gemm_afp4wfp4
++from op_tests.triton_tests.gemm.basic.test_gemm_afp4wfp4 import (
++    generate_gemm_afp4wfp4_inputs,
++)
++
++############################################################
++
++input_shape, config_list = get_input_shape_and_config_list(sys.argv, shape_size=3)
++
++############################################################
++# <generate input>
++dtype = torch.bfloat16
++shuffle = False
++x, w, w_triton, x_scales, w_scales, x_scales_triton, w_scales_triton, out_dtype, y = (
++    generate_gemm_afp4wfp4_inputs(
++        *input_shape,
++        dtype,
++        output=True,
++        shuffle_scales_fg=shuffle,
++        shuffle_weight_fg=shuffle
++    )
++)
++############################################################
++
++for config in config_list:
++
++    def fn():
++        ############################################################
++        # <run API>
++        gemm_afp4wfp4(
++            x, w_triton, x_scales_triton, w_scales_triton, dtype, y, config=config
++        )
++        ############################################################
++
++    run_profile(fn)
+diff --git a/aiter/ops/triton/utils/_triton/tunning/ut_afp4wfp4_gemm_preshuffle.py b/aiter/ops/triton/utils/_triton/tunning/ut_afp4wfp4_gemm_preshuffle.py
+new file mode 100644
+index 0000000000..f66cf6c2c6
+--- /dev/null
++++ b/aiter/ops/triton/utils/_triton/tunning/ut_afp4wfp4_gemm_preshuffle.py
+@@ -0,0 +1,44 @@
++import sys
++from _utils import (
++    run_profile,
++    get_input_shape_and_config_list,
++)
++
++############################################################
++# <import>
++import torch
++from aiter.ops.triton.gemm.basic.gemm_afp4wfp4 import gemm_afp4wfp4_preshuffle
++from op_tests.triton_tests.gemm.basic.test_gemm_afp4wfp4 import (
++    generate_gemm_afp4wfp4_inputs,
++)
++
++############################################################
++
++input_shape, config_list = get_input_shape_and_config_list(sys.argv, shape_size=3)
++
++############################################################
++# <generate input>
++dtype = torch.bfloat16
++shuffle = True
++x, w, w_triton, x_scales, w_scales, x_scales_triton, w_scales_triton, out_dtype, y = (
++    generate_gemm_afp4wfp4_inputs(
++        *input_shape,
++        dtype,
++        output=True,
++        shuffle_scales_fg=shuffle,
++        shuffle_weight_fg=shuffle
++    )
++)
++############################################################
++
++for config in config_list:
++
++    def fn():
++        ############################################################
++        # <run API>
++        gemm_afp4wfp4_preshuffle(
++            x, w_triton, x_scales_triton, w_scales_triton, dtype, y, config=config
++        )
++        ############################################################
++
++    run_profile(fn)
+diff --git a/aiter/ops/triton/utils/_triton/tunning/ut_template.py b/aiter/ops/triton/utils/_triton/tunning/ut_template.py
+new file mode 100644
+index 0000000000..c577e91d63
+--- /dev/null
++++ b/aiter/ops/triton/utils/_triton/tunning/ut_template.py
+@@ -0,0 +1,36 @@
++import sys
++from _utils import (
++    run_profile,
++    get_input_shape_and_config_list,
++)
++
++############################################################
++# <import>
++"""
++This block of code includes APIs you need for generating input and executing GEMMs
++"""
++############################################################
++
++input_shape, config_list = get_input_shape_and_config_list(sys.argv, shape_size=3)
++
++############################################################
++# <import and generate input>
++"""
++This block of code imports the GEMM APIs and generates inputs: activation, weights, scales, ... etc, for the GEMM
++usually the input generation API requires (M, N, K), which can be obtained from *input_shape
++"""
++pass
++############################################################
++
++for config in config_list:
++
++    def fn():
++        ############################################################
++        # <run API>
++        """
++        This block of code defines how you actually run the GEMM using the same inputs you just generated.
++        """
++        pass
++        ############################################################
++
++    run_profile(fn)
+diff --git a/aiter/ops/triton/utils/_triton/tunning/verify-perf.py b/aiter/ops/triton/utils/_triton/tunning/verify-perf.py
+new file mode 100644
+index 0000000000..f0c2155f62
+--- /dev/null
++++ b/aiter/ops/triton/utils/_triton/tunning/verify-perf.py
+@@ -0,0 +1,81 @@
++import os
++import sys
++import argparse
++import subprocess
++
++
++def parse_args():
++    parser = argparse.ArgumentParser()
++    parser.add_argument("M", type=int, help="M dim")
++    parser.add_argument("N", type=int, help="N dim")
++    parser.add_argument("K", type=int, help="K dim")
++    parser.add_argument("F", type=str, help="Unit test filename")
++
++    args = parser.parse_args()
++    return args
++
++
++def main():
++    args = parse_args()
++    M = args.M
++    N = args.N
++    K = args.K
++    ut_filename = args.F
++
++    file_tag = f"{ut_filename}-{M}-{N}-{K}"
++    cmd = f"""rocprofv3 --kernel-trace -f csv -o verf_{file_tag} -- python3 {ut_filename} {M} {N} {K}"""
++    cmd = cmd.split(" ")
++
++    rocprof_filename = f"verf_{file_tag}_kernel_trace.csv"
++
++    if os.path.isfile(rocprof_filename):
++        process = subprocess.Popen(
++            ["rm", rocprof_filename],
++            stdout=subprocess.PIPE,
++            stderr=subprocess.PIPE,
++            text=True,
++        )
++        process.communicate()
++
++    env = os.environ.copy()
++    process = subprocess.Popen(
++        cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
++    )
++    stdout_data, stderr_data = process.communicate()
++
++    if process.returncode == 0:
++        if os.path.isfile(rocprof_filename):
++            cmd_rprof = f"""python3 rprof.py {rocprof_filename} -k gemm"""
++            cmd_rprof = cmd_rprof.split(" ")
++            process = subprocess.Popen(
++                cmd_rprof, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
++            )
++            stdout_data, stderr_data = process.communicate()
++            if process.returncode == 0:
++                prof_output = stdout_data.split("\n")
++                if prof_output[-1].strip() == "":
++                    prof_output.pop()
++
++                prof_output_i = 0
++                assert prof_output[prof_output_i] == "Kernel detected:"
++                prof_output_i += 1
++                while (
++                    prof_output_i < len(prof_output)
++                    and prof_output[prof_output_i] != "Kernel detected:"
++                ):
++                    print(prof_output[prof_output_i], flush=True)
++                    prof_output_i += 1
++            else:
++                for stderr_str in stderr_data:
++                    print(f"\t{stderr_str}")
++        else:
++            print(f"[Error]: {rocprof_filename} not found")
++    else:
++        stderr_data = stderr_data.split("\n")
++        print("[Error]: when running rocprof, error message:")
++        for stderr_str in stderr_data:
++            print(f"\t{stderr_str}")
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/aiter/ops/triton/utils/_triton/tunning/view-screen.py b/aiter/ops/triton/utils/_triton/tunning/view-screen.py
+new file mode 100644
+index 0000000000..f8b0f9cb2c
+--- /dev/null
++++ b/aiter/ops/triton/utils/_triton/tunning/view-screen.py
+@@ -0,0 +1,172 @@
++import os
++import sys
++import argparse
++from _utils import (
++    config_parms_key,
++    read_screen_file,
++)
++
++import aiter.ops.triton.utils._triton.arch_info as arch_info
++
++DEVICE_ARCH = arch_info.get_arch()
++
++
++def parse_args():
++    parser = argparse.ArgumentParser()
++    parser.add_argument("F", type=str, help="Unit test filename")
++    parser.add_argument(
++        "--n-list", nargs="+", type=int, help="List of N dim", default=[]
++    )
++    parser.add_argument(
++        "--k-list", nargs="+", type=int, help="List of K dim", default=[]
++    )
++    parser.add_argument(
++        "--json-prefix",
++        type=str,
++        help="Specify JSON filename prefix, otherwise will gess",
++        default=None,
++    )
++    parser.add_argument(
++        "--last-m-any",
++        action="store_false",
++        help='Set configs with largest M to "any"',
++        default=True,
++    )
++    parser.add_argument(
++        "--max-m",
++        type=int,
++        help="Maximum M to search for screen*.log files",
++        default=131072,
++    )
++
++    args = parser.parse_args()
++    return args
++
++
++def main():
++    args = parse_args()
++    ut_filename = args.F
++    nlist = args.n_list
++    klist = args.k_list
++    config_json_file_prefix = args.json_prefix
++    last_m_any = args.last_m_any
++    max_m = args.max_m
++
++    assert len(nlist) == len(klist), "Number of N and K must be the same"
++    assert len(nlist) > 0, "No N and K dim specified"
++
++    list_of_shapes = [(nlist[i], klist[i]) for i in range(len(nlist))]
++
++    if config_json_file_prefix is None:
++        a_and_w = ut_filename[
++            ut_filename.index("ut_") + 3 : ut_filename.index("_gemm")
++        ].upper()
++        variation = ut_filename[
++            ut_filename.index("_gemm") + 5 : ut_filename.index(".py")
++        ]
++        variation = f"{variation.upper()}" if len(variation) > 0 else ""
++        variation = variation.replace("PRESHUFFLE", "PRESHUFFLED")
++        config_json_file_prefix = f"{DEVICE_ARCH}-GEMM-{a_and_w}{variation}"
++        print(
++            f"Guesing the output JSON filename to be {config_json_file_prefix}-N=<N>-K=<K>.json"
++        )
++    else:
++        print(
++            f"Set output JSON filename to be {config_json_file_prefix}-N=<N>-K=<K>.json"
++        )
++
++    for n, k in list_of_shapes:
++        print()
++        print(f"Parsing N={n}, K={k} tunning results generated by {ut_filename}...")
++        m = 1
++        mlist = []
++        m_config_map = {}
++        while m <= max_m:
++            screen_filename = f"screen-{ut_filename}-{m}-{n}-{k}.log"
++            if os.path.isfile(screen_filename):
++                print(f"\tFound {screen_filename}")
++                m_config_map[m] = f"M_LEQ_{m}"
++                mlist.append(m)
++            m *= 2
++        if last_m_any:
++            m_config_map[mlist[-1]] = "any"
++            print(f'Setting last M = {mlist[-1]} config name to "any"')
++            print()
++        print()
++        last_config_name = m_config_map[mlist[-1]]
++
++        if len(mlist) == 0:
++            continue
++
++        print("M\tN\tK\tTriton (us)\tconfig")
++        last_config_list = None
++        get_at_least_one_config = False
++        fout = open(f"{config_json_file_prefix}-N={n}-K={k}.json", "w")
++        fout.write("{\n")
++
++        for m in mlist:
++            case_data = []
++            screen_filename = f"screen-{ut_filename}-{m}-{n}-{k}.log"
++            read_screen_file(screen_filename, case_data)
++            case_data = sorted(case_data, key=lambda x: x[0])
++
++            if len(case_data) > 0:
++                get_at_least_one_config = True
++                triton_runtime = f"{case_data[0][0]:8.3f}"
++                config_str = f"(config = {case_data[0][1]})"
++            else:
++                triton_runtime = "     N/A"
++                config_str = "Warning: your config files is not complete!"
++
++            print(f"{m}\t{n}\t{k}\t{triton_runtime}\t{config_str}")
++
++            if len(case_data) == 0:
++                if last_config_list is None:
++                    continue
++                config_list = last_config_list
++            else:
++                config_list = case_data[0][1].split()
++                last_config_list = config_list
++
++            config_name = m_config_map[m]
++
++            fout.write("""  "%s": {\n""" % (config_name))
++            for i_parms_key, parms_key in enumerate(config_parms_key):
++                parm = config_list[i_parms_key]
++
++                if parms_key == "cache_modifier":
++                    fout.write(
++                        """    "%s": %s"""
++                        % (
++                            parms_key,
++                            """".cg\"""" if parm == "0" else "null",
++                        )
++                    )
++                else:
++                    fout.write("""    "%s": %s""" % (parms_key, parm))
++
++                if i_parms_key != len(config_parms_key) - 1:
++                    fout.write(""",\n""")
++                else:
++                    fout.write("""\n  }""")
++
++            if config_name == last_config_name:
++                fout.write("\n")
++            else:
++                fout.write(",\n")
++
++        fout.write("}\n")
++        fout.close()
++        if not get_at_least_one_config:
++            os.popen(f"rm {config_json_file_prefix}-N={n}-K={k}.json").read()
++            print("No file is created")
++        else:
++            print(f"{config_json_file_prefix}-N={n}-K={k}.json is created")
++
++    print(
++        "Warning! Please make sure the output JSON filenames are correct for each GEMM"
++    )
++
++
++if __name__ == "__main__":
++    sys.exit(main())

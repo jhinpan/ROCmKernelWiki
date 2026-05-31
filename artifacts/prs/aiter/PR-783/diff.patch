@@ -1,0 +1,654 @@
+diff --git a/aiter/jit/core.py b/aiter/jit/core.py
+index 5ca666eb21..12fea13295 100644
+--- a/aiter/jit/core.py
++++ b/aiter/jit/core.py
+@@ -520,6 +520,18 @@ def convert(d_ops: dict):
+     "compile_mha_bwd",
+ ]
+ 
++SPECIAL_OPS_MUTATES_ARGS = {
++    "topk_softmax": [
++        "arg0",
++        "arg1",
++        "arg2",
++    ],  # "topk_weights", "topk_indices", "token_expert_indices"
++    "biased_grouped_topk_hip": ["topk_weights", "topk_ids"],
++    "moe_fused_gate": ["topk_weights", "topk_ids"],
++    "grouped_topk": ["topk_weights", "topk_ids"],
++    "mha_varlen_fwd": ["out"],
++}
++
+ 
+ def generate_schema(func) -> str:
+     import inspect
+@@ -528,17 +540,29 @@ def generate_schema(func) -> str:
+ 
+     sig = inspect.signature(func)
+     parameters = []
+-
++    mutates_args = SPECIAL_OPS_MUTATES_ARGS.get(func.__name__, [])
+     for idx, (name, param) in enumerate(sig.parameters.items()):
+         param_type = param.annotation
+         flag = True
++        is_mutates = False
++        if name in mutates_args:
++            is_mutates = True
+ 
+         if param_type is torch.Tensor:
+-            type_str = f"Tensor(a{idx}!)"
++            if is_mutates:
++                type_str = f"Tensor(a{idx}!)"
++            else:
++                type_str = "Tensor"
+         elif param_type == Optional[torch.Tensor]:
+-            type_str = f"Tensor(a{idx}!)?"
++            if is_mutates:
++                type_str = f"Tensor(a{idx}!)?"
++            else:
++                type_str = "Tensor?"
+         elif get_origin(param_type) is Union and torch.Tensor in get_args(param_type):
+-            type_str = f"Tensor(a{idx}!)?"
++            if is_mutates:
++                type_str = f"Tensor(a{idx}!)?"
++            else:
++                type_str = "Tensor?"
+         elif param_type in (torch.SymInt, int):
+             type_str = "SymInt"
+         elif param_type in (float, bool, str):
+@@ -549,9 +573,14 @@ def generate_schema(func) -> str:
+             get_origin(param_type) in (list, List)
+             and get_args(param_type)[0] is torch.Tensor
+         ):
+-            type_str = f"Tensor(a{idx}!)[]"
++            if is_mutates:
++                type_str = f"Tensor(a{idx}!)[]"
++            else:
++                type_str = "Tensor[]"
+         elif get_origin(param_type) in (list, List) and get_args(param_type)[0] is int:
+             type_str = "int[]"
++        elif param_type == Optional[torch.dtype]:
++            type_str = "ScalarType?"
+         else:
+             type_str = "*"
+             flag = False
+@@ -606,6 +635,7 @@ def decorator(func):
+ 
+         @functools.wraps(func)
+         def wrapper(*args, custom_build_args={}, **kwargs):
++
+             loadName = fc_name
+             md_name = _md_name
+             if fc_name is None:
+@@ -807,12 +837,9 @@ def wrapper_register(func):
+                 schema = generate_schema(func)
+             else:
+                 sig = inspect.signature(func)
+-                mutates_args = []
+-                for name, param in sig.parameters.items():
+-                    if param.annotation is torch.Tensor:
+-                        mutates_args.append(name)
++                mutates_args = SPECIAL_OPS_MUTATES_ARGS.get(func.__name__, [])
+                 if hasattr(torch.library, "infer_schema"):
+-                    sig = torch.library.infer_schema(func, mutates_args="unknown")
++                    sig = torch.library.infer_schema(func, mutates_args=mutates_args)
+                 else:
+                     # for pytorch 2.4
+                     import torch._custom_op.impl
+@@ -823,21 +850,17 @@ def wrapper_register(func):
+ 
+         schema = wrapper_register(func)
+ 
+-        def wrapper_custom(*args, custom_build_args={}, **kwargs):
+-            import torch
++        import torch
+ 
+-            loadName = func.__name__
+-            if not hasattr(torch.ops.aiter, f"wrapper_{loadName}"):
+-                op_schema = f"aiter::wrapper_{loadName}" + schema
+-                aiter_lib.define(op_schema, tags=())
+-                aiter_lib.impl(
+-                    f"aiter::wrapper_{loadName}", wrapper, dispatch_key="CUDA"
+-                )
+-                aiter_lib.impl(
+-                    f"aiter::wrapper_{loadName}", wrapper, dispatch_key="CPU"
+-                )
+-                aiter_lib._register_fake(f"wrapper_{loadName}", abstract_impl)
++        loadName = func.__name__
++        if not hasattr(torch.ops.aiter, f"wrapper_{loadName}"):
++            op_schema = f"aiter::wrapper_{loadName}" + schema
++            aiter_lib.define(op_schema, tags=())
++            aiter_lib.impl(f"aiter::wrapper_{loadName}", wrapper, dispatch_key="CUDA")
++            aiter_lib.impl(f"aiter::wrapper_{loadName}", wrapper, dispatch_key="CPU")
++            aiter_lib._register_fake(f"wrapper_{loadName}", abstract_impl)
+ 
++        def wrapper_custom(*args, custom_build_args={}, **kwargs):
+             return getattr(torch.ops.aiter, f"wrapper_{loadName}")(*args, **kwargs)
+ 
+         return wrapper_custom
+diff --git a/aiter/jit/utils/chip_info.py b/aiter/jit/utils/chip_info.py
+index 373473a2c8..b49559635a 100644
+--- a/aiter/jit/utils/chip_info.py
++++ b/aiter/jit/utils/chip_info.py
+@@ -4,6 +4,7 @@
+ import os
+ import re
+ import subprocess
++from torch_guard import torch_compile_guard
+ 
+ from cpp_extension import executable_path
+ 
+@@ -28,8 +29,8 @@ def get_gfx():
+     return gfx
+ 
+ 
+-@functools.lru_cache(maxsize=1)
+-def get_cu_num():
++@torch_compile_guard()
++def get_cu_num_custom_op() -> int:
+     cu_num = int(os.getenv("CU_NUM", 0))
+     if cu_num == 0:
+         try:
+@@ -54,6 +55,11 @@ def get_cu_num():
+     return cu_num
+ 
+ 
++@functools.lru_cache(maxsize=1)
++def get_cu_num():
++    return get_cu_num_custom_op()
++
++
+ def get_device_name():
+     gfx = get_gfx()
+ 
+diff --git a/aiter/jit/utils/torch_guard.py b/aiter/jit/utils/torch_guard.py
+new file mode 100644
+index 0000000000..0d691d7186
+--- /dev/null
++++ b/aiter/jit/utils/torch_guard.py
+@@ -0,0 +1,57 @@
++aiter_lib = None
++
++
++def torch_compile_guard(mutates_args: list[str] = [], device: str = "cpu"):
++    def decorator(func):
++        try:
++            import torch
++            from torch.library import Library
++            import inspect
++        except ImportError:
++
++            def wrapper(*args, **kwargs):
++                return func(*args, **kwargs)
++
++            return wrapper
++
++        global aiter_lib
++        aiter_lib = Library("aiter", "FRAGMENT") if aiter_lib is None else aiter_lib
++        op_name = func.__name__
++
++        def custom_impl(dummy_tensor, *args, **kwargs):
++            return func(*args, **kwargs)
++
++        def outer_wrapper(*args, **kwargs):
++            dummy = torch.empty(1, device=device)
++            return getattr(torch.ops.aiter, op_name)(dummy, *args, **kwargs)
++
++        if hasattr(torch.ops.aiter, func.__name__):
++            return outer_wrapper
++        if hasattr(torch.library, "infer_schema"):
++            schema_str = torch.library.infer_schema(func, mutates_args=mutates_args)
++        else:
++            # for pytorch 2.4
++            import torch._custom_op.impl
++
++            schema_str = torch._custom_op.impl.infer_schema(
++                func, mutates_args=mutates_args
++            )
++
++        sig = inspect.signature(func)
++        input_part, output_part = schema_str.split("->", 1)
++        if not sig.parameters:
++            new_input = "(Tensor dummy)"
++        else:
++            new_input = "(Tensor dummy, " + input_part[1:]
++
++        schema_str = f"{new_input} -> {output_part}".strip()
++
++        my_lib = aiter_lib
++        my_lib.define(op_name + schema_str, tags=())
++        my_lib.impl(op_name, custom_impl, dispatch_key="CUDA")
++        my_lib.impl(op_name, custom_impl, dispatch_key="CPU")
++        my_lib._register_fake(op_name, custom_impl)
++
++        return outer_wrapper
++
++    return decorator
+diff --git a/aiter/ops/batched_gemm_op_bf16.py b/aiter/ops/batched_gemm_op_bf16.py
+index e82905684d..820442ce4b 100644
+--- a/aiter/ops/batched_gemm_op_bf16.py
++++ b/aiter/ops/batched_gemm_op_bf16.py
+@@ -14,10 +14,20 @@
+ from ..jit.utils.chip_info import get_cu_num
+ 
+ 
+-@compile_ops("module_batched_gemm_bf16", fc_name="batched_gemm_bf16")
++def gen_batched_gemm_bf16_tune_fake_tensor(
++    XQ: Tensor, WQ: Tensor, out: Tensor, kernelId: int, splitK: int = 0
++) -> Tensor:
++    return out
++
++
++@compile_ops(
++    "module_batched_gemm_bf16",
++    fc_name="batched_gemm_bf16",
++    gen_fake=gen_batched_gemm_bf16_tune_fake_tensor,
++)
+ def batched_gemm_bf16(
+     XQ: Tensor, WQ: Tensor, out: Tensor, bias: Optional[Tensor] = None, splitK: int = 0
+-) -> None: ...
++) -> Tensor: ...
+ 
+ 
+ @functools.lru_cache(maxsize=1024)
+@@ -80,11 +90,14 @@ def batched_gemm_bf16_CK(
+         else:
+             splitK = 0
+     Y = torch.empty(b, m, n, dtype=dtype, device=XQ.device)
+-    batched_gemm_bf16(XQ, WQ, Y, bias, splitK)
+-    return Y
++    return batched_gemm_bf16(XQ, WQ, Y, bias, splitK)
+ 
+ 
+-@compile_ops("module_batched_gemm_bf16_tune", fc_name="batched_gemm_bf16_tune")
++@compile_ops(
++    "module_batched_gemm_bf16_tune",
++    fc_name="batched_gemm_bf16_tune",
++    gen_fake=gen_batched_gemm_bf16_tune_fake_tensor,
++)
+ def batched_gemm_bf16_tune(
+     XQ: Tensor, WQ: Tensor, out: Tensor, kernelId: int, splitK: int = 0
+-) -> None: ...
++) -> Tensor: ...
+diff --git a/aiter/ops/gemm_op_a4w4.py b/aiter/ops/gemm_op_a4w4.py
+index 14cb758613..9708055f19 100644
+--- a/aiter/ops/gemm_op_a4w4.py
++++ b/aiter/ops/gemm_op_a4w4.py
+@@ -89,9 +89,8 @@ def gemm_a4w4(
+         or (ck_config is not None and kernelName.find("_ZN") == -1)
+         # or bias is None
+     ):
+-        gemm_a4w4_blockscale(A, B, A_scale, B_scale, out, splitK=splitK)
+-        return out
+-    gemm_a4w4_asm(
++        return gemm_a4w4_blockscale(A, B, A_scale, B_scale, out, splitK=splitK)
++    return gemm_a4w4_asm(
+         A,
+         B,
+         A_scale,
+@@ -104,10 +103,25 @@ def gemm_a4w4(
+         bpreshuffle,
+         log2_k_split=0,
+     )
++
++
++def gen_gemm_a4w4_asm_fake_tensors(
++    A: Tensor,  # A:[M, K/2] f4x2
++    B: Tensor,  # B:[N, K/2] f4x2
++    A_scale: Tensor,  # A_scale:[M, K/32] e8m0 paded
++    B_scale: Tensor,  # B_scale:[N, K/32] e8m0 paded
++    out: Tensor,  # Out:[M, N] bf16
++    kernelName: str,
++    bias: Optional[Tensor] = None,  # bias:[1, N] f32
++    alpha: Optional[float] = 1.0,
++    beta: Optional[float] = 0.0,
++    bpreshuffle: Optional[bool] = True,
++    log2_k_split: Optional[int] = None,
++) -> Tensor:
+     return out
+ 
+ 
+-@compile_ops("module_gemm_a4w4_asm")
++@compile_ops("module_gemm_a4w4_asm", gen_fake=gen_gemm_a4w4_asm_fake_tensors)
+ def gemm_a4w4_asm(
+     A: Tensor,  # A:[M, K/2] f4x2
+     B: Tensor,  # B:[N, K/2] f4x2
+@@ -120,10 +134,23 @@ def gemm_a4w4_asm(
+     beta: Optional[float] = 0.0,
+     bpreshuffle: Optional[bool] = True,
+     log2_k_split: Optional[int] = None,
+-) -> None: ...
++) -> Tensor: ...
++
++
++def gen_gemm_a4w4_blockscale_fake_tensors(
++    XQ: torch.Tensor,
++    WQ: torch.Tensor,
++    x_scale: torch.Tensor,
++    w_scale: torch.Tensor,
++    Out: torch.Tensor,
++    splitK: int = 0,
++) -> torch.Tensor:
++    return Out
+ 
+ 
+-@compile_ops("module_gemm_a4w4_blockscale")
++@compile_ops(
++    "module_gemm_a4w4_blockscale", gen_fake=gen_gemm_a4w4_blockscale_fake_tensors
++)
+ def gemm_a4w4_blockscale(
+     XQ: torch.Tensor,
+     WQ: torch.Tensor,
+@@ -131,10 +158,14 @@ def gemm_a4w4_blockscale(
+     w_scale: torch.Tensor,
+     Out: torch.Tensor,
+     splitK: int = 0,
+-) -> None: ...
++) -> Tensor: ...
+ 
+ 
+-@compile_ops("module_gemm_a4w4_blockscale_tune", fc_name="gemm_a4w4_blockscale_tune")
++@compile_ops(
++    "module_gemm_a4w4_blockscale_tune",
++    fc_name="gemm_a4w4_blockscale_tune",
++    gen_fake=gen_gemm_a4w4_blockscale_fake_tensors,
++)
+ def gemm_a4w4_blockscale_tune(
+     XQ: torch.Tensor,
+     WQ: torch.Tensor,
+@@ -143,4 +174,4 @@ def gemm_a4w4_blockscale_tune(
+     Out: torch.Tensor,
+     kernelId: int,
+     splitK: int = 0,
+-) -> None: ...
++) -> Tensor: ...
+diff --git a/aiter/ops/gemm_op_a8w8.py b/aiter/ops/gemm_op_a8w8.py
+index c058630d6c..43204e2e1a 100644
+--- a/aiter/ops/gemm_op_a8w8.py
++++ b/aiter/ops/gemm_op_a8w8.py
+@@ -11,6 +11,7 @@
+     compile_ops,
+     AITER_ROOT_DIR,
+ )
++from ..jit.utils.torch_guard import torch_compile_guard
+ from ..utility import dtypes
+ from ..jit.utils.chip_info import get_cu_num
+ from torch.library import Library
+@@ -169,7 +170,8 @@ def compute_gemm_SplitK(M: int, N: int, K: int, tile_m: int, tile_n: int, tile_k
+ _CKGEMM_CONFIG_CACHE = None
+ 
+ 
+-def get_CKGEMM_config_(X: Tensor, tuned_file: str = "a8w8_tuned_gemm.csv") -> None:
++@torch_compile_guard()
++def get_CKGEMM_config_(tuned_file: str = "a8w8_tuned_gemm.csv") -> None:
+     global _CKGEMM_CONFIG_CACHE
+ 
+     if _CKGEMM_CONFIG_CACHE is None:
+@@ -185,34 +187,9 @@ def get_CKGEMM_config_(X: Tensor, tuned_file: str = "a8w8_tuned_gemm.csv") -> No
+     return None
+ 
+ 
+-def get_CKGEMM_config_fake(
+-    X: Tensor,
+-) -> None:
+-    return None
+-
+-
+ @functools.lru_cache(maxsize=1024)
+ def get_CKGEMM_config(M: int, N: int, K: int, tuned_file="a8w8_tuned_gemm.csv"):
+-    import torch
+-
+-    op_name = "aiter::get_CKGEMM_config_"
+-    if not hasattr(torch.ops.aiter, "get_CKGEMM_config_"):
+-        if hasattr(torch.library, "infer_schema"):
+-            schema_str = torch.library.infer_schema(
+-                get_CKGEMM_config_, mutates_args="unknown"
+-            )
+-        else:
+-            # for pytorch 2.4
+-            import torch._custom_op.impl
+-
+-            schema_str = torch._custom_op.impl.infer_schema(get_CKGEMM_config_, ["X"])
+-
+-        torch.library.define(op_name, schema_str, lib=aiter_lib)
+-        torch.library.impl(op_name, "cuda", get_CKGEMM_config_, lib=aiter_lib)
+-        torch.library.register_fake(op_name, get_CKGEMM_config_, lib=aiter_lib)
+-
+-    x = torch.empty(1, device="cuda")
+-    getattr(torch.ops.aiter, "get_CKGEMM_config_")(x, tuned_file)
++    get_CKGEMM_config_(tuned_file)
+ 
+     cu_num = get_cu_num()
+ 
+@@ -263,10 +240,10 @@ def gemm_a8w8(
+     dtype=dtypes.bf16,
+     splitK: Optional[int] = None,
+ ):
+-    assert dtype in [
+-        dtypes.bf16,
+-        dtypes.fp16,
+-    ], f"Output {dtype=} is currently not supported in gemm_a8w8"
++    # assert dtype in [
++    #     dtypes.bf16,
++    #     dtypes.fp16,
++    # ], f"Output {dtype=} is currently not supported in gemm_a8w8"
+     return gemm_a8w8_CK(XQ, WQ, x_scale, w_scale, bias, dtype, splitK)
+ 
+ 
+@@ -320,10 +297,10 @@ def gemm_a8w8_CK(
+     dtype=dtypes.bf16,
+     splitK: Optional[int] = None,
+ ):
+-    assert dtype in [
+-        dtypes.bf16,
+-        dtypes.fp16,
+-    ], f"Output {dtype=} is currently not supported in gemm_a8w8 CK"
++    # assert dtype in [
++    #     dtypes.bf16,
++    #     dtypes.fp16,
++    # ], f"Output {dtype=} is currently not supported in gemm_a8w8 CK"
+     m = XQ.shape[0]
+     n = WQ.shape[0]
+     k = XQ.shape[-1]
+@@ -456,7 +433,11 @@ def gemm_a8w8_blockscale_tune(
+     kernelId: int = 0,
+     splitK: int = 0,
+ ) -> torch.Tensor: ...
+-@compile_ops("module_gemm_a8w8_bpreshuffle_tune", fc_name="gemm_a8w8_bpreshuffle_tune")
++@compile_ops(
++    "module_gemm_a8w8_bpreshuffle_tune",
++    fc_name="gemm_a8w8_bpreshuffle_tune",
++    gen_fake=gen_gemm_a8w8_blockscale_tune_fake_tensors,
++)
+ def gemm_a8w8_bpreshuffle_tune(
+     XQ: torch.Tensor,
+     WQ: torch.Tensor,
+@@ -465,4 +446,4 @@ def gemm_a8w8_bpreshuffle_tune(
+     Out: torch.Tensor,
+     kernelId: int = 0,
+     splitK: int = 0,
+-) -> None: ...
++) -> torch.Tensor: ...
+diff --git a/csrc/ck_batched_gemm_bf16/batched_gemm_bf16.cu b/csrc/ck_batched_gemm_bf16/batched_gemm_bf16.cu
+index 1a2afbfb62..2947b070ef 100644
+--- a/csrc/ck_batched_gemm_bf16/batched_gemm_bf16.cu
++++ b/csrc/ck_batched_gemm_bf16/batched_gemm_bf16.cu
+@@ -137,7 +137,7 @@ BatchedKernel batched_dispatch(int B, int M, int N, int K)
+   return batched_heuristic_dispatch(B, M, N, K);
+ }
+ 
+-void batched_gemm_bf16(
++torch::Tensor batched_gemm_bf16(
+     torch::Tensor &XQ,
+     torch::Tensor &WQ,
+     torch::Tensor &Y,
+@@ -158,5 +158,5 @@ void batched_gemm_bf16(
+ 
+   batched_dispatch(B, M, N, K)(XQ, WQ, Y, bias, KBatch);
+ 
+-  // return Y;
++  return Y;
+ }
+diff --git a/csrc/ck_batched_gemm_bf16/batched_gemm_bf16_tune.cu b/csrc/ck_batched_gemm_bf16/batched_gemm_bf16_tune.cu
+index 9c7b5f9612..09d9960ee0 100644
+--- a/csrc/ck_batched_gemm_bf16/batched_gemm_bf16_tune.cu
++++ b/csrc/ck_batched_gemm_bf16/batched_gemm_bf16_tune.cu
+@@ -50,7 +50,7 @@ BatchedKernel batched_dispatch(int id)
+ }
+ 
+ 
+-void batched_gemm_bf16_tune(
++torch::Tensor batched_gemm_bf16_tune(
+     torch::Tensor &XQ,
+     torch::Tensor &WQ,
+     torch::Tensor &Y,
+@@ -75,5 +75,5 @@ void batched_gemm_bf16_tune(
+   {
+     TORCH_CHECK(false, "Unsupported output dtype!");
+   }
+-  // return Y;
++  return Y;
+ }
+diff --git a/csrc/ck_batched_gemm_bf16/include/batched_gemm_bf16.h b/csrc/ck_batched_gemm_bf16/include/batched_gemm_bf16.h
+index 4a81221181..87804eb59f 100644
+--- a/csrc/ck_batched_gemm_bf16/include/batched_gemm_bf16.h
++++ b/csrc/ck_batched_gemm_bf16/include/batched_gemm_bf16.h
+@@ -3,14 +3,14 @@
+ // Copyright (c) 2024, Advanced Micro Devices, Inc. All rights reserved.
+ #include <torch/all.h>
+ #include <torch/extension.h>
+-void batched_gemm_bf16(
++torch::Tensor batched_gemm_bf16(
+     torch::Tensor &XQ,
+     torch::Tensor &WQ,
+     torch::Tensor &Y,
+     std::optional<torch::Tensor> bias,
+     int splitK);
+ 
+-void batched_gemm_bf16_tune(
++torch::Tensor batched_gemm_bf16_tune(
+     torch::Tensor &XQ,
+     torch::Tensor &WQ,
+     torch::Tensor &Y,
+diff --git a/csrc/ck_gemm_a4w4_blockscale/gemm_a4w4_blockscale.cu b/csrc/ck_gemm_a4w4_blockscale/gemm_a4w4_blockscale.cu
+index 79fba67193..3fc3385871 100755
+--- a/csrc/ck_gemm_a4w4_blockscale/gemm_a4w4_blockscale.cu
++++ b/csrc/ck_gemm_a4w4_blockscale/gemm_a4w4_blockscale.cu
+@@ -76,7 +76,7 @@ BlockwiseKernel blockscale_dispatch(int M, int N, int K)
+     return a4w4_blockscale_256x64x128x128_16x16_16x16_8x32x1_8x32x1_1x32x1x8_8_2x2_intrawave_v3<CDataType>;
+ }
+ 
+-void gemm_a4w4_blockscale(
++torch::Tensor gemm_a4w4_blockscale(
+     torch::Tensor& XQ,
+     torch::Tensor& WQ,
+     torch::Tensor& x_scale,
+@@ -104,5 +104,5 @@ void gemm_a4w4_blockscale(
+   {
+     TORCH_CHECK(false, "Unsupported scales/output dtype!");
+   }
+-  // return Y;
++  return Y;
+ }
+diff --git a/csrc/ck_gemm_a4w4_blockscale/gemm_a4w4_blockscale_tune.py b/csrc/ck_gemm_a4w4_blockscale/gemm_a4w4_blockscale_tune.py
+index ceb0541d2b..93576e73ef 100755
+--- a/csrc/ck_gemm_a4w4_blockscale/gemm_a4w4_blockscale_tune.py
++++ b/csrc/ck_gemm_a4w4_blockscale/gemm_a4w4_blockscale_tune.py
+@@ -79,8 +79,10 @@ def kernel_instance_test(x, weight, x_scale, w_scale, out, kernel_id, splitK=0):
+ def run_gemm_a4w4_blockscale(x, weight, x_scale, w_scale, out, kernel_id, splitK):
+     m, k = x.shape
+     n, k = weight.shape
+-    aiter.gemm_a4w4_blockscale_tune(x, weight, x_scale, w_scale, out, kernel_id, splitK)
+-    return out[:m]
++    res = aiter.gemm_a4w4_blockscale_tune(
++        x, weight, x_scale, w_scale, out, kernel_id, splitK
++    )
++    return res[:m]
+ 
+ 
+ def run_gemm_a4w4_blockscale_asm(
+@@ -101,7 +103,7 @@ def run_gemm_a4w4_blockscale_asm(
+             out.shape[0], out.shape[1], dtype=dtype, device=torch.cuda.current_device()
+         )
+         out = out_reset
+-    aiter.gemm_a4w4_asm(
++    res = aiter.gemm_a4w4_asm(
+         x,
+         weight_shuffle,
+         x_scale,
+@@ -112,7 +114,7 @@ def run_gemm_a4w4_blockscale_asm(
+         bpreshuffle=bpreshuffle,
+         log2_k_split=splitK,
+     )
+-    return out[:m]
++    return res[:m]
+ 
+ 
+ def generate_data(m, n, k, seed, device="cuda", dtype=dtypes.bf16):
+diff --git a/csrc/ck_gemm_a4w4_blockscale/include/gemm_a4w4_blockscale.h b/csrc/ck_gemm_a4w4_blockscale/include/gemm_a4w4_blockscale.h
+index be0d24a93b..c9a53fefbf 100644
+--- a/csrc/ck_gemm_a4w4_blockscale/include/gemm_a4w4_blockscale.h
++++ b/csrc/ck_gemm_a4w4_blockscale/include/gemm_a4w4_blockscale.h
+@@ -3,14 +3,14 @@
+ // Copyright (C) 2024-2025, Advanced Micro Devices, Inc. All rights reserved.
+ #include <torch/all.h>
+ #include <torch/extension.h>
+-void gemm_a4w4_blockscale(torch::Tensor& A,
++torch::Tensor gemm_a4w4_blockscale(torch::Tensor& A,
+                                    torch::Tensor& B,
+                                    torch::Tensor& a_scale,
+                                    torch::Tensor& b_scale,
+                                    torch::Tensor& C,
+                                    int splitK);
+ 
+-void gemm_a4w4_blockscale_tune(torch::Tensor& XQ,
++torch::Tensor gemm_a4w4_blockscale_tune(torch::Tensor& XQ,
+                                         torch::Tensor& WQ,
+                                         torch::Tensor& x_scale,
+                                         torch::Tensor& w_scale,
+diff --git a/csrc/include/asm_gemm_a4w4.h b/csrc/include/asm_gemm_a4w4.h
+index 4371226cad..54d23eb8d2 100644
+--- a/csrc/include/asm_gemm_a4w4.h
++++ b/csrc/include/asm_gemm_a4w4.h
+@@ -3,7 +3,7 @@
+ // Copyright (C) 2024-2025, Advanced Micro Devices, Inc. All rights reserved.
+ #include <torch/extension.h>
+ 
+-void gemm_a4w4_asm(torch::Tensor& A,       // A:[M, K/2] f4x2
++torch::Tensor gemm_a4w4_asm(torch::Tensor& A,       // A:[M, K/2] f4x2
+                             torch::Tensor& B,       // B:[N, K/2] f4x2
+                             torch::Tensor& A_scale, // A_scale:[M, K/32] e8m0 paded
+                             torch::Tensor& B_scale, // B_scale:[N, K/32] e8m0 paded
+diff --git a/csrc/py_itfs_cu/asm_gemm_a4w4.cu b/csrc/py_itfs_cu/asm_gemm_a4w4.cu
+index 07cc0382d0..94b462f897 100644
+--- a/csrc/py_itfs_cu/asm_gemm_a4w4.cu
++++ b/csrc/py_itfs_cu/asm_gemm_a4w4.cu
+@@ -155,7 +155,7 @@ std::tuple<std::string, int> get_heuristic_kernel(int M,
+ 
+ // A4W4 asm gemm kernel
+ // D=A*B*alpha+beta*C
+-void gemm_a4w4_asm(torch::Tensor& A,       // A:[M, K/2] f4x2
++torch::Tensor gemm_a4w4_asm(torch::Tensor& A,       // A:[M, K/2] f4x2
+                             torch::Tensor& B,       // B:[N, K/2] f4x2
+                             torch::Tensor& A_scale, // A_scale:[M, K/32] e8m0 paded
+                             torch::Tensor& B_scale, // B_scale:[N, K/32] e8m0 paded
+@@ -287,5 +287,5 @@ void gemm_a4w4_asm(torch::Tensor& A,       // A:[M, K/2] f4x2
+                              1,   // bdy
+                              1,   // bdz
+                              stream});
+-    // return out;
++    return out;
+ }
+diff --git a/op_tests/test_gemm_a4w4.py b/op_tests/test_gemm_a4w4.py
+index 40f3d4d372..e2cf91962f 100644
+--- a/op_tests/test_gemm_a4w4.py
++++ b/op_tests/test_gemm_a4w4.py
+@@ -39,8 +39,7 @@ def run_torch(x, w, x_scales, w_scales, dtype):
+ 
+ @perftest()
+ def run_gemm_ck(x, weight, x_scale, w_scale, out):
+-    aiter.gemm_a4w4_blockscale(x, weight, x_scale, w_scale, out)
+-    return out
++    return aiter.gemm_a4w4_blockscale(x, weight, x_scale, w_scale, out)
+ 
+ 
+ @perftest()

@@ -1,0 +1,1692 @@
+diff --git a/.github/runner-config.yml b/.github/runner-config.yml
+index 0433a05ae..ca7c313cf 100644
+--- a/.github/runner-config.yml
++++ b/.github/runner-config.yml
+@@ -17,3 +17,7 @@ runners:
+   linux-flydsl-mi355-8:
+     gpu_arch: MI355
+     gpu_count: 8
++
++  linux-flydsl-navi-2:
++    gpu_arch: gfx1201
++    gpu_count: 4
+diff --git a/.github/workflows/flydsl.yaml b/.github/workflows/flydsl.yaml
+index 283a13791..8ff64d2f5 100644
+--- a/.github/workflows/flydsl.yaml
++++ b/.github/workflows/flydsl.yaml
+@@ -22,7 +22,7 @@ jobs:
+   test:
+     strategy:
+       matrix:
+-        runners: [ 'linux-flydsl-mi325-1', 'linux-flydsl-mi355-1' ]
++        runners: [ 'linux-flydsl-mi325-1', 'linux-flydsl-mi355-1', 'linux-flydsl-navi-2' ]
+       fail-fast: false
+     runs-on: ${{ matrix.runners }}
+     steps:
+@@ -74,7 +74,7 @@ jobs:
+           path: mlir_install.tgz
+           # Key includes LLVM commit and hashes of build scripts/workflow.
+           # Repo is checked out under `flydsl-test/` (see actions/checkout path), so hash paths must include it.
+-          key: mlir-install-${{ hashFiles('flydsl-test/thirdparty/llvm-hash.txt', 'flydsl-test/scripts/build_llvm.sh', 'flydsl-test/CMakeLists.txt', 'flydsl-test/.github/workflows/flydsl.yaml') }}
++          key: mlir-install-${{ matrix.runners }}-${{ hashFiles('flydsl-test/thirdparty/llvm-hash.txt', 'flydsl-test/scripts/build_llvm.sh', 'flydsl-test/CMakeLists.txt', 'flydsl-test/.github/workflows/flydsl.yaml') }}
+ 
+       - name: Use cached MLIR install tarball (skip LLVM build)
+         if: steps.mlir-cache.outputs.cache-hit == 'true'
+@@ -127,6 +127,7 @@ jobs:
+           retention-days: 7
+         
+       - name: Install aiter
++        if: ${{ !contains(matrix.runners, 'navi') }}
+         run: |
+           docker exec flydsl_test bash -c "git clone --depth 1 --recursive --shallow-submodules https://github.com/ROCm/aiter.git /tmp/aiter && cd /tmp/aiter && python3 setup.py develop"
+ 
+diff --git a/kernels/layernorm_kernel.py b/kernels/layernorm_kernel.py
+index 2e1b7b1b3..8850d9f3f 100644
+--- a/kernels/layernorm_kernel.py
++++ b/kernels/layernorm_kernel.py
+@@ -29,8 +29,11 @@
+ 
+ EPS = 1e-5
+ 
++import math
++from kernels.kernels_common import get_warp_size
++
+ BLOCK_THREADS = 256
+-WARP_SIZE = 64
++WARP_SIZE = get_warp_size()
+ VEC_WIDTH = 8
+ USE_NONTEMPORAL = True
+ VEC_ALIGN = 16
+@@ -91,8 +94,8 @@ def layernorm_kernel(
+         def wave_reduce_add(x):
+             width_i32 = fx.Int32(WARP_SIZE)
+             w = x
+-            for sh in [32, 16, 8, 4, 2, 1]:
+-                off = fx.Int32(sh)
++            for _sh_exp in range_constexpr(int(math.log2(WARP_SIZE))):
++                off = fx.Int32(WARP_SIZE // (2 << _sh_exp))
+                 peer = w.shuffle_xor(off, width_i32)
+                 w = w.addf(peer, fastmath=fm_fast)
+             return w
+diff --git a/kernels/rdna_f16_gemm.py b/kernels/rdna_f16_gemm.py
+new file mode 100644
+index 000000000..51ad195f6
+--- /dev/null
++++ b/kernels/rdna_f16_gemm.py
+@@ -0,0 +1,398 @@
++#!/usr/bin/env python3
++"""WMMA GEMM kernel for RDNA4 (gfx120x, wave32).
++
++4-warp LDS kernel inspired by Triton's 93 TFLOPS approach.
++
++Architecture:
++- 128x128x32 tiles, 4 warps (128 threads), 2x2 warp layout
++- Each warp: 4 M-repeats x 4 N-repeats (64x64 output per warp)
++- 2 K-steps per iteration (K=32, WMMA_K=16) -> 32 WMMAs per iter
++- Double-buffered LDS (ping-pong): compute from buf[cur], prefetch to buf[1-cur]
++- A[M,K] row-major GMEM, B_T[N,K] row-major GMEM
++- K-padding on LDS stores for bank conflict avoidance
++
++LDS layout (per buffer):
++  A tile: 128 rows x (32+pad) cols x 2B, stored row-major
++  B tile: 128 rows x (32+pad) cols x 2B, stored row-major
++  Total per buffer: ~20KB, double-buffered: ~40KB
++
++Pipeline: split GMEM load / LDS store with double buffering
++
++Computes C[M,N] = A[M,K] @ B_T[N,K]^T
++"""
++
++import os
++
++import flydsl.compiler as flyc
++import flydsl.expr as fx
++from flydsl.compiler.kernel_function import CompilationContext
++
++from flydsl.expr import arith, vector, gpu, rocdl, buffer_ops, range_constexpr
++from flydsl.runtime.device import get_rocm_arch
++from flydsl.expr.typing import T
++from flydsl.utils.smem_allocator import SmemAllocator
++from flydsl._mlir import ir
++from flydsl._mlir.dialects import llvm as _llvm
++
++
++WMMA_M = 16
++WMMA_N = 16
++WMMA_K = 16
++
++
++def create_wmma_gemm_module(
++    M: int,
++    N: int,
++    K: int,
++    in_dtype="bf16",
++    out_dtype="bf16",
++    *,
++    reg_m=4,  # M-repeats per warp
++    reg_n=4,  # N-repeats per warp
++    reg_k=2,  # K-steps per tile (32/16=2)
++    waves_m=2,  # warps in M dimension
++    waves_n=2,  # warps in N dimension
++    group_m=8,
++    a_k_pad=8,  # K-padding for A in LDS (bank conflict avoidance)
++    b_k_pad=8,  # K-padding for B in LDS
++):
++    BLOCK_M = WMMA_M * reg_m * waves_m  # 16*4*2 = 128
++    BLOCK_N = WMMA_N * reg_n * waves_n  # 16*4*2 = 128
++    BLOCK_K = WMMA_K * reg_k  # 16*2 = 32
++    NUM_WAVES = waves_m * waves_n  # 2*2 = 4
++    WAVE_SIZE = 32
++    THREADS_PER_BLOCK = NUM_WAVES * WAVE_SIZE  # 128
++
++    assert reg_k >= 2 and reg_k % 2 == 0
++
++    # Loading: each thread loads 8 bf16 elements per load (128 bits = buffer_load_b128)
++    LOAD_VEC = 8
++    A_TILE_ELEMS = BLOCK_M * BLOCK_K  # 128*32 = 4096
++    NUM_A_LOADS = A_TILE_ELEMS // (THREADS_PER_BLOCK * LOAD_VEC)  # 4096/(128*8) = 4
++    B_TILE_ELEMS = BLOCK_N * BLOCK_K  # 128*32 = 4096
++    NUM_B_LOADS = B_TILE_ELEMS // (THREADS_PER_BLOCK * LOAD_VEC)  # 4
++    TOTAL_LOADS = NUM_A_LOADS + NUM_B_LOADS  # 8
++
++    # LDS layout with K-padding for bank conflict avoidance
++    BLOCK_K_PAD_A = BLOCK_K + a_k_pad  # 40
++    BLOCK_K_PAD_B = BLOCK_K + b_k_pad  # 40
++    LDS_A_SIZE = BLOCK_M * BLOCK_K_PAD_A  # 128*40 = 5120 elements
++    LDS_B_SIZE = BLOCK_N * BLOCK_K_PAD_B  # 128*40 = 5120 elements
++    LDS_ONE_BUF = LDS_A_SIZE + LDS_B_SIZE  # 10240 elements = 20KB
++    LDS_TOTAL = 2 * LDS_ONE_BUF  # 20480 elements = 40KB
++
++    gpu_arch = get_rocm_arch()
++
++    assert M % BLOCK_M == 0
++    assert N % BLOCK_N == 0
++    assert K % BLOCK_K == 0
++
++    num_k_tiles = K // BLOCK_K
++    assert num_k_tiles >= 2, "Need at least 2 K-tiles for prefetch pipeline"
++
++    grid_m = M // BLOCK_M
++    grid_n = N // BLOCK_N
++    is_bf16 = in_dtype == "bf16"
++
++    def _in_elem_ty():
++        return T.bf16 if is_bf16 else T.f16
++
++    def _out_elem_ty():
++        return T.f32 if out_dtype == "f32" else T.bf16
++
++    def _wmma_op(result_type, a_vec, b_vec, acc, v8i16_ty):
++        if is_bf16:
++            a_i16 = vector.bitcast(v8i16_ty, a_vec)
++            b_i16 = vector.bitcast(v8i16_ty, b_vec)
++            return rocdl.wmma_f32_16x16x16_bf16(result_type, a_i16, b_i16, arith.unwrap(acc)).result
++        else:
++            return rocdl.wmma_f32_16x16x16_f16(
++                result_type, arith.unwrap(a_vec), arith.unwrap(b_vec), arith.unwrap(acc)
++            ).result
++
++    elem_bytes = 2  # bf16/f16 are both 2 bytes
++    allocator = SmemAllocator(None, arch=gpu_arch)
++    # Reserve LDS space (allocate_array needs an ir.Type, but we're outside MLIR
++    # context here; manually compute offset instead).
++    lds_byte_offset = allocator._align(allocator.ptr, elem_bytes)
++    allocator.ptr = lds_byte_offset + LDS_TOTAL * elem_bytes
++
++    @flyc.kernel
++    def wmma_gemm_kernel(
++        arg_c: fx.Tensor,
++        arg_a: fx.Tensor,
++        arg_bt: fx.Tensor,
++    ):
++        in_ir_ty = T.bf16 if is_bf16 else T.f16
++        v8_in_ty = T.vec(8, in_ir_ty)
++        v4f32_ty = T.f32x4
++        v8f32_ty = T.vec(8, T.f32)
++        i16_ty = T.i16
++        v8i16_ty = T.vec(8, i16_ty)
++
++        from flydsl.utils.smem_allocator import SmemPtr
++
++        lds_base = allocator.get_base()
++        lds_view = SmemPtr(lds_base, lds_byte_offset, in_ir_ty, shape=(LDS_TOTAL,)).get()
++
++        tid = gpu.thread_id("x")
++        pid = gpu.block_id("x")
++
++        c32 = fx.Index(32)
++        c16 = fx.Index(16)
++        c8 = fx.Index(8)
++        c2 = fx.Index(2)
++        wave_id = tid // c32
++        lane = tid % c32
++        lane16 = lane % c16
++        klane = lane // c16
++        base8 = klane * c8
++
++        # Swizzle workgroup mapping for L2 locality
++        effective_group_m = min(group_m, grid_m)
++        c_grid_n = fx.Index(grid_n)
++        c_group_m = fx.Index(effective_group_m)
++        num_pid_in_group = c_group_m * c_grid_n
++        group_id = pid // num_pid_in_group
++        first_pid_m = group_id * c_group_m
++        group_size_m = c_group_m
++
++        pid_in_group = pid % num_pid_in_group
++        bid_m = first_pid_m + (pid_in_group % group_size_m)
++        bid_n = pid_in_group // group_size_m
++
++        # 2x2 warp layout
++        c_wn = fx.Index(waves_n)
++        wave_m = wave_id // c_wn
++        wave_n = wave_id % c_wn
++
++        tile_m0 = bid_m * fx.Index(BLOCK_M)
++        tile_n0 = bid_n * fx.Index(BLOCK_N)
++
++        a_rsrc = buffer_ops.create_buffer_resource(arg_a, max_size=True)
++        bt_rsrc = buffer_ops.create_buffer_resource(arg_bt, max_size=True)
++        c_rsrc = buffer_ops.create_buffer_resource(arg_c, max_size=True)
++
++        # ============================================================
++        # Pre-compute GMEM offsets and LDS addresses
++        # ============================================================
++        a_lds_info = []
++        for al in range_constexpr(NUM_A_LOADS):
++            a_lin = tid * fx.Index(LOAD_VEC) + fx.Index(al * THREADS_PER_BLOCK * LOAD_VEC)
++            a_load_row = a_lin // fx.Index(BLOCK_K)
++            a_load_col = a_lin % fx.Index(BLOCK_K)
++            lds_rel = a_load_row * fx.Index(BLOCK_K_PAD_A) + a_load_col
++            g_row = tile_m0 + a_load_row
++            a_lds_info.append((g_row, a_load_col, lds_rel))
++
++        b_lds_info = []
++        for bl in range_constexpr(NUM_B_LOADS):
++            b_lin = tid * fx.Index(LOAD_VEC) + fx.Index(bl * THREADS_PER_BLOCK * LOAD_VEC)
++            b_load_row = b_lin // fx.Index(BLOCK_K)
++            b_load_col = b_lin % fx.Index(BLOCK_K)
++            lds_rel = fx.Index(LDS_A_SIZE) + b_load_row * fx.Index(BLOCK_K_PAD_B) + b_load_col
++            g_row = tile_n0 + b_load_row
++            b_lds_info.append((g_row, b_load_col, lds_rel))
++
++        # ============================================================
++        # Phase 1: Issue GMEM loads (non-blocking), return raw data
++        # ============================================================
++        def _gmem_load(k_base):
++            """Issue buffer_loads for A+B tile. Returns list of raw v4f32."""
++            raw_data = []
++            for al in range_constexpr(NUM_A_LOADS):
++                g_row, a_load_col, _ = a_lds_info[al]
++                g_col = k_base + a_load_col
++                elem_off = g_row * fx.Index(K) + g_col
++                f32_off = elem_off // c2
++                a_raw = buffer_ops.buffer_load(a_rsrc, f32_off, vec_width=4, dtype=T.f32)
++                raw_data.append(a_raw)
++
++            for bl in range_constexpr(NUM_B_LOADS):
++                g_row, b_load_col, _ = b_lds_info[bl]
++                g_col = k_base + b_load_col
++                elem_off = g_row * fx.Index(K) + g_col
++                f32_off = elem_off // c2
++                b_raw = buffer_ops.buffer_load(bt_rsrc, f32_off, vec_width=4, dtype=T.f32)
++                raw_data.append(b_raw)
++
++            return raw_data  # [a0, a1, a2, a3, b0, b1, b2, b3] -- 8 x v4f32
++
++        # ============================================================
++        # Phase 2: Store loaded data to LDS
++        # ============================================================
++        def _lds_store(raw_data, buf_offset):
++            """Store previously loaded data to LDS at buf_offset."""
++            for al in range_constexpr(NUM_A_LOADS):
++                _, _, lds_rel = a_lds_info[al]
++                a_vec = vector.bitcast(v8_in_ty, raw_data[al])
++                lds_idx = buf_offset + lds_rel
++                vector.store(a_vec, lds_view, [lds_idx])
++
++            for bl in range_constexpr(NUM_B_LOADS):
++                _, _, lds_rel = b_lds_info[bl]
++                b_vec = vector.bitcast(v8_in_ty, raw_data[NUM_A_LOADS + bl])
++                lds_idx = buf_offset + lds_rel
++                vector.store(b_vec, lds_view, [lds_idx])
++
++        # ============================================================
++        # LDS read helpers -- row-major with K-padding
++        # ============================================================
++        def _load_a_from_lds(rk, buf_offset):
++            """Load A WMMA operands from LDS for K-step rk."""
++            vecs = []
++            col_base = fx.Index(rk * WMMA_K) + base8
++            for rm in range_constexpr(reg_m):
++                row = wave_m * fx.Index(reg_m * WMMA_M) + fx.Index(rm * WMMA_M) + lane16
++                lds_idx = buf_offset + row * fx.Index(BLOCK_K_PAD_A) + col_base
++                a_raw = vector.load_op(v8_in_ty, lds_view, [lds_idx])
++                vecs.append(a_raw)
++            return vecs
++
++        def _load_b_from_lds(rk, buf_offset):
++            """Load B WMMA operands from LDS for K-step rk."""
++            vecs = []
++            col_base = fx.Index(rk * WMMA_K) + base8
++            for rn in range_constexpr(reg_n):
++                row = wave_n * fx.Index(reg_n * WMMA_N) + fx.Index(rn * WMMA_N) + lane16
++                lds_idx = buf_offset + fx.Index(LDS_A_SIZE) + row * fx.Index(BLOCK_K_PAD_B) + col_base
++                b_raw = vector.load_op(v8_in_ty, lds_view, [lds_idx])
++                vecs.append(b_raw)
++            return vecs
++
++        def _barrier():
++            _llvm.inline_asm(
++                res=None,
++                operands_=[],
++                asm_string="s_wait_dscnt 0x0\ns_wait_storecnt 0x0\ns_barrier_signal -1\ns_barrier_wait -1",
++                constraints="",
++                has_side_effects=True,
++            )
++
++        def _do_compute_rk(accs_in, rk, buf_offset):
++            """Compute all WMMAs for one K-step.
++
++            Pattern: load all B first, then for each A load 1 A -> 4 WMMAs.
++            This keeps register pressure low: only 4 B + 1 A + 16 accs live.
++            """
++            new_accs = list(accs_in)
++            # Load all B operands for this K-step first
++            b_vecs = _load_b_from_lds(rk, buf_offset)
++            # Then load A one at a time and do reg_n WMMAs per A
++            for rm in range_constexpr(reg_m):
++                a_vec = _load_a_single_from_lds(rk, rm, buf_offset)
++                for rn in range_constexpr(reg_n):
++                    idx = rm * reg_n + rn
++                    new_accs[idx] = _wmma_op(
++                        v8f32_ty,
++                        a_vec,
++                        b_vecs[rn],
++                        new_accs[idx],
++                        v8i16_ty,
++                    )
++            return new_accs
++
++        def _load_a_single_from_lds(rk, rm_val, buf_offset):
++            """Load a single A WMMA operand from LDS for K-step rk, repeat rm_val."""
++            col_base = fx.Index(rk * WMMA_K) + base8
++            row = wave_m * fx.Index(reg_m * WMMA_M) + fx.Index(rm_val * WMMA_M) + lane16
++            lds_idx = buf_offset + row * fx.Index(BLOCK_K_PAD_A) + col_base
++            return vector.load_op(v8_in_ty, lds_view, [lds_idx])
++
++        # ============================================================
++        # Initialize accumulators -- 4x4 = 16 accumulators
++        # ============================================================
++        zero_acc = arith.constant_vector(0.0, v8f32_ty)
++        accs = [zero_acc for _ in range_constexpr(reg_m * reg_n)]
++
++        # ============================================================
++        # DOUBLE-BUFFERED PIPELINE WITH SPLIT LOAD/STORE
++        # ============================================================
++
++        c_lds_buf_stride = fx.Index(LDS_ONE_BUF)
++        c_zero = fx.Index(0)
++
++        # --- PROLOGUE ---
++        prologue_data = _gmem_load(c_zero)
++        _lds_store(prologue_data, c_zero)
++        _barrier()
++
++        # --- MAIN LOOP: kt=0..num_k_tiles-2 (SCF loop) ---
++        # Loop-carried: accs (reg_m*reg_n accumulators)
++        n_acc = reg_m * reg_n
++        init_state = list(accs)
++
++        for iv, state in range(0, num_k_tiles - 1, 1, init=init_state):
++            s_accs = list(state[:n_acc])
++
++            # Ping-pong: even iterations read buf0/write buf1, odd reversed
++            read_off = iv % fx.Index(2) * c_lds_buf_stride
++            write_off = (fx.Index(1) - iv % fx.Index(2)) * c_lds_buf_stride
++
++            # 1. Issue GMEM loads for next tile (non-blocking)
++            next_k = (iv + fx.Index(1)) * fx.Index(BLOCK_K)
++            next_data = _gmem_load(next_k)
++
++            # 2. Compute from current read buffer
++            for rk in range_constexpr(reg_k):
++                s_accs = _do_compute_rk(s_accs, rk, read_off)
++
++            # 3. Store loaded data to write buffer
++            _lds_store(next_data, write_off)
++
++            # 4. Barrier
++            _barrier()
++
++            results = yield list(s_accs)
++
++        accs = list(results[:n_acc])
++
++        # --- EPILOGUE: Last tile in LDS ---
++        # After num_k_tiles-1 iterations, last written buffer is the read buffer
++        last_read_off = fx.Index((num_k_tiles - 1) % 2) * c_lds_buf_stride
++        for rk in range_constexpr(reg_k):
++            accs = _do_compute_rk(accs, rk, last_read_off)
++
++        # ============================================================
++        # Store results to GMEM
++        # ============================================================
++        c_layout_n = fx.Index(N)
++        for rm in range_constexpr(reg_m):
++            for rn in range_constexpr(reg_n):
++                idx = rm * reg_n + rn
++                wmma_m_off = wave_m * fx.Index(reg_m * WMMA_M) + fx.Index(rm * WMMA_M)
++                wmma_n_off = wave_n * fx.Index(reg_n * WMMA_N) + fx.Index(rn * WMMA_N)
++                for si in range_constexpr(8):
++                    g_row = tile_m0 + wmma_m_off + base8 + fx.Index(si)
++                    g_col = tile_n0 + wmma_n_off + lane16
++                    val = vector.extract(accs[idx], static_position=[si], dynamic_position=[])
++                    if out_dtype == "bf16":
++                        val = arith.trunc_f(T.bf16, val)
++                    elem_off = g_row * c_layout_n + g_col
++                    buffer_ops.buffer_store(val, c_rsrc, elem_off)
++
++    # ── Host launcher ──────────────────────────────────────────────────────
++    @flyc.jit
++    def launch_gemm(
++        arg_c: fx.Tensor,
++        arg_a: fx.Tensor,
++        arg_bt: fx.Tensor,
++        stream: fx.Stream,
++    ):
++        allocator.finalized = False
++        ctx = CompilationContext.get_current()
++        with ir.InsertionPoint(ctx.gpu_module_body):
++            allocator.finalize()
++
++        c1 = 1
++        total_blocks = grid_m * grid_n
++        bk = THREADS_PER_BLOCK
++
++        launcher = wmma_gemm_kernel(arg_c, arg_a, arg_bt)
++        launcher.launch(
++            grid=(total_blocks, c1, c1),
++            block=(bk, c1, c1),
++            stream=stream,
++        )
++
++    return launch_gemm, BLOCK_M, BLOCK_N, BLOCK_K
+diff --git a/kernels/rdna_fp8_preshuffle_gemm.py b/kernels/rdna_fp8_preshuffle_gemm.py
+new file mode 100644
+index 000000000..09fc56bd7
+--- /dev/null
++++ b/kernels/rdna_fp8_preshuffle_gemm.py
+@@ -0,0 +1,447 @@
++"""Fast Float8 Preshuffle GEMM for RDNA4 (gfx120x, wave32).
++
++Optimized for M=32, N=8192, K=6144 (decode-phase inference shape).
++
++  C[M,N] = A[M,K] @ B[K,N]
++
++Both A and B are fp8_e4m3fn with per-tensor scales.
++Output is bf16.  Accumulation in f32.
++
++A is loaded directly from raw [M,K] layout (no preshuffle needed).
++Uses per-token (rowwise) scaling: scale_a[M] for activation, scale_b[N] for weight.
++B must be preshuffled to [N0, K0, KLane=2, NLane=16, KPack=8] bytes.
++  - No LDS needed — direct GMEM -> register -> WMMA pipeline
++  - Software-pipelined K-loop with compile-time inner unrolling
++
++Tile config (tuned for M=32):
++  tile_m=32  (2 WMMA M-tiles)
++  tile_n=128 (8 WMMA N-tiles)
++  tile_k=32  (2 WMMA K-tiles)
++  waves_m=1, waves_n=2 → 2 waves = 64 threads per block
++  wave_reg_m=2, wave_reg_n=4 → 8 accumulators per wave
++"""
++
++import os
++import functools
++import time
++
++import flydsl.compiler as flyc
++import flydsl.expr as fx
++from flydsl.compiler.kernel_function import CompilationContext
++
++from flydsl.expr import arith, gpu, buffer_ops, vector, rocdl, range_constexpr
++from flydsl.runtime.device import get_rocm_arch
++from flydsl.expr.typing import T
++
++
++WMMA_M = 16
++WMMA_N = 16
++WMMA_K = 16
++
++
++# =============================================================================
++# Host-side preshuffle functions
++# =============================================================================
++
++
++def preshuffle_b_fp8(B_kn):
++    """Preshuffle B[K,N] fp8 for WMMA B operand layout.
++
++    Layout: [N0, K0, KLane=2, NLane=16, KPack=8] bytes.
++    lane16 selects N column, klane selects K half.
++    """
++    import torch
++
++    K, N = B_kn.shape
++    assert K % 16 == 0 and N % 16 == 0
++    N0 = N // 16
++    K0 = K // 16
++    B_view = B_kn.view(torch.uint8)
++    B_reshaped = B_view.reshape(K0, 2, 8, N0, 16)
++    return B_reshaped.permute(3, 0, 1, 4, 2).contiguous()  # [N0, K0, 2, 16, 8]
++
++
++def fp8_quantize_per_token(x_f32):
++    """Quantize f32 tensor to fp8_e4m3fn with per-token (per-row) scale.
++
++    Returns (x_fp8, scale_per_token) where:
++      x_f32[m, :] ~ x_fp8[m, :].float() * scale_per_token[m]
++      scale_per_token shape: [M]
++    """
++    import torch
++
++    amax = x_f32.abs().amax(dim=-1, keepdim=True).clamp(min=1e-12)
++    scale = amax / 448.0  # fp8_e4m3fn max = 448.0
++    x_scaled = (x_f32 / scale).clamp(-448.0, 448.0)
++    x_fp8 = x_scaled.to(torch.float8_e4m3fn)
++    return x_fp8, scale.squeeze(-1)  # [M]
++
++
++def fp8_quantize_per_channel(x_f32):
++    """Quantize f32 tensor to fp8_e4m3fn with per-channel (per-column) scale.
++
++    Returns (x_fp8, scale_per_channel) where:
++      x_f32[:, n] ~ x_fp8[:, n].float() * scale_per_channel[n]
++      scale_per_channel shape: [N]
++    """
++    import torch
++
++    amax = x_f32.abs().amax(dim=0).clamp(min=1e-12)
++    scale = amax / 448.0
++    x_scaled = (x_f32 / scale.unsqueeze(0)).clamp(-448.0, 448.0)
++    x_fp8 = x_scaled.to(torch.float8_e4m3fn)
++    return x_fp8, scale  # [N]
++
++
++# =============================================================================
++# Kernel compiler
++# =============================================================================
++
++
++@functools.lru_cache(maxsize=64)
++def compile_fp8_gemm(
++    *,
++    M: int,
++    N: int,
++    K: int,
++    tile_m: int = 32,
++    tile_n: int = None,
++    tile_k: int = 32,
++    k_unroll: int = None,
++    group_m: int = 8,
++):
++    """Compile fp8 GEMM for RDNA4.
++
++    A is raw fp8 [M,K] (no preshuffle needed). B must be preshuffled.
++    Optimized for small-M shapes (e.g., M=32, decode phase).
++
++    Args:
++        M, N, K: Matrix dimensions. Must be divisible by tile sizes.
++        tile_m: Block tile M (default 32 for small-M).
++        tile_n: Block tile N (default 128).
++        tile_k: Block tile K (default 32 = 2 WMMA K-tiles).
++        k_unroll: Inner K-loop unroll factor.
++        group_m: L2 cache swizzle group size.
++
++    Returns:
++        launch(c, a_fp8_f32, b_shuf_f32, scale_a_per_token, scale_b_per_channel, stream)
++    """
++    # Auto-select tile_n and k_unroll based on shape
++    if tile_n is None:
++        tile_n = 256 if M >= 256 else 128
++    if k_unroll is None:
++        k_unroll = 1 if M >= 256 else 2
++
++    gpu_arch = get_rocm_arch()
++
++    WAVE_SIZE = 32
++    assert tile_m % WMMA_M == 0, f"tile_m={tile_m} must be multiple of {WMMA_M}"
++    assert tile_n % WMMA_N == 0, f"tile_n={tile_n} must be multiple of {WMMA_N}"
++    assert tile_k % WMMA_K == 0, f"tile_k={tile_k} must be multiple of {WMMA_K}"
++    assert M % tile_m == 0, f"M={M} must be multiple of tile_m={tile_m}"
++    assert N % tile_n == 0, f"N={N} must be multiple of tile_n={tile_n}"
++    assert K % tile_k == 0, f"K={K} must be multiple of tile_k={tile_k}"
++
++    reg_m = tile_m // WMMA_M  # 32/16 = 2
++    reg_n = tile_n // WMMA_N  # 128/16 = 8
++    reg_k = tile_k // WMMA_K  # 32/16 = 2
++
++    # Wave layout: for small M, put all waves along N
++    if tile_m >= 128 and tile_n >= 128:
++        waves_m, waves_n = 2, 2
++    elif tile_m >= 64 and tile_n >= 128:
++        waves_m, waves_n = 2, 2
++    elif tile_n >= 256:
++        waves_m, waves_n = 1, 2
++    elif tile_m >= 64:
++        waves_m, waves_n = 2, 1
++    elif tile_n >= 128:
++        waves_m, waves_n = 1, 2
++    else:
++        waves_m, waves_n = 1, 1
++
++    NUM_WAVES = waves_m * waves_n
++    THREADS_PER_BLOCK = NUM_WAVES * WAVE_SIZE
++    wave_reg_m = reg_m // waves_m
++    wave_reg_n = reg_n // waves_n
++
++    num_k_tiles = K // tile_k
++    grid_m = M // tile_m
++    grid_n = N // tile_n
++
++    K0_total = K // 16  # total WMMA K-tiles across full K dimension
++
++    # B preshuffle strides (byte-based for fp8)
++    # B layout: [N0, K0, KLane=2, NLane=16, KPack=8] bytes
++    B_KPACK = 8
++    B_STRIDE_NLANE = B_KPACK  # 8
++    B_STRIDE_KLANE = 16 * B_KPACK  # 128
++    B_STRIDE_K0 = 2 * 16 * B_KPACK  # 256
++    B_STRIDE_N0 = K0_total * B_STRIDE_K0
++
++    @flyc.kernel
++    def kernel_gemm(
++        arg_c: fx.Tensor,
++        arg_a: fx.Tensor,
++        arg_b: fx.Tensor,
++        arg_scale_a: fx.Tensor,
++        arg_scale_b: fx.Tensor,
++    ):
++        # === Types ===
++        f32 = T.f32
++        bf16 = T.bf16
++        i32 = T.i32
++        v8f32_ty = T.vec(8, T.f32)
++        v2i32_ty = T.i32x2
++
++        # === Thread/block IDs ===
++        tid = gpu.thread_id("x")
++        pid = gpu.block_id("x")
++
++        c32 = fx.Index(32)
++        c16 = fx.Index(16)
++        c8 = fx.Index(8)
++        wave_id = tid // c32
++        lane = tid % c32
++        lane16 = lane % c16
++        klane = lane // c16
++
++        # === L2 cache swizzle ===
++        effective_group_m = min(group_m, grid_m)
++        c_grid_n = fx.Index(grid_n)
++        c_group_m = fx.Index(effective_group_m)
++        num_pid_in_group = c_group_m * c_grid_n
++        group_id = pid // num_pid_in_group
++        first_pid_m = group_id * c_group_m
++        group_size_m = c_group_m
++        pid_in_group = pid % num_pid_in_group
++        bid_m = first_pid_m + (pid_in_group % group_size_m)
++        bid_n = pid_in_group // group_size_m
++
++        # === Wave position within workgroup ===
++        c_wn = fx.Index(waves_n)
++        wave_m = wave_id // c_wn
++        wave_n = wave_id % c_wn
++
++        tile_m0 = bid_m * fx.Index(tile_m)
++        tile_n0 = bid_n * fx.Index(tile_n)
++
++        # === Buffer resources ===
++        a_rsrc = buffer_ops.create_buffer_resource(arg_a, max_size=True)
++        b_rsrc = buffer_ops.create_buffer_resource(arg_b, max_size=True)
++        c_rsrc = buffer_ops.create_buffer_resource(arg_c, max_size=True)
++        scale_a_rsrc = buffer_ops.create_buffer_resource(arg_scale_a, max_size=True)
++        scale_b_rsrc = buffer_ops.create_buffer_resource(arg_scale_b, max_size=True)
++
++        # === Scale resources (per-token scale_a[M], per-channel scale_b[N]) ===
++        # Scales are loaded per-element in the epilogue
++
++        # === Tile load functions ===
++
++        def _load_a_tile(k_tile_idx):
++            """Load A fp8 tile from raw A[M,K]. Returns [reg_k][wave_reg_m] of v2i32.
++
++            Each lane loads 8 contiguous fp8 bytes from:
++              row = tile_m0 + wave_m*wave_reg_m*16 + rm*16 + lane16
++              col = k_tile_idx*tile_k + rk*16 + klane*8
++            """
++            a_vecs = []
++            c_K = fx.Index(K)
++            for rk in range_constexpr(reg_k):
++                rk_vecs = []
++                col_base = k_tile_idx * fx.Index(tile_k) + fx.Index(rk * 16) + klane * c8
++                for rm in range_constexpr(wave_reg_m):
++                    row = tile_m0 + wave_m * fx.Index(wave_reg_m * WMMA_M) + fx.Index(rm * WMMA_M) + lane16
++                    byte_off = row * c_K + col_base
++                    dword_off = byte_off // fx.Index(4)
++                    a_raw = buffer_ops.buffer_load(a_rsrc, dword_off, vec_width=2, dtype=i32)
++                    rk_vecs.append(a_raw)
++                a_vecs.append(rk_vecs)
++            return a_vecs
++
++        def _load_b_tile(k_tile_idx):
++            """Load B fp8 tile. Returns [reg_k][wave_reg_n] of v2i32."""
++            b_vecs = []
++            n0_base = tile_n0 // c16 + wave_n * fx.Index(wave_reg_n)
++            for rk in range_constexpr(reg_k):
++                rk_vecs = []
++                k0 = k_tile_idx * fx.Index(reg_k) + fx.Index(rk)
++                for rn in range_constexpr(wave_reg_n):
++                    n0 = n0_base + fx.Index(rn)
++                    byte_off = (
++                        n0 * fx.Index(B_STRIDE_N0)
++                        + k0 * fx.Index(B_STRIDE_K0)
++                        + klane * fx.Index(B_STRIDE_KLANE)
++                        + lane16 * fx.Index(B_STRIDE_NLANE)
++                    )
++                    dword_off = byte_off // fx.Index(4)
++                    b_raw = buffer_ops.buffer_load(b_rsrc, dword_off, vec_width=2, dtype=i32)
++                    rk_vecs.append(b_raw)
++                b_vecs.append(rk_vecs)
++            return b_vecs
++
++        # === Compute function ===
++
++        def _do_compute(accs_in, a_vecs, b_vecs):
++            """Run WMMA fp8 multiply-accumulate for one tile."""
++            new_accs = list(accs_in)
++            for rk in range_constexpr(reg_k):
++                # Load all B for this rk, then iterate A (minimize reg pressure)
++                for rm in range_constexpr(wave_reg_m):
++                    for rn in range_constexpr(wave_reg_n):
++                        idx = rm * wave_reg_n + rn
++                        new_accs[idx] = rocdl.wmma_f32_16x16x16_fp8_fp8(
++                            v8f32_ty,
++                            a_vecs[rk][rm],
++                            b_vecs[rk][rn],
++                            arith.unwrap(new_accs[idx]),
++                        ).result
++            return new_accs
++
++        # === Initialize accumulators ===
++        zero_acc = arith.constant_vector(0.0, v8f32_ty)
++        accs = [zero_acc for _ in range_constexpr(wave_reg_m * wave_reg_n)]
++
++        # === Software-pipelined K-loop ===
++        # Prologue: load first tile
++        a_cur = _load_a_tile(fx.Index(0))
++        b_cur = _load_b_tile(fx.Index(0))
++
++        full_outer_iters = (num_k_tiles - 1) // k_unroll
++        remainder = (num_k_tiles - 1) % k_unroll
++
++        # Flatten/unflatten helpers for loop-carried state
++        def _flatten_tile(tile):
++            flat = []
++            for rk_vecs in tile:
++                flat.extend(rk_vecs)
++            return flat
++
++        def _unflatten_a(flat):
++            out = []
++            idx = 0
++            for rk in range_constexpr(reg_k):
++                row = []
++                for rm in range_constexpr(wave_reg_m):
++                    row.append(flat[idx])
++                    idx += 1
++                out.append(row)
++            return out
++
++        def _unflatten_b(flat):
++            out = []
++            idx = 0
++            for rk in range_constexpr(reg_k):
++                row = []
++                for rn in range_constexpr(wave_reg_n):
++                    row.append(flat[idx])
++                    idx += 1
++                out.append(row)
++            return out
++
++        n_a = reg_k * wave_reg_m
++        n_b = reg_k * wave_reg_n
++        n_acc = wave_reg_m * wave_reg_n
++
++        # Build initial state: [a_flat, accs, b_flat]
++        init_state = _flatten_tile(a_cur) + list(accs) + _flatten_tile(b_cur)
++
++        # Main K-loop: SCF outer with constexpr inner unroll
++        if full_outer_iters > 0:
++            for iv, state in range(0, full_outer_iters * k_unroll, k_unroll, init=init_state):
++                s_a = _unflatten_a(list(state[:n_a]))
++                s_accs = list(state[n_a : n_a + n_acc])
++                s_b = _unflatten_b(list(state[n_a + n_acc :]))
++
++                # Inner unroll: pipeline load-before-compute
++                for j in range_constexpr(k_unroll):
++                    next_kt = iv + fx.Index(j + 1)
++                    a_next = _load_a_tile(next_kt)
++                    b_next = _load_b_tile(next_kt)
++                    s_accs = _do_compute(s_accs, s_a, s_b)
++                    s_a = _unflatten_a(_flatten_tile(a_next))
++                    s_b = _unflatten_b(_flatten_tile(b_next))
++
++                results = yield _flatten_tile(s_a) + list(s_accs) + _flatten_tile(s_b)
++
++            a_cur = _unflatten_a(list(results[:n_a]))
++            accs = list(results[n_a : n_a + n_acc])
++            b_cur = _unflatten_b(list(results[n_a + n_acc :]))
++
++        # Handle remainder tiles
++        if remainder > 0:
++            for j in range_constexpr(remainder):
++                next_kt = fx.Index(full_outer_iters * k_unroll + j + 1)
++                a_next = _load_a_tile(next_kt)
++                b_next = _load_b_tile(next_kt)
++                accs = _do_compute(accs, a_cur, b_cur)
++                a_cur = _unflatten_a(_flatten_tile(a_next))
++                b_cur = _unflatten_b(_flatten_tile(b_next))
++
++        # Epilogue: compute last loaded tile
++        accs = _do_compute(accs, a_cur, b_cur)
++
++        # === Store results with scaling ===
++        c_n = fx.Index(N)
++        base8 = klane * c8
++        # Pre-load scale_b for each N column this lane writes to
++        sb_cache = []
++        for rn in range_constexpr(wave_reg_n):
++            g_col = tile_n0 + wave_n * fx.Index(wave_reg_n * WMMA_N) + fx.Index(rn * WMMA_N) + lane16
++            sb_cache.append(buffer_ops.buffer_load(scale_b_rsrc, g_col, vec_width=1, dtype=f32))
++
++        for rm in range_constexpr(wave_reg_m):
++            wmma_m_off = wave_m * fx.Index(wave_reg_m * WMMA_M) + fx.Index(rm * WMMA_M)
++            # Pre-load scale_a for the 8 rows in this WMMA M tile
++            sa_cache = []
++            for si in range_constexpr(8):
++                g_row_si = tile_m0 + wmma_m_off + base8 + fx.Index(si)
++                sa_cache.append(buffer_ops.buffer_load(scale_a_rsrc, g_row_si, vec_width=1, dtype=f32))
++
++            for rn in range_constexpr(wave_reg_n):
++                idx = rm * wave_reg_n + rn
++                wmma_n_off = wave_n * fx.Index(wave_reg_n * WMMA_N) + fx.Index(rn * WMMA_N)
++                sb_val = sb_cache[rn]
++                for si in range_constexpr(8):
++                    g_row = tile_m0 + wmma_m_off + base8 + fx.Index(si)
++                    g_col = tile_n0 + wmma_n_off + lane16
++                    val = vector.extract(
++                        accs[idx],
++                        static_position=[si],
++                        dynamic_position=[],
++                    )
++                    val = val * sa_cache[si] * sb_val
++                    val_bf16 = arith.trunc_f(bf16, val)
++                    elem_off = g_row * c_n + g_col
++                    buffer_ops.buffer_store(val_bf16, c_rsrc, elem_off)
++
++    # ── Host launcher ──────────────────────────────────────────────────────
++    @flyc.jit
++    def launch_fp8_gemm(
++        arg_c: fx.Tensor,
++        arg_a: fx.Tensor,
++        arg_b: fx.Tensor,
++        arg_scale_a: fx.Tensor,
++        arg_scale_b: fx.Tensor,
++        stream: fx.Stream,
++    ):
++        c1 = 1
++        total_blocks = grid_m * grid_n
++        bk = THREADS_PER_BLOCK
++
++        launcher = kernel_gemm(arg_c, arg_a, arg_b, arg_scale_a, arg_scale_b)
++        launcher.launch(
++            grid=(total_blocks, c1, c1),
++            block=(bk, c1, c1),
++            stream=stream,
++        )
++
++    return launch_fp8_gemm
++
++
++__all__ = [
++    "compile_fp8_gemm",
++    "preshuffle_b_fp8",
++    "fp8_quantize_per_token",
++    "fp8_quantize_per_channel",
++]
+diff --git a/kernels/rmsnorm_kernel.py b/kernels/rmsnorm_kernel.py
+index 17e231a3a..d354dbb70 100644
+--- a/kernels/rmsnorm_kernel.py
++++ b/kernels/rmsnorm_kernel.py
+@@ -27,8 +27,11 @@
+ 
+ EPS = 1e-5
+ 
++import math
++from kernels.kernels_common import get_warp_size
++
+ BLOCK_THREADS = 256
+-WARP_SIZE = 64
++WARP_SIZE = get_warp_size()
+ VEC_WIDTH = 8
+ 
+ 
+@@ -83,8 +86,8 @@ def rmsnorm_kernel(
+         def wave_reduce_add(x):
+             width_i32 = fx.Int32(WARP_SIZE)
+             w = x
+-            for sh in [32, 16, 8, 4, 2, 1]:
+-                off = fx.Int32(sh)
++            for _sh_exp in range_constexpr(int(math.log2(WARP_SIZE))):
++                off = fx.Int32(WARP_SIZE // (2 << _sh_exp))
+                 peer = w.shuffle_xor(off, width_i32)
+                 w = w.addf(peer, fastmath=fm_fast)
+             return w
+diff --git a/kernels/softmax_kernel.py b/kernels/softmax_kernel.py
+index 03709075a..832fcffae 100644
+--- a/kernels/softmax_kernel.py
++++ b/kernels/softmax_kernel.py
+@@ -29,8 +29,11 @@
+ 
+ KERNEL_NAME = "softmax_kernel"
+ 
++import math
++from kernels.kernels_common import get_warp_size
++
+ BLOCK_THREADS = 256
+-WARP_SIZE = 64
++WARP_SIZE = get_warp_size()
+ VEC_WIDTH = 8
+ 
+ 
+@@ -84,8 +87,8 @@ def softmax_kernel(
+         def wave_reduce(x, mode):
+             width_i32 = fx.Int32(WARP_SIZE)
+             w = x
+-            for sh in [32, 16, 8, 4, 2, 1]:
+-                off = fx.Int32(sh)
++            for _sh_exp in range_constexpr(int(math.log2(WARP_SIZE))):
++                off = fx.Int32(WARP_SIZE // (2 << _sh_exp))
+                 peer = w.shuffle_xor(off, width_i32)
+                 if mode == "max":
+                     w = w.maximumf(peer)
+diff --git a/python/flydsl/expr/rocdl/universal.py b/python/flydsl/expr/rocdl/universal.py
+index 08b0e14e2..0d6e9ee0d 100644
+--- a/python/flydsl/expr/rocdl/universal.py
++++ b/python/flydsl/expr/rocdl/universal.py
+@@ -62,7 +62,8 @@ def _elem_bit_width(elem_ty):
+ 
+     stride_val = arith.ConstantOp(T.i16(), ir.IntegerAttr.get(T.i16(), 0)).result
+     num_records_val = arith.ConstantOp(T.i64(), ir.IntegerAttr.get(T.i64(), num_records_bytes)).result
+-    flags_val_int = (7 << 12) | (4 << 15)
++    from ..buffer_ops import _get_buffer_flags
++    flags_val_int = _get_buffer_flags()
+     flags_val = arith.ConstantOp(T.i32(), ir.IntegerAttr.get(T.i32(), flags_val_int)).result
+ 
+     src_ptr_ty = PointerType(ptr.type)
+diff --git a/python/flydsl/runtime/device.py b/python/flydsl/runtime/device.py
+index 4807298db..2209b37d2 100644
+--- a/python/flydsl/runtime/device.py
++++ b/python/flydsl/runtime/device.py
+@@ -56,4 +56,8 @@ def is_rdna_arch(arch: Optional[str] = None) -> bool:
+     if not arch:
+         return False
+     arch = arch.lower()
+-    return arch.startswith("gfx10") or arch.startswith("gfx11") or arch.startswith("gfx12")
++    if arch.startswith("gfx10") or arch.startswith("gfx11"):
++        return True
++    if arch.startswith("gfx120"):
++        return True
++    return False
+diff --git a/scripts/run_benchmark.sh b/scripts/run_benchmark.sh
+index 955b49eb2..7945917aa 100755
+--- a/scripts/run_benchmark.sh
++++ b/scripts/run_benchmark.sh
+@@ -27,6 +27,28 @@ fi
+ BENCH_LOG_DIR="${BENCH_LOG_DIR:-/tmp/flydsl_bench}"
+ mkdir -p "${BENCH_LOG_DIR}"
+ 
++# Auto-select GPU with the most free VRAM (skip if HIP_VISIBLE_DEVICES is already set).
++if [ -z "${HIP_VISIBLE_DEVICES:-}" ] && command -v python3 >/dev/null 2>&1; then
++    _best_gpu=$(python3 -c "
++import torch
++if torch.cuda.is_available() and torch.cuda.device_count() > 1:
++    best = max(range(torch.cuda.device_count()), key=lambda i: torch.cuda.mem_get_info(i)[0])
++    print(best)
++" 2>/dev/null || true)
++    if [ -n "${_best_gpu}" ]; then
++        export HIP_VISIBLE_DEVICES="${_best_gpu}"
++        echo "[run_benchmark] Auto-selected GPU ${_best_gpu} (most free VRAM)"
++    fi
++fi
++
++# Detect GPU architecture — CDNA-only benchmarks are guarded by IS_CDNA.
++GPU_ARCH=$(python3 -c "from flydsl.runtime.device import get_rocm_arch; print(get_rocm_arch())" 2>/dev/null || echo "unknown")
++IS_CDNA=false
++IS_RDNA4=false
++case "${GPU_ARCH}" in gfx9*) IS_CDNA=true ;; esac
++case "${GPU_ARCH}" in gfx120*) IS_RDNA4=true ;; esac
++echo "[run_benchmark] GPU arch: ${GPU_ARCH} (CDNA=${IS_CDNA}, RDNA4=${IS_RDNA4})"
++
+ SUCCESS_COUNT=0
+ FAIL_COUNT=0
+ 
+@@ -392,8 +414,8 @@ if [ "${RUN_RMSNORM}" -eq 1 ]; then
+   done
+ fi
+ 
+-# Preshuffle GEMM
+-if [ "${RUN_PRESHUFFLE_GEMM}" -eq 1 ]; then
++# Preshuffle GEMM (CDNA only — uses MFMA)
++if [ "${RUN_PRESHUFFLE_GEMM}" -eq 1 ] && [ "${IS_CDNA}" = "true" ]; then
+   for shape in $GEMM_SHAPES; do
+     oldIFS=$IFS
+     IFS=,
+@@ -515,8 +537,8 @@ if [ "${RUN_PRESHUFFLE_GEMM}" -eq 1 ]; then
+   done
+ fi
+ 
+-# MoE
+-if [ "${RUN_MOE}" -eq 1 ]; then
++# MoE (CDNA only — uses MFMA)
++if [ "${RUN_MOE}" -eq 1 ] && [ "${IS_CDNA}" = "true" ]; then
+   for shape in $MOE_SHAPES; do
+     oldIFS=$IFS
+     IFS=,
+@@ -566,6 +588,23 @@ if [ "${RUN_MOE}" -eq 1 ]; then
+   done
+ fi
+ 
++# RDNA4 WMMA GEMM benchmarks (via benchmark_common.py)
++if [ "${IS_RDNA4}" = "true" ]; then
++  echo ""
++  echo "========================================================================"
++  echo "RDNA4 WMMA Benchmarks"
++  echo "========================================================================"
++  log="${BENCH_LOG_DIR}/rdna_wmma_sweep.log"
++  if python3 -c "from tests.kernels.benchmark_common import run_wmma_sweep, print_perf_table; rows = run_wmma_sweep(); print_perf_table(rows)" >"${log}" 2>&1; then
++    cat "${log}"
++    SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
++  else
++    FAIL_COUNT=$((FAIL_COUNT + 1))
++    echo "RDNA4 WMMA benchmark failed. Log: ${log}" >&2
++    tail -20 "${log}" >&2
++  fi
++fi
++
+ # Summary
+ TOTAL=$((SUCCESS_COUNT + FAIL_COUNT))
+ echo ""
+diff --git a/scripts/run_tests.sh b/scripts/run_tests.sh
+index ea70265ca..cdaf4bb12 100644
+--- a/scripts/run_tests.sh
++++ b/scripts/run_tests.sh
+@@ -12,6 +12,21 @@ set -euo pipefail
+ SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+ cd "${REPO_ROOT}"
++
++# Auto-select GPU with the most free VRAM (skip if HIP_VISIBLE_DEVICES is already set).
++if [[ -z "${HIP_VISIBLE_DEVICES:-}" ]] && command -v python3 &>/dev/null; then
++    _best_gpu=$(python3 -c "
++import torch
++if torch.cuda.is_available() and torch.cuda.device_count() > 1:
++    best = max(range(torch.cuda.device_count()), key=lambda i: torch.cuda.mem_get_info(i)[0])
++    print(best)
++" 2>/dev/null || true)
++    if [[ -n "${_best_gpu}" ]]; then
++        export HIP_VISIBLE_DEVICES="${_best_gpu}"
++        echo "[run_tests] Auto-selected GPU ${_best_gpu} (most free VRAM)"
++    fi
++fi
++
+ BUILD_DIR="${FLY_BUILD_DIR:-${REPO_ROOT}/build-fly}"
+ MLIR_LIBS_DIR="${BUILD_DIR}/python_packages/flydsl/_mlir/_mlir_libs"
+ 
+@@ -47,9 +62,16 @@ echo "========================================================================"
+ echo "Examples (examples/)"
+ echo "========================================================================"
+ 
++# Whitelist from tests/arch_compat.py (single source of truth for arch compat).
++_RDNA_EXAMPLE_WHITELIST=$(python3 -c "from tests.arch_compat import RDNA_COMPATIBLE_EXAMPLES; print(' '.join(RDNA_COMPATIBLE_EXAMPLES))" 2>/dev/null || echo "")
++_gpu_arch=$(python3 -c "from flydsl.runtime.device import get_rocm_arch; print(get_rocm_arch())" 2>/dev/null || echo "unknown")
+ for example in "${REPO_ROOT}"/examples/*.py; do
+     [ -f "${example}" ] || continue
+     name="$(basename "${example}")"
++    if [[ "${_gpu_arch}" != gfx9* ]] && ! echo "${_RDNA_EXAMPLE_WHITELIST}" | grep -qw "${name}"; then
++        echo "  SKIP  ${name}  (not in RDNA whitelist, arch: ${_gpu_arch})"
++        continue
++    fi
+     output=$(python3 "${example}" 2>&1) || {
+         echo "  FAIL  ${name}"; echo "$output" | tail -10 | sed 's/^/        /'; exit 1
+     }
+diff --git a/tests/arch_compat.py b/tests/arch_compat.py
+new file mode 100644
+index 000000000..c79b7be63
+--- /dev/null
++++ b/tests/arch_compat.py
+@@ -0,0 +1,26 @@
++"""Architecture compatibility configuration for GPU tests and examples.
++
++Single source of truth for what runs on CDNA vs RDNA GPUs.
++Referenced by:
++  - tests/kernels/conftest.py  (pytest collection filter)
++  - scripts/run_tests.sh       (example script filter)
++"""
++
++# Test files that ONLY work on CDNA (gfx9xx) GPUs.
++# Reasons: MFMA instructions, hardcoded wave64, or imports from CDNA-only kernels.
++CDNA_ONLY_TESTS = frozenset({
++    "test_preshuffle_gemm.py",
++    "test_blockscale_preshuffle_gemm.py",
++    "test_moe_gemm.py",
++    "test_moe_blockscale.py",
++    "test_moe_reduce.py",
++    "test_pa.py",
++    "test_quant.py",
++})
++
++# Example scripts verified to work on RDNA (non-CDNA) GPUs.
++# On CDNA all examples run; on RDNA only whitelisted ones run.
++RDNA_COMPATIBLE_EXAMPLES = frozenset({
++    "01-vectorAdd.py",
++    "02-tiledCopy.py",
++})
+diff --git a/tests/kernels/benchmark_common.py b/tests/kernels/benchmark_common.py
+index 9952f6d88..36926f8c0 100644
+--- a/tests/kernels/benchmark_common.py
++++ b/tests/kernels/benchmark_common.py
+@@ -13,6 +13,7 @@
+ 
+ import os
+ import sys
++
+ from dataclasses import dataclass
+ from typing import Any, Callable, List, Optional, Tuple
+ 
+@@ -59,7 +60,9 @@ def print_perf_table(rows: List[PerfRow]) -> None:
+     for r in rows:
+         sp = r.speedup_aiter_vs_flydsl
+         sp_s = "-" if sp is None else f"{sp:,.2f}x"
+-        print(f"{r.op:10s} {r.shape:18s} {r.dtype:6s} {_fmt_us(r.flydsl_gpu_us):>14s} {_fmt_us(r.aiter_gpu_us):>14s} {sp_s:>10s}")
++        print(
++            f"{r.op:10s} {r.shape:18s} {r.dtype:6s} {_fmt_us(r.flydsl_gpu_us):>14s} {_fmt_us(r.aiter_gpu_us):>14s} {sp_s:>10s}"
++        )
+     print("=" * 100 + "\n")
+ 
+ 
+@@ -88,6 +91,7 @@ def maybe_enable_aiter() -> bool:
+     """
+     try:
+         import aiter  # noqa: F401
++
+         return True
+     except Exception:
+         pass
+@@ -98,6 +102,7 @@ def maybe_enable_aiter() -> bool:
+         sys.path.insert(0, aiter_repo)
+         try:
+             import aiter  # noqa: F401
++
+             return True
+         except Exception:
+             return False
+@@ -131,6 +136,26 @@ def _default_configs() -> List[Tuple[int, int, str]]:
+     ]
+ 
+ 
++def _default_wmma_configs() -> List[Tuple[int, int, str]]:
++    """Default WMMA GEMM benchmark configs: (M, N=K, dtype)."""
++    return [
++        (256, 256, "bf16"),
++        (1024, 1024, "bf16"),
++        (2048, 2048, "bf16"),
++        (4096, 4096, "bf16"),
++    ]
++
++
++def _default_fp8_configs() -> List[Tuple[int, int, str]]:
++    """Default FP8 GEMM benchmark configs: (M, N=K, dtype='fp8')."""
++    return [
++        (32, 4096, "fp8"),
++        (32, 8192, "fp8"),
++        (128, 4096, "fp8"),
++        (4096, 4096, "fp8"),
++    ]
++
++
+ def _dtype_torch(dt: str):
+     dt = dt.lower()
+     import torch
+@@ -161,6 +186,7 @@ def _bench_flydsl_torch(*, op: str, M: int, N: int, dtype: str, warmup: int, ite
+ 
+     if op == "softmax":
+         from kernels.softmax_kernel import build_softmax_module
++
+         # M is runtime; module construction uses a dummy M.
+         # `flydsl.compile()` already has its own cache.
+         m = build_softmax_module(1, N, dtype)
+@@ -171,6 +197,7 @@ def _bench_flydsl_torch(*, op: str, M: int, N: int, dtype: str, warmup: int, ite
+ 
+     if op == "layernorm":
+         from kernels.layernorm_kernel import build_layernorm_module
++
+         m = build_layernorm_module(1, N, dtype)
+         exe = flydsl.compile(m)
+         x = torch.randn((M, N), device="cuda", dtype=torch_dtype)
+@@ -181,6 +208,7 @@ def _bench_flydsl_torch(*, op: str, M: int, N: int, dtype: str, warmup: int, ite
+ 
+     if op == "rmsnorm":
+         from kernels.rmsnorm_kernel import build_rmsnorm_module
++
+         m = build_rmsnorm_module(1, N, dtype)
+         exe = flydsl.compile(m)
+         x = torch.randn((M, N), device="cuda", dtype=torch_dtype)
+@@ -188,6 +216,42 @@ def _bench_flydsl_torch(*, op: str, M: int, N: int, dtype: str, warmup: int, ite
+         y = torch.empty((M, N), device="cuda", dtype=torch_dtype)
+         return bench_gpu_us_torch(lambda: exe(x, gamma, y, M), warmup=warmup, iters=iters)
+ 
++    if op == "wmma_gemm":
++        from kernels.rdna_f16_gemm import create_wmma_gemm_module
++
++        K = N  # square by default; caller can override via config
++        torch_dtype = torch.bfloat16 if dtype == "bf16" else torch.float16
++        launch, *_ = create_wmma_gemm_module(M, N, K, in_dtype=dtype, out_dtype="bf16")
++        A = torch.randn(M, K, dtype=torch_dtype, device="cuda")
++        B_T = torch.randn(N, K, dtype=torch_dtype, device="cuda")
++        C = torch.zeros(M, N, dtype=torch.bfloat16, device="cuda")
++        return bench_gpu_us_torch(
++            lambda: launch(C, A, B_T, torch.cuda.current_stream()),
++            warmup=warmup,
++            iters=iters,
++        )
++
++    if op == "wmma_fp8_gemm":
++        from kernels.rdna_fp8_preshuffle_gemm import compile_fp8_gemm, preshuffle_b_fp8, fp8_quantize_per_token, fp8_quantize_per_channel
++
++        K = N  # square by default
++        torch.manual_seed(42)
++        A_f32 = torch.randn(M, K, device="cuda") * 0.1
++        B_f32 = torch.randn(K, N, device="cuda") * 0.1
++        A_fp8, sa = fp8_quantize_per_token(A_f32)
++        B_fp8, sb = fp8_quantize_per_channel(B_f32)
++        B_shuf = preshuffle_b_fp8(B_fp8).view(torch.float32).contiguous()
++        A_view = A_fp8.view(torch.float32).contiguous()
++        C = torch.zeros(M, N, dtype=torch.bfloat16, device="cuda")
++        sa_t = sa.to(device="cuda", dtype=torch.float32).contiguous()
++        sb_t = sb.to(device="cuda", dtype=torch.float32).contiguous()
++        launch = compile_fp8_gemm(M=M, N=N, K=K)
++        return bench_gpu_us_torch(
++            lambda: launch(C, A_view, B_shuf, sa_t, sb_t, torch.cuda.current_stream()),
++            warmup=warmup,
++            iters=iters,
++        )
++
+     raise ValueError(f"unknown op: {op}")
+ 
+ 
+@@ -200,6 +264,7 @@ def _bench_aiter(*, op: str, impl: str, M: int, N: int, dtype: str, warmup: int,
+         return None
+ 
+     import torch
++
+     torch_dtype, dt_norm = _dtype_torch(dtype)
+     dtype = dt_norm
+     impl = (impl or "triton").lower()
+@@ -212,16 +277,19 @@ def _bench_aiter(*, op: str, impl: str, M: int, N: int, dtype: str, warmup: int,
+     if impl == "triton":
+         if op == "softmax":
+             from aiter.ops.triton.softmax import softmax as fn
++
+             x = torch.randn((M, N), device="cuda", dtype=torch_dtype)
+             return bench_gpu_us_torch(lambda: fn(x), warmup=warmup, iters=iters)
+         if op == "layernorm":
+             from aiter.ops.triton.norm import layer_norm as fn
++
+             x = torch.randn((M, N), device="cuda", dtype=torch_dtype)
+             w = torch.randn((N,), device="cuda", dtype=torch_dtype)
+             b = torch.randn((N,), device="cuda", dtype=torch_dtype)
+             return bench_gpu_us_torch(lambda: fn(x, w, b, 1e-5, None), warmup=warmup, iters=iters)
+         if op == "rmsnorm":
+             from aiter.ops.triton.rmsnorm import rms_norm as fn
++
+             x = torch.randn((M, N), device="cuda", dtype=torch_dtype)
+             w = torch.randn((N,), device="cuda", dtype=torch_dtype)
+             return bench_gpu_us_torch(lambda: fn(x, w, 1e-5), warmup=warmup, iters=iters)
+@@ -238,7 +306,7 @@ def run_compare_sweep(
+     iters: int = 50,
+ ) -> List[PerfRow]:
+     rows: List[PerfRow] = []
+-    for (M, N, dt) in configs:
++    for M, N, dt in configs:
+         shape = f"{M}x{N}"
+         for op in ("softmax", "layernorm", "rmsnorm"):
+             flydsl_us = None
+@@ -255,6 +323,81 @@ def run_compare_sweep(
+     return rows
+ 
+ 
++def run_wmma_sweep(
++    *,
++    warmup: int = 10,
++    iters: int = 50,
++) -> List[PerfRow]:
++    """Benchmark WMMA GEMM kernels (RDNA4 only) vs torch."""
++    import torch
++
++    rows: List[PerfRow] = []
++
++    from flydsl.runtime.device import get_rocm_arch
++
++    arch = get_rocm_arch()
++    if not arch.startswith("gfx120"):
++        return rows
++
++    fail_count = 0
++
++    # wmma_gemm (LDS bf16)
++    for M, N, dt in _default_wmma_configs():
++        K = N
++        shape = f"{M}x{N}x{K}"
++        flydsl_us = None
++        torch_us = None
++        try:
++            flydsl_us = _bench_flydsl_torch(op="wmma_gemm", M=M, N=N, dtype=dt, warmup=warmup, iters=iters)
++        except Exception as e:
++            print(f"ERROR: wmma_gemm {shape} FAILED: {e}")
++            fail_count += 1
++        try:
++            torch_dtype, _ = _dtype_torch(dt)
++            A = torch.randn(M, K, dtype=torch_dtype, device="cuda")
++            B = torch.randn(K, N, dtype=torch_dtype, device="cuda")
++            C = torch.zeros(M, N, dtype=torch_dtype, device="cuda")
++            torch_us = bench_gpu_us_torch(lambda: torch.mm(A, B, out=C), warmup=warmup, iters=iters)
++        except Exception:
++            pass  # torch reference failure is non-fatal
++        rows.append(PerfRow(op="wmma_gemm", shape=shape, dtype=dt, flydsl_gpu_us=flydsl_us, aiter_gpu_us=torch_us))
++
++    # wmma_fp8_gemm (A raw, B preshuffled)
++    for M, N, dt in _default_fp8_configs():
++        K = N
++        shape = f"{M}x{N}x{K}"
++        flydsl_us = None
++        torch_us = None
++        try:
++            flydsl_us = _bench_flydsl_torch(op="wmma_fp8_gemm", M=M, N=N, dtype="bf16", warmup=warmup, iters=iters)
++        except Exception as e:
++            print(f"ERROR: fp8_gemm {shape} FAILED: {e}")
++            fail_count += 1
++        try:
++            from kernels.rdna_fp8_preshuffle_gemm import fp8_quantize_per_token, fp8_quantize_per_channel
++
++            A_f32 = torch.randn(M, K, device="cuda") * 0.1
++            B_f32 = torch.randn(K, N, device="cuda") * 0.1
++            A_fp8, sa = fp8_quantize_per_token(A_f32)
++            B_fp8, sb = fp8_quantize_per_channel(B_f32)
++            B_col = B_fp8.T.contiguous().T
++            sa_t = sa.to(device="cuda", dtype=torch.float32).unsqueeze(1).contiguous()   # (M, 1)
++            sb_t = sb.to(device="cuda", dtype=torch.float32).unsqueeze(0).contiguous()   # (1, N)
++            torch_us = bench_gpu_us_torch(
++                lambda: torch._scaled_mm(A_fp8, B_col, scale_a=sa_t, scale_b=sb_t, out_dtype=torch.bfloat16),
++                warmup=warmup,
++                iters=iters,
++            )
++        except Exception:
++            pass  # torch reference failure is non-fatal
++        rows.append(PerfRow(op="fp8_gemm", shape=shape, dtype="fp8", flydsl_gpu_us=flydsl_us, aiter_gpu_us=torch_us))
++
++    if fail_count > 0:
++        raise RuntimeError(f"{fail_count} RDNA WMMA benchmark(s) failed — see errors above")
++
++    return rows
++
++
+ def main() -> None:
+     # CLI entrypoint:
+     #   BENCH_CONFIGS="M,N,dtype;..." AITER_IMPL=triton BENCH_WARMUP=10 BENCH_ITERS=50 python -m tests.kernels.benchmark_common
+@@ -265,7 +408,21 @@ def main() -> None:
+     rows = run_compare_sweep(configs=configs, aiter_impl=aiter_impl, warmup=warmup, iters=iters)
+     print_perf_table(rows)
+ 
++    # WMMA GEMM benchmarks (RDNA4 only)
++    wmma_rows = run_wmma_sweep(warmup=warmup, iters=iters)
++    if wmma_rows:
++        print("\n" + "=" * 100)
++        print("Perf Compare (gpu us): FlyDSL WMMA vs torch (RDNA4)")
++        print("=" * 100)
++        print(f"{'op':10s} {'shape':18s} {'dtype':6s} {'FlyDSL(gpu us)':>14s} {'torch(gpu us)':>14s} {'speedup':>10s}")
++        for r in wmma_rows:
++            sp = r.speedup_aiter_vs_flydsl
++            sp_s = "-" if sp is None else f"{sp:,.2f}x"
++            print(
++                f"{r.op:10s} {r.shape:18s} {r.dtype:6s} {_fmt_us(r.flydsl_gpu_us):>14s} {_fmt_us(r.aiter_gpu_us):>14s} {sp_s:>10s}"
++            )
++        print("=" * 100 + "\n")
++
+ 
+ if __name__ == "__main__":
+     main()
+-
+diff --git a/tests/kernels/conftest.py b/tests/kernels/conftest.py
+new file mode 100644
+index 000000000..e69a3feca
+--- /dev/null
++++ b/tests/kernels/conftest.py
+@@ -0,0 +1,39 @@
++"""Architecture-aware test filtering for GPU kernel tests.
++
++Automatically skips tests that are incompatible with the current GPU:
++  - MFMA-based kernels (preshuffle GEMM, MoE, blockscale, PA) require CDNA (gfx9xx)
++  - WMMA-based kernels require RDNA4 (gfx12xx) — handled by per-test _requires_rdna4()
++  - Generic kernels (softmax, layernorm, vec_add, quant, etc.) run on all architectures
++
++Configuration lives in tests/arch_compat.py (single source of truth).
++"""
++
++import pytest
++from tests.arch_compat import CDNA_ONLY_TESTS
++
++
++def _get_gpu_arch():
++    try:
++        from flydsl.runtime.device import get_rocm_arch
++        return str(get_rocm_arch())
++    except Exception:
++        return ""
++
++
++def pytest_collection_modifyitems(config, items):
++    arch = _get_gpu_arch()
++    if not arch:
++        return
++
++    is_cdna = "gfx9" in arch
++
++    if is_cdna:
++        return
++
++    skip_marker = pytest.mark.skip(
++        reason=f"Test requires CDNA (gfx9xx) GPU, current arch: {arch}"
++    )
++    for item in items:
++        filename = item.fspath.basename
++        if filename in CDNA_ONLY_TESTS:
++            item.add_marker(skip_marker)
+diff --git a/tests/kernels/test_rdna_gemm.py b/tests/kernels/test_rdna_gemm.py
+new file mode 100644
+index 000000000..7d69d6841
+--- /dev/null
++++ b/tests/kernels/test_rdna_gemm.py
+@@ -0,0 +1,201 @@
++#!/usr/bin/env python3
++"""RDNA4 GEMM correctness tests (gfx120x, wave32).
++
++Kernel implementations:
++  kernels/rdna_f16_gemm.py          — BF16/F16 GEMM with LDS
++  kernels/rdna_fp8_preshuffle_gemm.py — FP8 GEMM with B preshuffle
++"""
++
++import os
++import sys
++import logging
++
++import torch
++import pytest
++
++_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
++if _REPO_ROOT not in sys.path:
++    sys.path.insert(0, _REPO_ROOT)
++
++from kernels.rdna_f16_gemm import create_wmma_gemm_module
++from kernels.rdna_fp8_preshuffle_gemm import (
++    compile_fp8_gemm,
++    preshuffle_b_fp8,
++    fp8_quantize_per_token,
++    fp8_quantize_per_channel,
++)
++from tests.test_common import verify_output, run_perftest
++from flydsl.runtime.device import get_rocm_arch
++
++logging.basicConfig(level=logging.INFO)
++
++if not torch.cuda.is_available():
++    pytest.skip("CUDA/ROCm not available. Skipping GPU tests.", allow_module_level=True)
++
++ARCH = str(get_rocm_arch())
++
++
++def _requires_rdna4():
++    if not ARCH.startswith("gfx120"):
++        pytest.skip(f"RDNA4 GEMM requires gfx120x, got {ARCH}")
++
++
++# ── BF16/F16 GEMM ────────────────────────────────────────────────────────────
++
++
++@pytest.mark.parametrize(
++    "M, N, K",
++    [
++        pytest.param(128, 128, 128, id="128x128x128"),
++        pytest.param(256, 256, 256, id="256x256x256"),
++        pytest.param(256, 256, 512, id="256x256x512"),
++        pytest.param(512, 512, 512, id="512x512x512", marks=pytest.mark.large_shape),
++    ],
++)
++@pytest.mark.parametrize("dtype", ["bf16", "f16"])
++def test_f16_gemm_correctness(M, N, K, dtype):
++    """Test BF16/F16 GEMM correctness for various shapes and dtypes."""
++    _requires_rdna4()
++
++    torch_dtype = torch.bfloat16 if dtype == "bf16" else torch.float16
++    torch.manual_seed(42)
++
++    launch_fn, BLOCK_M, BLOCK_N, BLOCK_K = create_wmma_gemm_module(M, N, K, in_dtype=dtype, out_dtype="bf16")
++
++    A = torch.randn(M, K, dtype=torch_dtype, device="cuda") * 0.1
++    B_T = torch.randn(N, K, dtype=torch_dtype, device="cuda") * 0.1
++    C = torch.zeros(M, N, dtype=torch.bfloat16, device="cuda")
++
++    launch_fn(C, A, B_T, torch.cuda.current_stream())
++    torch.cuda.synchronize()
++
++    C_ref = A.float() @ B_T.float().T
++    assert verify_output(C.float(), C_ref, atol=0.05, rtol=0.05)
++
++
++@pytest.mark.parametrize(
++    "M, N, K",
++    [
++        pytest.param(128, 128, 128, id="128x128x128"),
++        pytest.param(256, 256, 256, id="256x256x256"),
++    ],
++)
++def test_f16_gemm_f32_output(M, N, K):
++    """Test BF16 GEMM with f32 output accumulation."""
++    _requires_rdna4()
++
++    torch.manual_seed(42)
++    launch_fn, _, _, _ = create_wmma_gemm_module(M, N, K, in_dtype="bf16", out_dtype="f32")
++
++    A = torch.randn(M, K, dtype=torch.bfloat16, device="cuda") * 0.1
++    B_T = torch.randn(N, K, dtype=torch.bfloat16, device="cuda") * 0.1
++    C = torch.zeros(M, N, dtype=torch.float32, device="cuda")
++
++    launch_fn(C, A, B_T, torch.cuda.current_stream())
++    torch.cuda.synchronize()
++
++    C_ref = A.float() @ B_T.float().T
++    assert verify_output(C.float(), C_ref, atol=0.05, rtol=0.05)
++
++
++@pytest.mark.parametrize(
++    "M, N, K",
++    [
++        pytest.param(1024, 1024, 1024, id="1k"),
++        pytest.param(2048, 2048, 2048, id="2k", marks=pytest.mark.large_shape),
++    ],
++)
++def test_f16_gemm_benchmark(M, N, K):
++    """Benchmark BF16 GEMM throughput."""
++    _requires_rdna4()
++
++    torch.manual_seed(42)
++    launch_fn, _, _, _ = create_wmma_gemm_module(M, N, K, in_dtype="bf16", out_dtype="bf16")
++
++    A = torch.randn(M, K, dtype=torch.bfloat16, device="cuda") * 0.01
++    B_T = torch.randn(N, K, dtype=torch.bfloat16, device="cuda") * 0.01
++    C = torch.zeros(M, N, dtype=torch.bfloat16, device="cuda")
++
++    def run_kernel():
++        launch_fn(C, A, B_T, torch.cuda.current_stream())
++
++    _, avg_us = run_perftest(run_kernel, num_iters=20, num_warmup=3)
++
++    flops = 2 * M * N * K
++    tflops = flops / (avg_us / 1e6) / 1e12
++    logging.getLogger("flydsl").info(f"[f16_gemm] {M}x{N}x{K} bf16: {avg_us:.1f} us, {tflops:.2f} TFLOPS")
++
++    C_ref = A.float() @ B_T.float().T
++    assert verify_output(C.float(), C_ref, atol=0.1, rtol=0.1, msg=f"{M}x{N}x{K}")
++
++
++# ── FP8 Preshuffle GEMM ──────────────────────────────────────────────────────
++
++
++def _run_fp8_gemm(M, N, K, tile_m=32, tile_n=None, tile_k=32):
++    """Helper: quantize (per-token/per-channel), preshuffle B, compile, launch."""
++    launch_fn = compile_fp8_gemm(M=M, N=N, K=K, tile_m=tile_m, tile_n=tile_n, tile_k=tile_k)
++
++    A_f32 = torch.randn(M, K, device="cuda") * 0.1
++    B_f32 = torch.randn(K, N, device="cuda") * 0.1
++
++    A_fp8, scale_a = fp8_quantize_per_token(A_f32)
++    B_fp8, scale_b = fp8_quantize_per_channel(B_f32)
++
++    B_shuf = preshuffle_b_fp8(B_fp8)
++
++    C = torch.zeros(M, N, dtype=torch.bfloat16, device="cuda")
++    sa = scale_a.to(device="cuda", dtype=torch.float32).contiguous()
++    sb = scale_b.to(device="cuda", dtype=torch.float32).contiguous()
++
++    A_f32_view = A_fp8.view(torch.float32).contiguous()
++    B_shuf_f32 = B_shuf.view(torch.float32).contiguous()
++
++    launch_fn(C, A_f32_view, B_shuf_f32, sa, sb, torch.cuda.current_stream())
++    torch.cuda.synchronize()
++
++    C_ref = (A_fp8.float() * scale_a.unsqueeze(1)) @ (B_fp8.float() * scale_b.unsqueeze(0))
++    return C, C_ref
++
++
++@pytest.mark.parametrize(
++    "M, N, K",
++    [
++        pytest.param(32, 128, 128, id="32x128x128"),
++        pytest.param(32, 128, 256, id="32x128x256"),
++        pytest.param(32, 256, 256, id="32x256x256"),
++    ],
++)
++def test_fp8_gemm_correctness(M, N, K):
++    """Test FP8 preshuffle GEMM correctness."""
++    _requires_rdna4()
++    torch.manual_seed(42)
++
++    C, C_ref = _run_fp8_gemm(M, N, K)
++    assert verify_output(C.float(), C_ref.float(), atol=0.5, rtol=0.1)
++
++
++def test_fp8_preshuffle_b():
++    """Test preshuffle_b_fp8 produces correct layout."""
++    _requires_rdna4()
++
++    K, N = 64, 32
++    B = torch.arange(K * N, dtype=torch.uint8, device="cuda").view(torch.float8_e4m3fn).reshape(K, N)
++    B_shuf = preshuffle_b_fp8(B)
++    assert B_shuf.shape == (N // 16, K // 16, 2, 16, 8), f"Wrong shape: {B_shuf.shape}"
++
++
++def test_fp8_quantize():
++    """Test fp8_quantize_per_token roundtrip."""
++    _requires_rdna4()
++
++    x = torch.randn(64, 64, device="cuda")
++    x_fp8, scale = fp8_quantize_per_token(x)
++
++    assert x_fp8.dtype == torch.float8_e4m3fn
++    assert scale.shape == (64,)
++    assert (scale > 0).all()
++
++    x_roundtrip = x_fp8.float() * scale.unsqueeze(1)
++    rel_err = ((x - x_roundtrip).abs() / (x.abs() + 1e-6)).mean().item()
++    assert rel_err < 0.2, f"Mean relative roundtrip error too large: {rel_err}"

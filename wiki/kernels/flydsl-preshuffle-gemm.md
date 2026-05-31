@@ -15,7 +15,8 @@ tags:
 - bf16
 - fp8
 confidence: experimental
-reproducibility: snippet
+reproducibility: runnable
+artifact_dir: examples/flydsl-preshuffle-gemm
 kernel_types:
 - gemm
 languages:
@@ -220,6 +221,45 @@ FlyDSL is experimental and unverified against an official benchmark suite.
 |---|---|---|---|---|
 | MI300X | bf16 | 8192³ | % of 1307 TFLOPS peak | ~75% (compute-bound) |
 | MI300X | bf16 | 8192³ | B-path LDS bank conflicts | ~0 vs. naive staging |
+
+## Runnable example
+
+A runnable demonstration lives in
+[`examples/flydsl-preshuffle-gemm/`](../../examples/flydsl-preshuffle-gemm/).
+Because FlyDSL is not installed on the test box and targets CDNA MFMA, that
+directory ships **two** artifacts:
+
+- `04_preshuffle_gemm_flydsl.py` — the faithful FlyDSL reference snippet above
+  (layout transform + MFMA kernel), reference-only / not executed.
+- `preshuffle_gemm_rocwmma.cpp` — a **portable rocWMMA** GEMM that demonstrates
+  the *same* preshuffle idea (pre-permute `B` into fragment-contiguous order so
+  the in-kernel load is a flat copy) and **runs natively on gfx1201** (RDNA4
+  WMMA; also runs on CDNA MFMA unchanged). It builds two kernels — naive
+  row-major `B` vs. preshuffled `B` — and checks both against a CPU reference.
+
+```bash
+cd examples/flydsl-preshuffle-gemm
+./build.sh        # hipcc --offload-arch=gfx1201 -O3 -I/opt/rocm/include \
+                  #       preshuffle_gemm_rocwmma.cpp -o demo && ./demo
+```
+
+Expected output (captured on an RX 9070 XT / gfx1201, ROCm 7.2.3, rocWMMA 2.2.0):
+
+```
+Preshuffle GEMM demo (rocWMMA 16x16x16, fp16->fp32)  M=N=K=256
+Correctness:
+  row-major    max abs err = 0.0000  ->  PASS
+  preshuffled  max abs err = 0.0000  ->  PASS
+Timing (avg over 200 iters):
+  row-major    0.0102 ms  (3302.1 GFLOP/s)
+  preshuffled  0.0064 ms  (5254.8 GFLOP/s)
+
+RESULT: PASS
+```
+
+The preshuffled kernel reads each `B` fragment from a contiguous 16×16 block
+(`ldb = 16`) instead of striding across the full `K×N` matrix — the portable
+analogue of FlyDSL's `copy(Bsh.tile(...), sB.next())` flat path.
 
 ## See also
 

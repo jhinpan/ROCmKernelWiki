@@ -1,0 +1,2091 @@
+diff --git a/aiter/ops/triton/_triton_kernels/attention/pa_decode_sparse.py b/aiter/ops/triton/_triton_kernels/attention/pa_decode_sparse.py
+new file mode 100644
+index 0000000000..f403bf1021
+--- /dev/null
++++ b/aiter/ops/triton/_triton_kernels/attention/pa_decode_sparse.py
+@@ -0,0 +1,304 @@
++# SPDX-License-Identifier: MIT
++# Copyright (C) 2024-2026, Advanced Micro Devices, Inc. All rights reserved.
++
++"""Sparse paged-decode attention kernels (split-K + per-token paged indices).
++
++Two-kernel decomposition of a flash-decode whose K range for each token is a
++gathered subset of a unified KV pool:
++
++  ``_pa_decode_sparse``        : split-K main kernel. Grid (T, ceil(H/BLOCK_H),
++                                 KV_SPLITS). Each program owns one token, one
++                                 head-block, and one slice of the token's
++                                 sparse K range; writes pre-sink
++                                 (m, l, acc) partials.
++  ``_pa_decode_sparse_reduce`` : combines KV_SPLITS partials per (token, head)
++                                 via log-sum-exp, folds in the per-head
++                                 ``attn_sink`` as a virtual K, writes the
++                                 final output.
++
++Both kernels follow the ``tiles_per_segment`` pattern from aiter's
++``kernel_unified_attention_3d``: the split-axis grid dim ``KV_SPLITS`` is
++constexpr; ``tiles_per_segment`` is computed at runtime per token; trailing
++segments past the end exit early; the reduce derives ``act_num_segments``
++from ``kv_indptr`` and masks the stale partial-buffer slots out of its load.
++
++Caller contract:
++  unified_kv:       [total_pages, D] bf16/fp16  (page_size = 1)
++  kv_indices:       [total_indices] int32 — per-token slot lists, flat. ``-1``
++                    entries are skipped (sentinel for unused tail).
++  kv_indptr:        [N+1] int32 — true prefix sum (variable per-token len).
++  attn_sink:        [H] fp32 per-head learnable softmax-denom bias.
++"""
++
++import triton
++import triton.language as tl
++
++from aiter.ops.triton.utils._triton.kernel_repr import make_kernel_repr
++
++_pa_decode_sparse_repr = make_kernel_repr(
++    "_pa_decode_sparse",
++    [
++        "BLOCK_H",
++        "BLOCK_D",
++        "BLOCK_K",
++        "H",
++        "D",
++        "KV_SPLITS",
++    ],
++)
++
++
++@triton.jit(repr=_pa_decode_sparse_repr)
++def _pa_decode_sparse(
++    q_ptr,  # [N, H, D]
++    unified_kv_ptr,  # [total_pages, D]
++    kv_indices_ptr,  # [total_indices] int32
++    kv_indptr_ptr,  # [N+1] int32
++    m_partial_ptr,  # [N, KV_SPLITS, H_padded] fp32
++    l_partial_ptr,  # [N, KV_SPLITS, H_padded] fp32
++    acc_partial_ptr,  # [N, KV_SPLITS, H_padded, D] fp32
++    q_stride_t: tl.constexpr,
++    q_stride_h: tl.constexpr,
++    q_stride_d: tl.constexpr,
++    kv_stride_n: tl.constexpr,
++    kv_stride_d: tl.constexpr,
++    mp_stride_t: tl.constexpr,
++    mp_stride_k: tl.constexpr,
++    mp_stride_h: tl.constexpr,
++    lp_stride_t: tl.constexpr,
++    lp_stride_k: tl.constexpr,
++    lp_stride_h: tl.constexpr,
++    ap_stride_t: tl.constexpr,
++    ap_stride_k: tl.constexpr,
++    ap_stride_h: tl.constexpr,
++    ap_stride_d: tl.constexpr,
++    H: tl.constexpr,
++    D: tl.constexpr,
++    KV_SPLITS: tl.constexpr,
++    softmax_scale: tl.constexpr,
++    BLOCK_H: tl.constexpr,
++    BLOCK_D: tl.constexpr,
++    BLOCK_K: tl.constexpr,
++):
++    """3D split-K sparse paged-decode. Grid: (N, ceil(H/BLOCK_H), KV_SPLITS).
++
++    Each program owns one token, one head-block, and one slice of the token's
++    sparse K range. The attn_sink fold-in lives in the reduce kernel — splits
++    only emit (m_i, l_i, acc) in pre-sink form. ``BLOCK_H`` is widened so a
++    single head-block program can cover many heads, killing the MLA-style KV
++    re-fetch across head-block programs.
++    """
++    t = tl.program_id(0)
++    pid_h = tl.program_id(1)
++    pid_k = tl.program_id(2)
++
++    h_offs = pid_h * BLOCK_H + tl.arange(0, BLOCK_H)
++    d_offs = tl.arange(0, BLOCK_D)
++    h_mask = h_offs < H
++    d_mask = d_offs < D
++
++    q = tl.load(
++        q_ptr
++        + t * q_stride_t
++        + h_offs[:, None] * q_stride_h
++        + d_offs[None, :] * q_stride_d,
++        mask=h_mask[:, None] & d_mask[None, :],
++        other=0.0,
++    )
++
++    kv_start = tl.load(kv_indptr_ptr + t)
++    kv_end = tl.load(kv_indptr_ptr + t + 1)
++    kv_len = kv_end - kv_start
++
++    # aiter unified_attention 3d pattern: fixed grid axis (KV_SPLITS), runtime
++    # tiles_per_segment, early-return for trailing segments past the end.
++    tiles_per_segment = tl.cdiv(kv_len, KV_SPLITS * BLOCK_K)
++    if pid_k * tiles_per_segment * BLOCK_K >= kv_len:
++        return
++
++    num_tiles = tl.cdiv(kv_len, BLOCK_K)
++    tile_start = pid_k * tiles_per_segment
++    tile_end = tl.minimum((pid_k + 1) * tiles_per_segment, num_tiles)
++
++    neg_large = -3.4028234663852886e38
++    m_i = tl.full((BLOCK_H,), neg_large, dtype=tl.float32)
++    l_i = tl.zeros((BLOCK_H,), dtype=tl.float32)
++    acc = tl.zeros((BLOCK_H, BLOCK_D), dtype=tl.float32)
++
++    k_offs = tl.arange(0, BLOCK_K)
++    for j in tl.range(tile_start, tile_end, num_stages=2):
++        k_start = j * BLOCK_K
++        k_pos = k_start + k_offs
++        in_range = k_pos < kv_len
++        slot = tl.load(
++            kv_indices_ptr + kv_start + k_pos,
++            mask=in_range,
++            other=-1,
++        )
++        valid = in_range & (slot >= 0)
++
++        kv = tl.load(
++            unified_kv_ptr
++            + slot[:, None] * kv_stride_n
++            + d_offs[None, :] * kv_stride_d,
++            mask=valid[:, None] & d_mask[None, :],
++            other=0.0,
++        )
++
++        scores = tl.dot(q, tl.trans(kv)) * softmax_scale
++        scores = tl.where(h_mask[:, None] & valid[None, :], scores, neg_large)
++
++        m_block = tl.max(scores, axis=1)
++        m_new = tl.maximum(m_i, m_block)
++        alpha = tl.exp(m_i - m_new)
++        p = tl.exp(scores - m_new[:, None])
++        p = tl.where(h_mask[:, None] & valid[None, :], p, 0.0)
++        l_new = l_i * alpha + tl.sum(p, axis=1)
++
++        acc = acc * alpha[:, None] + tl.dot(p.to(kv.dtype), kv)
++        m_i = m_new
++        l_i = l_new
++
++    # Emit partials. The reduce reads (m, l, acc) per split and folds in the
++    # sink there, so we do *not* touch attn_sink here.
++    m_base = t * mp_stride_t + pid_k * mp_stride_k
++    tl.store(
++        m_partial_ptr + m_base + h_offs * mp_stride_h,
++        m_i,
++        mask=h_mask,
++    )
++    l_base = t * lp_stride_t + pid_k * lp_stride_k
++    tl.store(
++        l_partial_ptr + l_base + h_offs * lp_stride_h,
++        l_i,
++        mask=h_mask,
++    )
++    a_base = t * ap_stride_t + pid_k * ap_stride_k
++    tl.store(
++        acc_partial_ptr
++        + a_base
++        + h_offs[:, None] * ap_stride_h
++        + d_offs[None, :] * ap_stride_d,
++        acc,
++        mask=h_mask[:, None] & d_mask[None, :],
++    )
++
++
++_pa_decode_sparse_reduce_repr = make_kernel_repr(
++    "_pa_decode_sparse_reduce",
++    [
++        "BLOCK_H",
++        "BLOCK_D",
++        "BLOCK_K",
++        "H",
++        "D",
++        "KV_SPLITS",
++    ],
++)
++
++
++@triton.jit(repr=_pa_decode_sparse_reduce_repr)
++def _pa_decode_sparse_reduce(
++    m_partial_ptr,  # [N, KV_SPLITS, H_padded] fp32
++    l_partial_ptr,  # [N, KV_SPLITS, H_padded] fp32
++    acc_partial_ptr,  # [N, KV_SPLITS, H_padded, D] fp32
++    attn_sink_ptr,  # [H]
++    kv_indptr_ptr,  # [N+1] int32 — used to derive per-token kv_len
++    out_ptr,  # [N, H, D]
++    mp_stride_t: tl.constexpr,
++    mp_stride_k: tl.constexpr,
++    mp_stride_h: tl.constexpr,
++    lp_stride_t: tl.constexpr,
++    lp_stride_k: tl.constexpr,
++    lp_stride_h: tl.constexpr,
++    ap_stride_t: tl.constexpr,
++    ap_stride_k: tl.constexpr,
++    ap_stride_h: tl.constexpr,
++    ap_stride_d: tl.constexpr,
++    out_stride_t: tl.constexpr,
++    out_stride_h: tl.constexpr,
++    out_stride_d: tl.constexpr,
++    H: tl.constexpr,
++    D: tl.constexpr,
++    KV_SPLITS: tl.constexpr,
++    BLOCK_H: tl.constexpr,
++    BLOCK_D: tl.constexpr,
++    BLOCK_K: tl.constexpr,
++):
++    """Combine KV_SPLITS partials, fold in attn_sink, write final output.
++
++    The split kernel uses aiter's tiles_per_segment pattern and early-returns
++    for trailing splits whose tile range is past kv_len. Their slot of the
++    partial buffer is therefore stale (torch.empty contents). We derive
++    ``act_num_segments = cdiv(kv_len, tiles_per_segment * BLOCK_K)`` and mask
++    those stale slots out of the load."""
++    t = tl.program_id(0)
++    pid_h = tl.program_id(1)
++
++    h_offs = pid_h * BLOCK_H + tl.arange(0, BLOCK_H)
++    d_offs = tl.arange(0, BLOCK_D)
++    k_offs = tl.arange(0, KV_SPLITS)
++    h_mask = h_offs < H
++    d_mask = d_offs < D
++
++    kv_start = tl.load(kv_indptr_ptr + t)
++    kv_end = tl.load(kv_indptr_ptr + t + 1)
++    kv_len = kv_end - kv_start
++    tiles_per_segment = tl.cdiv(kv_len, KV_SPLITS * BLOCK_K)
++    # Only the first ``act_num_segments`` slots of the partial buffer were
++    # actually written by the split kernel; the rest are stale.
++    act_num_segments = tl.cdiv(kv_len, tiles_per_segment * BLOCK_K)
++    segm_mask = k_offs < act_num_segments
++
++    neg_large = -3.4028234663852886e38
++
++    m_p = tl.load(
++        m_partial_ptr
++        + t * mp_stride_t
++        + k_offs[:, None] * mp_stride_k
++        + h_offs[None, :] * mp_stride_h,
++        mask=segm_mask[:, None] & h_mask[None, :],
++        other=neg_large,
++    )  # [KV_SPLITS, BLOCK_H]
++    l_p = tl.load(
++        l_partial_ptr
++        + t * lp_stride_t
++        + k_offs[:, None] * lp_stride_k
++        + h_offs[None, :] * lp_stride_h,
++        mask=segm_mask[:, None] & h_mask[None, :],
++        other=0.0,
++    )  # [KV_SPLITS, BLOCK_H]
++    a_p = tl.load(
++        acc_partial_ptr
++        + t * ap_stride_t
++        + k_offs[:, None, None] * ap_stride_k
++        + h_offs[None, :, None] * ap_stride_h
++        + d_offs[None, None, :] * ap_stride_d,
++        mask=segm_mask[:, None, None] & h_mask[None, :, None] & d_mask[None, None, :],
++        other=0.0,
++    )  # [KV_SPLITS, BLOCK_H, BLOCK_D]
++
++    # Pre-sink combine across splits.
++    m_max = tl.max(m_p, axis=0)  # [BLOCK_H]
++    alpha_split = tl.exp(m_p - m_max[None, :])  # [KV_SPLITS, BLOCK_H]
++    l_combined = tl.sum(l_p * alpha_split, axis=0)  # [BLOCK_H]
++    acc_combined = tl.sum(a_p * alpha_split[:, :, None], axis=0)  # [BLOCK_H, BLOCK_D]
++
++    # Fold attn_sink as a virtual K of weight 1.
++    sink = tl.load(attn_sink_ptr + h_offs, mask=h_mask, other=neg_large).to(tl.float32)
++    m_final = tl.maximum(m_max, sink)
++    alpha_kv = tl.exp(m_max - m_final)
++    alpha_sink = tl.exp(sink - m_final)
++    l_final = l_combined * alpha_kv + alpha_sink
++    acc_final = acc_combined * alpha_kv[:, None]
++
++    denom = tl.maximum(l_final, 1.0e-30)
++    out = tl.where(l_final[:, None] > 0.0, acc_final / denom[:, None], 0.0)
++    tl.store(
++        out_ptr
++        + t * out_stride_t
++        + h_offs[:, None] * out_stride_h
++        + d_offs[None, :] * out_stride_d,
++        out.to(out_ptr.dtype.element_ty),
++        mask=h_mask[:, None] & d_mask[None, :],
++    )
+diff --git a/aiter/ops/triton/_triton_kernels/fusions/__init__.py b/aiter/ops/triton/_triton_kernels/fusions/__init__.py
+index 12bb11c05b..9f2c7fe579 100644
+--- a/aiter/ops/triton/_triton_kernels/fusions/__init__.py
++++ b/aiter/ops/triton/_triton_kernels/fusions/__init__.py
+@@ -6,6 +6,8 @@
+     _mhc_fused_split_kernel,
+     _mhc_reduce_apply_kernel,
+     _mhc_post_kernel,
++    _mhc_post_pre_split_kernel,
++    _mhc_post_pre_reduce_apply_kernel,
+ )
+ 
+ __all__ = [
+@@ -13,4 +15,6 @@
+     "_mhc_fused_split_kernel",
+     "_mhc_reduce_apply_kernel",
+     "_mhc_post_kernel",
++    "_mhc_post_pre_split_kernel",
++    "_mhc_post_pre_reduce_apply_kernel",
+ ]
+diff --git a/aiter/ops/triton/_triton_kernels/fusions/mhc.py b/aiter/ops/triton/_triton_kernels/fusions/mhc.py
+index c56f4c5a07..9eb7d80147 100644
+--- a/aiter/ops/triton/_triton_kernels/fusions/mhc.py
++++ b/aiter/ops/triton/_triton_kernels/fusions/mhc.py
+@@ -5,6 +5,7 @@
+ 
+ import triton
+ import triton.language as tl
++from aiter.ops.triton.utils._triton.kernel_repr import make_kernel_repr
+ 
+ 
+ @triton.jit
+@@ -752,3 +753,493 @@ def _mhc_post_kernel(
+             mask=m_mask[:, None, None] & c_mask[None, None, :],
+             cache_modifier=".cs",
+         )
++
++
++_mhc_post_pre_split_kernel_repr = make_kernel_repr(
++    "_mhc_post_pre_split_kernel",
++    [
++        "n",
++        "C",
++        "stride_phi_k",
++        "stride_phi_n",
++        "BLOCK_M",
++        "BLOCK_C",
++        "N_TOTAL_POW2",
++    ],
++)
++
++
++@triton.jit(repr=_mhc_post_pre_split_kernel_repr)
++def _mhc_post_pre_split_kernel(
++    # mhc_post inputs
++    layer_input_ptr,  # (M, C)        x.dtype  - attn/ffn output
++    residual_in_ptr,  # (M, n, C)     x.dtype  - prev-layer multi-stream residual
++    post_mix_ptr,  # (M, n)        fp32     - h_post from preceding mhc_pre
++    comb_mix_ptr,  # (M, n, n)     fp32     - h_res from preceding mhc_pre
++    # mhc_post output (also the next mhc_pre's flattened x input)
++    residual_out_ptr,  # (M, n, C)     x.dtype  - new residual; consumed by next layer's hc_post
++    # next mhc_pre's split-K partials
++    phi_ptr,  # (n*C, N=2n+n^2) x.dtype  - projection matrix, cols [pre|post|res]
++    acc_ptr,  # (NUM_KSPLIT=cdiv(C, BLOCK_C), M, N) fp32 - GEMM partials
++    acc_sq_ptr,  # (NUM_KSPLIT, M) fp32 - sum-of-squares partials
++    M,
++    N: tl.constexpr,  # = 2*n + n_squared
++    n: tl.constexpr,
++    C: tl.constexpr,
++    stride_x_m,
++    stride_x_c,
++    stride_resin_m,
++    stride_resin_n,
++    stride_resin_c,
++    stride_post_m,
++    stride_post_n,
++    stride_comb_m,
++    stride_comb_src,
++    stride_comb_dst,
++    stride_resout_m,
++    stride_resout_n,
++    stride_resout_c,
++    stride_phi_k: tl.constexpr,
++    stride_phi_n: tl.constexpr,
++    stride_acc_k,
++    stride_acc_m,
++    stride_acc_n,
++    stride_acc_sq_k,
++    stride_acc_sq_m,
++    BLOCK_M: tl.constexpr,
++    BLOCK_C: tl.constexpr,
++    N_TOTAL_POW2: tl.constexpr,
++):
++    """Fused mhc_post + (next) mhc_pre split-K kernel.
++
++    Per (M-tile, C-tile) — n streams unrolled via tl.static_range — this CTA:
++      1. Computes the new mHC residual stream (mhc_post step):
++             residual_out[m, j, c] = post_mix[m, j] * layer_input[m, c]
++                                   + sum_h comb_mix[m, h, j] * residual_in[m, h, c]
++      2. With that residual tile still live in registers, contributes the next
++         mhc_pre's split-K GEMM partials over the same C-tile, treating the
++         residual as the next pre's flattened x = (M, n*C):
++             acc[pid_c, m, :N]    += sum_j x_j(:, c_block:+BLOCK_C)
++                                          @ phi[j*C+c_block:+BLOCK_C, :N]
++             acc_sq[pid_c, m]     += sum_j ||x_j(:, c_block:+BLOCK_C)||^2
++         where ``x_j`` is the j-th stream of residual_out (= the "h" index of
++         the flattened pre input ``x[m, h*C+c]``).
++
++    The C-tile axis IS the pre's split-K axis: each CTA owns one of
++    ``cdiv(C, BLOCK_C)`` non-overlapping K-splits of the next-pre GEMM. The
++    remaining apply / RMS / Sinkhorn work is finished by a separate launch
++    of ``_mhc_reduce_apply_kernel``, which re-reads ``residual_out`` as its
++    ``x`` operand for the apply-pre step.
++
++    The post output (``residual_out``) is still written to HBM because the
++    next layer's ``hc_post`` consumes it as its own ``residual_in``. The
++    HBM saving vs the unfused chain comes from not re-reading it as the
++    next-pre's GEMM operand.
++
++    Grid: ``(cdiv(M, BLOCK_M), cdiv(C, BLOCK_C))``.
++    """
++    pid_m = tl.program_id(0)
++    pid_c = tl.program_id(1)
++
++    rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
++    rc = pid_c * BLOCK_C + tl.arange(0, BLOCK_C)
++    rn = tl.arange(0, N_TOTAL_POW2)
++    i_n = tl.arange(0, n)
++
++    m_mask = rm < M
++    c_mask = rc < C
++
++    out_dtype = residual_out_ptr.dtype.element_ty
++
++    # --- 1) Load small post-step operands once. ---
++    post_mix_tile = tl.load(
++        post_mix_ptr + rm[:, None] * stride_post_m + i_n[None, :] * stride_post_n,
++        mask=m_mask[:, None],
++        other=0.0,
++    )  # (BLOCK_M, n) fp32
++
++    # comb_mix as a single (BLOCK_M, n_src, n_dst) 3D tile.
++    comb_3d = tl.load(
++        comb_mix_ptr
++        + rm[:, None, None] * stride_comb_m
++        + i_n[None, :, None] * stride_comb_src
++        + i_n[None, None, :] * stride_comb_dst,
++        mask=m_mask[:, None, None],
++        other=0.0,
++    )  # (BLOCK_M, n_src, n_dst) fp32
++
++    x_tile = tl.load(
++        layer_input_ptr + rm[:, None] * stride_x_m + rc[None, :] * stride_x_c,
++        mask=m_mask[:, None] & c_mask[None, :],
++        other=0.0,
++        cache_modifier=".cg",
++    )  # (BLOCK_M, BLOCK_C) x.dtype
++
++    # All n source streams of residual_in as one (BLOCK_M, n_src, BLOCK_C) tile.
++    res_3d = tl.load(
++        residual_in_ptr
++        + rm[:, None, None] * stride_resin_m
++        + i_n[None, :, None] * stride_resin_n
++        + rc[None, None, :] * stride_resin_c,
++        mask=m_mask[:, None, None] & c_mask[None, None, :],
++        other=0.0,
++        cache_modifier=".cg",
++    )  # (BLOCK_M, n_src, BLOCK_C) x.dtype
++
++    # --- 2) Post step: build (BLOCK_M, n_dst, BLOCK_C) residual_out via tl.sum.
++    # Conceptually: out[m, j, c] = post[m, j] * x[m, c]
++    #                            + sum_h_src comb[m, h_src, j] * res[m, h_src, c].
++    # The 4D outer product `comb[:, :, :, None] * res[:, :, None, :]` of shape
++    # (BLOCK_M, n_src, n_dst, BLOCK_C) is folded into tl.sum(axis=1); Triton
++    # fuses the broadcast + sum into a register-resident reduction without
++    # materializing the full 4D intermediate. Measured ~25-40% faster than the
++    # manual static_range(n) per-h load+accumulate at M ∈ {1..256}, hc=4,
++    # C=4096.
++    out_tile = post_mix_tile[:, :, None] * x_tile[:, None, :].to(tl.float32)
++    out_tile += tl.sum(
++        comb_3d[:, :, :, None] * res_3d[:, :, None, :].to(tl.float32),
++        axis=1,
++    )
++
++    # Store residual_out for next layer's hc_post (separate from the dot below).
++    tl.store(
++        residual_out_ptr
++        + rm[:, None, None] * stride_resout_m
++        + i_n[None, :, None] * stride_resout_n
++        + rc[None, None, :] * stride_resout_c,
++        out_tile.to(out_dtype),
++        mask=m_mask[:, None, None] & c_mask[None, None, :],
++        cache_modifier=".cs",
++    )
++
++    # --- 3) Next-pre split-K partial GEMM + sqrsum, sharing out_tile in registers. ---
++    # Reshape (BLOCK_M, n, BLOCK_C) → (BLOCK_M, n*BLOCK_C) as the next pre's
++    # flattened x for this K-split. The matching phi rows are (n, BLOCK_C, N)
++    # tiled at offsets ``h*C + c`` for h in [0, n), c in [c_block, c_block+BLOCK_C);
++    # we 3D-load and reshape to (n*BLOCK_C, N_TOTAL_POW2) so a single tl.dot
++    # handles all n streams' contribution to this K-split.
++    out_flat = tl.reshape(out_tile, [BLOCK_M, n * BLOCK_C])
++    out_flat_cast = out_flat.to(out_dtype)
++
++    k_offset_2d = i_n[:, None] * C + rc[None, :]  # (n, BLOCK_C)
++    phi_3d = tl.load(
++        phi_ptr
++        + k_offset_2d[:, :, None] * stride_phi_k
++        + rn[None, None, :] * stride_phi_n,
++        mask=c_mask[None, :, None] & (rn[None, None, :] < N),
++        other=0.0,
++    ).to(
++        out_dtype
++    )  # (n, BLOCK_C, N_TOTAL_POW2) phi.dtype
++    phi_flat = tl.reshape(phi_3d, [n * BLOCK_C, N_TOTAL_POW2])
++
++    acc_gemm = tl.dot(out_flat_cast, phi_flat)
++    acc_sq = tl.sum(out_flat * out_flat, axis=1)
++
++    # --- 4) Write split-K partials for the reduce-apply kernel. ---
++    tl.store(
++        acc_ptr
++        + pid_c * stride_acc_k
++        + rm[:, None] * stride_acc_m
++        + rn[None, :] * stride_acc_n,
++        acc_gemm,
++        mask=m_mask[:, None] & (rn[None, :] < N),
++    )
++    tl.store(
++        acc_sq_ptr + pid_c * stride_acc_sq_k + rm * stride_acc_sq_m,
++        acc_sq,
++        mask=m_mask,
++    )
++
++
++@triton.jit
++def _mhc_post_pre_reduce_apply_res_block(
++    acc_res,  # (BLOCK_M, N_POW2_RES) fp32, already reduced over ks
++    rsigma,  # (BLOCK_M,) fp32
++    rm,
++    rn_res_local,
++    rn_res_global,
++    alpha_res,
++    bias_ptr,
++    h_res_ptr,
++    M,
++    n: tl.constexpr,
++    n_squared: tl.constexpr,
++    N_POW2_RES: tl.constexpr,
++    stride_hr_m,
++    stride_hr_n,
++    BLOCK_M: tl.constexpr,
++    NUM_SINKHORN_ITERS: tl.constexpr,
++):
++    """Compute h_res = rsigma * alpha_res * acc_res + bias_res, optionally run
++    log-domain Sinkhorn-Knopp, and store to ``h_res_ptr`` (flattened (M, n²)).
++
++    Called from the dedicated res-stream CTA (``pid_c == NUM_C_BLOCKS + 1``)
++    in ``_mhc_reduce_apply_kernel``.
++    """
++    bias_res = tl.load(
++        bias_ptr + rn_res_global,
++        mask=rn_res_local < n_squared,
++        other=0.0,
++    ).to(tl.float32)
++    h_res = rsigma[:, None] * alpha_res * acc_res + bias_res[None, :]
++
++    if NUM_SINKHORN_ITERS > 0:
++        LOG2_E: tl.constexpr = 1.4426950408889634
++
++        log2_A = tl.reshape(h_res, (BLOCK_M, n, n)) * LOG2_E
++        log2_u = tl.zeros((BLOCK_M, n), dtype=tl.float32)
++        log2_v = tl.zeros((BLOCK_M, n), dtype=tl.float32)
++
++        for _ in range(NUM_SINKHORN_ITERS):
++            scaled_row = log2_A + log2_v[:, None, :]
++            row_max = tl.max(scaled_row, axis=2)
++            exp_shifted = tl.exp2(scaled_row - row_max[:, :, None])
++            row_sum_exp = tl.sum(exp_shifted, axis=2)
++            log2_row_sums = row_max + tl.log2(row_sum_exp)
++            log2_u = -log2_row_sums
++
++            scaled_col = log2_A + log2_u[:, :, None]
++            col_max = tl.max(scaled_col, axis=1)
++            exp_shifted = tl.exp2(scaled_col - col_max[:, None, :])
++            col_sum_exp = tl.sum(exp_shifted, axis=1)
++            log2_col_sums = col_max + tl.log2(col_sum_exp)
++            log2_v = -log2_col_sums
++
++        log2_P = log2_A + log2_u[:, :, None] + log2_v[:, None, :]
++        P = tl.exp2(log2_P)
++        out_res = tl.reshape(P, (BLOCK_M, n_squared))
++    else:
++        out_res = h_res
++
++    tl.store(
++        h_res_ptr + rm[:, None] * stride_hr_m + rn_res_local[None, :] * stride_hr_n,
++        out_res,
++        mask=(rm[:, None] < M) & (rn_res_local[None, :] < n_squared),
++    )
++
++
++@triton.jit
++def _mhc_post_pre_reduce_apply_kernel(
++    acc_ptr,  # Unified split-K partials: (NUM_KSPLIT, M, n + n + n_squared), layout [pre | post | res]
++    acc_sq_ptr,  # Sum-of-squares partials: (NUM_KSPLIT, M)
++    alpha_ptr,  # (3,) fp32 — [alpha_pre, alpha_post, alpha_res]
++    bias_ptr,  # (n + n + n_squared,) fp32
++    x_ptr,  # (M, n*C)
++    h_post_ptr,  # (M, n) — written by the post CTA
++    h_res_ptr,  # (M, n*n) — written by the res CTA (flat n_squared view)
++    layer_input_ptr,  # (M, C) in x.dtype
++    M,
++    K: tl.constexpr,
++    n: tl.constexpr,
++    n_squared: tl.constexpr,
++    C: tl.constexpr,
++    eps: tl.constexpr,
++    hc_pre_eps: tl.constexpr,
++    hc_post_mult_value: tl.constexpr,
++    stride_acc_k,
++    stride_acc_m,
++    stride_acc_n,
++    stride_acc_sq_k,
++    stride_acc_sq_m,
++    stride_xm,
++    stride_xk,
++    stride_hp_m,
++    stride_hp_n,
++    stride_hr_m,
++    stride_hr_n,
++    stride_li_m,
++    stride_li_c,
++    BLOCK_M: tl.constexpr,
++    BLOCK_C: tl.constexpr,
++    N_POW2: tl.constexpr,
++    N_POW2_RES: tl.constexpr,
++    ACTUAL_KSPLIT: tl.constexpr,
++    KSPLIT_POW2: tl.constexpr,
++    BLOCK_M_POST_RES: tl.constexpr,
++    NUM_SINKHORN_ITERS: tl.constexpr,
++):
++    """
++    Reduce-and-apply kernel for the split-K mHC pipeline (Eq 15-19 + apply).
++
++    Grid: ``(cdiv(M, BLOCK_M), cdiv(C, BLOCK_C) + 2)``. For each ``pid_m``:
++
++    - ``pid_c <  NUM_C_BLOCKS``  : pre reduce + RMS + apply-pre on this BLOCK_C
++                                   slice. Writes ``layer_input[:, rc]``.
++    - ``pid_c == NUM_C_BLOCKS``  : post stream only (``hc_post_mult_value *
++                                   sigmoid``). Writes ``out[:, :n]``.
++    - ``pid_c == NUM_C_BLOCKS+1``: res stream + log-domain Sinkhorn (when
++                                   NUM_SINKHORN_ITERS > 0). Writes
++                                   ``out[:, n:n+n_squared]``.
++
++    The three branches share only ``rsigma`` (which each CTA recomputes from
++    ``acc_sq``). Compared to the earlier layout where the post and res CTAs
++    were piggybacked onto ``pid_c == 0`` / ``pid_c == RES_PID_C`` and did
++    apply-pre work on top, these dedicated CTAs do **only** their stream's
++    activation — so the 20-iter Sinkhorn on the res CTA runs in parallel with
++    apply-pre on the other ``NUM_C_BLOCKS`` CTAs rather than serializing
++    behind it.
++
++    Sinkhorn requires ``n_squared`` to be a power of two; the wrapper enforces
++    this when ``NUM_SINKHORN_ITERS > 0``.
++    """
++    # pid_m = tl.program_id(0)
++    # pid_c = tl.program_id(1)
++    pid = tl.program_id(0)
++
++    NUM_C_BLOCKS = tl.cdiv(C, BLOCK_C)
++    NUM_M_BLOCKS = tl.cdiv(M, BLOCK_M)
++    NUM_M_BLOCKS_POST_RES = tl.cdiv(M, BLOCK_M_POST_RES)
++
++    K_INV: tl.constexpr = 1.0 / K
++    # POST_PID == NUM_C_BLOCKS, RES_PID == NUM_C_BLOCKS + 1 (inlined below to
++    # sidestep Triton's constexpr-arithmetic restriction on `: tl.constexpr =`
++    # binding sites).
++
++    ks_offs = tl.arange(0, KSPLIT_POW2)
++    if KSPLIT_POW2 != ACTUAL_KSPLIT:
++        ks_mask = ks_offs < ACTUAL_KSPLIT
++    else:
++        ks_mask = tl.full((1,), 1, dtype=tl.int1)
++
++    if pid < NUM_M_BLOCKS * NUM_C_BLOCKS:
++        # ---- Apply-pre branch ----
++        pid_m = pid // NUM_C_BLOCKS
++        pid_c = pid % NUM_C_BLOCKS
++        rc = pid_c * BLOCK_C + tl.arange(0, BLOCK_C)
++        m_offs = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
++        m_mask = m_offs < M
++        acc_sq = tl.load(
++            acc_sq_ptr
++            + ks_offs[:, None] * stride_acc_sq_k
++            + m_offs[None, :] * stride_acc_sq_m,
++            mask=ks_mask[:, None] & m_mask[None, :],
++            other=0.0,
++        )
++        acc_sq = tl.sum(acc_sq, 0)
++        rsigma = tl.math.rsqrt((acc_sq * K_INV) + eps)
++
++        rn_pre = tl.arange(0, N_POW2)
++
++        acc_pre = tl.load(
++            acc_ptr
++            + ks_offs[:, None, None] * stride_acc_k
++            + m_offs[None, :, None] * stride_acc_m
++            + rn_pre[None, None, :] * stride_acc_n,
++            mask=ks_mask[:, None, None]
++            & m_mask[None, :, None]
++            & (rn_pre[None, None, :] < n),
++            other=0.0,
++        )
++        acc_pre = tl.sum(acc_pre, 0)
++
++        alpha_pre = tl.load(alpha_ptr + 0)
++        bias_pre = tl.load(bias_ptr + rn_pre, mask=rn_pre < n, other=0.0).to(tl.float32)
++        h_pre = rsigma[:, None] * alpha_pre * acc_pre + bias_pre[None, :]
++        pre_mix_2d = tl.sigmoid(h_pre) + hc_pre_eps
++
++        _mhc_apply_pre_mix_tile(
++            x_ptr,
++            layer_input_ptr,
++            pre_mix_2d,
++            m_offs,
++            rc,
++            rn_pre,
++            M,
++            C,
++            n,
++            stride_xm,
++            stride_xk,
++            stride_li_m,
++            stride_li_c,
++        )
++    elif pid < NUM_M_BLOCKS * NUM_C_BLOCKS + NUM_M_BLOCKS_POST_RES:
++        pid = pid - NUM_M_BLOCKS * NUM_C_BLOCKS
++        m_offs_post_res = pid * BLOCK_M_POST_RES + tl.arange(0, BLOCK_M_POST_RES)
++        m_mask_post_res = m_offs_post_res < M
++        acc_sq_post_res = tl.load(
++            acc_sq_ptr
++            + ks_offs[:, None] * stride_acc_sq_k
++            + m_offs_post_res[None, :] * stride_acc_sq_m,
++            mask=m_mask_post_res,
++            other=0.0,
++        )
++        acc_sq_post_res = tl.sum(acc_sq_post_res, 0)
++        rsigma_post_res = tl.math.rsqrt((acc_sq_post_res * K_INV) + eps)
++        # ---- Post stream branch (pid_c == NUM_C_BLOCKS) ----
++        rn_post_local = tl.arange(0, N_POW2)
++        rn_post_global = n + rn_post_local
++
++        acc_post = tl.load(
++            acc_ptr
++            + ks_offs[:, None, None] * stride_acc_k
++            + m_offs_post_res[None, :, None] * stride_acc_m
++            + rn_post_global[None, None, :] * stride_acc_n,
++            mask=ks_mask[:, None, None]
++            & m_mask_post_res[None, :, None]
++            & (rn_post_local[None, None, :] < n),
++            other=0.0,
++        )
++        acc_post = tl.sum(acc_post, 0)
++
++        alpha_post = tl.load(alpha_ptr + 1)
++        bias_post = tl.load(
++            bias_ptr + rn_post_global, mask=rn_post_local < n, other=0.0
++        ).to(tl.float32)
++        h_post = rsigma_post_res[:, None] * alpha_post * acc_post + bias_post[None, :]
++        out_post = tl.sigmoid(h_post) * hc_post_mult_value
++        tl.store(
++            h_post_ptr
++            + m_offs_post_res[:, None] * stride_hp_m
++            + rn_post_local[None, :] * stride_hp_n,
++            out_post,
++            mask=m_mask_post_res[:, None] & (rn_post_local[None, :] < n),
++        )
++    else:
++        pid = pid - NUM_M_BLOCKS * NUM_C_BLOCKS - NUM_M_BLOCKS_POST_RES
++        m_offs_post_res = pid * BLOCK_M_POST_RES + tl.arange(0, BLOCK_M_POST_RES)
++        m_mask_post_res = m_offs_post_res < M
++        acc_sq_post_res = tl.load(
++            acc_sq_ptr
++            + ks_offs[:, None] * stride_acc_sq_k
++            + m_offs_post_res[None, :] * stride_acc_sq_m,
++            mask=m_mask_post_res,
++            other=0.0,
++        )
++        acc_sq_post_res = tl.sum(acc_sq_post_res, 0)
++        rsigma_post_res = tl.math.rsqrt((acc_sq_post_res * K_INV) + eps)
++        # ---- Res stream + Sinkhorn branch (pid_c == NUM_C_BLOCKS + 1) ----
++        rn_res_local = tl.arange(0, N_POW2_RES)
++        rn_res_global = 2 * n + rn_res_local
++
++        acc_res = tl.load(
++            acc_ptr
++            + ks_offs[:, None, None] * stride_acc_k
++            + m_offs_post_res[None, :, None] * stride_acc_m
++            + rn_res_global[None, None, :] * stride_acc_n,
++            mask=ks_mask[:, None, None]
++            & m_mask_post_res[None, :, None]
++            & (rn_res_local[None, None, :] < n_squared),
++            other=0.0,
++        )
++        acc_res = tl.sum(acc_res, 0)
++        alpha_res = tl.load(alpha_ptr + 2)
++
++        _mhc_post_pre_reduce_apply_res_block(
++            acc_res,
++            rsigma_post_res,
++            m_offs_post_res,
++            rn_res_local,
++            rn_res_global,
++            alpha_res,
++            bias_ptr,
++            h_res_ptr,
++            M,
++            n,
++            n_squared,
++            N_POW2_RES,
++            stride_hr_m,
++            stride_hr_n,
++            BLOCK_M_POST_RES,
++            NUM_SINKHORN_ITERS,
++        )
+diff --git a/aiter/ops/triton/attention/pa_decode_sparse.py b/aiter/ops/triton/attention/pa_decode_sparse.py
+new file mode 100644
+index 0000000000..b423932d15
+--- /dev/null
++++ b/aiter/ops/triton/attention/pa_decode_sparse.py
+@@ -0,0 +1,192 @@
++# SPDX-License-Identifier: MIT
++# Copyright (C) 2024-2026, Advanced Micro Devices, Inc. All rights reserved.
++
++"""Sparse paged-decode attention over a unified KV pool with per-token paged
++indices. See ``_triton_kernels/attention/pa_decode_sparse.py`` for the
++kernels' caller contract.
++
++This module exposes ``pa_decode_sparse`` — a 3D split-K + widened-BLOCK_H
+++ pipelined-K-loop variant suitable for sparse decode (e.g. V4 top-k gather)
++where each token's K range is an unordered subset of a unified KV pool.
++"""
++
++from typing import Optional
++
++import torch
++import triton
++
++from aiter.ops.triton._triton_kernels.attention.pa_decode_sparse import (
++    _pa_decode_sparse,
++    _pa_decode_sparse_reduce,
++)
++from aiter.ops.triton.utils.logger import AiterTritonLogger
++
++_LOGGER = AiterTritonLogger()
++
++
++def pa_decode_sparse(
++    q: torch.Tensor,
++    unified_kv: torch.Tensor,
++    kv_indices: torch.Tensor,
++    kv_indptr: torch.Tensor,
++    attn_sink: torch.Tensor,
++    softmax_scale: float,
++    block_h: Optional[int] = None,
++    kv_splits: Optional[int] = None,
++) -> torch.Tensor:
++    """Sparse paged-decode attention with split-K + widened BLOCK_H.
++
++    Args:
++        q: ``[N, H, D]`` decode queries, bf16/fp16.
++        unified_kv: ``[total_pages, D]`` shared KV pool (page_size=1), same dtype as ``q``.
++        kv_indices: ``[total_indices]`` int32 — per-token slot lists, flat.
++            Per-token entries live in ``kv_indices[kv_indptr[t] : kv_indptr[t+1]]``.
++            ``-1`` entries are skipped (sentinel for unused tail).
++        kv_indptr: ``[N+1]`` int32 — true prefix sum.
++        attn_sink: ``[H]`` per-head learnable softmax-denom bias (fp32).
++        softmax_scale: scalar softmax scale.
++        block_h: override ``BLOCK_H`` for the split kernel. Default picks
++            ``next_pow2(min(H, 64))``, rounded up to the AMD MFMA min tile (16).
++        kv_splits: override ``KV_SPLITS`` for the split-K grid axis. Default
++            auto-infers to fill ~512 total CTAs while capping below the number
++            of K-blocks, then rounds up to a power of 2.
++        num_stages: software-pipeline depth of the K loop (default 2).
++
++    Returns:
++        ``[N, H, D]`` attention output, same dtype as ``q``.
++
++    Optimizations targeted:
++      (1) Wider ``BLOCK_H`` so all heads of a token are handled by one CTA →
++          eliminates MLA-style KV re-fetch across head-block programs.
++      (2) ``num_stages`` on the K loop pipelines KV gather behind the dot.
++      (3) Split the K dimension across CTAs via a third grid axis →
++          fixes grid undersubscription on long-context decode.
++    """
++    if not q.is_cuda:
++        raise RuntimeError("pa_decode_sparse requires CUDA/HIP tensors")
++    if q.dtype not in (torch.bfloat16, torch.float16):
++        raise RuntimeError(f"pa_decode_sparse expects fp16/bf16 q, got {q.dtype}")
++    if unified_kv.dtype != q.dtype:
++        raise RuntimeError(
++            f"unified_kv dtype mismatch: kv={unified_kv.dtype}, q={q.dtype}"
++        )
++
++    T, H, D = q.shape
++    _LOGGER.info(
++        f"PA_DECODE_SPARSE T={T} H={H} D={D} " f"total_indices={kv_indices.shape[0]}"
++    )
++
++    out = torch.empty_like(q)
++    kv_indices = kv_indices.to(torch.int32).contiguous()
++    kv_indptr = kv_indptr.to(torch.int32).contiguous()
++
++    if block_h is None:
++        # Default: one CTA per token (kills the H/BLOCK_H KV duplication).
++        # If H is too large to fit a single tile, halve until it does.
++        block_h = triton.next_power_of_2(min(H, 64))
++    else:
++        block_h = triton.next_power_of_2(block_h)
++    block_h = max(block_h, 16)  # AMD MFMA min tile
++
++    n_head_blocks = triton.cdiv(H, block_h)
++    h_padded = n_head_blocks * block_h
++    block_d = triton.next_power_of_2(D)
++    block_k = 16 if D >= 256 else 32
++    num_stages = 2
++    attn_num_warps = 4
++    waves_per_eu = 0
++    reduce_num_warps = 4
++
++    # Infer KV_SPLITS from inputs when caller doesn't override.
++    # Fill ~512 total CTAs (MI300X has 304 CUs) while never splitting K into
++    # more pieces than there are K-blocks. Rounded up to a power of 2 so the
++    # reduce kernel's tl.arange(0, KV_SPLITS) compiles; over-splitting past
++    # max_kv_splits is handled by the kernel (empty splits early-return and
++    # the reduce masks their stale partial-buffer slots).
++    if kv_splits is None:
++        max_kv_len = kv_indices.shape[0]
++        max_num_wg = 512
++        max_kv_splits = max(1, triton.cdiv(max_kv_len, block_k))
++        kv_splits = max(1, max_num_wg // max(1, T * n_head_blocks))
++        kv_splits = min(max_kv_splits, kv_splits)
++        kv_splits = triton.next_power_of_2(kv_splits)
++
++    m_partial = torch.empty(
++        (T, kv_splits, h_padded), dtype=torch.float32, device=q.device
++    )
++    l_partial = torch.empty_like(m_partial)
++    acc_partial = torch.empty(
++        (T, kv_splits, h_padded, D), dtype=torch.float32, device=q.device
++    )
++
++    grid_attn = (T, n_head_blocks, kv_splits)
++    _pa_decode_sparse[grid_attn](
++        q,
++        unified_kv,
++        kv_indices,
++        kv_indptr,
++        m_partial,
++        l_partial,
++        acc_partial,
++        q.stride(0),
++        q.stride(1),
++        q.stride(2),
++        unified_kv.stride(0),
++        unified_kv.stride(1),
++        m_partial.stride(0),
++        m_partial.stride(1),
++        m_partial.stride(2),
++        l_partial.stride(0),
++        l_partial.stride(1),
++        l_partial.stride(2),
++        acc_partial.stride(0),
++        acc_partial.stride(1),
++        acc_partial.stride(2),
++        acc_partial.stride(3),
++        H,
++        D,
++        kv_splits,
++        float(softmax_scale),
++        BLOCK_H=block_h,
++        BLOCK_D=block_d,
++        BLOCK_K=block_k,
++        num_warps=attn_num_warps,
++        num_stages=num_stages,
++        waves_per_eu=waves_per_eu,
++    )
++
++    # One reduce CTA per head. For small per-rank H (TP=8 → H ∈ {8, 16}) this
++    # multiplies the reduce-side CTA count by H, replacing the previous single
++    # under-occupied CTA per token with a small fan-out that hides launch
++    # latency. tl.arange(0, 1) is a valid power-of-2 range.
++    block_h_reduce = 1
++    grid_reduce = (T, triton.cdiv(H, block_h_reduce))
++    _pa_decode_sparse_reduce[grid_reduce](
++        m_partial,
++        l_partial,
++        acc_partial,
++        attn_sink,
++        kv_indptr,
++        out,
++        m_partial.stride(0),
++        m_partial.stride(1),
++        m_partial.stride(2),
++        l_partial.stride(0),
++        l_partial.stride(1),
++        l_partial.stride(2),
++        acc_partial.stride(0),
++        acc_partial.stride(1),
++        acc_partial.stride(2),
++        acc_partial.stride(3),
++        out.stride(0),
++        out.stride(1),
++        out.stride(2),
++        H,
++        D,
++        kv_splits,
++        BLOCK_H=block_h_reduce,
++        BLOCK_D=block_d,
++        BLOCK_K=block_k,
++        num_warps=reduce_num_warps,
++    )
++    return out
+diff --git a/aiter/ops/triton/configs/gemm/gfx950-GEMM-A8W8_BLOCKSCALE_PRESHUFFLED-N=1536-K=4096.json b/aiter/ops/triton/configs/gemm/gfx950-GEMM-A8W8_BLOCKSCALE_PRESHUFFLED-N=1536-K=4096.json
+new file mode 100644
+index 0000000000..47be82e9f6
+--- /dev/null
++++ b/aiter/ops/triton/configs/gemm/gfx950-GEMM-A8W8_BLOCKSCALE_PRESHUFFLED-N=1536-K=4096.json
+@@ -0,0 +1,98 @@
++{
++  "M_LEQ_4": {
++    "BLOCK_SIZE_M": 4,
++    "BLOCK_SIZE_N": 16,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 1,
++    "num_stages": 2,
++    "waves_per_eu": 2,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 8
++  },
++  "M_LEQ_8": {
++    "BLOCK_SIZE_M": 4,
++    "BLOCK_SIZE_N": 16,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 1,
++    "num_stages": 2,
++    "waves_per_eu": 4,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 8
++  },
++  "M_LEQ_16": {
++    "BLOCK_SIZE_M": 4,
++    "BLOCK_SIZE_N": 16,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 1,
++    "num_stages": 2,
++    "waves_per_eu": 2,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 8
++  },
++  "M_LEQ_32": {
++    "BLOCK_SIZE_M": 32,
++    "BLOCK_SIZE_N": 16,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 2,
++    "waves_per_eu": 6,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 8
++  },
++  "M_LEQ_64": {
++    "BLOCK_SIZE_M": 16,
++    "BLOCK_SIZE_N": 16,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 1,
++    "num_stages": 2,
++    "waves_per_eu": 2,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 8
++  },
++  "M_LEQ_128": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 16,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 2,
++    "waves_per_eu": 2,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 4
++  },
++  "M_LEQ_256": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 16,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 8,
++    "num_warps": 4,
++    "num_stages": 2,
++    "waves_per_eu": 2,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  },
++  "any": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 64,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 1,
++    "num_stages": 2,
++    "waves_per_eu": 2,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 1
++  }
++}
+diff --git a/aiter/ops/triton/configs/gemm/gfx950-GEMM-A8W8_BLOCKSCALE_PRESHUFFLED-N=2048-K=7168.json b/aiter/ops/triton/configs/gemm/gfx950-GEMM-A8W8_BLOCKSCALE_PRESHUFFLED-N=2048-K=7168.json
+new file mode 100644
+index 0000000000..af8620a4bf
+--- /dev/null
++++ b/aiter/ops/triton/configs/gemm/gfx950-GEMM-A8W8_BLOCKSCALE_PRESHUFFLED-N=2048-K=7168.json
+@@ -0,0 +1,98 @@
++{
++  "M_LEQ_4": {
++    "BLOCK_SIZE_M": 4,
++    "BLOCK_SIZE_N": 16,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 2,
++    "waves_per_eu": 4,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 7
++  },
++  "M_LEQ_8": {
++    "BLOCK_SIZE_M": 4,
++    "BLOCK_SIZE_N": 16,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 1,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 7
++  },
++  "M_LEQ_16": {
++    "BLOCK_SIZE_M": 4,
++    "BLOCK_SIZE_N": 32,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 1,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 7
++  },
++  "M_LEQ_32": {
++    "BLOCK_SIZE_M": 16,
++    "BLOCK_SIZE_N": 16,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 1,
++    "num_stages": 2,
++    "waves_per_eu": 2,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 7
++  },
++  "M_LEQ_64": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 16,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 2,
++    "waves_per_eu": 2,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 7
++  },
++  "M_LEQ_128": {
++    "BLOCK_SIZE_M": 32,
++    "BLOCK_SIZE_N": 64,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 1,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 7
++  },
++  "M_LEQ_256": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 64,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 1,
++    "num_stages": 2,
++    "waves_per_eu": 1,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": ".cg",
++    "NUM_KSPLIT": 7
++  },
++  "any": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 64,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 4,
++    "num_warps": 1,
++    "num_stages": 2,
++    "waves_per_eu": 2,
++    "matrix_instr_nonkdim": 16,
++    "cache_modifier": null,
++    "NUM_KSPLIT": 1
++  }
++}
+diff --git a/aiter/ops/triton/configs/gfx950-MHC_FUSED_SINKHORN-C=4096.json b/aiter/ops/triton/configs/gfx950-MHC_FUSED_SINKHORN-C=4096.json
+index 2d2ee858da..b554b1044b 100644
+--- a/aiter/ops/triton/configs/gfx950-MHC_FUSED_SINKHORN-C=4096.json
++++ b/aiter/ops/triton/configs/gfx950-MHC_FUSED_SINKHORN-C=4096.json
+@@ -1,4 +1,13 @@
+ {
++    "M_LEQ_1": {
++        "BLOCK_M": 16,
++        "BLOCK_K": 256,
++        "BLOCK_C": 128,
++        "NUM_KSPLIT": 32,
++        "num_warps": 4,
++        "num_stages": 1,
++        "waves_per_eu": 0
++    },
+     "M_LEQ_1024": {
+         "BLOCK_M": 32,
+         "BLOCK_K": 256,
+diff --git a/aiter/ops/triton/configs/gfx950-MHC_FUSED_SINKHORN-C=7168.json b/aiter/ops/triton/configs/gfx950-MHC_FUSED_SINKHORN-C=7168.json
+new file mode 100644
+index 0000000000..647b446153
+--- /dev/null
++++ b/aiter/ops/triton/configs/gfx950-MHC_FUSED_SINKHORN-C=7168.json
+@@ -0,0 +1,65 @@
++{
++    "M_LEQ_1": {
++        "BLOCK_M": 16,
++        "BLOCK_K": 256,
++        "BLOCK_C": 128,
++        "NUM_KSPLIT": 28,
++        "num_warps": 4,
++        "num_stages": 1,
++        "waves_per_eu": 0
++    },
++    "M_LEQ_1024": {
++        "BLOCK_M": 32,
++        "BLOCK_K": 256,
++        "BLOCK_C": 256,
++        "NUM_KSPLIT": 7,
++        "num_warps": 8,
++        "num_stages": 2,
++        "waves_per_eu": 2
++    },
++    "M_LEQ_2048": {
++        "BLOCK_M": 64,
++        "BLOCK_K": 128,
++        "BLOCK_C": 64,
++        "NUM_KSPLIT": 7,
++        "num_warps": 8,
++        "num_stages": 2,
++        "waves_per_eu": 1
++    },
++    "M_LEQ_4096": {
++        "BLOCK_M": 64,
++        "BLOCK_K": 256,
++        "BLOCK_C": 64,
++        "NUM_KSPLIT": 7,
++        "num_warps": 8,
++        "num_stages": 2,
++        "waves_per_eu": 1
++    },
++    "M_LEQ_8192": {
++        "BLOCK_M": 64,
++        "BLOCK_K": 256,
++        "BLOCK_C": 256,
++        "NUM_KSPLIT": 7,
++        "num_warps": 8,
++        "num_stages": 2,
++        "waves_per_eu": 0
++    },
++    "M_LEQ_16384": {
++        "BLOCK_M": 64,
++        "BLOCK_K": 256,
++        "BLOCK_C": 256,
++        "NUM_KSPLIT": 7,
++        "num_warps": 4,
++        "num_stages": 1,
++        "waves_per_eu": 0
++    },
++    "any": {
++        "BLOCK_M": 64,
++        "BLOCK_K": 256,
++        "BLOCK_C": 256,
++        "NUM_KSPLIT": 7,
++        "num_warps": 4,
++        "num_stages": 1,
++        "waves_per_eu": 0
++    }
++}
+diff --git a/aiter/ops/triton/configs/gfx950-MHC_POST.json b/aiter/ops/triton/configs/gfx950-MHC_POST.json
+index f81d56610e..66cd974160 100644
+--- a/aiter/ops/triton/configs/gfx950-MHC_POST.json
++++ b/aiter/ops/triton/configs/gfx950-MHC_POST.json
+@@ -22,9 +22,9 @@
+     },
+     "C_7168": {
+         "BLOCK_M": 8,
+-        "BLOCK_C": 256,
+-        "num_warps": 4,
+-        "num_stages": 1,
++        "BLOCK_C": 512,
++        "num_warps": 8,
++        "num_stages": 2,
+         "waves_per_eu": 1
+     },
+     "C_32768": {
+diff --git a/aiter/ops/triton/fusions/mhc.py b/aiter/ops/triton/fusions/mhc.py
+index e9240c83e6..bbc5d24046 100644
+--- a/aiter/ops/triton/fusions/mhc.py
++++ b/aiter/ops/triton/fusions/mhc.py
+@@ -9,7 +9,9 @@
+     _mhc_fused_kernel,
+     _mhc_fused_split_kernel,
+     _mhc_post_kernel,
++    _mhc_post_pre_split_kernel,
+     _mhc_reduce_apply_kernel,
++    _mhc_post_pre_reduce_apply_kernel,
+ )
+ from aiter.ops.triton.utils.logger import AiterTritonLogger
+ from aiter.ops.triton.utils.mhc_config_utils import (
+@@ -425,3 +427,367 @@ def mhc_post(
+     )
+ 
+     return out
++
++
++def mhc_post_pre(
++    layer_input: torch.Tensor,  # (M, C)        bf16 / fp16
++    residual_in: torch.Tensor,  # (M, n, C)     bf16 / fp16
++    post_mix: torch.Tensor,  # (M, n) or (M, n, 1) fp32
++    comb_mix: torch.Tensor,  # (M, n, n)     fp32
++    phi: torch.Tensor,  # (n*C, N=n+n+n*n) bf16 / fp16
++    alphas: torch.Tensor,  # (3,) fp32 — [alpha_pre, alpha_post, alpha_res]
++    bias: torch.Tensor,  # (N,) fp32
++    n: int,
++    eps: float = 1e-6,
++    hc_pre_eps: float = 1e-6,
++    hc_post_mult_value: float = 2.0,
++    sinkhorn_iters: int = 20,
++    residual_out: Optional[torch.Tensor] = None,
++    h_post: Optional[torch.Tensor] = None,
++    h_res: Optional[torch.Tensor] = None,
++    layer_input_out: Optional[torch.Tensor] = None,
++    acc_partial: Optional[torch.Tensor] = None,
++    acc_sq_partial: Optional[torch.Tensor] = None,
++    config: Optional[dict] = None,
++) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
++    """Fused mhc_post + (next) mhc_pre across two Triton launches.
++
++    Launch 1 (``_mhc_post_pre_split_kernel``): per (M-tile, C-tile), one CTA
++    does the mhc_post elementwise mix AND contributes one split-K K-slice of
++    the next mhc_pre GEMM + sqrsum, sharing the post-output residual tile in
++    registers between the two operations.
++
++    Launch 2 (``_mhc_reduce_apply_kernel``, reused as-is): finalizes RMS-norm
++    + bias + alpha + sigmoid (pre/post) + log-domain Sinkhorn (res) + the
++    apply-pre fold ``layer_input_out[m, c] = sum_i pre_mix[m, i] *
++    residual_out[m, i, c]``.
++
++    The C-tile axis of the split kernel IS the pre's split-K axis (one CTA
++    per K-split chunk of size ``n * BLOCK_C`` in the flattened pre input).
++
++    Pipeline:
++        residual_out[m, j, c] = post_mix[m, j] * layer_input[m, c]
++                              + sum_h comb_mix[m, h, j] * residual_in[m, h, c]
++        h_post                = hc_post_mult_value * sigmoid(...)        # of next pre
++        h_res                 = Sinkhorn(...)                            # of next pre
++        layer_input_out[m, c] = sum_i (sigmoid(H^pre[m, i]) + hc_pre_eps)
++                                    * residual_out[m, i, c]
++
++    Args:
++        layer_input:        (M, C) bf16 / fp16, attn/ffn output (the post step's ``x``)
++        residual_in:        (M, n, C) bf16 / fp16, prev-layer multi-stream residual
++        post_mix:           (M, n) or (M, n, 1) fp32, from preceding mhc_pre
++        comb_mix:           (M, n, n) fp32, from preceding mhc_pre; [src, dst]
++        phi:                (n*C, N) bf16 / fp16, next pre's projection matrix
++        alphas:             (3,) fp32 — ``[alpha_pre, alpha_post, alpha_res]``.
++                            Loaded by the kernel via tl.load; pass the
++                            ``hc_scale`` parameter tensor unchanged.
++        bias:               (N,) fp32, next pre's bias
++        n:                  stream / manifold dimension
++        eps:                RMS-norm epsilon (default 1e-6)
++        hc_pre_eps:         added to sigmoid(H^pre) (default 0.0)
++        hc_post_mult_value: multiplier on sigmoid(H^post) (default 2.0)
++        sinkhorn_iters:     log-domain SK iterations on next pre's H^res (default 20)
++        residual_out:       optional pre-allocated (M, n, C) output of dtype
++                            ``layer_input.dtype``. Allocated if None.
++        h_post:             optional pre-allocated post-stream output. Accepts
++                            either (M, n) or (M, n, 1). Any float dtype — the
++                            kernel implicit-casts on store. Allocated as
++                            (M, n, 1) in ``layer_input.dtype`` if None.
++        h_res:              optional pre-allocated res-stream output of shape
++                            (M, n, n). Any float dtype. Allocated as
++                            (M, n, n) in ``layer_input.dtype`` if None.
++        layer_input_out:    optional pre-allocated (M, C) output of dtype
++                            ``layer_input.dtype``. Allocated if None.
++        config:             optional config dict; loaded from
++                            get_mhc_config("MHC_FUSED", M, C, mode="sinkhorn")
++                            when None. NUM_KSPLIT is ignored — the split kernel's
++                            grid uses ``cdiv(C, BLOCK_C)`` K-splits.
++
++    Returns ``(h_post, h_res, layer_input_out, residual_out)``:
++        h_post:          (M, n, 1)  hc_post_mult_value * sigmoid(H^post)
++        h_res:           (M, n, n)  Sinkhorn output (raw logits if sk_iters == 0)
++        layer_input_out: (M, C)     sum_i (sigmoid(H^pre[m, i]) + hc_pre_eps)
++                                          * residual_out[m, i, c]
++        residual_out:    (M, n, C)  new mHC residual stream (must be kept;
++                                    consumed by the next layer's hc_post)
++
++    Reference: arXiv:2512.24880.
++    """
++    M, C = layer_input.shape
++    M_res, n_res, C_res = residual_in.shape
++    assert (M, n, C) == (
++        M_res,
++        n_res,
++        C_res,
++    ), f"shape mismatch: layer_input=({M},{C}), residual_in=({M_res},{n_res},{C_res}), n={n}"
++
++    K_phi, N_phi = phi.shape
++    n_squared = n * n
++    N_total = 2 * n + n_squared
++    K = n * C
++    assert K_phi == K, f"phi K mismatch: expected {K}, got {K_phi}"
++    assert N_phi == N_total, f"phi N mismatch: expected {N_total}, got {N_phi}"
++
++    if post_mix.ndim == 3:
++        post_mix = post_mix.squeeze(-1)
++    assert post_mix.shape == (
++        M,
++        n,
++    ), f"post_mix shape mismatch: expected ({M}, {n}), got {tuple(post_mix.shape)}"
++    assert comb_mix.shape == (
++        M,
++        n,
++        n,
++    ), f"comb_mix shape mismatch: expected ({M}, {n}, {n}), got {tuple(comb_mix.shape)}"
++    assert (
++        bias.shape[0] == N_total
++    ), f"bias shape mismatch: expected ({N_total},), got {tuple(bias.shape)}"
++    assert (
++        layer_input.device
++        == residual_in.device
++        == phi.device
++        == bias.device
++        == post_mix.device
++        == comb_mix.device
++    ), "All tensors must be on the same device"
++    assert layer_input.device.type == "cuda", "mHC kernel requires CUDA device"
++    assert sinkhorn_iters >= 0, f"sinkhorn_iters must be >= 0, got {sinkhorn_iters}"
++
++    device = layer_input.device
++    dtype = layer_input.dtype
++
++    N_POW2 = triton.next_power_of_2(n)
++    N_POW2_RES = triton.next_power_of_2(n_squared)
++    N_TOTAL_POW2 = triton.next_power_of_2(N_total)
++
++    if sinkhorn_iters > 0:
++        assert N_POW2_RES == n_squared, (
++            f"sinkhorn_iters>0 requires n_squared ({n_squared}) to be a power of 2; "
++            f"got N_POW2_RES={N_POW2_RES}. For non-power-of-2 n, run with "
++            f"sinkhorn_iters=0."
++        )
++
++    # Reuse MHC_FUSED tuning. Two block-sizes serve distinct roles here:
++    #   - BLOCK_K  : per-CTA K-axis width in the post_pre split kernel; one
++    #                CTA covers BLOCK_K K-elements of the next-pre GEMM,
++    #                equivalent to BLOCK_K/n contiguous C-elements per stream.
++    #                NUM_KSPLIT = cdiv(K, BLOCK_K).
++    #   - BLOCK_C  : C-axis tile for _mhc_reduce_apply_kernel only (apply-pre
++    #                output parallelism). Independent of BLOCK_K.
++    if config is None:
++        config, _ = get_mhc_config("MHC_FUSED", M, C, mode="sinkhorn")
++    config = dict(config)
++
++    BLOCK_M = config.pop("BLOCK_M", 64 if M >= 64 else 32)
++    BLOCK_K = config.pop("BLOCK_K", min(512, triton.next_power_of_2(K)))
++    BLOCK_K = min(BLOCK_K, triton.next_power_of_2(K))
++    BLOCK_C = config.pop("BLOCK_C", min(128, triton.next_power_of_2(C)))
++    BLOCK_C = min(BLOCK_C, triton.next_power_of_2(C))
++    # Knobs irrelevant to mhc_post_pre.
++    config.pop("BLOCK_N", None)
++    config.pop("NUM_KSPLIT", None)
++
++    assert BLOCK_K % n == 0, (
++        f"BLOCK_K ({BLOCK_K}) must be divisible by n ({n}) — each CTA owns "
++        f"n contiguous BLOCK_K/n-wide C-slices of the next-pre GEMM"
++    )
++    # Per-CTA C-slice width (constexpr inside the split kernel).
++    BLOCK_C_SPLIT = BLOCK_K // n
++    NUM_KSPLIT = triton.cdiv(C, BLOCK_C_SPLIT)  # == cdiv(K, BLOCK_K)
++    KSPLIT_POW2 = triton.next_power_of_2(NUM_KSPLIT)
++
++    # `_mhc_reduce_apply_kernel` uses a (num_M_tiles, NUM_C_BLOCKS + 2) grid.
++    NUM_C_BLOCKS = triton.cdiv(C, BLOCK_C)
++
++    _LOGGER.info(
++        f"MHC_POST_PRE: layer_input={tuple(layer_input.shape)} "
++        f"residual_in={tuple(residual_in.shape)} phi={tuple(phi.shape)} "
++        f"alphas={tuple(alphas.shape)}@{alphas.dtype} "
++        f"hc_pre_eps={hc_pre_eps} hc_post_mult_value={hc_post_mult_value} "
++        f"sinkhorn_iters={sinkhorn_iters} "
++        f"BLOCK_M={BLOCK_M} BLOCK_K={BLOCK_K} BLOCK_C_SPLIT={BLOCK_C_SPLIT} "
++        f"BLOCK_C={BLOCK_C} NUM_KSPLIT={NUM_KSPLIT} NUM_C_BLOCKS={NUM_C_BLOCKS} "
++        f"N_TOTAL_POW2={N_TOTAL_POW2}"
++    )
++    assert alphas.shape == (
++        3,
++    ), f"alphas shape mismatch: expected (3,), got {tuple(alphas.shape)}"
++
++    if residual_out is None:
++        residual_out = torch.empty(M, n, C, dtype=dtype, device=device)
++    else:
++        assert residual_out.shape == (
++            M,
++            n,
++            C,
++        ), f"residual_out shape mismatch: expected ({M}, {n}, {C}), got {tuple(residual_out.shape)}"
++        assert (
++            residual_out.dtype == dtype
++        ), f"residual_out dtype mismatch: expected {dtype}, got {residual_out.dtype}"
++
++    # Split-K reduce-apply scratch. Write-before-read within this call (the
++    # split kernel writes every entry the reduce kernel reads, masked the same
++    # way), so callers may pass persistent buffers — keeping `.data_ptr()`
++    # stable lets CUDAGraph capture/replay work without surprise re-allocation.
++    if acc_partial is None:
++        acc_partial = torch.empty(
++            (NUM_KSPLIT, M, N_total), dtype=torch.float32, device=device
++        )
++    else:
++        assert acc_partial.shape == (NUM_KSPLIT, M, N_total), (
++            f"acc_partial shape mismatch: expected ({NUM_KSPLIT}, {M}, {N_total}), "
++            f"got {tuple(acc_partial.shape)}"
++        )
++        assert (
++            acc_partial.dtype == torch.float32
++        ), f"acc_partial dtype mismatch: expected float32, got {acc_partial.dtype}"
++    if acc_sq_partial is None:
++        acc_sq_partial = torch.empty(
++            (NUM_KSPLIT, M), dtype=torch.float32, device=device
++        )
++    else:
++        assert acc_sq_partial.shape == (NUM_KSPLIT, M), (
++            f"acc_sq_partial shape mismatch: expected ({NUM_KSPLIT}, {M}), "
++            f"got {tuple(acc_sq_partial.shape)}"
++        )
++        assert acc_sq_partial.dtype == torch.float32, (
++            f"acc_sq_partial dtype mismatch: expected float32, "
++            f"got {acc_sq_partial.dtype}"
++        )
++
++    # --- Launch 1: fused post + partial pre GEMM/sqrsum, one CTA per (M-tile, C-tile).
++    grid_split = (triton.cdiv(M, BLOCK_M), NUM_KSPLIT)
++    _mhc_post_pre_split_kernel[grid_split](
++        layer_input,
++        residual_in,
++        post_mix,
++        comb_mix,
++        residual_out,
++        phi,
++        acc_partial,
++        acc_sq_partial,
++        M=M,
++        N=N_total,
++        n=n,
++        C=C,
++        stride_x_m=layer_input.stride(0),
++        stride_x_c=layer_input.stride(1),
++        stride_resin_m=residual_in.stride(0),
++        stride_resin_n=residual_in.stride(1),
++        stride_resin_c=residual_in.stride(2),
++        stride_post_m=post_mix.stride(0),
++        stride_post_n=post_mix.stride(1),
++        stride_comb_m=comb_mix.stride(0),
++        stride_comb_src=comb_mix.stride(1),
++        stride_comb_dst=comb_mix.stride(2),
++        stride_resout_m=residual_out.stride(0),
++        stride_resout_n=residual_out.stride(1),
++        stride_resout_c=residual_out.stride(2),
++        stride_phi_k=phi.stride(0),
++        stride_phi_n=phi.stride(1),
++        stride_acc_k=acc_partial.stride(0),
++        stride_acc_m=acc_partial.stride(1),
++        stride_acc_n=acc_partial.stride(2),
++        stride_acc_sq_k=acc_sq_partial.stride(0),
++        stride_acc_sq_m=acc_sq_partial.stride(1),
++        BLOCK_M=BLOCK_M,
++        BLOCK_C=BLOCK_C_SPLIT,
++        N_TOTAL_POW2=N_TOTAL_POW2,
++        **config,
++    )
++
++    # --- Launch 2: reduce-apply kernel writes h_post and h_res directly.
++    # Allocate any caller-omitted outputs in `layer_input.dtype`. Callers can
++    # pre-allocate them in any float dtype (e.g. fp32) to skip a downstream
++    # cast — the kernel implicit-casts at the store.
++    if h_post is None:
++        h_post = torch.empty(M, n, 1, dtype=dtype, device=device)
++    else:
++        if h_post.ndim == 2:
++            assert h_post.shape == (
++                M,
++                n,
++            ), f"h_post 2D shape mismatch: expected ({M}, {n}), got {tuple(h_post.shape)}"
++        else:
++            assert h_post.shape == (
++                M,
++                n,
++                1,
++            ), f"h_post 3D shape mismatch: expected ({M}, {n}, 1), got {tuple(h_post.shape)}"
++    if h_res is None:
++        h_res = torch.empty(M, n, n, dtype=dtype, device=device)
++    else:
++        assert h_res.shape == (
++            M,
++            n,
++            n,
++        ), f"h_res shape mismatch: expected ({M}, {n}, {n}), got {tuple(h_res.shape)}"
++    if layer_input_out is None:
++        layer_input_out = torch.empty(M, C, dtype=dtype, device=device)
++    else:
++        assert layer_input_out.shape == (M, C), (
++            f"layer_input_out shape mismatch: expected ({M}, {C}), "
++            f"got {tuple(layer_input_out.shape)}"
++        )
++
++    # 2D (M, n) view for the kernel — h_post.ndim is 2 or 3, both OK after view.
++    h_post_2d = h_post.view(M, n)
++    # 2D (M, n*n) view for the kernel — h_res is contiguous (M, n, n).
++    h_res_2d = h_res.view(M, n_squared)
++
++    # residual_out (M, n, C) is contiguous after `torch.empty`; flatten gives
++    # the (M, n*C) layout the reduce-apply kernel expects as ``x``.
++    x_flat = residual_out.view(M, n * C)
++
++    # Grid: NUM_C_BLOCKS apply-pre CTAs + 2 dedicated CTAs for post & res.
++    BLOCK_M_POST_RES = 1
++    grid_reduce_apply = (
++        triton.cdiv(M, BLOCK_M) * NUM_C_BLOCKS + triton.cdiv(M, BLOCK_M_POST_RES) * 2,
++    )
++    _mhc_post_pre_reduce_apply_kernel[grid_reduce_apply](
++        acc_partial,
++        acc_sq_partial,
++        alphas,
++        bias,
++        x_flat,
++        h_post_2d,
++        h_res_2d,
++        layer_input_out,
++        M=M,
++        K=K,
++        n=n,
++        n_squared=n_squared,
++        C=C,
++        eps=eps,
++        hc_pre_eps=hc_pre_eps,
++        hc_post_mult_value=hc_post_mult_value,
++        stride_acc_k=acc_partial.stride(0),
++        stride_acc_m=acc_partial.stride(1),
++        stride_acc_n=acc_partial.stride(2),
++        stride_acc_sq_k=acc_sq_partial.stride(0),
++        stride_acc_sq_m=acc_sq_partial.stride(1),
++        stride_xm=x_flat.stride(0),
++        stride_xk=x_flat.stride(1),
++        stride_hp_m=h_post_2d.stride(0),
++        stride_hp_n=h_post_2d.stride(1),
++        stride_hr_m=h_res_2d.stride(0),
++        stride_hr_n=h_res_2d.stride(1),
++        stride_li_m=layer_input_out.stride(0),
++        stride_li_c=layer_input_out.stride(1),
++        BLOCK_M=BLOCK_M,
++        BLOCK_C=BLOCK_C,
++        N_POW2=N_POW2,
++        N_POW2_RES=N_POW2_RES,
++        ACTUAL_KSPLIT=NUM_KSPLIT,
++        KSPLIT_POW2=KSPLIT_POW2,
++        BLOCK_M_POST_RES=BLOCK_M_POST_RES,
++        NUM_SINKHORN_ITERS=sinkhorn_iters,
++        **config,
++    )
++
++    # Reshape h_post to (M, n, 1) on return for compatibility with downstream
++    # callers that expect the trailing singleton (e.g. HIP mhc_post).
++    if h_post.ndim == 2:
++        h_post = h_post.unsqueeze(-1)
++    return h_post, h_res, layer_input_out, residual_out
+diff --git a/op_tests/triton_tests/attention/test_pa_decode_sparse.py b/op_tests/triton_tests/attention/test_pa_decode_sparse.py
+new file mode 100644
+index 0000000000..eaab0fe477
+--- /dev/null
++++ b/op_tests/triton_tests/attention/test_pa_decode_sparse.py
+@@ -0,0 +1,163 @@
++# SPDX-License-Identifier: MIT
++# Copyright (C) 2024-2026, Advanced Micro Devices, Inc. All rights reserved.
++
++# from __future__ import annotations
++
++import pytest
++import torch
++
++from aiter.ops.triton.attention.pa_decode_sparse import pa_decode_sparse
++
++
++def _sparse_attn_torch(q, kv, attn_sink, topk_idxs, softmax_scale):
++    """Per-batch sparse multi-head attention with sink in the denominator only.
++
++    Shapes:
++        q:           [B, M, H, D]
++        kv:          [B, N, D]
++        attn_sink:   [H]
++        topk_idxs:   [B, M, K] int32, -1 means skip
++    Returns:
++        [B, M, H, D] same dtype as q.
++    """
++    B, M, H, D = q.shape
++    K = topk_idxs.shape[-1]
++    device = q.device
++    out_dtype = q.dtype
++
++    valid = topk_idxs != -1
++    safe_idxs = topk_idxs.clamp(min=0).long()
++    batch_idx = torch.arange(B, device=device).view(B, 1, 1).expand(B, M, K)
++    kv_gathered = kv[batch_idx, safe_idxs]  # [B, M, K, D]
++    kv_f32 = kv_gathered.float()
++    kv_f32 = torch.where(
++        valid.unsqueeze(-1), kv_f32, torch.zeros((), dtype=kv_f32.dtype, device=device)
++    )
++
++    q_f32 = q.float()
++    scores = torch.einsum("bmhd,bmkd->bmhk", q_f32, kv_f32) * float(softmax_scale)
++    scores = scores.masked_fill(~valid.unsqueeze(2), float("-inf"))
++
++    sink = attn_sink.float().view(1, 1, H, 1).expand(B, M, H, 1)
++    combined = torch.cat([scores, sink], dim=-1)
++    cmax = combined.amax(dim=-1, keepdim=True)
++    cmax = torch.where(
++        cmax == float("-inf"),
++        torch.zeros((), dtype=cmax.dtype, device=device),
++        cmax,
++    )
++    weights = (combined - cmax).exp()
++    denom = weights.sum(dim=-1, keepdim=True)
++    weights = weights / denom.clamp(min=1e-30)
++    weights_kv = weights[..., :K]
++    out = torch.einsum("bmhk,bmkd->bmhd", weights_kv, kv_f32)
++    return out.to(out_dtype)
++
++
++def pa_decode_sparse_reference(
++    q, unified_kv, kv_indices, kv_indptr, attn_sink, softmax_scale
++):
++    """Pure-torch reference that materialises per-token KV via gather."""
++    T = q.size(0)
++    indptr = kv_indptr.to(torch.int64)
++    spans = (indptr[1:] - indptr[:T]).clamp(min=0)
++    k_dim = int(spans.max().item()) if T > 0 else 1
++    if k_dim == 0:
++        k_dim = 1
++    topk_idxs = torch.full((T, k_dim), -1, device=q.device, dtype=torch.int32)
++    for t in range(T):
++        s = int(indptr[t].item())
++        n = int(spans[t].item())
++        if n > 0:
++            topk_idxs[t, :n] = kv_indices[s : s + n].to(torch.int32)
++    return _sparse_attn_torch(
++        q.unsqueeze(0),
++        unified_kv.unsqueeze(0),
++        attn_sink,
++        topk_idxs.unsqueeze(0),
++        softmax_scale,
++    ).squeeze(0)
++
++
++# ---------------------------------------------------------------------------
++# Input builder
++# ---------------------------------------------------------------------------
++
++
++def _make_inputs(
++    T: int,
++    H: int,
++    D: int,
++    kv_len_per_token: int,
++    total_pages: int,
++    dtype=torch.bfloat16,
++    seed: int = 0,
++    include_sentinels: bool = False,
++    variable_len: bool = False,
++):
++    torch.manual_seed(seed)
++    device = torch.device("cuda")
++
++    q = torch.randn(T, H, D, dtype=dtype, device=device) * 0.5
++    unified_kv = torch.randn(total_pages, D, dtype=dtype, device=device) * 0.5
++    attn_sink = torch.randn(H, dtype=torch.float32, device=device) * 0.1
++
++    # Per-token kv_len: fixed or random in [1, kv_len_per_token].
++    if variable_len:
++        kv_lens = torch.randint(
++            low=1,
++            high=kv_len_per_token + 1,
++            size=(T,),
++            device=device,
++            dtype=torch.int64,
++        )
++    else:
++        kv_lens = torch.full((T,), kv_len_per_token, device=device, dtype=torch.int64)
++
++    indptr = torch.zeros(T + 1, device=device, dtype=torch.int64)
++    indptr[1:] = kv_lens.cumsum(0)
++    total_indices = int(indptr[-1].item())
++
++    indices = torch.randint(
++        low=0,
++        high=total_pages,
++        size=(total_indices,),
++        device=device,
++        dtype=torch.int32,
++    )
++    if include_sentinels and total_indices > 0:
++        # Sprinkle a few -1 sentinels.
++        n_sentinel = max(1, total_indices // 16)
++        sentinel_pos = torch.randperm(total_indices, device=device)[:n_sentinel]
++        indices[sentinel_pos] = -1
++
++    indptr = indptr.to(torch.int32)
++    softmax_scale = float(D) ** -0.5
++    return q, unified_kv, indices, indptr, attn_sink, softmax_scale
++
++
++@pytest.mark.parametrize("T", [1, 32, 64])
++@pytest.mark.parametrize("H", [1, 8, 16, 64, 128])
++@pytest.mark.parametrize("D", [512])
++@pytest.mark.parametrize("kv_len", [100, 400, 1024, 4096, 8192, 16384])
++@pytest.mark.parametrize("var_len", [True, False])
++@pytest.mark.parametrize("sentinels", [True, False])
++def test_pa_decode_sparse_vs_reference(T, H, D, kv_len, var_len, sentinels):
++    if not torch.cuda.is_available():
++        pytest.skip("CUDA required")
++
++    pages = 2 * T * kv_len
++    q, ukv, indices, indptr, sink, scale = _make_inputs(
++        T,
++        H,
++        D,
++        kv_len,
++        pages,
++        include_sentinels=sentinels,
++        variable_len=var_len,
++    )
++
++    ref = pa_decode_sparse_reference(q, ukv, indices, indptr, sink, scale)
++    out = pa_decode_sparse(q, ukv, indices, indptr, sink, scale)
++
++    torch.testing.assert_close(out, ref, atol=5e-3, rtol=5e-3)
+diff --git a/op_tests/triton_tests/fusions/test_mhc.py b/op_tests/triton_tests/fusions/test_mhc.py
+index c1bccb111a..da8c19dd28 100644
+--- a/op_tests/triton_tests/fusions/test_mhc.py
++++ b/op_tests/triton_tests/fusions/test_mhc.py
+@@ -25,7 +25,7 @@
+ import pytest
+ import torch
+ 
+-from aiter.ops.triton.fusions.mhc import mhc, mhc_post
++from aiter.ops.triton.fusions.mhc import mhc, mhc_post, mhc_post_pre
+ from aiter.ops.triton.utils.mhc_config_utils import (
+     hip_post_dispatch_block as _hip_post_dispatch_block,
+ )
+@@ -56,6 +56,16 @@
+ # =============================================================================
+ 
+ 
++def _alphas(alpha_pre, alpha_post, alpha_res, device="cuda"):
++    """Pack the three per-stream scale floats into the (3,) fp32 tensor that
++    ``mhc()`` / ``mhc_post_pre()`` now consume — the kernels ``tl.load`` the
++    individual alphas at offsets 0/1/2.
++    """
++    return torch.tensor(
++        [alpha_pre, alpha_post, alpha_res], dtype=torch.float32, device=device
++    )
++
++
+ def _assert_mhc_close(
+     triton_tuple,
+     ref_tuple,
+@@ -174,7 +184,14 @@ def test_mhc_different_epsilon(eps, M, n, C):
+         x, phi, alpha_pre, alpha_post, alpha_res, bias, n_streams, eps=eps
+     )
+     triton_tuple = mhc(
+-        x, phi, alpha_pre, alpha_post, alpha_res, bias, n_streams, eps=eps
++        x,
++        phi,
++        alpha_pre,
++        alpha_post,
++        alpha_res,
++        bias,
++        n_streams,
++        eps=eps,
+     )
+ 
+     _assert_mhc_close(triton_tuple, out_torch)
+@@ -191,7 +208,15 @@ def test_mhc_different_alpha(alpha_scale):
+     alpha_pre = alpha_post = alpha_res = alpha_scale
+ 
+     out_torch = mhc_torch(x, phi, alpha_pre, alpha_post, alpha_res, bias, n_streams)
+-    triton_tuple = mhc(x, phi, alpha_pre, alpha_post, alpha_res, bias, n_streams)
++    triton_tuple = mhc(
++        x,
++        phi,
++        alpha_pre,
++        alpha_post,
++        alpha_res,
++        bias,
++        n_streams,
++    )
+ 
+     _assert_mhc_close(
+         triton_tuple,
+@@ -765,6 +790,7 @@ def test_mhc_post_squeeze_post_mix():
+         # see bench_mhc.py --op post --with-hip for that repro.
+         (1024, 4, 4096),
+         (2048, 4, 4096),
++        (2048, 4, 7168),
+     ],
+ )
+ @pytest.mark.parametrize("dtype", [torch.bfloat16])
+@@ -822,6 +848,100 @@ def test_triton_mhc_post_matches_hip(M, n, C, dtype):
+     assert pct <= 0.05, f"{msg} (atol=2e-2, rtol=1e-2, bad_element_ratio={pct:.2%})"
+ 
+ 
++# =============================================================================
++# Fused mhc_post_pre Tests
++# =============================================================================
++
++
++@pytest.mark.parametrize("M", [1, 4, 64, 128])
++@pytest.mark.parametrize("n", [4])
++@pytest.mark.parametrize("C", [1024, 4096, 7168])
++@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
++def test_triton_mhc_pre_post(M, n, C, dtype):
++    """Fused ``mhc_post_pre()`` matches the unfused torch chain.
++
++    ``mhc_post_pre`` fuses one mHC sub-layer transition: it consumes the
++    previous sub-layer's ``(post_mix, comb_mix)`` to update the residual
++    stream via the mhc_post mix, then runs the next sub-layer's mhc_pre
++    GEMM + RMS-norm + Sinkhorn on the just-updated residual.
++
++    Reference is the unfused chain on torch:
++        residual_out = mhc_post_torch(layer_input, residual_in, post_mix, comb_mix)
++        (h_post, h_res, _h_pre, layer_input_out) = mhc_torch(residual_out.view(M, n*C), phi, ...)
++
++    Compared outputs: ``(residual_out, h_post, h_res, layer_input_out)``.
++    """
++    if not torch.cuda.is_available():
++        pytest.skip("CUDA device required for mHC kernels")
++
++    torch.cuda.empty_cache()
++    torch.manual_seed(0)
++    torch.cuda.manual_seed_all(0)
++
++    sinkhorn_iters = 20
++
++    # Reuse the existing mHC input generators: `generate_mhc_post_inputs`
++    # for the post-step operands and `generate_mhc_inputs` for phi/bias/alphas.
++    # The two generators produce independent random data — same convention
++    # as test_mhc_e2e_correctness.
++    layer_input, residual_in, post_mix, comb_mix = generate_mhc_post_inputs(
++        M, n, C, dtype
++    )
++    _x_unused, phi, alpha_pre, alpha_post, alpha_res, bias, _n = generate_mhc_inputs(
++        M, n, C, dtype
++    )
++
++    # Reference: torch mhc_post -> torch mhc. mhc_torch is the PyTorch ref;
++    # it still takes the three floats directly (no alphas tensor).
++    residual_out_ref = mhc_post_torch(layer_input, residual_in, post_mix, comb_mix)
++    h_post_ref, h_res_ref, _h_pre_ref, layer_input_out_ref = mhc_torch(
++        residual_out_ref.view(M, n * C),
++        phi,
++        alpha_pre,
++        alpha_post,
++        alpha_res,
++        bias,
++        n,
++        sinkhorn_iters=sinkhorn_iters,
++    )
++
++    # Convert to K-contiguous tensor
++    phi = phi.T.contiguous().T.to(torch.float32)
++
++    # Triton fused — mhc_post_pre consumes the alphas tensor.
++    h_post_t, h_res_t, layer_input_out_t, residual_out_t = mhc_post_pre(
++        layer_input,
++        residual_in,
++        post_mix,
++        comb_mix,
++        phi,
++        _alphas(alpha_pre, alpha_post, alpha_res, device=layer_input.device),
++        bias,
++        n,
++        sinkhorn_iters=sinkhorn_iters,
++    )
++
++    cfg = f"(M={M}, n={n}, C={C}, dtype={dtype})"
++    for name, t, ref, atol, rtol in (
++        ("residual_out", residual_out_t, residual_out_ref, 2e-2, 2e-2),
++        ("h_post", h_post_t, h_post_ref, 2e-2, 2e-2),
++        ("h_res", h_res_t, h_res_ref, 2e-2, 2e-2),
++        ("layer_input_out", layer_input_out_t, layer_input_out_ref, 5e-2, 2e-2),
++    ):
++        msg = f"mhc_post_pre {name} mismatch at {cfg}"
++        pct = checkAllclose(
++            t.float(),
++            ref.float(),
++            atol=atol,
++            rtol=rtol,
++            tol_err_ratio=0.05,
++            msg=msg,
++        )
++        assert (
++            pct <= 0.05
++        ), f"{msg} (atol={atol:g}, rtol={rtol:g}, bad_element_ratio={pct:.2%})"
++
++
+ def mhc_e2e_triton(
+     x_l_flat,
+     phi,
+@@ -907,7 +1027,8 @@ def test_mhc_e2e_correctness(M, n, C, dtype):
+     )
+     x_l = x_l_flat.view(M, n, C)
+ 
+-    # Reference implementation
++    # Reference implementation — mhc_e2e_ref is the torch ref and takes
++    # three floats directly.
+     layer_input_ref, x_l_plus_1_ref, h_post_ref, h_res_ref = mhc_e2e_ref(
+         x_l,
+         phi,
+@@ -919,7 +1040,8 @@ def test_mhc_e2e_correctness(M, n, C, dtype):
+         sinkhorn_iters=int(sinkhorn_iters),
+     )
+ 
+-    # Triton implementation
++    # Triton implementation — wrapper takes three floats and converts to
++    # an alphas tensor internally before invoking mhc().
+     layer_input_triton, x_l_plus_1_triton, h_post_triton, h_res_triton = mhc_e2e_triton(
+         x_l_flat,
+         phi,
