@@ -134,7 +134,7 @@ consuming `ds_read`, then on a separate `s_barrier`:
 ```
 
 Picking the *largest safe* non-zero wait targets (`vmcnt(N)` instead of
-`vmcnt(0)`) is exactly how [software pipelining](../technique/mfma-pipelining.md)
+`vmcnt(0)`) is exactly how [software pipelining](../techniques/mfma-pipelining.md)
 keeps many loads in flight to hide HBM latency. Over-waiting (`s_waitcnt 0`
 everywhere) serializes the pipeline and is one of the most common causes of a
 memory-bound stall on CDNA.
@@ -177,8 +177,8 @@ cross-wave visibility is needed, an `s_barrier`.
 
 - [Direct-to-LDS async copy](async-copy-lds.md)
 - [Memory instructions: buffer / global / flat](memory-instructions.md)
-- [MFMA software pipelining](../technique/mfma-pipelining.md)
-- [LDS double buffering](../technique/lds-double-buffering.md)
+- [MFMA software pipelining](../techniques/mfma-pipelining.md)
+- [LDS double buffering](../techniques/lds-double-buffering.md)
 
 ## Sources
 

@@ -54,9 +54,16 @@ NVIDIA Volta+). The active-lane set is tracked by the **EXEC mask**.
 
 A CU is partitioned into **4 SIMD units (SIMD16)**. Each SIMD owns a slice of the
 register file and a pool of wave slots; the four pools together hold up to
-**40 wavefronts per CU (4 × 10)**. The number actually resident — the
+**32 wavefronts per CU (4 × 8)**. The number actually resident — the
 **occupancy** — is almost always limited by VGPR and LDS usage rather than by the
-40-wave hardware ceiling.
+32-wave hardware ceiling.
+
+> Verified on an AMD Instinct MI350X (gfx950, ROCm 7.2): `rocminfo` reports
+> `Max Waves Per CU: 32` and `Max Work-item Per CU: 2048` (= 32 × wave64), and
+> `hipGetDeviceProperties` returns `maxThreadsPerMultiProcessor = 2048`. gfx942
+> (CDNA3) likewise caps at 32 waves/CU. The 40-wave/4×10 figure quoted for some
+> older AMD GPUs is a pre-CDNA (GCN/Vega) number and does **not** apply to
+> CDNA3/CDNA4.
 
 ## The EXEC mask and per-lane predication
 
@@ -122,11 +129,11 @@ of several caps:
 
 ```text
 waves_per_simd = min(
-    10,                                    # hardware wave-slot ceiling per SIMD
+    8,                                     # hardware wave-slot ceiling per SIMD (CDNA3/CDNA4)
     floor(VGPRs_per_SIMD / vgprs_per_wave),# vector-register limited
     floor(LDS_per_CU   / lds_per_workgroup) * waves_per_wg / SIMDs  # LDS limited
 )
-occupancy_per_CU = 4 * waves_per_simd      # 4 SIMDs, max 40 waves/CU
+occupancy_per_CU = 4 * waves_per_simd      # 4 SIMDs, max 32 waves/CU
 ```
 
 The practical lever is `vgprs_per_wave`: at 256 VGPRs/wave a SIMD holds only 1

@@ -75,7 +75,7 @@ can be sub-optimal at 64). Always re-tune LDS strides when porting; see the
 > Capacity also bounds occupancy. With 64 KB/CU on gfx942, a kernel using 32 KB
 > of `__shared__` per workgroup caps the CU at 2 resident workgroups regardless
 > of VGPR headroom. LDS-per-workgroup is therefore a first-class occupancy knob —
-> see [occupancy tuning](../technique/occupancy-tuning.md).
+> see [occupancy tuning](../techniques/occupancy-tuning.md).
 
 ## Bank conflicts in detail
 
@@ -104,7 +104,7 @@ __shared__ float tileA[32][32 + 1];   // 33-dword stride: 33 % 32 == 1
 ```
 
 Padding costs a little capacity; an alternative that costs none is a swizzled
-(XOR-permuted) index — see [LDS swizzling](../technique/lds-swizzling.md) and the
+(XOR-permuted) index — see [LDS swizzling](../techniques/lds-swizzling.md) and the
 [bank-conflict pattern](../patterns/bank-conflicts.md).
 
 ## The `ds_*` instruction family
@@ -133,7 +133,7 @@ crossbar for **lane-to-lane data movement without occupying LDS storage**. For
 `ds_bpermute` the byte address is `lane_id * 4`, i.e. the *source lane index ×4*;
 on an address collision the highest source lane wins; an out-of-range lane reads
 0. These are the building blocks of cross-row wave reductions — see
-[cross-lane operations](cross-lane.md) and [wave reduce](../technique/wave-reduce.md).
+[cross-lane operations](cross-lane.md) and [wave reduce](../techniques/wave-reduce.md).
 
 ```cpp
 // Cross-lane broadcast/shuffle with zero LDS storage cost.
@@ -183,7 +183,7 @@ layout each `v_mfma_*` expects. Two techniques make this efficient:
 
 - **Double buffering:** ping-pong two LDS tiles so `ds_read`/MFMA on tile *i*
   overlaps the global load of tile *i+1*
-  ([lds-double-buffering](../technique/lds-double-buffering.md)).
+  ([lds-double-buffering](../techniques/lds-double-buffering.md)).
 - **Direct-to-LDS:** on CDNA the `buffer_load ... lds` / `global_load_lds_*`
   path streams HBM → LDS **bypassing VGPRs**, freeing registers for the
   accumulator tile ([async copy to LDS](async-copy-lds.md)).
@@ -200,12 +200,12 @@ impact on achieved TFLOPS.
 > spread those 128-bit reads across all 64 banks. Wide LDS instructions
 > (`ds_read_b128`, `ds_read2_b64`, `ds_write_b128`) and `ds_*` over `flat_*` are
 > preferred for the same reason. See
-> [LDS swizzling](../technique/lds-swizzling.md).
+> [LDS swizzling](../techniques/lds-swizzling.md).
 
 ## See also
 
-- [Bank-conflict avoidance technique](../technique/bank-conflict-avoidance.md)
-- [LDS swizzling](../technique/lds-swizzling.md)
+- [Bank-conflict avoidance technique](../techniques/bank-conflict-avoidance.md)
+- [LDS swizzling](../techniques/lds-swizzling.md)
 - [Direct-to-LDS async copy](async-copy-lds.md)
 - [Cross-lane operations (DPP / swizzle / permute)](cross-lane.md)
 - [Bank-conflicts pattern](../patterns/bank-conflicts.md)

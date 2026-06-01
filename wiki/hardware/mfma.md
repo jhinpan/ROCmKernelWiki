@@ -182,7 +182,7 @@ See [MI300X datasheet](../../sources/docs/doc-mi300x-datasheet.md) and the
 ## See also
 
 - [MXFP / block-scaled FP8-FP6-FP4](mxfp.md)
-- [MFMA pipelining technique](../technique/mfma-pipelining.md)
+- [MFMA pipelining technique](../techniques/mfma-pipelining.md)
 - [rocWMMA language guide](../languages/rocwmma.md)
 - [WMMA vs MFMA migration](../migration/wmma-vs-mfma.md)
 

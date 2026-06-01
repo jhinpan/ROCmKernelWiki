@@ -164,7 +164,7 @@ produced**:
 
 It is usually **not** worth it for the *activation* operand (which is produced
 fresh every layer) unless the producer can be fused to emit MFMA-order output
-directly — see [kernel fusion](../technique/kernel-fusion.md).
+directly — see [kernel fusion](kernel-fusion.md).
 
 ## Costs and pitfalls
 

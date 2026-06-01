@@ -133,12 +133,16 @@ MI300/MI350 can be carved up at boot/driver level along two independent axes —
 
 **Compute partitioning (how XCDs are exposed as devices):**
 
-| Mode | Meaning | Devices seen | Use case |
-|---|---|---|---|
-| **SPX** (Single Partition X-celerator) | All 8 XCDs act as one logical GPU | 1 | Large single models; max per-device CUs/HBM |
-| **CPX** (Core Partition X-celerator) | Each XCD is its own logical GPU | 8 | Many small/independent jobs; tighter L2 locality per device |
+| Mode | Meaning | Devices seen | XCCs/device | Use case |
+|---|---|---|---|---|
+| **SPX** (Single Partition X-celerator) | All 8 XCDs act as one logical GPU | 1 | 8 | Large single models; max per-device CUs/HBM |
+| **DPX** (Dual) | XCDs split into two halves | 2 | 4 | Two medium jobs |
+| **QPX** (Quad) | XCDs split into four | 4 | 2 | Four medium jobs |
+| **CPX** (Core Partition X-celerator) | Each XCD is its own logical GPU | 8 | 1 | Many small/independent jobs; tighter L2 locality per device |
 
-In **CPX** each logical device *is* a single XCD, so the per-XCD L2 becomes "the"
+All four modes are advertised by this MI350X (verified via `amd-smi partition`:
+`ACCELERATOR_PARTITION_PROFILES` lists SPX/DPX/QPX/CPX = 1/2/4/8 partitions of
+8/4/2/1 XCCs). In **CPX** each logical device *is* a single XCD, so the per-XCD L2 becomes "the"
 L2 and the NUMA effect inside a device disappears — at the cost of 1/8th the CUs
 and a memory slice per device. **SPX** gives one big device but re-introduces the
 8-domain NUMA behavior described above.
@@ -148,12 +152,18 @@ and a memory slice per device. **SPX** gives one big device but re-introduces th
 | Mode | HBM layout | Notes |
 |---|---|---|
 | **NPS1** | All HBM stacks as one interleaved pool | Uniform bandwidth; default for big models |
-| **NPS4** | HBM split into 4 NUMA quadrants | Higher local BW per quadrant; pair with CPX for locality |
+| **NPS2** | HBM split into 2 NUMA halves | Higher local BW per half; the finer split this MI350X advertises |
 
-Compute and memory modes compose (e.g. `CPX` + `NPS4`). The right choice is
-workload-dependent: inference servers packing many small models favor
-`CPX`/`NPS4` for isolation and locality; a single large training/GEMM job favors
-`SPX`/`NPS1` for one wide device. Mode is fixed for the lifetime of the
+> Verified on this MI350X (gfx950): `amd-smi partition` reports
+> `MEMORY_PARTITION_CAPS: NPS1,NPS2` (current `NPS1`); **NPS4 is not advertised
+> by this gfx950 part** — it is an MI300-series (gfx942) memory layout. Older docs
+> that pair `CPX` with `NPS4` describe MI300X; on MI350X the analogous fine-grained
+> pairing is `CPX`/`NPS2`.
+
+Compute and memory modes compose (e.g. `CPX` + `NPS2` on MI350X). The right choice
+is workload-dependent: inference servers packing many small models favor a finer
+`CPX`/`NPS2` split for isolation and locality; a single large training/GEMM job
+favors `SPX`/`NPS1` for one wide device. Mode is fixed for the lifetime of the
 allocation — a kernel cannot change it, but it must be written to behave well
 under whichever mode the operator chose.
 

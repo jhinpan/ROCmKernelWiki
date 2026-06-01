@@ -83,7 +83,7 @@ export ROCM_WIKI_ROOT=/path/to/ROCmKernelWiki
   decision for every scanned PR
 - **6 auto-generated cross-reference indices** under `queries/`
 - **959 real upstream PR diffs** under `artifacts/prs/<repo>/PR-<N>/` (byte-capped, SHA-256-pinned via `PROVENANCE.yaml`) for the highest-signal kernel PRs
-- **12 runnable kernel examples** under `examples/` — compiled with hipcc; portable ones run + self-check on RDNA4/gfx1201, CDNA-MFMA ones cross-compile-verify for gfx942/gfx950
+- **12 runnable kernel examples** under `examples/` — compiled with hipcc; **all 12 now build with `--offload-arch=gfx950` and run on an AMD Instinct MI350X (gfx950), ROCm 7.2** (11/12 self-checks pass; `fp8-gemm`'s `main()` only verifies the emitted MFMA instruction, it does not run a numeric GEMM). Portable ones also run + self-check on RDNA4/gfx1201. See [`VERIFICATION.md`](VERIFICATION.md).
 
 ## Hardware Scope
 
@@ -162,7 +162,10 @@ python3 scripts/generate-indices.py    # regenerate query indices
 - Every technique/kernel/language page has a compilable code snippet
 - Every PR page carries `inclusion_reason` and `status: merged`
 - `verified` pages carry `evidence_basis` (official-doc + upstream-code/paper)
-- 0 dangling internal references
+- 0 dangling internal references (frontmatter ids **and** in-body relative links)
+- **gfx950 hardware/numeric claims re-verified on real MI350X silicon (ROCm 7.2),
+  double-checked by an adversarial re-run** — see [`VERIFICATION.md`](VERIFICATION.md)
+  and [`data/hardware-verified.yaml`](data/hardware-verified.yaml)
 
 ## License
 

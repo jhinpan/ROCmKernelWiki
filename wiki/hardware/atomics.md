@@ -91,7 +91,7 @@ as source-reported and confirm against your ISA build.)*
 
 A wave-local reduction usually wants **cross-lane** ops (DPP / `ds_swizzle`)
 first, then a single LDS or global atomic per wave — not one atomic per lane.
-See [wave reduce](../technique/wave-reduce.md) and
+See [wave reduce](../techniques/wave-reduce.md) and
 [RMSNorm](../kernels/rmsnorm.md), which reduce within the wave before touching a
 shared accumulator.
 
@@ -175,7 +175,7 @@ __device__ void signal(int* flag) {
 (`cg::this_grid().sync()` launched via `hipLaunchCooperativeKernel`) provide a
 device-wide barrier, but require that **all workgroups are co-resident** — the
 launch must fit in the occupancy budget of the device, so grid-sync kernels are
-typically [persistent kernels](../technique/persistent-kernel.md) sized to one
+typically [persistent kernels](../techniques/persistent-kernel.md) sized to one
 wave-group per CU. If the grid is over-subscribed, the sync deadlocks.
 
 **3. Atomic work counters.** Stream-K and persistent GEMM schedulers use a single
@@ -202,7 +202,7 @@ the result — see [s_waitcnt](s-waitcnt.md).
 
 - [LDS — Local Data Share](lds.md)
 - [Memory instructions — buffer vs global vs flat](memory-instructions.md)
-- [Wave reduce technique](../technique/wave-reduce.md)
+- [Wave reduce technique](../techniques/wave-reduce.md)
 - [RMSNorm kernel](../kernels/rmsnorm.md)
 
 ## Sources
