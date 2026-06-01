@@ -151,6 +151,14 @@ __device__ f32x4 mx_mma_16x16x128(i32x8 a, i32x8 b, f32x4 acc,
 }
 ```
 
+> Verified on MI350X (gfx950, ROCm 7.2 / clang 22): both `v_mfma_f32_16x16x128_f8f6f4`
+> and `v_mfma_f32_32x32x64_f8f6f4` are real ISA mnemonics the assembler accepts,
+> and the scaled builtins above emit `v_mfma_scale_f32_16x16x128_f8f6f4` /
+> `…_32x32x64_…`. But Clang exposes **only the *scaled* builtin** — there is no
+> `__builtin_amdgcn_mfma_f32_16x16x128_f8f6f4` (unscaled) intrinsic; to get the
+> unscaled behaviour from the builtin, set `ABID[0]=0` (forces all scales to 1.0),
+> or reach the bare opcode via inline asm. All three are absent on gfx942.
+
 In practice you should let [Composable Kernel](../languages/composable-kernel.md),
 hipBLASLt, or the [Triton AMD backend](../languages/triton-amd.md) emit these —
 the packed register layout for FP6 (6 bits straddling dword boundaries) is
@@ -193,8 +201,18 @@ From the [CDNA4 whitepaper](../../sources/docs/doc-cdna4-whitepaper.md):
 The 2× step from FP8 to FP6/FP4 comes directly from the wider-K opcodes
 (`16x16x128` vs the FP8 `16x16x32`): more reduction work per issued instruction
 at the same issue rate. Note the silicon trade — to make room for the MX path,
-CDNA4 **dropped the native TF32/XF32 matrix path** (now emulated via BF16) and
-**halved per-CU FP64 matrix** throughput vs CDNA3.
+CDNA4 **dropped the native TF32/XF32 matrix path** and **halved per-CU FP64
+matrix** throughput vs CDNA3.
+
+> Verified on MI350X (gfx950, ROCm 7.2): the TF32 drop is not a soft
+> "emulation" — the native intrinsic literally does not lower. Compiling
+> `__builtin_amdgcn_mfma_f32_16x16x8_xf32` (and `32x32x4`) fails for gfx950 with
+> `fatal error: Cannot select: intrinsic llvm.amdgcn.mfma.f32.16x16x8.xf32`,
+> while the same source compiles for gfx942. A "fast-FP32" GEMM that relied on
+> TF32 MFMA must move to an explicit BF16 (or higher-precision) path. The
+> **FP64-matrix-halved** figure is datasheet-derived (the `mfma_f64_16x16x4`
+> opcode itself still compiles on gfx950 — the change is per-CU rate, not opcode
+> availability), so treat it as source-reported rather than measured here.
 
 ## Practical notes
 

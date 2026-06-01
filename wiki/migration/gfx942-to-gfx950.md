@@ -79,7 +79,7 @@ The big-ticket changes:
 | MX block formats | none | FP6/FP4 + E8M0 block scales (`f8f6f4`) | New opt path; opt-in |
 | LDS size | 64 KB/CU | 160 KB/CU | Can grow tiles / occupancy |
 | LDS banks | 32 banks × 512 dwords | 64 banks × 640 dwords | Re-check swizzle/padding |
-| Direct-to-LDS width | ≤8 B | ≤16 B (`global_load_lds_dwordx4`) | Wider async copies |
+| Direct-to-LDS width | ≤4 B (one dword) | ≤16 B (`global_load_lds_dwordx4`; also `dwordx3`) | Wider async copies |
 | `v_permlane16_*` | absent | present | Faster cross-lane reductions |
 | TF32/XF32 matrix | native MFMA path | **dropped** (BF16-emulated) | Switch to BF16 or accept emulation |
 | FP64 matrix | full rate | **halved per CU** | Re-budget FP64-heavy kernels |
@@ -107,12 +107,10 @@ In HIP, gate the type by arch rather than hardcoding:
 #include <hip/hip_fp8.h>
 
 // CDNA3 (gfx942): FNUZ FP8.   CDNA4 (gfx950): OCP FP8.
-#if defined(__gfx950__)
-  using fp8_e4m3 = __hip_fp8_e4m3;        // OCP
-#elif defined(__gfx942__)
-  using fp8_e4m3 = __hip_fp8_e4m3_fnuz;   // FNUZ
+#if defined(__gfx942__)
+  using fp8_e4m3 = __hip_fp8_e4m3_fnuz;   // FNUZ (CDNA3 device pass)
 #else
-  #error "unsupported FP8 target"
+  using fp8_e4m3 = __hip_fp8_e4m3;        // OCP (gfx950 device pass + the host pass)
 #endif
 
 __device__ float decode(fp8_e4m3 x) { return float(x); }  // bias handled by type
@@ -167,30 +165,44 @@ size_t lds_bytes = p.sharedMemPerBlock;     // 64KB-class on gfx942, larger on g
 The direct-to-LDS async copy (HBM→LDS bypassing VGPRs — AMD's analog of
 NVIDIA `cp.async`; see [async copy](../hardware/async-copy-lds.md)) gains
 12-/16-byte transfers on gfx950 (`global_load_lds_dwordx3/x4`,
-`llvm.amdgcn.load.to.lds`). A gfx942 pipeline built on `dwordx2` async copies can
-halve its instruction count by switching to `dwordx4`, improving the
-streaming/compute overlap in GEMM and attention prologues.
+`llvm.amdgcn.load.to.lds`). A gfx942 pipeline limited to **single-dword (4 B)**
+direct-to-LDS copies can move 4× as much per instruction by switching to
+`dwordx4` on gfx950, improving the streaming/compute overlap in GEMM and
+attention prologues. (Verified on MI350X, ROCm 7.2: the legal
+`__builtin_amdgcn_load_to_lds` byte sizes are `{1, 2, 4}` on gfx942 vs
+`{1, 2, 4, 12, 16}` on gfx950 — there is **no** 8 B / `dwordx2` form on either
+generation.)
 
-## 5. Cross-lane: `v_permlane16` now available
+## 5. Cross-lane: `v_permlane16_swap` now available
 
-`v_permlane16_*` is **gfx950-only** (absent on gfx942) — see
+The lane-swap op `v_permlane16_swap_b32` (and `v_permlane32_swap_b32`) is
+**gfx950-only** (absent on gfx942) — see
 [cross-lane ops](../hardware/cross-lane.md). On gfx942 a full wave reduction
 typically does DPP within 16-lane rows, then `ds_swizzle`/`ds_bpermute` for the
-cross-row step. On gfx950 you can replace the LDS-crossbar hop with `permlane16`,
-shortening the reduction critical path. Keep the gfx942 path under an arch guard:
+cross-row step. On gfx950 you can replace the LDS-crossbar hop with
+`__builtin_amdgcn_permlane16_swap`, shortening the reduction critical path. Keep
+the gfx942 path under an arch guard:
 
 ```cpp
 __device__ float row_then_cross_reduce(float v) {
     // intra-16-lane reduction via DPP works on both archs ...
     v = dpp_row_reduce(v);
 #if defined(__gfx950__)
-    v = permlane16_cross_reduce(v);     // single op, no LDS traffic
+    // single op, no LDS traffic: swap the partner 16-lane half and add it.
+    auto sw = __builtin_amdgcn_permlane16_swap(
+        __float_as_int(v), __float_as_int(v), false, false);
+    v += __int_as_float(sw[1]);
 #else
     v = bpermute_cross_reduce(v);       // gfx942: route through LDS crossbar
 #endif
     return v;
 }
 ```
+
+> **Do not use** `__builtin_amdgcn_permlanex16(v, v, sel0, sel1, …)` here: that
+> SGPR-selector form is an RDNA (gfx10+) instruction and fails to compile for
+> gfx950 with `needs target feature gfx10-insts` (verified on MI350X, ROCm 7.2).
+> CDNA4 exposes only the `_swap` form.
 
 ## 6. TF32/XF32 dropped; FP64 matrix halved
 

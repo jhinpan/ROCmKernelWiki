@@ -146,7 +146,7 @@ normal load-then-`ds_write` would need. This is AMD's analog of NVIDIA
 Steering the accumulator into **AGPRs** frees ArchVGPRs for addressing and lets
 the matrix unit co-issue with VALU. The compiler does this by default for MFMA
 output, but tile shape and `-amdgpu-num-vgpr`/agpr controls let you rebalance
-the 256+256 split — see [VGPR budgeting](../techniques/technique-vgpr-budgeting.md).
+the 256+256 split — see [VGPR budgeting](../techniques/vgpr-budgeting.md).
 
 ### 5. Reduce live ranges
 

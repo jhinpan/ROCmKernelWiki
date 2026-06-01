@@ -184,7 +184,7 @@ Key tuning levers (all discussed in the CK FP8 blog and the 4-wave note):
 
 ## The 4-wave schedule
 
-The [4-wave FP8 GEMM note](../sources/blogs/blog-4wave-fp8-gemm.md) describes a
+The [4-wave FP8 GEMM note](../../sources/blogs/blog-4wave-fp8-gemm.md) describes a
 scheduling refinement: run **4 waves per workgroup** and statically partition
 them so that while two waves drive the matrix core on the current K-stage, the
 other two issue the next stage's `global_load_lds` copies. Because the FP8 MMA is
@@ -221,8 +221,8 @@ full cache line. See the [Triton AMD guide](../languages/triton-amd.md).
 
 ## Performance
 
-From the [CDNA4 whitepaper](../sources/docs/doc-cdna4-whitepaper.md) and the
-[FP8 GEMM blog](../sources/blogs/blog-fp8-gemm-cdna4.md):
+From the [CDNA4 whitepaper](../../sources/docs/doc-cdna4-whitepaper.md) and the
+[FP8 GEMM blog](../../sources/blogs/blog-fp8-gemm-cdna4.md):
 
 | GPU | dtype | Metric | Value |
 |---|---|---|---|
@@ -250,8 +250,11 @@ contains two pieces, kept separate because the FP8 `f8f6f4` path is **CDNA-only
 (MFMA)** while RDNA4 (gfx1201) has WMMA:
 
 1. **`fp8_gemm_cdna.cpp`** — the CDNA FP8 GEMM using the real matrix-core
-   builtins. **Cross-compile-verify only** (it does not run on gfx1201). The
-   build confirms the right instructions are emitted:
+   builtins. It builds for gfx950/gfx942 and, on a real MI350X (gfx950, ROCm 7.2),
+   compiles and runs to completion. **Caveat:** its `main()` only confirms that
+   the right MFMA instruction is *emitted* — it does **not** launch the kernel or
+   run a numeric GEMM correctness check, so treat it as a codegen/ISA probe, not a
+   validated numeric example. The emitted instructions are
    `v_mfma_scale_f32_16x16x128_f8f6f4` for gfx950 (OCP E4M3, hardware MX) and
    `v_mfma_f32_16x16x32_fp8_fp8` for gfx942 (FNUZ E4M3, software scaling).
 

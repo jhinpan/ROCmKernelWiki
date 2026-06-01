@@ -55,7 +55,7 @@ memory. They differ in **reach** (which lanes can talk to which), **cost**
 | `ds_swizzle_b32` | within 32-lane group | fixed (encoded mask) | yes (no storage) | compile-time pattern |
 | `ds_permute_b32` (fwd) | full 64 lanes | per-lane VGPR (push) | yes (no storage) | scatter: I send to lane *idx* |
 | `ds_bpermute_b32` (bwd) | full 64 lanes | per-lane VGPR (pull) | yes (no storage) | gather: I read from lane *idx* |
-| `v_permlane16_*` | 32-lane half, gfx950-only | SGPR selectors | no | absent on gfx942 |
+| `v_permlane16_swap` / `v_permlane32_swap` | swaps the paired 16-/32-lane halves, gfx950-only | `fi` / `bound_ctrl` bools (no selectors) | no | absent on gfx942; the RDNA selector-form `v_permlane16`/`permlanex16` is a *different* gfx10+ op that will not assemble for CDNA4 |
 | `v_readlane`/`v_writelane`/`v_readfirstlane` | lane ↔ SGPR | immediate / VGPR | no | vector↔scalar move |
 
 CDNA is **wave64-only**, so all of these operate over a 64-lane wavefront and a
@@ -152,21 +152,33 @@ This DPP-then-`ds_bpermute`-then-`readfirstlane` sequence is the canonical
 gfx942 wave reduction — see [wave reduction](../techniques/wave-reduce.md). Only
 32-bit dwords move per op; 64-bit values need two passes.
 
-## v_permlane16 — gfx950 only
+## v_permlane16_swap — gfx950 only
 
-CDNA4 adds `v_permlane16_b32` / `v_permlanex16_b32`, which permute lanes within a
-16-lane block (and the cross-block `x16` variant) using **SGPR-held selectors**
-rather than the LDS crossbar — useful for the cross-row step of a reduction
-without occupying the LDS unit. These are **absent on gfx942**: code that uses
-`v_permlane16_*` will not assemble for CDNA3, so a portable kernel must fall back
-to `ds_bpermute`/DPP. This is one of the small ISA deltas to watch when porting —
-see [gfx942 → gfx950 migration](../migration/gfx942-to-gfx950.md).
+CDNA4 adds the lane-**swap** instructions `v_permlane16_swap_b32` and
+`v_permlane32_swap_b32`, which *exchange* the paired 16-/32-lane halves of the
+wavefront in a single op without touching the LDS crossbar — useful for the
+cross-row step of a reduction without occupying the LDS unit. They are reached
+via `__builtin_amdgcn_permlane16_swap` / `__builtin_amdgcn_permlane32_swap`,
+which return a 2-element vector (`r[0]` = this lane's value, `r[1]` = the swapped
+partner) and take only `fi` / `bound_ctrl` boolean modifiers — there are **no
+SGPR selector operands**. These are **absent on gfx942** (a portable kernel must
+fall back to `ds_bpermute`/DPP there).
+
+> **Watch the name.** The RDNA selector-form `v_permlane16_b32` /
+> `v_permlanex16_b32` (`__builtin_amdgcn_permlane16` / `permlanex16`, taking two
+> 32-bit SGPR selectors) is a **gfx10+ (RDNA) instruction**, *not* the CDNA4 op.
+> On gfx950 the compiler rejects it with `error: '__builtin_amdgcn_permlanex16'
+> needs target feature gfx10-insts` (verified on MI350X, ROCm 7.2 / clang 22).
+> Use the `_swap` builtins on CDNA4. This is one of the small ISA deltas to watch
+> when porting — see [gfx942 → gfx950 migration](../migration/gfx942-to-gfx950.md).
 
 ```cpp
 #if defined(__gfx950__)
-    // gfx950: cross-lane step without touching the LDS unit
-    int hi = __builtin_amdgcn_permlanex16(v, v, 0x76543210u, 0xfedcba98u,
-                                          /*fi=*/true, /*bound_ctrl=*/false);
+    // gfx950: swap the two 16-lane halves of each 32-lane group with
+    // v_permlane16_swap_b32 — no LDS-unit traffic; r[1] is the partner lane.
+    // (The RDNA selector-form permlanex16(...) does NOT assemble for CDNA4.)
+    auto sw = __builtin_amdgcn_permlane16_swap(v, v, /*fi=*/false, /*bound_ctrl=*/false);
+    int hi = sw[1];
 #else
     // gfx942 fallback: pull from the partner lane via the LDS crossbar
     int hi = __builtin_amdgcn_ds_bpermute((lane ^ 16) << 2, v);
@@ -187,7 +199,7 @@ or the way to feed a per-wave scalar into a `buffer`/`ds` address.
 - Fixed pattern, all within a 16-lane row → **DPP** (cheapest).
 - Fixed pattern within 32 lanes → **ds_swizzle_b32**.
 - Data-dependent or full-64-lane movement → **ds_permute/ds_bpermute**.
-- gfx950 cross-row step without the LDS unit → **v_permlane16/x16**.
+- gfx950 cross-row step without the LDS unit → **v_permlane16_swap** (lane-block swap).
 - Lane → scalar (broadcast / uniformize) → **readfirstlane/readlane**.
 
 `ds_swizzle`, `ds_permute`, and `ds_bpermute` issue on the LDS unit and so
@@ -210,7 +222,8 @@ the instruction **plus its `s_waitcnt`**):
 The guide's rule of thumb — **speed:**
 `v_permlane ≥ DPP > ds_swizzle ≥ ds_permute > ds_bpermute`; **generality** is the
 exact reverse. Practical guidance: reach for **DPP** (or `v_permlane16` on gfx950)
-whenever the access pattern fits — it is ~5–10× cheaper than the LDS-crossbar ops
+whenever the access pattern fits (on gfx950 use `v_permlane16_swap` for the
+cross-row step) — it is ~5–10× cheaper than the LDS-crossbar ops
 and needs no `s_waitcnt` — and fall back to `ds_permute`/`ds_bpermute` only when
 you need arbitrary full-wave gather/scatter. In MLIR these surface as
 `amdgpu.dpp` / `rocdl.update.dpp`, `rocdl.ds_swizzle`, `rocdl.ds_bpermute`, and
