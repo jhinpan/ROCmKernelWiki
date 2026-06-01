@@ -250,8 +250,11 @@ contains two pieces, kept separate because the FP8 `f8f6f4` path is **CDNA-only
 (MFMA)** while RDNA4 (gfx1201) has WMMA:
 
 1. **`fp8_gemm_cdna.cpp`** — the CDNA FP8 GEMM using the real matrix-core
-   builtins. **Cross-compile-verify only** (it does not run on gfx1201). The
-   build confirms the right instructions are emitted:
+   builtins. It builds for gfx950/gfx942 and, on a real MI350X (gfx950, ROCm 7.2),
+   compiles and runs to completion. **Caveat:** its `main()` only confirms that
+   the right MFMA instruction is *emitted* — it does **not** launch the kernel or
+   run a numeric GEMM correctness check, so treat it as a codegen/ISA probe, not a
+   validated numeric example. The emitted instructions are
    `v_mfma_scale_f32_16x16x128_f8f6f4` for gfx950 (OCP E4M3, hardware MX) and
    `v_mfma_f32_16x16x32_fp8_fp8` for gfx942 (FNUZ E4M3, software scaling).
 

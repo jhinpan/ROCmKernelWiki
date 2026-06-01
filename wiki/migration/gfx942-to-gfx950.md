@@ -190,8 +190,8 @@ __device__ float row_then_cross_reduce(float v) {
 #if defined(__gfx950__)
     // single op, no LDS traffic: swap the partner 16-lane half and add it.
     auto sw = __builtin_amdgcn_permlane16_swap(
-        __builtin_bit_cast(int, v), __builtin_bit_cast(int, v), false, false);
-    v += __builtin_bit_cast(float, sw[1]);
+        __float_as_int(v), __float_as_int(v), false, false);
+    v += __int_as_float(sw[1]);
 #else
     v = bpermute_cross_reduce(v);       // gfx942: route through LDS crossbar
 #endif
