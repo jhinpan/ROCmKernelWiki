@@ -28,6 +28,7 @@ sources:
 - doc-cdna4-isa
 - blog-gemm-optimization
 - doc-llvm-amdgpu
+- blog-amdgpu-kernel-opt-guide
 aliases:
 - LDS
 - local data share
@@ -191,6 +192,16 @@ AMD's step-by-step GEMM optimization blog walks through exactly these LDS
 staging, vectorization, and bank-conflict-avoidance steps and their measured
 impact on achieved TFLOPS.
 
+> **gfx950 bank index & the XOR-swizzle rule.** On MI350X/MI355X the LDS is
+> **160 KB with 64 banks** (640 × 4 B entries, 256 B/clock read), so the bank a
+> Dword lands in is `(address / 4) % 64` (vs `% 32` on MI300). For the column-wise
+> `ds_read_b128` access an MFMA tile load performs, **padding is awkward to apply**
+> — the shark-ai guide recommends **XOR-based swizzling instead of padding** to
+> spread those 128-bit reads across all 64 banks. Wide LDS instructions
+> (`ds_read_b128`, `ds_read2_b64`, `ds_write_b128`) and `ds_*` over `flat_*` are
+> preferred for the same reason. See
+> [LDS swizzling](../technique/lds-swizzling.md).
+
 ## See also
 
 - [Bank-conflict avoidance technique](../technique/bank-conflict-avoidance.md)
@@ -204,4 +215,5 @@ impact on achieved TFLOPS.
 - [AMD Instinct MI300 / CDNA3 ISA Reference Guide](https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/instruction-set-architectures/amd-instinct-mi300-cdna3-instruction-set-architecture.pdf)
 - [AMD Instinct CDNA4 ISA Reference Guide](https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/instruction-set-architectures/amd-instinct-cdna4-instruction-set-architecture.pdf)
 - [Optimizing a GEMM kernel on AMD Instinct (ROCm Blogs)](https://rocm.blogs.amd.com/artificial-intelligence/matrix-cores/README.html)
+- [AMDGPU Kernel Optimization Guide (nod-ai/shark-ai)](https://github.com/nod-ai/amd-shark-ai/blob/main/docs/amdgpu_kernel_optimization_guide.md) — gfx950 LDS specs, XOR-swizzle vs padding
 - [LLVM AMDGPU Backend User Guide](https://llvm.org/docs/AMDGPUUsage.html)

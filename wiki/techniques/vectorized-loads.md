@@ -36,6 +36,7 @@ sources:
 - doc-mi300x-datasheet
 - blog-gemm-optimization
 - doc-llvm-amdgpu
+- blog-amdgpu-kernel-opt-guide
 implemented_by:
 - pr-aiter-2394
 - pr-triton-729
@@ -194,6 +195,28 @@ unroll factor, and L2/Infinity-Cache hit rate. See the
 [GEMM optimization blog](../../sources/blogs/blog-gemm-optimization.md) for how
 wide A/B loads feed the LDS double-buffer stage in a real kernel.
 
+## Coalescing checklist (from the shark-ai optimization guide)
+
+The nod-ai/shark-ai *AMDGPU Kernel Optimization Guide* gives a precise recipe for
+saturating the memory path on GFX9. Treat it as a checklist when a kernel is
+memory-bound (see [memory-bound pattern](../patterns/memory-bound.md)):
+
+1. **Use 16 B / 128-bit accesses** — `global_load_dwordx4` / `global_store_dwordx4`.
+2. **Make the access subgroup-contiguous** so the whole 64-lane wave touches
+   **512 B at once** (64 lanes × 8 B, or the natural span of the dwordx4 pattern).
+3. **Form clauses:** up to **4 adjacent `global_load_dwordx4`** instructions
+   implicitly form a *clause* that issues as a **single data-fabric transaction** —
+   far cheaper than four independent transactions.
+4. **Engage all four L1 cache sets** by having a workgroup load 4 distinct 128 B
+   cache lines that map to different sets.
+5. **Launch enough work:** make the grid a **multiple of the CU count** and engage
+   all **4 IODs** (and, on MI300, all 8 XCDs) to reach peak HBM bandwidth.
+6. **Use non-temporal** loads/stores for streamed, write-once / read-once data so
+   it bypasses the caches.
+
+These rules are exactly what the [bandwidth microbenchmark](../kernels/bandwidth-microbench.md)
+exploits to reach multi-TB/s on MI300-class parts.
+
 ## See also
 
 - [Memory instructions: buffer vs global vs flat](../hardware/memory-instructions.md)
@@ -209,3 +232,4 @@ wide A/B loads feed the LDS double-buffer stage in a real kernel.
 - [AMD Instinct MI300X Datasheet](https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/data-sheets/amd-instinct-mi300x-data-sheet.pdf)
 - [LLVM User Guide for AMDGPU Backend](https://llvm.org/docs/AMDGPUUsage.html)
 - [Optimizing GEMM on AMD GPUs](https://rocm.blogs.amd.com/artificial-intelligence/matrix-cores/README.html)
+- [AMDGPU Kernel Optimization Guide (nod-ai/shark-ai)](https://github.com/nod-ai/amd-shark-ai/blob/main/docs/amdgpu_kernel_optimization_guide.md) — coalescing & clause rules

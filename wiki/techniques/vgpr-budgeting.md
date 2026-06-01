@@ -38,6 +38,7 @@ sources:
 - doc-mi300x-datasheet
 - blog-gemm-optimization
 - ref-matrix-calculator
+- blog-amdgpu-kernel-opt-guide
 implemented_by:
 - pr-Tensile-1383
 - pr-sglang-25898
@@ -203,3 +204,4 @@ exact failure mode catalogued under
 - [AMD Instinct MI300X Datasheet](https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/data-sheets/amd-instinct-mi300x-data-sheet.pdf)
 - [Optimizing GEMM on AMD GPUs](https://rocm.blogs.amd.com/artificial-intelligence/matrix-cores/README.html)
 - [AMD Matrix Instruction Calculator](https://github.com/ROCm/amd_matrix_instruction_calculator)
+- [AMDGPU Kernel Optimization Guide (nod-ai/shark-ai)](https://github.com/nod-ai/amd-shark-ai/blob/main/docs/amdgpu_kernel_optimization_guide.md)

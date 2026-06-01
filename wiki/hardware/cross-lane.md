@@ -28,6 +28,7 @@ sources:
 - ref-gcnasm
 - doc-llvm-amdgpu
 - blog-amd-matrix-cores
+- blog-amdgpu-kernel-opt-guide
 aliases:
 - cross-lane
 - lane shuffle
@@ -193,10 +194,33 @@ or the way to feed a per-wave scalar into a `buffer`/`ds` address.
 contend with real `ds_read`/`ds_write` traffic; on a heavily LDS-bound kernel a
 DPP or `v_permlane16` path can be cheaper even when its reach is narrower.
 
+## Measured latency (MI300) and how to choose
+
+The nod-ai/shark-ai *AMDGPU Kernel Optimization Guide* reports measured
+per-primitive latencies on MI300 (Fused Softmax microbenchmark; cycles include
+the instruction **plus its `s_waitcnt`**):
+
+| Primitive | Approx. cycles | Needs `s_waitcnt`? | Reach |
+|---|---|---|---|
+| `ds_permute` / `ds_bpermute` | ~50 | yes (LDS unit) | full 64-lane, arbitrary |
+| `ds_swizzle` | ~50 | yes (LDS unit) | fixed pattern, 32-lane groups |
+| DPP | 4–12 | no | adjacent rows / fixed shifts |
+| `v_permlane` (gfx950) | 4–8 | no | 16/32-lane, gfx950 only |
+
+The guide's rule of thumb — **speed:**
+`v_permlane ≥ DPP > ds_swizzle ≥ ds_permute > ds_bpermute`; **generality** is the
+exact reverse. Practical guidance: reach for **DPP** (or `v_permlane16` on gfx950)
+whenever the access pattern fits — it is ~5–10× cheaper than the LDS-crossbar ops
+and needs no `s_waitcnt` — and fall back to `ds_permute`/`ds_bpermute` only when
+you need arbitrary full-wave gather/scatter. In MLIR these surface as
+`amdgpu.dpp` / `rocdl.update.dpp`, `rocdl.ds_swizzle`, `rocdl.ds_bpermute`, and
+`rocdl.permlane*` / `amdgpu.permlane_swap`.
+
 ## Sources
 
 - [CDNA3 ISA Reference Guide](https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/instruction-set-architectures/amd-instinct-mi300-cdna3-instruction-set-architecture.pdf)
 - [CDNA4 ISA Reference Guide](https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/instruction-set-architectures/amd-instinct-cdna4-instruction-set-architecture.pdf)
 - [LLVM AMDGPU User Guide — cross-lane intrinsics](https://llvm.org/docs/AMDGPUUsage.html)
-- [GCN/CDNA assembly notes (gcnasm)](https://github.com/AMD-AI/gcnasm)
+- [GCN/CDNA assembly notes (gcnasm)](https://github.com/carlushuang/gcnasm)
 - [AMD Matrix Cores blog](https://gpuopen.com/learn/amd-lab-notes/amd-lab-notes-matrix-cores-readme/)
+- [AMDGPU Kernel Optimization Guide (nod-ai/shark-ai)](https://github.com/nod-ai/amd-shark-ai/blob/main/docs/amdgpu_kernel_optimization_guide.md) — measured cross-lane latencies

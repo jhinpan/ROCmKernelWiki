@@ -36,6 +36,7 @@ sources:
 - blog-gemm-optimization
 - doc-cdna3-isa
 - blog-4wave-fp8-gemm
+- blog-amdgpu-kernel-opt-guide
 implemented_by:
 - pr-Tensile-1383
 - pr-Tensile-1529
@@ -225,6 +226,15 @@ rather than guessing.
 5. Sweep `__launch_bounds__` / `waves_per_eu` and measure; keep the fastest point,
    not the highest-occupancy point.
 
+> **Concrete caps (MI300, per the shark-ai guide):** up to **104 SGPRs/workgroup**,
+> **256 VGPRs/thread**, **256 AGPRs/thread** (VGPR/AGPR share one file on CDNA2+).
+> The default register cap is **128** — exceed it deliberately with
+> `__launch_bounds__(MAX_THREADS_PER_BLOCK, MIN_WARPS_PER_EXECUTION_UNIT)` and hint
+> the allocator via the LLVM `amdgpu-waves-per-eu` attribute. When a kernel spills,
+> it goes **first to AGPRs** (`v_accvgpr_*`), **then to scratch** (`scratch_store_*`)
+> — so a few spilled VGPRs landing in unused AGPRs is far cheaper than scratch
+> traffic. Verify with `.sgpr_spill_count` / `.vgpr_spill_count` in the ISA dump.
+
 ## See also
 
 - [Wavefront & register files](../hardware/wavefront.md)
@@ -238,5 +248,6 @@ rather than guessing.
 - [HIP Performance Guidelines (occupancy, launch bounds)](https://rocm.docs.amd.com/projects/HIP/en/latest/how-to/performance_guidelines.html)
 - [Triton kernel performance optimization on AMD](https://rocm.blogs.amd.com/software-tools-optimization/triton-kernel-optimization/README.html)
 - [GEMM kernel optimization on AMD GPUs](https://rocm.blogs.amd.com/artificial-intelligence/matrix-cores/README.html)
+- [AMDGPU Kernel Optimization Guide (nod-ai/shark-ai)](https://github.com/nod-ai/amd-shark-ai/blob/main/docs/amdgpu_kernel_optimization_guide.md) — register caps, launch_bounds, spill order
 - [AMD Instinct MI300 / CDNA3 ISA Reference Guide](https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/instruction-set-architectures/amd-instinct-mi300-cdna3-instruction-set-architecture.pdf)
 - [Optimizing an FP8 GEMM with a 4-wave ping-pong schedule](https://rocm.blogs.amd.com/artificial-intelligence/fp8-gemm/README.html)

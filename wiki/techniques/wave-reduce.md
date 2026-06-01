@@ -42,6 +42,7 @@ sources:
 - doc-cdna4-isa
 - doc-llvm-amdgpu
 - ref-gcnasm
+- blog-amdgpu-kernel-opt-guide
 implemented_by:
 - pr-FlyDSL-447
 - pr-FlyDSL-524
@@ -213,3 +214,4 @@ first, write one scalar per wave to LDS, then reduce those (see
 - [AMD CDNA4 ISA Reference Guide](https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/instruction-set-architectures/amd-instinct-cdna4-instruction-set-architecture.pdf) — `v_permlane16_b32`.
 - [LLVM AMDGPU User Guide](https://llvm.org/docs/AMDGPUUsage.html) — `llvm.amdgcn.mov.dpp`, `llvm.amdgcn.ds.bpermute`, `llvm.amdgcn.readlane` intrinsics.
 - [AMD Lab Notes / GCN assembly reference (gcnasm)](https://gpuopen.com/learn/amd-gcn-assembly-cross-lane-operations/) — cross-lane operations walkthrough.
+- [AMDGPU Kernel Optimization Guide (nod-ai/shark-ai)](https://github.com/nod-ai/amd-shark-ai/blob/main/docs/amdgpu_kernel_optimization_guide.md)
