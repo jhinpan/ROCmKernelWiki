@@ -34,14 +34,11 @@ an adversarial second pass. Full evidence: [`VERIFICATION.md`](VERIFICATION.md) 
   memory NPS1/NPS2; native `xf32` MFMA *fails to select* on gfx950.
 - **All 12 runnable examples** build with `--offload-arch=gfx950` **and execute** on the GPU
   (11/12 self-check; `fp8-gemm`'s `main()` only verifies the emitted MFMA, no numeric check).
-- **First-party FlyDSL kernel sweep on MI350X** — every major FlyDSL gfx950 kernel profiled
-  with rocprofv3 ATT + counters against AITER/CK/hipBLASLt baselines
-  ([dashboard](https://jhinpan.github.io/flydsl-kernel-profiling/) ·
-  [`ref-flydsl-kernel-profiling`](sources/refs/ref-flydsl-kernel-profiling.md) ·
-  [FlyDSL flash-attention page](wiki/kernels/flydsl-flash-attention.md)):
-  - **Wins:** softmax **2.05×** (vs Triton), hgemm_splitk **1.66×**, moe_gemm **1.11×**.
-  - **Headroom:** flash_attn 0.92×, paged-attention 0.48×, **topk_gating 0.22×**, **rope 0.17×**
-    — the attention/GEMM losers are **register-pressure-capped** at 1–2 waves/SIMD.
+- **First-party FlyDSL kernel sweep on MI350X** — every major FlyDSL gfx950 kernel was
+  profiled with rocprofv3 ATT + counters against matched AITER/CK/hipBLASLt baselines.
+  The detailed verdict table, root-cause notes, and dashboard links live in the
+  canonical [`ref-flydsl-kernel-profiling`](sources/refs/ref-flydsl-kernel-profiling.md)
+  source page; synthesized pages link back to it instead of duplicating the full summary.
 
 ## What's Here
 

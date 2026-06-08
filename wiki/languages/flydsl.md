@@ -227,21 +227,12 @@ matrix-core operand distribution.
 
 ## Measured on MI350X (gfx950)
 
-We profiled every major FlyDSL gfx950 kernel on real **MI350X silicon (ROCm 7.2)** with
-rocprofv3 ATT + counters, against matched-shape AITER / CK / hipBLASLt baselines — see the
-[profiling sweep & dashboard](../../sources/refs/ref-flydsl-kernel-profiling.md). Headlines
-(throughput ÷ baseline, `>1` = FlyDSL faster):
-
-- **Wins:** softmax **2.05×** (vs Triton), hgemm_splitk **1.66×**, moe_gemm **1.11×**.
-- **Parity:** layernorm, quant, moe_reduce.
-- **Headroom:** flash_attn 0.92×, mla 0.90×, rmsnorm 0.89×, paged-attention 0.48×, and the
-  two big ones — **topk_gating 0.22×** and **rope 0.17×**.
-
-Two recurring root causes, both actionable: (1) the attention/GEMM losers are
-**register-pressure-capped** at 1–2 waves/SIMD (VGPR 175–251) — admit a 2nd wave by
-[cutting the live set](../techniques/vgpr-budgeting.md); (2) rope/topk serialize cross-lane
-reductions on `LGKMCNT` — replace with a DPP / `v_permlane16`
-[wave reduction](../techniques/wave-reduce.md).
+FlyDSL has a first-party MI350X profiling sweep with rocprofv3 ATT traces, hardware
+counters, matched baselines, and per-kernel bundles. Keep the detailed verdict table
+and root-cause list in the canonical
+[profiling sweep & dashboard](../../sources/refs/ref-flydsl-kernel-profiling.md);
+this language page points to the study as evidence that the same layout DSL can reach
+wins, parity, and still-open headroom depending on the kernel.
 
 ## Limitations and gotchas
 

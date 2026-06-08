@@ -54,14 +54,14 @@ sources:
 - ref-flydsl
 - ref-flydsl-kernel-profiling
 - doc-flash-attention-2
-- hw-mfma
-- lang-flydsl
 performance_claims:
 - gpu: MI350X
   dtype: bf16
   metric: FlyDSL fwd kernel-time vs CK-tile FlashAttention (throughput ratio, >1 = FlyDSL faster)
-  value: ~0.92x (HEADROOM)
-  shape: D=128, causal, seq%256==0
+  value: 0.92
+  bucket: HEADROOM
+  baseline: CK-tile FlashAttention
+  shape: D=128, causal, seq % 256 == 0
   utilization: register-pressure-capped — 1-2 waves/SIMD resident, VGPR 175-251 live
   source_id: ref-flydsl-kernel-profiling
 implemented_by:
@@ -154,15 +154,13 @@ generate code rather than branch at runtime.
 
 ## Performance (measured on MI350X)
 
-In our [first-party rocprofv3 ATT sweep](../../sources/refs/ref-flydsl-kernel-profiling.md)
-on real gfx950 silicon (ROCm 7.2), the FlyDSL forward kernel runs at **~0.92×** the
-throughput of the CK-tile FlashAttention baseline at `D=128` causal — i.e. close but
-in the **HEADROOM** bucket, not yet a win. The trace attributes the gap to
-**register-pressure-capped occupancy**: only **1–2 waves/SIMD** are resident with
-**VGPR 175–251** live, so the matrix unit stalls without a second wave to hide latency.
-The actionable lever is [cutting the live VGPR set](../techniques/vgpr-budgeting.md) to
-admit a 2nd wave — the dual-wave SWP schedule is the structural attempt at exactly that,
-trading hand-scheduled register reuse for occupancy.
+The canonical measurement record is the
+[MI350X rocprofv3 ATT sweep](../../sources/refs/ref-flydsl-kernel-profiling.md);
+this page only carries the kernel-level interpretation. For `D=128` causal, the
+frontmatter records a 0.92 FlyDSL/CK-tile throughput ratio in the **HEADROOM**
+bucket. The actionable gap is [VGPR pressure](../techniques/vgpr-budgeting.md):
+the trace is capped at 1–2 waves/SIMD, so the dual-wave SWP schedule is the
+structural attempt to trade hand-scheduled register reuse for more latency hiding.
 
 ## See also
 
