@@ -6968,7 +6968,9 @@
 - [pr-FlyDSL-91](sources/prs/FlyDSL/PR-91.md) — fix lds bug  `[source-pr]`
 - [pr-FlyDSL-92](sources/prs/FlyDSL/PR-92.md) — [Bug] Fix missing stream_ptr parameter in MoeGemm2ReduceWrapper  `[source-pr]`
 - [pr-FlyDSL-98](sources/prs/FlyDSL/PR-98.md) — fix a4w4 gemm precision  `[source-pr]`
+- [ref-flydsl-kernel-profiling](sources/refs/ref-flydsl-kernel-profiling.md) — FlyDSL Kernel Profiling — MI350X rocprofv3 ATT Sweep & Dashboard  `[source-ref]`
 - [ref-flydsl](sources/refs/ref-flydsl.md) — FlyDSL — Flexible Layout DSL for AMD GPUs  `[source-ref]`
+- [kernel-flydsl-flash-attention](wiki/kernels/flydsl-flash-attention.md) — FlyDSL Flash Attention — generic + gfx950 dual-wave fast path  `[wiki-kernel]`
 - [kernel-flydsl-preshuffle-gemm](wiki/kernels/flydsl-preshuffle-gemm.md) — FlyDSL Preshuffle GEMM (layout-DSL example)  `[wiki-kernel]`
 - [lang-flydsl](wiki/languages/flydsl.md) — FlyDSL — Python + MLIR Layout DSL for AMD Kernels  `[wiki-language]`
 - [technique-preshuffle-layout](wiki/techniques/preshuffle-layout.md) — Pre-shuffle Weight Layout for MFMA  `[wiki-technique]`
@@ -14492,7 +14494,9 @@
 - [pr-triton-95](sources/prs/triton/PR-95.md) — Remove torch import in setup.py to check for ROCm.  `[source-pr]`
 - [pr-triton-96](sources/prs/triton/PR-96.md) — Triton mlir ifu 2023 30 1  `[source-pr]`
 - [pr-triton-99](sources/prs/triton/PR-99.md) — Fix llir IR restoration from cache to convert to string.  `[source-pr]`
+- [ref-flydsl-kernel-profiling](sources/refs/ref-flydsl-kernel-profiling.md) — FlyDSL Kernel Profiling — MI350X rocprofv3 ATT Sweep & Dashboard  `[source-ref]`
 - [ref-flydsl](sources/refs/ref-flydsl.md) — FlyDSL — Flexible Layout DSL for AMD GPUs  `[source-ref]`
+- [kernel-flydsl-flash-attention](wiki/kernels/flydsl-flash-attention.md) — FlyDSL Flash Attention — generic + gfx950 dual-wave fast path  `[wiki-kernel]`
 - [kernel-flydsl-preshuffle-gemm](wiki/kernels/flydsl-preshuffle-gemm.md) — FlyDSL Preshuffle GEMM (layout-DSL example)  `[wiki-kernel]`
 - [lang-flydsl](wiki/languages/flydsl.md) — FlyDSL — Python + MLIR Layout DSL for AMD Kernels  `[wiki-language]`
 - [lang-triton-amd](wiki/languages/triton-amd.md) — Triton on AMD — tl.dot → MFMA and the AMD backend knobs  `[wiki-language]`
@@ -16949,9 +16953,11 @@
 - [pr-vllm-43817](sources/prs/vllm/PR-43817.md) — [ROCm] Add attention sink support to AITer flash attention backend  `[source-pr]`
 - [pr-vllm-43881](sources/prs/vllm/PR-43881.md) — [ROCm] cmake: support PYTORCH_FOUND_HIP for torch 2.13 native HIP language support  `[source-pr]`
 - [pr-vllm-43898](sources/prs/vllm/PR-43898.md) — [ROCm][DSv4] Remove device pipeline stall in sparse attention  `[source-pr]`
+- [ref-flydsl-kernel-profiling](sources/refs/ref-flydsl-kernel-profiling.md) — FlyDSL Kernel Profiling — MI350X rocprofv3 ATT Sweep & Dashboard  `[source-ref]`
 - [ref-flydsl](sources/refs/ref-flydsl.md) — FlyDSL — Flexible Layout DSL for AMD GPUs  `[source-ref]`
 - [ref-matrix-calculator](sources/refs/ref-matrix-calculator.md) — AMD Matrix Instruction Calculator  `[source-ref]`
 - [ref-tensile](sources/refs/ref-tensile.md) — Tensile — assembly GEMM kernel generator  `[source-ref]`
+- [kernel-flydsl-flash-attention](wiki/kernels/flydsl-flash-attention.md) — FlyDSL Flash Attention — generic + gfx950 dual-wave fast path  `[wiki-kernel]`
 - [kernel-flydsl-preshuffle-gemm](wiki/kernels/flydsl-preshuffle-gemm.md) — FlyDSL Preshuffle GEMM (layout-DSL example)  `[wiki-kernel]`
 - [lang-flydsl](wiki/languages/flydsl.md) — FlyDSL — Python + MLIR Layout DSL for AMD Kernels  `[wiki-language]`
 - [lang-triton-amd](wiki/languages/triton-amd.md) — Triton on AMD — tl.dot → MFMA and the AMD backend knobs  `[wiki-language]`

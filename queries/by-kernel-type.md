@@ -965,8 +965,10 @@
 - [pr-vllm-43817](sources/prs/vllm/PR-43817.md) — [ROCm] Add attention sink support to AITer flash attention backend  `[source-pr]`
 - [pr-vllm-43898](sources/prs/vllm/PR-43898.md) — [ROCm][DSv4] Remove device pipeline stall in sparse attention  `[source-pr]`
 - [kernel-flash-attention-ck](wiki/kernels/flash-attention-ck.md) — FlashAttention-2 via CK-tile on CDNA (MI300X)  `[wiki-kernel]`
+- [kernel-flydsl-flash-attention](wiki/kernels/flydsl-flash-attention.md) — FlyDSL Flash Attention — generic + gfx950 dual-wave fast path  `[wiki-kernel]`
 - [kernel-mla-decode](wiki/kernels/mla-decode.md) — MLA Decode (DeepSeek Multi-Latent Attention) on MI300  `[wiki-kernel]`
 - [kernel-paged-attention](wiki/kernels/paged-attention.md) — Paged Attention Decode (vLLM / AITER) on MI300  `[wiki-kernel]`
+- [lang-flydsl](wiki/languages/flydsl.md) — FlyDSL — Python + MLIR Layout DSL for AMD Kernels  `[wiki-language]`
 
 ## bandwidth-bench
 
@@ -3689,6 +3691,8 @@
 - [pr-vllm-43727](sources/prs/vllm/PR-43727.md) — [MoE] Remove inplace fused experts mechanism  `[source-pr]`
 - [pr-vllm-43817](sources/prs/vllm/PR-43817.md) — [ROCm] Add attention sink support to AITer flash attention backend  `[source-pr]`
 - [kernel-flash-attention-ck](wiki/kernels/flash-attention-ck.md) — FlashAttention-2 via CK-tile on CDNA (MI300X)  `[wiki-kernel]`
+- [kernel-flydsl-flash-attention](wiki/kernels/flydsl-flash-attention.md) — FlyDSL Flash Attention — generic + gfx950 dual-wave fast path  `[wiki-kernel]`
+- [lang-flydsl](wiki/languages/flydsl.md) — FlyDSL — Python + MLIR Layout DSL for AMD Kernels  `[wiki-language]`
 - [technique-lds-double-buffering](wiki/techniques/lds-double-buffering.md) — LDS Double / Multi-Buffering (Overlapping HBM Loads with MFMA)  `[wiki-technique]`
 - [technique-vgpr-budgeting](wiki/techniques/vgpr-budgeting.md) — VGPR Budgeting — ArchVGPR + AGPR Pressure vs Occupancy  `[wiki-technique]`
 

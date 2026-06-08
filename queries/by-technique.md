@@ -103,6 +103,7 @@ Every page (wiki + PR sources) that uses each optimization technique.
 
 ## direct-to-lds
 
+- [kernel-flydsl-flash-attention](wiki/kernels/flydsl-flash-attention.md) — FlyDSL Flash Attention — generic + gfx950 dual-wave fast path  `[wiki-kernel]`
 - [kernel-vector-add-asm](wiki/kernels/vector-add-asm.md) — Persistent Vector Add in GCN Assembly (async direct-to-LDS, double-buffered)  `[wiki-kernel]`
 
 ## epilogue-fusion
@@ -2008,6 +2009,7 @@ Every page (wiki + PR sources) that uses each optimization technique.
 - [pr-triton-872](sources/prs/triton/PR-872.md) — Shared/oai oss bf16mx4 moe launch  `[source-pr]`
 - [pr-triton-905](sources/prs/triton/PR-905.md) — replace copysign to avoid potential LLVM opt  `[source-pr]`
 - [kernel-flash-attention-ck](wiki/kernels/flash-attention-ck.md) — FlashAttention-2 via CK-tile on CDNA (MI300X)  `[wiki-kernel]`
+- [kernel-flydsl-flash-attention](wiki/kernels/flydsl-flash-attention.md) — FlyDSL Flash Attention — generic + gfx950 dual-wave fast path  `[wiki-kernel]`
 - [kernel-flydsl-preshuffle-gemm](wiki/kernels/flydsl-preshuffle-gemm.md) — FlyDSL Preshuffle GEMM (layout-DSL example)  `[wiki-kernel]`
 - [kernel-vector-add-asm](wiki/kernels/vector-add-asm.md) — Persistent Vector Add in GCN Assembly (async direct-to-LDS, double-buffered)  `[wiki-kernel]`
 
@@ -2722,6 +2724,7 @@ Every page (wiki + PR sources) that uses each optimization technique.
 - [pr-triton-879](sources/prs/triton/PR-879.md) — Adding more support for machine model cycles per dot/mfma  `[source-pr]`
 - [pr-vllm-40161](sources/prs/vllm/PR-40161.md) — [bugfix] Use only onlines CPUs in lscpu  `[source-pr]`
 - [kernel-flash-attention-ck](wiki/kernels/flash-attention-ck.md) — FlashAttention-2 via CK-tile on CDNA (MI300X)  `[wiki-kernel]`
+- [kernel-flydsl-flash-attention](wiki/kernels/flydsl-flash-attention.md) — FlyDSL Flash Attention — generic + gfx950 dual-wave fast path  `[wiki-kernel]`
 
 ## nontemporal-loads
 
@@ -2904,6 +2907,7 @@ Every page (wiki + PR sources) that uses each optimization technique.
 - [pr-triton-668](sources/prs/triton/PR-668.md) — rmsnorm optimization for M = 1  `[source-pr]`
 - [pr-triton-698](sources/prs/triton/PR-698.md) — Fold fp_to_fp op with zero constant input (#5007)  `[source-pr]`
 - [pr-triton-722](sources/prs/triton/PR-722.md) — Fix pid remapping logic when GRID_MN cannot divide NUM_XCDS  `[source-pr]`
+- [kernel-flydsl-flash-attention](wiki/kernels/flydsl-flash-attention.md) — FlyDSL Flash Attention — generic + gfx950 dual-wave fast path  `[wiki-kernel]`
 
 ## persistent-kernel
 
@@ -4772,6 +4776,7 @@ Every page (wiki + PR sources) that uses each optimization technique.
 - [pr-vllm-41751](sources/prs/vllm/PR-41751.md) — [ROCm] mori: add InterNodeV1LL inter-node kernel selection via VLLM_MORI_INTERNODE_KERNEL  `[source-pr]`
 - [pr-vllm-41901](sources/prs/vllm/PR-41901.md) — [Model] Use AutoWeightsLoader for AXK1  `[source-pr]`
 - [pr-vllm-43898](sources/prs/vllm/PR-43898.md) — [ROCm][DSv4] Remove device pipeline stall in sparse attention  `[source-pr]`
+- [kernel-flydsl-flash-attention](wiki/kernels/flydsl-flash-attention.md) — FlyDSL Flash Attention — generic + gfx950 dual-wave fast path  `[wiki-kernel]`
 
 ## split-k
 
@@ -5728,6 +5733,7 @@ Every page (wiki + PR sources) that uses each optimization technique.
 - [pr-triton-635](sources/prs/triton/PR-635.md) — Move utility tools from triton-mlir to main_perf branch  `[source-pr]`
 - [pr-triton-733](sources/prs/triton/PR-733.md) — rmsnorm backward optimizations  `[source-pr]`
 - [pr-triton-775](sources/prs/triton/PR-775.md) — plot_layout.py Refactoring  `[source-pr]`
+- [kernel-flydsl-flash-attention](wiki/kernels/flydsl-flash-attention.md) — FlyDSL Flash Attention — generic + gfx950 dual-wave fast path  `[wiki-kernel]`
 
 ## wave-reduce
 
@@ -6470,5 +6476,6 @@ Every page (wiki + PR sources) that uses each optimization technique.
 - [pr-vllm-43717](sources/prs/vllm/PR-43717.md) — [9/n] Migrate attention and cache kernels to torch stable ABI (continued)  `[source-pr]`
 - [pr-vllm-43727](sources/prs/vllm/PR-43727.md) — [MoE] Remove inplace fused experts mechanism  `[source-pr]`
 - [kernel-flash-attention-ck](wiki/kernels/flash-attention-ck.md) — FlashAttention-2 via CK-tile on CDNA (MI300X)  `[wiki-kernel]`
+- [kernel-flydsl-flash-attention](wiki/kernels/flydsl-flash-attention.md) — FlyDSL Flash Attention — generic + gfx950 dual-wave fast path  `[wiki-kernel]`
 - [kernel-rmsnorm](wiki/kernels/rmsnorm.md) — Fused RMSNorm (+ residual / quant) on CDNA  `[wiki-kernel]`
 

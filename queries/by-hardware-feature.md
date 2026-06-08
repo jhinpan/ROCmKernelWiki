@@ -14,6 +14,7 @@ Pages grouped by AMD GPU hardware feature.
 - [pr-composable_kernel-48](sources/prs/composable_kernel/PR-48.md) — ckProfiler and device-level XDL GEMM operator  `[source-pr]`
 - [pr-flash-attention-179](sources/prs/flash-attention/PR-179.md) — [CK_TILE] Fix NaN for FMHA BWD When seq_q=0  `[source-pr]`
 - [kernel-flash-attention-ck](wiki/kernels/flash-attention-ck.md) — FlashAttention-2 via CK-tile on CDNA (MI300X)  `[wiki-kernel]`
+- [kernel-flydsl-flash-attention](wiki/kernels/flydsl-flash-attention.md) — FlyDSL Flash Attention — generic + gfx950 dual-wave fast path  `[wiki-kernel]`
 - [technique-kernel-fusion](wiki/techniques/kernel-fusion.md) — Kernel Fusion — Epilogues and Adjacent-Op Merging  `[wiki-technique]`
 - [technique-lds-swizzling](wiki/techniques/lds-swizzling.md) — LDS Swizzling — Conflict-Free A/B Tile Staging for MFMA  `[wiki-technique]`
 - [technique-mfma-pipelining](wiki/techniques/mfma-pipelining.md) — MFMA Software Pipelining (interleaving loads and matrix issue)  `[wiki-technique]`
@@ -312,6 +313,7 @@ Pages grouped by AMD GPU hardware feature.
 - [pr-vllm-43219](sources/prs/vllm/PR-43219.md) — [EPLB] Make async EPLB default  `[source-pr]`
 - [pr-vllm-43303](sources/prs/vllm/PR-43303.md) — [Misc][Refactor][ROCm] Convert MoRI-related envvars to extra config args  `[source-pr]`
 - [kernel-flash-attention-ck](wiki/kernels/flash-attention-ck.md) — FlashAttention-2 via CK-tile on CDNA (MI300X)  `[wiki-kernel]`
+- [kernel-flydsl-flash-attention](wiki/kernels/flydsl-flash-attention.md) — FlyDSL Flash Attention — generic + gfx950 dual-wave fast path  `[wiki-kernel]`
 - [kernel-vector-add-asm](wiki/kernels/vector-add-asm.md) — Persistent Vector Add in GCN Assembly (async direct-to-LDS, double-buffered)  `[wiki-kernel]`
 - [technique-lds-double-buffering](wiki/techniques/lds-double-buffering.md) — LDS Double / Multi-Buffering (Overlapping HBM Loads with MFMA)  `[wiki-technique]`
 - [technique-mfma-pipelining](wiki/techniques/mfma-pipelining.md) — MFMA Software Pipelining (interleaving loads and matrix issue)  `[wiki-technique]`
@@ -2342,6 +2344,7 @@ Pages grouped by AMD GPU hardware feature.
 - [pr-triton-439](sources/prs/triton/PR-439.md) — [Backend] Refactor sharedToDotOperandMFMA lowering  `[source-pr]`
 - [pr-triton-635](sources/prs/triton/PR-635.md) — Move utility tools from triton-mlir to main_perf branch  `[source-pr]`
 - [pr-triton-775](sources/prs/triton/PR-775.md) — plot_layout.py Refactoring  `[source-pr]`
+- [kernel-flydsl-flash-attention](wiki/kernels/flydsl-flash-attention.md) — FlyDSL Flash Attention — generic + gfx950 dual-wave fast path  `[wiki-kernel]`
 - [technique-bank-conflict-avoidance](wiki/techniques/bank-conflict-avoidance.md) — LDS Bank-Conflict Avoidance (padding, swizzle, ds_read2)  `[wiki-technique]`
 - [technique-lds-double-buffering](wiki/techniques/lds-double-buffering.md) — LDS Double / Multi-Buffering (Overlapping HBM Loads with MFMA)  `[wiki-technique]`
 - [technique-lds-swizzling](wiki/techniques/lds-swizzling.md) — LDS Swizzling — Conflict-Free A/B Tile Staging for MFMA  `[wiki-technique]`
@@ -7082,6 +7085,7 @@ Pages grouped by AMD GPU hardware feature.
 - [pr-vllm-43571](sources/prs/vllm/PR-43571.md) — [BugFix][Platform] Fix import vllm.platforms.rocm error on non-CUDA test_gpt_oss.py  `[source-pr]`
 - [pr-vllm-43881](sources/prs/vllm/PR-43881.md) — [ROCm] cmake: support PYTORCH_FOUND_HIP for torch 2.13 native HIP language support  `[source-pr]`
 - [kernel-flash-attention-ck](wiki/kernels/flash-attention-ck.md) — FlashAttention-2 via CK-tile on CDNA (MI300X)  `[wiki-kernel]`
+- [kernel-flydsl-flash-attention](wiki/kernels/flydsl-flash-attention.md) — FlyDSL Flash Attention — generic + gfx950 dual-wave fast path  `[wiki-kernel]`
 - [kernel-flydsl-preshuffle-gemm](wiki/kernels/flydsl-preshuffle-gemm.md) — FlyDSL Preshuffle GEMM (layout-DSL example)  `[wiki-kernel]`
 - [kernel-rmsnorm](wiki/kernels/rmsnorm.md) — Fused RMSNorm (+ residual / quant) on CDNA  `[wiki-kernel]`
 - [kernel-vector-add-asm](wiki/kernels/vector-add-asm.md) — Persistent Vector Add in GCN Assembly (async direct-to-LDS, double-buffered)  `[wiki-kernel]`
@@ -7739,6 +7743,7 @@ Pages grouped by AMD GPU hardware feature.
 - [pr-triton-879](sources/prs/triton/PR-879.md) — Adding more support for machine model cycles per dot/mfma  `[source-pr]`
 - [pr-vllm-40161](sources/prs/vllm/PR-40161.md) — [bugfix] Use only onlines CPUs in lscpu  `[source-pr]`
 - [kernel-flash-attention-ck](wiki/kernels/flash-attention-ck.md) — FlashAttention-2 via CK-tile on CDNA (MI300X)  `[wiki-kernel]`
+- [kernel-flydsl-flash-attention](wiki/kernels/flydsl-flash-attention.md) — FlyDSL Flash Attention — generic + gfx950 dual-wave fast path  `[wiki-kernel]`
 - [kernel-flydsl-preshuffle-gemm](wiki/kernels/flydsl-preshuffle-gemm.md) — FlyDSL Preshuffle GEMM (layout-DSL example)  `[wiki-kernel]`
 - [technique-fine-grained-quantization](wiki/techniques/fine-grained-quantization.md) — Fine-Grained FP8 Quantization & Block Scaling  `[wiki-technique]`
 - [technique-kernel-fusion](wiki/techniques/kernel-fusion.md) — Kernel Fusion — Epilogues and Adjacent-Op Merging  `[wiki-technique]`
@@ -8158,6 +8163,7 @@ Pages grouped by AMD GPU hardware feature.
 ## vgpr
 
 - [kernel-bandwidth-microbench](wiki/kernels/bandwidth-microbench.md) — HBM Bandwidth Microbenchmark (float4 non-temporal persistent read)  `[wiki-kernel]`
+- [kernel-flydsl-flash-attention](wiki/kernels/flydsl-flash-attention.md) — FlyDSL Flash Attention — generic + gfx950 dual-wave fast path  `[wiki-kernel]`
 - [technique-kernel-fusion](wiki/techniques/kernel-fusion.md) — Kernel Fusion — Epilogues and Adjacent-Op Merging  `[wiki-technique]`
 - [technique-occupancy-tuning](wiki/techniques/occupancy-tuning.md) — Occupancy Tuning — Waves per SIMD vs ILP on CDNA  `[wiki-technique]`
 - [technique-profiling-workflow](wiki/techniques/profiling-workflow.md) — Profiling & Roofline Workflow on ROCm (rocprof / Omniperf)  `[wiki-technique]`
@@ -8256,6 +8262,7 @@ Pages grouped by AMD GPU hardware feature.
 - [pr-sglang-26208](sources/prs/sglang/PR-26208.md) — [AMD] Dsv4/pr2 compressor opt  `[source-pr]`
 - [pr-triton-153](sources/prs/triton/PR-153.md) — Adding wave64 support to Triton  `[source-pr]`
 - [kernel-bandwidth-microbench](wiki/kernels/bandwidth-microbench.md) — HBM Bandwidth Microbenchmark (float4 non-temporal persistent read)  `[wiki-kernel]`
+- [kernel-flydsl-flash-attention](wiki/kernels/flydsl-flash-attention.md) — FlyDSL Flash Attention — generic + gfx950 dual-wave fast path  `[wiki-kernel]`
 - [kernel-rmsnorm](wiki/kernels/rmsnorm.md) — Fused RMSNorm (+ residual / quant) on CDNA  `[wiki-kernel]`
 - [kernel-vector-add-asm](wiki/kernels/vector-add-asm.md) — Persistent Vector Add in GCN Assembly (async direct-to-LDS, double-buffered)  `[wiki-kernel]`
 - [technique-occupancy-tuning](wiki/techniques/occupancy-tuning.md) — Occupancy Tuning — Waves per SIMD vs ILP on CDNA  `[wiki-technique]`
