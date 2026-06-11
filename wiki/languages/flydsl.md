@@ -26,14 +26,18 @@ kernel_types:
 - gemm
 - fp8-gemm
 - fused-moe
+- flash-attention
+- attention
 related:
 - hw-mfma
 - technique-preshuffle-layout
 - kernel-flydsl-preshuffle-gemm
+- kernel-flydsl-flash-attention
 - lang-composable-kernel
 - lang-triton-amd
 sources:
 - ref-flydsl
+- ref-flydsl-kernel-profiling
 - ref-aiter
 - doc-llvm-amdgpu
 - blog-amd-matrix-cores
@@ -204,6 +208,31 @@ chains at trace time and emit straight-line addressing, instead of you tracking
 three independent index expressions by hand. The end-to-end worked GEMM —
 including the pre-shuffle transform and a benchmark — is on the
 [FlyDSL pre-shuffle GEMM kernel page](../kernels/flydsl-preshuffle-gemm.md).
+
+## Beyond GEMM: flash attention and the MMA-atom API
+
+FlyDSL is not GEMM-only. Its forward **flash attention** is a two-GEMM + online-softmax
+kernel built the same way — and it now has two implementations behind one dispatcher: a
+portable compiler-scheduled `flash_attn_generic.py` and a hand-scheduled, dual-wave
+software-pipelined `flash_attn_gfx950.py` fast path (gfx950, `D=128`, bf16/f16). The full
+walk-through — dispatch logic, the gfx950 hardware schedule, and the upstream PR arc — is
+on the [FlyDSL flash-attention kernel page](../kernels/flydsl-flash-attention.md).
+
+A recent direction is the **layout MMA-atom API**: instead of emitting raw ROCDL
+intrinsics (`rocdl.mfma_f32_32x32x16_bf16`, `buffer_load_dwordx4`), kernels construct a
+`make_mma_atom(...)` and issue it via `mma_atom_call_ssa(...)` (and `copy_atom_call_ssa`
+for loads/stores). The flash-attention kernel was migrated onto this API, cutting ~1k
+lines at parity — the same `Layout` algebra that describes tiling now also describes the
+matrix-core operand distribution.
+
+## Measured on MI350X (gfx950)
+
+FlyDSL has a first-party MI350X profiling sweep with rocprofv3 ATT traces, hardware
+counters, matched baselines, and per-kernel bundles. Keep the detailed verdict table
+and root-cause list in the canonical
+[profiling sweep & dashboard](../../sources/refs/ref-flydsl-kernel-profiling.md);
+this language page points to the study as evidence that the same layout DSL can reach
+wins, parity, and still-open headroom depending on the kernel.
 
 ## Limitations and gotchas
 

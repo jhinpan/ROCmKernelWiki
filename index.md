@@ -7,6 +7,10 @@
 >
 > Inspired by and modeled on MIT Han Lab's
 > [KernelWiki](https://github.com/mit-han-lab/KernelWiki).
+>
+> **Validated on real MI350X silicon (gfx950, ROCm 7.2)** — see [VERIFICATION.md](VERIFICATION.md)
+> and the first-party [FlyDSL kernel profiling sweep](sources/refs/ref-flydsl-kernel-profiling.md)
+> ([dashboard](https://jhinpan.github.io/flydsl-kernel-profiling/)).
 
 ## Recommended Query Tools (for LLM agents)
 
@@ -65,6 +69,7 @@ See [references/examples.md](references/examples.md) for worked query patterns.
 - [kernel-ck-hgemm](wiki/kernels/ck-hgemm.md) — FP16 GEMM via CK / MFMA
 - [kernel-fp8-gemm](wiki/kernels/fp8-gemm.md) — FP8 block-scaled GEMM (gfx950)
 - [kernel-flash-attention-ck](wiki/kernels/flash-attention-ck.md) — FlashAttention-2 (CK-tile)
+- [kernel-flydsl-flash-attention](wiki/kernels/flydsl-flash-attention.md) — FlyDSL flash attention (gfx950 dual-wave)
 - [kernel-paged-attention](wiki/kernels/paged-attention.md) — Paged attention decode
 - [kernel-fused-moe](wiki/kernels/fused-moe.md) — Fused MoE
 - [kernel-mla-decode](wiki/kernels/mla-decode.md) — MLA decode (DeepSeek)
