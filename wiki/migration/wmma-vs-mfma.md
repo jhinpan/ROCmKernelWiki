@@ -2,6 +2,8 @@
 id: migration-wmma-vs-mfma
 title: 'WMMA (RDNA4) vs MFMA (CDNA3/4): porting matrix-core kernels'
 type: migration
+version_sensitive:
+- vs-cdna-unified-vgpr-agpr-allocation
 architectures:
 - gfx942
 - gfx950
@@ -72,7 +74,7 @@ API lowers to whichever family the target supports.
 | Family | CDNA matrix core | RDNA matrix core |
 | Mnemonic | `v_mfma_*` (VOP3P-MAI) | `v_wmma_*` (VOP3P) |
 | Cooperating lanes | wave64 only | wave32 **or** wave64 |
-| Accumulator regs | ArchVGPR **or** AGPR | ArchVGPR only (no AGPRs on RDNA) |
+| Accumulator regs | ArchVGPR **or** AGPR names; shared unified allocation | ArchVGPR only (no AGPR namespace on RDNA) |
 | Canonical shape | 16×16×16, 32×32×8 (and larger-K) | 16×16×16 |
 | Large-K / unified low-prec | 16×16×128 `f8f6f4` (gfx950) | not present |
 | MX block scaling | `v_mfma_scale_*` (gfx950) | not present |
@@ -80,8 +82,9 @@ API lowers to whichever family the target supports.
 | Portable wrapper | rocWMMA | rocWMMA |
 
 > The biggest structural differences when porting are (1) **wave width** — RDNA
-> can run wave32, CDNA is wave64-only — and (2) **AGPRs** — RDNA has no separate
-> accumulator register bank, so all WMMA operands live in ArchVGPRs.
+> can run wave32, CDNA is wave64-only — and (2) **register namespaces** — RDNA
+> has no AGPR namespace, so all WMMA operands use ArchVGPRs. On gfx942/gfx950,
+> ArchVGPR and AGPR names still draw from one unified occupancy budget.
 
 ## Wave width: the first thing to fix
 
@@ -105,17 +108,19 @@ For matrix code specifically: a 16×16 WMMA fragment is spread over 32 lanes in
 wave32 and replicated/repacked differently in wave64. Do not port MFMA
 register-packing assumptions by hand — regenerate the layout (see below).
 
-## Accumulators: AGPRs vs ArchVGPRs
+## Accumulators: AGPR names vs ArchVGPR-only
 
-On CDNA, the matrix core reads/writes accumulators through a **separate AGPR
-bank** (up to 256 AGPRs + 256 ArchVGPRs per wave); accumulator tiles are
-conventionally pinned in AGPRs to free ArchVGPRs for addressing. **RDNA has no
-AGPRs** — WMMA accumulators occupy ordinary ArchVGPRs. Consequences when porting:
+On CDNA, MFMA can address accumulators through AGPR names as well as ArchVGPRs.
+Those are distinct architectural access classes, but on gfx942/gfx950 they are
+not independent capacity banks: both consume a combined 512-entry-per-lane
+physical allocation and therefore the same occupancy budget. Using AGPR names
+can still simplify operand placement and copy scheduling; it does not make the
+accumulator tile free. **RDNA has no AGPR namespace** — WMMA accumulators occupy
+ordinary ArchVGPRs. Consequences when porting:
 
-- VGPR-budget math changes: on RDNA the C/D tile competes with A/B fragments and
-  address registers for the *same* 256-entry ArchVGPR file, so occupancy tuning
-  that relied on the AGPR/ArchVGPR split (see
-  [vgpr-budgeting](../techniques/vgpr-budgeting.md)) must be redone.
+- Recompute VGPR budgeting for the target's fragment layout and allocation
+  rules; do not carry over a “256 VGPR + 256 free AGPR” model. See
+  [vgpr-budgeting](../techniques/vgpr-budgeting.md).
 - No `agpr-management` step exists on RDNA; remove AGPR-to-ArchVGPR copy
   scheduling.
 

@@ -14,6 +14,8 @@ tags:
 - swizzled-layout
 confidence: source-reported
 reproducibility: snippet
+version_sensitive:
+- vs-lds-phase-groups-gfx942-gfx950
 hardware_features:
 - lds
 - ds-instructions
@@ -64,9 +66,11 @@ Bank count differs by architecture, so the conflict-avoidance stride differs:
 | gfx942 (CDNA3) | 64 kB | **32** | 512 | `d % 32` |
 | gfx950 (CDNA4) | 160 kB | **64** | 640 | `d % 64` |
 
-A wave64 LDS instruction is **dispatched over 4 cycles, 16 lanes per cycle**.
-That means a conflict is evaluated within each 16-lane quarter-wave, not across
-all 64 lanes at once — a useful subtlety when reasoning about which lanes collide.
+There is no universal “4 cycles × 16 lanes” rule. A conflict is evaluated within
+the emitted opcode's architecture-specific **phase group**. For the common
+reads, gfx942 uses 2×32 / 4×16 / 8×8 lane groups for b32/b64/b128, while gfx950
+uses 1×64 / 2×32 / 4×16. Inspect the actual `ds_*` width and use the complete
+[phase tables](../hardware/lds.md) when deciding which lanes can conflict.
 
 ## Where conflicts come from
 

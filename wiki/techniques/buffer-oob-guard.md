@@ -29,10 +29,12 @@ related:
 - lang-triton-amd
 sources:
 - doc-cdna3-isa
+- doc-cdna4-isa
 - hw-memory-instructions
 - ref-gcnasm
 - doc-llvm-amdgpu
 - blog-triton-amd
+- blog-amdgpu-kernel-opt-guide
 implemented_by:
 - pr-triton-729
 - pr-aiter-2328
@@ -71,8 +73,19 @@ check for free.
 
 `buffer_load`/`buffer_store` (the MUBUF class) address memory through a 128-bit
 **resource descriptor** (a "V#") that carries a `base_address`, a `stride`, and a
-`num_records` field. The hardware computes the effective byte offset and compares
-it against the extent implied by `num_records × stride`. The ISA guarantees:
+`num_records` field. The exact range comparison depends on the addressing mode:
+
+- a **raw** buffer checks
+  `InstOffset + (OffEN ? vgpr_offset : 0) >= NumRecords`, with `NumRecords` in
+  bytes; and
+- a **structured** buffer checks `Index(vgpr) >= NumRecords`, with
+  `NumRecords` counting records. `stride` participates in address formation,
+  not in that index comparison.
+
+The SGPR `soffset` contributes to the final address but is not part of the raw
+range comparison. The examples below therefore keep `soffset=0` and put the
+complete window-relative offset in `voffset`. For an access that the range check
+classifies as OOB, the ISA guarantees:
 
 > An out-of-bounds **read returns 0** (or `1.0` for components selected by
 > `dst_sel = SEL_1`); an out-of-bounds **write is dropped**.
@@ -83,45 +96,90 @@ overhanging store silently evaporates — no branch, no mask, no clamp, and no
 illegal address fault. This is exactly why the AMD compiler's "buffer ops" passes
 prefer MUBUF for in-bounds-uncertain accesses. Contrast with
 [`global_load`/`flat`](../hardware/memory-instructions.md), which take a raw
-64-bit pointer and have **no** `num_records` guard — an OOB flat access is a real
-fault (`MEM_VIOL`), so those paths still need software predication.
+64-bit pointer and have **no object-size guard**. An invalid flat address that
+does not fall in a memory aperture reports `MEM_VIOL`, but a C/C++ object OOB
+address can still land in mapped memory and read or overwrite a neighboring
+object. Those paths therefore still need software predication.
 
 ## Building the descriptor in HIP
 
-You rarely hand-assemble a V#. The portable way to get OOB-guarded loads in HIP
-is the `__builtin_amdgcn_make_buffer_rsrc` + `__builtin_amdgcn_raw_buffer_load`
+You rarely hand-assemble a V#. A compiler-facing way to get OOB-guarded loads in
+HIP is the `__builtin_amdgcn_make_buffer_rsrc` + `__builtin_amdgcn_raw_buffer_load`
 intrinsics (a.k.a. the LLVM `amdgcn.raw.ptr.buffer.load` family). Size the
 descriptor with the number of **bytes** of valid data:
 
 ```cpp
 #include <hip/hip_runtime.h>
+#include <stdint.h>
 
-// Branchless guarded load of one float; OOB element reads back as 0.0f.
-__device__ inline float guarded_load(const float* base,
-                                     int elem_idx,      // may be >= n_elems
-                                     int n_elems)
+// SRD word 3 is architecture-specific. These values match CK Tile's
+// CK_TILE_BUFFER_RESOURCE_3RD_DWORD for the targets covered by this page.
+#if !defined(__HIP_DEVICE_COMPILE__) || !__HIP_DEVICE_COMPILE__
+#define WIKI_RAW_BUFFER_FLAGS 0xffffffffu  // host-pass placeholder; never issued
+#elif defined(__gfx803__) || defined(__gfx900__) || defined(__gfx906__) || \
+      defined(__gfx908__) || defined(__gfx90a__) || defined(__gfx940__) || \
+      defined(__gfx941__) || defined(__gfx942__) || defined(__gfx950__)
+#define WIKI_RAW_BUFFER_FLAGS 0x00020000u  // GFX9
+#elif defined(__gfx1100__) || defined(__gfx1101__) || defined(__gfx1102__) || \
+      defined(__gfx1103__) || defined(__gfx1150__) || defined(__gfx1151__) || \
+      defined(__gfx1152__) || defined(__gfx1153__) || defined(__gfx1200__) || \
+      defined(__gfx1201__)
+#define WIKI_RAW_BUFFER_FLAGS 0x31004000u  // GFX11 / gfx1200-gfx1201
+#else
+#error "Add the target's raw-buffer resource flags before using this helper"
+#endif
+
+// Branchless guarded load inside one <=4-GiB raw-buffer window.
+__device__ inline float guarded_load(const float* window_base,
+                                     uint32_t byte_offset,
+                                     uint32_t valid_bytes)
 {
     // make_buffer_rsrc(ptr, stride/*=0 for raw*/, num_records_bytes, flags)
-    void* rsrc = __builtin_amdgcn_make_buffer_rsrc(
-        (void*)base,
+    __amdgpu_buffer_rsrc_t rsrc = __builtin_amdgcn_make_buffer_rsrc(
+        const_cast<float*>(window_base),
         /*stride=*/   0,
-        /*num_records=*/ n_elems * (int)sizeof(float),  // valid extent in BYTES
-        /*flags=*/    0);
+        /*num_records=*/ valid_bytes,
+        /*flags=*/    WIKI_RAW_BUFFER_FLAGS);
 
-    // raw_buffer_load_f32(rsrc, voffset, soffset, aux)
-    return __builtin_amdgcn_raw_buffer_load_f32(
+    // The b32 builtin returns the raw dword bits; reinterpret them as float.
+    int raw = __builtin_amdgcn_raw_buffer_load_b32(
         rsrc,
-        /*voffset=*/ elem_idx * (int)sizeof(float),
+        /*voffset=*/ byte_offset,
         /*soffset=*/ 0,
         /*aux=*/     0);   // lane past num_records -> hardware returns 0.0f
+    return __builtin_bit_cast(float, raw);
 }
+
+#undef WIKI_RAW_BUFFER_FLAGS
 ```
 
-Every lane runs the *same* code; lanes whose `elem_idx >= n_elems` simply receive
-`0.0f`. No `if`, no `EXEC` divergence, no separate tail loop. For a row-major 2-D
-tile, fold both dimensions into the byte offset and set `num_records` to the
-full tensor byte size so that *both* the M and N overhang are guarded by the one
-descriptor.
+Every lane runs the *same* code; with the shown zero instruction offset and
+`soffset`, lanes whose `byte_offset >= valid_bytes` simply receive `0.0f`. No
+`if`, no `EXEC` divergence, no separate tail loop. Keep `valid_bytes` a multiple
+of the dword component size for this `b32` helper. A single raw descriptor only
+checks the resulting **linear byte offset**: it catches a suffix past the end of
+that window, but it cannot detect a column overrun that merely lands in the next
+mapped row. Guard that dimension separately or describe each row with its own
+window when row boundaries matter.
+
+### Allocations larger than the descriptor window
+
+The raw descriptor extent is 32-bit, so one byte-addressed V# covers at most
+approximately **4 GiB**. This does **not** limit the allocation itself. Split a
+large tensor into windows and rebase the 64-bit descriptor base:
+
+```cpp
+// Host or uniform wave-level setup (conceptual):
+//   window_base  = allocation + window_start;       // 64-bit base
+//   local_offset = absolute_offset - window_start;  // must fit uint32_t
+//   valid_bytes  = min(allocation_bytes-window_start, UINT32_MAX);
+// guarded_load(window_base, (uint32_t)local_offset, (uint32_t)valid_bytes);
+```
+
+If rebasing/chunking is unsuitable, use a 64-bit global address with a software
+predicate. The dangerous pattern is computing `n_elems * sizeof(T)` in a signed
+32-bit `int`: it can wrap before the descriptor is constructed and make an
+invalid region appear in-bounds.
 
 ## What it looks like in assembly
 
@@ -162,30 +220,53 @@ free lunch when the neutral element is not zero:
 ## Interaction with vectorization and occupancy
 
 Buffer OOB guards compose cleanly with
-[vectorized loads](vectorized-loads.md): a `buffer_load_dwordx4` past the end
-returns a fully-zeroed `float4`, so you keep 128-bit transactions right up to the
-ragged edge instead of dropping to scalar tail code. Eliminating the tail loop
-also shrinks the kernel's instruction footprint, which helps I-cache residency
-and removes the per-iteration compare from the hot loop — a measurable win on
-memory-bound elementwise and reduction kernels where the VALU compare was on the
-critical path. The Triton AMD backend exposes this via its *buffer-ops* lowering
+[vectorized loads](vectorized-loads.md): raw `buffer_load_dwordx2/x3/x4`
+range-checks each dword component independently. A `dwordx4` whose first two
+components are in range and last two are out of range therefore returns the two
+valid dwords followed by two zeros; only an access with all four component
+offsets OOB is fully zero. (Format loads/stores and atomics instead use an
+all-or-nothing range check.) This lets a vectorized tail preserve its valid
+prefix without scalarizing. Eliminating the tail loop also shrinks the kernel's
+instruction footprint and removes the per-iteration compare from the hot loop.
+The Triton AMD backend exposes this via its *buffer-ops* lowering
 (`tl.load` with a `mask`/`other=0.0` lowers to guarded `buffer_load` when the
 pointer is provably a tensor base plus offset — see
 [`blog-triton-amd`](../languages/triton-amd.md)).
 
 ## Pitfalls
 
-- **`num_records` is in the descriptor's units.** For a "raw" (`stride=0`) buffer
-  it is a *byte* count; for a "structured" buffer it is a record count multiplied
-  by `stride`. Mixing the two silently truncates the valid region.
-- **It guards range, not alignment.** A misaligned `buffer_load_dwordx4` is still
-  a fault; the OOB guard does not relax alignment rules.
+- **`num_records` is in the descriptor's units.** For a raw buffer it is a byte
+  count and the hardware compares the instruction/VGPR byte offset; for a
+  structured buffer it is a record count and the hardware compares the VGPR
+  index. `stride` forms the structured address. Mixing the two changes the range
+  test, not merely its scale.
+- **It guards range, not source-language alignment.** On gfx942, dword-or-wider
+  raw buffer operations ignore the byte address's low two bits, forcing only
+  dword alignment; an 8- or 16-byte access is not specified to fault merely
+  because it lacks 8- or 16-byte alignment. That hardware rule does not make a
+  misaligned typed C++ `float4*` dereference legal: honor the source type's
+  alignment contract, or pass a byte offset to a raw-buffer builtin as above.
+- **Vector OOB is component-wise for raw dword ops.** `dwordx2/x3/x4` can return
+  or store a valid prefix while zeroing/dropping only the OOB dwords. Do not
+  assume a partially crossing vector is handled all-or-nothing.
 - **Flat/global paths are unguarded.** If a pass demotes your `buffer_load` to a
   `global_load` (e.g. because the descriptor couldn't be proven loop-invariant),
-  the OOB protection is gone. Inspect the assembly for `buffer_` vs `global_`.
+  the object-boundary protection is gone. A mapped neighboring address can be
+  accessed without a fault; inspect the assembly for `buffer_` vs `global_`.
+- **`soffset` does not extend the raw guard.** It changes the final address, but
+  the raw comparison is against `InstOffset + voffset`. Keep it zero for the
+  shown window-relative idiom, or account for it when constructing the SRD base
+  and range.
+- **Descriptor flags are target-specific.** The raw-dword flags used here are
+  `0x00020000` on gfx942/gfx950 and `0x31004000` on gfx11/gfx1200/gfx1201. Do not
+  copy a gfx9 literal into a gfx1201 build; use a target-selected helper such as
+  the one above (or CK Tile's maintained constant).
 - **Negative offsets wrap.** The comparison is unsigned; a negative `voffset`
   becomes a huge positive value (still OOB → 0), which is usually what you want,
   but do not rely on signed clamping.
+- **The 4-GiB raw window is not an allocation cap.** Rebase a descriptor per
+  chunk and validate every narrowing conversion; structured-buffer record-count
+  and stride-based address formation must be read from the target ISA.
 
 ## See also
 
@@ -197,6 +278,9 @@ pointer is provably a tensor base plus offset — see
 ## Sources
 
 - [AMD Instinct MI300/CDNA3 ISA Reference Guide — MUBUF / buffer resource descriptor, out-of-range behavior](https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/instruction-set-architectures/amd-instinct-mi300-cdna3-instruction-set-architecture.pdf)
+- [AMD Instinct CDNA4 ISA Reference Guide](https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/instruction-set-architectures/amd-instinct-cdna4-instruction-set-architecture.pdf) — gfx950 buffer-resource and MUBUF semantics.
 - [LLVM AMDGPU backend — `llvm.amdgcn.raw.ptr.buffer.load` / `make.buffer.rsrc` intrinsics](https://llvm.org/docs/AMDGPUUsage.html)
+- [CK Tile target configuration — architecture-selected buffer-resource word 3](https://github.com/ROCm/rocm-libraries/blob/5840fddc0f6f42cbedd9ecc113376d760bc177b1/projects/composablekernel/include/ck_tile/core/config.hpp)
 - [gcnasm — worked buffer_load examples](https://github.com/AMD/gcnasm)
 - [Triton AMD backend — buffer-ops lowering for masked loads](https://rocm.blogs.amd.com/artificial-intelligence/triton/README.html)
+- [AMDGPU Kernel Optimization Guide (captured snapshot)](https://github.com/nod-ai/amd-shark-ai/blob/efa471aeef66a260c85983cc41e833bfa769dade/docs/amdgpu_kernel_optimization_guide.md) — raw-buffer predication and the descriptor-window warning.

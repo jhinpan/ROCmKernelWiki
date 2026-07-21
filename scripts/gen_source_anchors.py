@@ -48,17 +48,41 @@ revision 5-August-2025. Adds the unified low-precision matrix instructions
 `v_mfma_f32_16x16x128_f8f6f4` and `v_mfma_f32_32x32x64_f8f6f4`, plus their
 microscaling (MX) `v_mfma_scale_*` variants.
 
-Key facts used across this wiki:
+## Matrix (MFMA) instructions
 
-- The `f8f6f4` ops **repurpose CBSZ/BLGP** as per-matrix element-format selectors:
+- Adds the **unified low-precision** dense ops `v_mfma_f32_16x16x128_f8f6f4` and
+  `v_mfma_f32_32x32x64_f8f6f4` (FP32 accumulate), plus their microscaling
+  variants `v_mfma_scale_f32_16x16x128_f8f6f4` / `v_mfma_scale_f32_32x32x64_f8f6f4`.
+- The `f8f6f4` ops **repurpose CBSZ/BLGP** as per-matrix element-format selectors
+  (CBSZ = matrix A format, BLGP = matrix B format), mixed A/B allowed:
   `000`=E4M3 (FP8), `001`=E5M2 (BF8), `010`=E2M3 (FP6), `011`=E3M2 (BF6),
-  `100`=E2M1 (FP4). Mixed A/B formats are allowed.
-- MX scale format is **E8M0**; `ABID[0]=1` enables scaling (else all scales 1.0).
-  The hardware folds scales into the exponent sum.
-- LDS grows to **160 kB/CU, 64 banks of 640 Dwords**.
-- Direct-to-LDS widens to 12/16-byte copies (`GLOBAL_LOAD_LDS_DWORDX3/X4`).
-- `v_permlane16_*` cross-lane ops are added (absent on gfx942).
-- EXPCNT is "Unused"; TF32/XF32 native path dropped in favor of MX formats."""),
+  `100`=E2M1 (FP4).
+- **MX scale** format is **E8M0** (8-bit exponent, bias 127), one shared scale per
+  MX block; `ABID[0]=1` enables scaling (else all scales forced to 1.0). The
+  hardware folds the scale into the exponent sum:
+  `d_exp = Σ(aᵢ_exp + bᵢ_exp) + c_exp + scale_a + scale_b`.
+- Keeps most of the CDNA3 MFMA/SMFMAC set and adds wider-K halves
+  (`v_mfma_f32_16x16x32_{f16,bf16}`, `v_mfma_f32_32x32x16_{f16,bf16}`,
+  `v_mfma_i32_16x16x64_i8`). The native **TF32/XF32** matrix path is **dropped**;
+  software must select a supported datatype/path. **FP64 matrix** throughput per
+  CU is **halved** vs CDNA3.
+- Companion conversion ops for packing/unpacking the narrow formats with E8M0
+  scales: `v_cvt_scalef32_pk_fp4_f32`, `v_cvt_scalef32_pk32_fp6_f32`, plus
+  stochastic-rounding `..._sr_...` variants.
+
+## Memory & LDS
+
+- **LDS** grows to **160 kB/CU, 64 banks of 640 Dwords** (32-bit wide) — vs
+  64 kB / 32 banks on CDNA3. Bank index is `(address / 4) % 64`.
+- **Direct-to-LDS** widens to 12/16-byte copies
+  (`GLOBAL_LOAD_LDS_DWORDX3` / `GLOBAL_LOAD_LDS_DWORDX4`); the LLVM intrinsic
+  `llvm.amdgcn.load.to.lds` selects these on gfx950.
+
+## Wavefront / counters / cross-lane
+
+- `v_permlane16_swap_b32` / `v_permlane32_swap_b32` are **added** (absent on
+  gfx942); the similarly named RDNA selector form is not a CDNA4 instruction.
+- **EXPCNT** is "Unused"; **LGKMCNT** wording drops GDS. CDNA remains wave64-only."""),
 
     dict(id="doc-cdna3-whitepaper", title='AMD CDNA 3 Architecture White Paper',
          url="https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/white-papers/amd-cdna-3-white-paper.pdf",
@@ -95,9 +119,13 @@ TFLOPS; FP8 2614.9 | 5229.8 TFLOPS; INT8 2614.9 | 5229.8 TOPS; FP64/FP32 matrix
          tags=["wave64", "sgpr", "vgpr", "agpr", "cu", "cdna"],
          body="""ROCm HIP hardware-implementation reference. Documents the CU register
 files: ~12.5 KiB SGPR storage per CU; 256–512 KiB VGPR storage split across the
-four SIMD16 units; up to 512 total VGPRs per wave (256 Arch + 256 Acc). Up to
-40 waves/CU occupancy (four pools × 10 waves), typically limited by register and
-LDS usage. CDNA is wave64-only."""),
+four SIMD16 units; up to 256 ArchVGPR and 256 AGPR names sharing one combined
+512-entry-per-lane allocation on gfx942/gfx950. Up to
+40 waves/CU is a generic/older-GCN limit described by this upstream overview;
+it is **not** the gfx942/gfx950 limit. CDNA3/CDNA4 devices report 32 waves/CU
+(four SIMD pools × 8 waves), typically reduced further by register and LDS
+usage. CDNA is wave64-only. See [`hw-wavefront`](../../wiki/hardware/wavefront.md)
+for the device-verified architecture-scoped value."""),
 
     dict(id="doc-llvm-amdgpu", title='LLVM — User Guide for the AMDGPU Backend',
          url="https://llvm.org/docs/AMDGPUUsage.html",

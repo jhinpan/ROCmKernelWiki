@@ -4,9 +4,9 @@
 // Pattern: load a TILE x TILE block with a coalesced row-major read into LDS,
 // then write it out transposed with another coalesced row-major write. The
 // transposed read walks down an LDS column, which is exactly where bank
-// conflicts appear. Padding the LDS row stride by +1 dword (TILE+1) makes the
-// 32 (or 64) elements of a column land in distinct banks because
-// gcd(TILE+1, num_banks) == 1.
+// conflicts appear. For this block(32,32) lane mapping the required padding is
+// target-specific: +1 dword on gfx942/default RDNA wave32, +2 on gfx950 where a
+// b32 phase contains two adjacent columns across the same 32 rows.
 //
 // Self-checks the result against a CPU reference and reports effective
 // bandwidth.
@@ -18,6 +18,11 @@
 #include <cmath>
 
 #define TILE 32
+#if defined(__gfx950__)
+#define LDS_PAD 2
+#else
+#define LDS_PAD 1
+#endif
 
 #define HIP_CHECK(cmd)                                                          \
   do {                                                                          \
@@ -33,8 +38,7 @@
 __global__ void transpose_lds(float* __restrict__ out,
                               const float* __restrict__ in,
                               int rows, int cols) {
-  // +1 pad column => column-wise reads hit distinct banks (gcd(TILE+1,banks)==1)
-  __shared__ float tile[TILE][TILE + 1];
+  __shared__ float tile[TILE][TILE + LDS_PAD];
 
   int x = blockIdx.x * TILE + threadIdx.x;  // input column
   int y = blockIdx.y * TILE + threadIdx.y;  // input row

@@ -5,10 +5,12 @@ optimization** for CDNA3 (gfx942 / MI300), CDNA4 (gfx950 / MI350–MI355X), and 
 (gfx1201), **packaged as a Claude Code skill**. The repository root **is** the skill
 directory — clone it into `~/.claude/skills/` and it works out of the box.
 
-> **Knowledge cutoff 2026-05-15** (PRs/docs/blogs anchored at or before this date; tool
-> versions pinned in [`data/tool-versions.yaml`](data/tool-versions.yaml)). The
-> gfx950 hardware/numeric facts and all 12 runnable examples were additionally
-> **re-verified on real MI350X silicon (ROCm 7.2)** — see below.
+> **Corpus dates:** merged-PR harvest through **2026-05-30**; each doc/blog page
+> carries its own retrieval date. The nod-ai AMDGPU optimization guide is synced
+> through commit `efa471ae` on **2026-07-20**. Tool versions remain pinned in
+> [`data/tool-versions.yaml`](data/tool-versions.yaml). gfx950 facts and examples
+> were verified on MI350X, with guide-specific device/LDS checks repeated on
+> MI355X — see below.
 
 ## Hardware Scope
 
@@ -21,12 +23,18 @@ directory — clone it into `~/.claude/skills/` and it works out of the box.
 > The headline portability gotcha: **gfx942 FP8 (FNUZ) is not bit-compatible with
 > gfx950 FP8 (OCP)**. See [`wiki/migration/gfx942-to-gfx950.md`](wiki/migration/gfx942-to-gfx950.md).
 
-## Validated on real silicon (MI350X / gfx950)
+## Validated on real silicon (MI350X and MI355X / gfx950)
 
 Unlike a docs-only wiki, the gfx950 claims here were **checked on an actual AMD Instinct
 MI350X** (ROCm 7.2) by compiling, running, and disassembling code — each finding re-run by
 an adversarial second pass. Full evidence: [`VERIFICATION.md`](VERIFICATION.md) and
 [`data/hardware-verified.yaml`](data/hardware-verified.yaml).
+
+The 2026-07-20 guide sync additionally ran on MI355X/ROCm 7.1.1: HIP reported
+256 CUs, wave64, 32 waves/CU, and 160 KiB LDS; the upstream empirical-LDS
+harness reproduced 64 banks plus the b32/b64 phase groups. Its b128 classifier
+was inconclusive and MI300X SSH access was unavailable, both recorded as limits
+in [`VERIFICATION.md`](VERIFICATION.md).
 
 - **Hardware facts re-grounded on silicon** and corrected where the GPU disagreed with the
   docs: gfx950 cross-lane is `v_permlane16_swap` (not the RDNA selector form); **32 waves/CU**

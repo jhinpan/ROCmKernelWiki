@@ -2,6 +2,9 @@
 id: pattern-vgpr-pressure
 title: VGPR Pressure, Register Spills, and Occupancy Collapse
 type: pattern
+version_sensitive:
+- vs-wave-slots-cdna3-cdna4
+- vs-cdna-unified-vgpr-agpr-allocation
 architectures:
 - gfx942
 - gfx950
@@ -44,28 +47,31 @@ implemented_by:
 ## The pattern
 
 A kernel runs much slower than its arithmetic intensity predicts, the profiler
-shows few waves resident per CU, and latency from a single memory miss is never
-hidden because there are no other waves to switch to. The root cause is almost
-always that **each wave consumes too many vector registers**, so the CU cannot
+shows few waves resident per CU, and latency from a memory miss is poorly hidden
+because there are few other ready waves to switch to. A frequent root cause is
+that **each wave consumes too many vector registers**, so the CU cannot
 keep enough waves in flight to cover memory and MFMA latency. In the worst case
 the compiler runs out of registers entirely and inserts **spill/reload traffic
 to scratch** (private memory backed by HBM), which is both slow and consumes
 even more VMEM bandwidth.
 
 On CDNA the VGPR file is the scarcest occupancy resource for most compute-bound
-kernels. A wave can hold up to **512 VGPRs (256 ArchVGPRs + 256 AccVGPRs/AGPRs)**,
-allocated in **groups of 8 dwords**, and the CU supports **up to 40 waves
-(4 SIMD pools × 10 waves)**. Because the register file is fixed, occupancy is
-roughly `floor(file_per_SIMD / per_wave_VGPRs)` capped at 10 per SIMD — so VGPR
-count per wave directly throttles how many waves fit. See
+kernels. CDNA3/CDNA4 provide one combined **512-entry-per-lane vector capacity
+per SIMD** for regular ArchVGPR and accumulator AccVGPR/AGPR allocations. Each
+view has up to 256 names; the combined allocation is encoded in **groups of 8
+dwords**. On gfx942 it is
+`round_up(round_up(arch_count, 4) + accum_count, 8)`; gfx950's combined
+`.vgpr_count` is rounded to 8 directly. CDNA3/CDNA4 support **up to 32 waves
+(4 SIMD pools × 8 waves)** per CU, with the vector-register limit computed as
+`floor(512 / vector_alloc)`, capped at 8 waves/SIMD. See
 [wavefront & occupancy](../hardware/wavefront.md).
 
 ## Symptoms and how to confirm them
 
 | Symptom | Where you see it | What it means |
 |---|---|---|
-| `vgpr-pressure` | High `VGPRs` in the compiler resource report / ISA `.vgpr_count` | Per-wave allocation is large, capping occupancy |
-| `register-spill` | Non-zero `ScratchSize` / `.private_segment_fixed_size`; `scratch_load/store` in ISA | Compiler ran out of registers; spilling to HBM-backed scratch |
+| `vgpr-pressure` | High combined vector allocation in the compiler resource report | Per-wave allocation is large, capping occupancy |
+| `register-spill` | Non-zero spill counts/private segment plus `scratch_load/store` in ISA | Live values or explicit private data use HBM-backed scratch |
 | `low-occupancy` | `rocprofv2`/`rocprof` `Wavefronts` or `Occupancy` counters far below peak | Too few waves to hide latency |
 
 Fast triage from the build itself — no profiler needed:
@@ -80,18 +86,28 @@ llvm-objdump --arch-name=amdgcn -d gemm.o | head -50
 # Look for:  .vgpr_count / .agpr_count / .sgpr_count / .private_segment_fixed_size
 ```
 
-Any non-zero `.private_segment_fixed_size` (scratch) on a hot kernel is a red
-flag: the compiler spilled. The first goal is almost always to get spills to
-**zero**, then to push occupancy.
+On gfx942, compute `round_up(round_up(.vgpr_count, 4) + .agpr_count, 8)`;
+rounding both components independently to eight would overestimate allocation.
+On gfx950, `.vgpr_count` already includes both, so round it to eight and do not
+double-count `.agpr_count`. A non-zero
+`.private_segment_fixed_size` means scratch/private storage exists, but use
+spill counts and emitted `scratch_*` instructions to distinguish register
+spills from explicit private objects. Hot-path scratch is a red flag; the first
+goal is usually to get actual spill traffic to **zero**, then tune occupancy.
 
-## Why it happens on AMD specifically
+## Why it happens in CDNA MFMA kernels
+
+The following AGPR and wave64 details are specific to gfx942/gfx950. On RDNA,
+WMMA accumulators use ordinary ArchVGPRs and the target may run wave32 or wave64;
+query the compiled wave mode and re-budget its fragment layout.
 
 - **MFMA accumulators are register-resident.** A large output tile keeps its
   whole C/D accumulator live across the K-loop. For `v_mfma_f32_16x16x16_f16`
   the accumulator is **4 VGPRs per lane (C=4, D=4)**; a 256×128 macro-tile built
   from many such MFMAs can pin a hundred-plus accumulator registers per wave.
   Accumulators are conventionally placed in **AGPRs** to free ArchVGPRs, but a
-  big tile is still ultimately AGPR-bound. See [MFMA](../hardware/mfma.md).
+  big tile still adds to the same combined physical budget. See
+  [MFMA](../hardware/mfma.md).
 - **wave64.** CDNA is wave64-only, so per-lane register costs are paid across
   64 lanes; there is no wave32 fallback to halve the live state (unlike RDNA4
   gfx1201, which can run wave32).
@@ -109,9 +125,9 @@ rematerialization against it. The portable HIP attribute is
 `__launch_bounds__(maxThreadsPerBlock, minWavesPerEU)`:
 
 ```cpp
-// 256 threads/block = 4 wave64 waves/block.
-// minWavesPerEU=2 tells the backend to keep <= ~256/(2*?) VGPRs so >=2
-// waves co-reside per SIMD (EU). Raising it forces a smaller VGPR budget.
+// gfx942/gfx950: 256 threads/block = 4 wave64 waves/block.
+// minWavesPerEU=2 asks the backend to keep the combined regular+accumulator
+// allocation <= 512/2 = 256 entries so >=2 waves co-reside per SIMD (EU).
 __global__ void __launch_bounds__(256, 2)
 hgemm_tile(const half* __restrict__ A,
            const half* __restrict__ B,
@@ -141,12 +157,15 @@ HBM→LDS transfers **bypass the VGPR file**, eliminating the staging registers 
 normal load-then-`ds_write` would need. This is AMD's analog of NVIDIA
 `cp.async`. See [async copy to LDS](../hardware/async-copy-lds.md).
 
-### 4. Move accumulators into AGPRs / rebalance the two banks
+### 4. On CDNA, use the AGPR view without mistaking remapping for a spill
 
 Steering the accumulator into **AGPRs** frees ArchVGPRs for addressing and lets
 the matrix unit co-issue with VALU. The compiler does this by default for MFMA
-output, but tile shape and `-amdgpu-num-vgpr`/agpr controls let you rebalance
-the 256+256 split — see [VGPR budgeting](../techniques/vgpr-budgeting.md).
+output. It does **not** create another occupancy pool: regular and accumulator
+allocations still sum against 512. Likewise, mapping a regular live range into
+an unused AGPR index is register remapping within the same file, not a scratch
+spill. Tile shape and target-specific VGPR/AGPR controls can still help with
+namespace pressure — see [VGPR budgeting](../techniques/vgpr-budgeting.md).
 
 ### 5. Reduce live ranges
 
@@ -157,16 +176,16 @@ loads.
 
 ## Worked example: reading the trade-off
 
-Suppose a HIP GEMM reports **168 VGPRs/wave** and `ScratchSize=0`. With 256
-ArchVGPRs available per SIMD-lane budget, `floor(256/168)=1` wave/SIMD → very
-low occupancy but no spills. Two paths:
+Suppose a gfx942 HIP GEMM reports **104 regular VGPRs + 64 AGPRs/wave** and
+`ScratchSize=0`. Both counts are already multiples of eight, so the combined
+allocation is 168 and `floor(512/168)=3` waves/SIMD. Two paths:
 
-- **Down to ≤128 VGPRs** (smaller tile or `__launch_bounds__(…, 2)`):
-  `floor(256/128)=2` waves/SIMD — occupancy doubles, latency hiding improves,
-  *as long as no spills appear*.
-- **Force ≤85 VGPRs** to chase 3 waves/SIMD: if the accumulator no longer fits,
-  the compiler spills (`ScratchSize>0`) and you trade a register stall for an
-  HBM round-trip — usually a net loss.
+- **Down to ≤128 combined registers** (smaller tile or a higher waves/EU target):
+  `floor(512/128)=4` waves/SIMD, which adds one resident wave as long as no
+  scratch spills appear.
+- **Grow to exactly 256 combined registers:** two waves/SIMD still fit. A legal
+  allocation above 256 drops to one wave/SIMD but does **not** inherently spill;
+  spill evidence comes from scratch allocation/instructions, not this threshold.
 
 The sweet spot is the smallest tile that keeps the MFMA pipeline fed while
 holding scratch at zero. Always co-optimize with LDS, since LDS per-CU
@@ -175,13 +194,14 @@ holding scratch at zero. Always co-optimize with LDS, since LDS per-CU
 ## Anti-patterns
 
 - **Chasing maximum occupancy blindly.** A compute-bound MFMA kernel can be
-  fastest at 2–4 waves/CU if the tile is large and the pipeline is full; forcing
-  8 waves by shrinking the tile can drop MFMA utilization. Tune for throughput,
-  not the occupancy number.
+  fastest at 2–4 waves/SIMD (8–16 waves/CU) if the tile is large and the
+  pipeline is full; forcing 8 waves/SIMD by shrinking the tile can drop MFMA
+  utilization. Tune for throughput, not the occupancy number.
 - **Ignoring `ScratchSize`.** Spills can hide behind "it still runs." Always
   check the resource report.
-- **Hardcoding `warpSize`/lane counts** when computing register-tiling — query
-  it; it is 64 on gfx9 and 32 on gfx10+ (see [HIP HW model](../../sources/docs/doc-rocm-hip-hw.md)).
+- **Hardcoding `warpSize`/lane counts** when computing register tiling — query
+  it. gfx9 CDNA is wave64, while RDNA supports target/mode-dependent wave32 or
+  wave64 (see [HIP HW model](../../sources/docs/doc-rocm-hip-hw.md)).
 
 ## See also
 

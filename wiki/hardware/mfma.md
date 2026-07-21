@@ -5,6 +5,8 @@ type: hardware
 version_sensitive:
 - vs-fp8-fnuz-gfx942
 - vs-fp8-ocp-gfx950
+- vs-cdna-unified-vgpr-agpr-allocation
+- vs-tf32-dropped-gfx950
 architectures:
 - gfx942
 - gfx950
@@ -83,16 +85,17 @@ Most kernels do **not** call the builtin directly. Prefer
 MFMA for you. Use the builtin (or hand assembly) only when you need full control
 of the register layout.
 
-## Accumulation registers (AGPRs)
+## Accumulation register names (AGPRs)
 
-CDNA has two vector register banks: **ArchVGPRs** and **AccVGPRs (AGPRs)**. The
-matrix core reads/writes accumulators through AGPRs. On CDNA3 and CDNA4, the A,
-B, C, and D operands may each live in either ArchVGPRs or AGPRs, but the
-accumulator (C/D) is conventionally kept in AGPRs to free ArchVGPRs for
-addressing and to allow the matrix unit to co-issue with the VALU. A wave can
-hold up to 256 ArchVGPRs + 256 AGPRs (512 total). Heavy MFMA tiling is usually
-**AGPR-bound**, so accumulator-tile size directly trades against occupancy — see
-[register pressure](../patterns/vgpr-pressure.md).
+CDNA exposes two architectural vector-register views: **ArchVGPRs** and
+**AccVGPRs (AGPRs)**. On CDNA3 and CDNA4, MFMA A, B, C, and D operands may each
+use either view, but the accumulator (C/D) is conventionally kept in AGPR names
+to free ArchVGPR names for addressing and to allow the matrix unit to co-issue
+with the VALU. These are not independent capacity banks: up to 256 names exist
+in each view, while both draw from the same combined 512-entry-per-lane physical
+allocation and occupancy budget. Heavy MFMA tiling is therefore still
+register-bound, so accumulator-tile size directly trades against occupancy —
+see [register pressure](../patterns/vgpr-pressure.md).
 
 ## Shapes and dtypes — CDNA3 (gfx942)
 
@@ -155,9 +158,10 @@ MX block; `ABID[0]=1` enables scaling (with `ABID[0]=0` all scales are forced to
 
 Also new on gfx950: wider-K halves `v_mfma_f32_16x16x32_f16/bf16`,
 `v_mfma_f32_32x32x16_f16/bf16`, `v_mfma_i32_16x16x64_i8`. Note that the native
-**TF32/XF32 matrix path was dropped** on CDNA4 (emulated via BF16), and FP64
-matrix throughput per CU was halved — the silicon was reallocated to the MX
-formats.
+**TF32/XF32 matrix path was dropped** on CDNA4: the gfx942 XF32 intrinsic does
+not lower for gfx950, so software must explicitly choose BF16 or another
+supported path. FP64 matrix throughput per CU was halved — the silicon was
+reallocated to the MX formats.
 
 ## Deriving the exact register layout
 

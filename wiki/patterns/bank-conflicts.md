@@ -5,6 +5,8 @@ type: pattern
 architectures:
 - gfx942
 - gfx950
+version_sensitive:
+- vs-lds-phase-groups-gfx942-gfx950
 tags:
 - bank-conflicts
 - lds-bound
@@ -64,13 +66,13 @@ at byte address `A` lives in bank:
 bank = (A / 4) % num_banks      // num_banks = 32 (gfx942) or 64 (gfx950)
 ```
 
-A wave64 `ds_read`/`ds_write` is dispatched to the LDS over **4 cycles, 16
-lanes per cycle**. Within a single 16-lane group, if `k` lanes target distinct
-dwords that map to the **same bank**, that group's access is split into `k`
-serialized passes — a *k-way bank conflict*. The penalty ranges from a couple
-of extra cycles up to ~64 cycles for a fully-degenerate 32-way pattern. An
-access where every lane hits a different bank (or where lanes read the *same*
-dword, which the hardware broadcasts for free) runs at full rate.
+LDS conflicts are evaluated inside **opcode- and architecture-specific phase
+groups**, not a universal 16-lane quarter-wave. For b32/b64/b128 reads, gfx942
+uses 2×32 / 4×16 / 8×8 lane groups; gfx950 uses 1×64 / 2×32 / 4×16. Within one
+such group, if `k` lanes target distinct dwords in the same bank, the hardware
+waterfalls/replays the conflicting lanes. Same-address reads are broadcasts and
+do not conflict. Use the exact [LDS phase tables](../hardware/lds.md), because a
+layout can be clean for one `ds_*` width and conflicted for another.
 
 The classic trigger is a **power-of-two stride** equal to (a multiple of) the
 bank count. Two examples that bite constantly:
@@ -85,9 +87,9 @@ float x = tile[threadIdx.x][0];   // lanes 0..31 all read column 0:
 ```
 
 Here the row stride is `32 floats = 128 bytes = 32 dwords`, an exact multiple
-of the 32-bank width, so a column access collapses onto one bank. The same code
-on gfx950 (64 banks) collapses 32 lanes onto bank 0 across two banks' worth of
-addressing — still badly conflicted.
+of the 32-bank width, so a column access collapses onto one bank. On gfx950 the
+same 32-dword stride alternates between banks 0 and 32, mapping 16 of these 32
+lanes to each bank — still badly conflicted, but not a single-bank collapse.
 
 ## Diagnosing it
 
@@ -95,9 +97,10 @@ addressing — still badly conflicted.
    *bank-conflict* count or a low *LDS access efficiency* / high LDS latency
    relative to issued `ds_*` instructions is the signal. Conflicts also inflate
    `lgkmcnt` wait time, which surfaces as matrix/VALU idle.
-2. **Reason about the stride.** Write down the byte address each lane in a
-   16-lane group produces, divide by 4, take `% num_banks`. If the set of
-   resulting banks has duplicates, you have a conflict. Column-major access of a
+2. **Reason about the stride.** Write down the byte address each lane in one
+   phase group of the emitted opcode produces, divide by 4, and take
+   `% num_banks`. If different addresses select the same bank, you have a
+   conflict. Column-major access of a
    `[N][32]` (gfx942) or `[N][64]` (gfx950) tile is the canonical offender.
 3. **A/B test padding.** Add one dword of column padding (below) and re-measure.
    A large delta confirms LDS serialization was the bottleneck rather than
@@ -165,7 +168,7 @@ LDS crossbar without consuming LDS storage.
 
 ## Caveats
 
-- **Broadcast is free, not a conflict.** If every lane in the 16-lane group
+- **Broadcast is free, not a conflict.** If every lane in the same phase group
   reads the *identical* dword, the LDS broadcasts it in one pass. Only accesses
   to *different* dwords in the *same* bank serialize.
 - **Bank count differs across architectures.** A layout tuned for 32 banks

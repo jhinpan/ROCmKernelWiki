@@ -207,4 +207,4 @@ is the one for its MFMA instruction class.
 - [ROCm Compute Profiler (Omniperf) documentation](https://rocm.docs.amd.com/projects/rocprofiler-compute/en/latest/)
 - [GEMM kernel optimization on AMD GPUs](https://rocm.blogs.amd.com/artificial-intelligence/matrix-cores/README.html)
 - [Triton kernel performance optimization on AMD](https://rocm.blogs.amd.com/software-tools-optimization/triton-kernel-optimization/README.html)
-- [AMDGPU Kernel Optimization Guide (nod-ai/shark-ai)](https://github.com/nod-ai/amd-shark-ai/blob/main/docs/amdgpu_kernel_optimization_guide.md)
+- [AMDGPU Kernel Optimization Guide (captured snapshot)](https://github.com/nod-ai/amd-shark-ai/blob/efa471aeef66a260c85983cc41e833bfa769dade/docs/amdgpu_kernel_optimization_guide.md)

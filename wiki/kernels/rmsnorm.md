@@ -2,6 +2,8 @@
 id: kernel-rmsnorm
 title: Fused RMSNorm (+ residual / quant) on CDNA
 type: kernel
+version_sensitive:
+- vs-permlane16-gfx950
 architectures:
 - gfx942
 - gfx950
@@ -198,7 +200,8 @@ Notes for the kernel engineer:
 - `__shfl_down` lowers to `ds_bpermute_b32` / DPP on AMD; for a hand-tuned
   path use `__builtin_amdgcn_mov_dpp` for the intra-row steps and
   `__builtin_amdgcn_ds_bpermute` for the cross-row step — see
-  [cross-lane](../hardware/cross-lane.md). `v_permlane16_*` is **gfx950-only**.
+  [cross-lane](../hardware/cross-lane.md). `v_permlane16_swap_b32` /
+  `v_permlane32_swap_b32` are **gfx950-only**; the RDNA selector form differs.
 - The residual sum is written once and re-read from **L2**, not HBM, so the
   fused kernel touches HBM ~3× less than three separate launches
   (read x, read res, write y) — this is the bandwidth win behind the

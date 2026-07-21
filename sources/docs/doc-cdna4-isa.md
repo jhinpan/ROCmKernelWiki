@@ -37,10 +37,11 @@ microscaling (MX) `v_mfma_scale_*` variants.
   MX block; `ABID[0]=1` enables scaling (else all scales forced to 1.0). The
   hardware folds the scale into the exponent sum:
   `d_exp = Σ(aᵢ_exp + bᵢ_exp) + c_exp + scale_a + scale_b`.
-- Keeps the full CDNA3 MFMA/SMFMAC set and adds wider-K halves
+- Keeps most of the CDNA3 MFMA/SMFMAC set and adds wider-K halves
   (`v_mfma_f32_16x16x32_{f16,bf16}`, `v_mfma_f32_32x32x16_{f16,bf16}`,
-  `v_mfma_i32_16x16x64_i8`). The native **TF32/XF32** matrix path is **dropped**
-  (BF16-emulated) and **FP64 matrix** throughput per CU is **halved** vs CDNA3.
+  `v_mfma_i32_16x16x64_i8`). The native **TF32/XF32** matrix path is **dropped**;
+  software must select a supported datatype/path. **FP64 matrix** throughput per
+  CU is **halved** vs CDNA3.
 - Companion conversion ops for packing/unpacking the narrow formats with E8M0
   scales: `v_cvt_scalef32_pk_fp4_f32`, `v_cvt_scalef32_pk32_fp6_f32`, plus
   stochastic-rounding `..._sr_...` variants.
@@ -55,8 +56,8 @@ microscaling (MX) `v_mfma_scale_*` variants.
 
 ## Wavefront / counters / cross-lane
 
-- `v_permlane16_*` cross-lane ops are **added** (absent on gfx942) — see the
-  latency comparison in `blog-amdgpu-kernel-opt-guide`.
+- `v_permlane16_swap_b32` / `v_permlane32_swap_b32` are **added** (absent on
+  gfx942); the similarly named RDNA selector form is not a CDNA4 instruction.
 - **EXPCNT** is "Unused"; **LGKMCNT** wording drops GDS. CDNA remains wave64-only.
 
 ## Reference

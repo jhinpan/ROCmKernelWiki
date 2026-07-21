@@ -15,6 +15,8 @@ tags:
 - vectorized-loads
 confidence: inferred
 reproducibility: runnable
+version_sensitive:
+- vs-lds-phase-groups-gfx942-gfx950
 artifact_dir: examples/transpose-lds
 kernel_types:
 - transpose
@@ -81,9 +83,12 @@ appear and must be designed away.
 
 On gfx942 the LDS has **32 banks of 512 dwords, each 32-bit wide**; on gfx950 it
 is **64 banks of 640 dwords** (see [LDS](../hardware/lds.md)). The bank of a
-dword address is `(addr/4) mod num_banks`. A wave64 access is dispatched over 4
-cycles at 16 lanes/cycle, so up to 16 distinct banks are serviced per cycle —
-two lanes hitting the same bank in the same cycle serialize.
+dword address is `(addr/4) mod num_banks`. A wave64 access is divided into
+architecture- and opcode-specific phase groups. A scalar `ds_read_b32`
+uses two 32-lane phases on gfx942 and one 64-lane phase on gfx950; b64/b128 use
+smaller, different groups. Two lanes in the same phase that hit different
+addresses in one bank serialize. Inspect the emitted width and consult the
+[LDS phase tables](../hardware/lds.md) before declaring a layout conflict-free.
 
 Store the tile naively as `float tile[TILE][TILE]` with `TILE = 32`. The
 transposed read `tile[col][row]` walks **down a column**: for a fixed column,
@@ -91,21 +96,29 @@ successive rows are `TILE = 32` dwords apart, so every address maps to
 `(row*32) mod 32 = 0` — **the same bank**. That is a 32-way conflict on every
 transposed read, the worst case.
 
-## Fix 1 — padding (one extra column)
+## Fix 1 — architecture-aware padding
 
-Pad the row stride to `TILE + 1` dwords. Now column elements are `33` dwords
-apart, and `gcd(33, 32) = 1`, so the 32 rows of a column land in 32 *distinct*
-banks — conflict-free — at the cost of one wasted dword per row.
+On gfx942, pad the row stride to `TILE + 1 = 33` dwords. Each b32 phase sees
+one column across 32 rows, and `gcd(33, 32) = 1`, so those rows land in 32
+distinct banks. On gfx950 a b32 phase is all 64 lanes: with `block(32,32)` it
+contains two adjacent columns across the same 32 rows. Stride 33 makes those two
+bank sets overlap; `TILE + 2 = 34` instead maps one column to the 32 even banks
+and the other to the 32 odd banks. Thus this particular thread mapping needs a
+target-specific pad.
 
 ```cpp
-// MI300X / MI350X — out-of-place fp32 transpose, LDS-staged, conflict-free.
+// MI300X / MI350X — out-of-place fp32 transpose, LDS-staged.
 // Launch: dim3 block(TILE, TILE); dim3 grid((cols+TILE-1)/TILE,(rows+TILE-1)/TILE);
 #define TILE 32
+#if defined(__gfx950__)
+#define LDS_PAD 2  // wave64 phase contains two columns: split even/odd banks
+#else
+#define LDS_PAD 1  // gfx942 b32 phases (and default RDNA wave32 mapping)
+#endif
 __global__ void transpose_lds(float* __restrict__ out,
                               const float* __restrict__ in,
                               int rows, int cols) {
-    // +1 pad column => column-wise reads hit 32 distinct banks (gcd(33,32)==1)
-    __shared__ float tile[TILE][TILE + 1];
+    __shared__ float tile[TILE][TILE + LDS_PAD];
 
     int x = blockIdx.x * TILE + threadIdx.x;   // input column
     int y = blockIdx.y * TILE + threadIdx.y;   // input row
@@ -126,37 +139,40 @@ __global__ void transpose_lds(float* __restrict__ out,
 }
 ```
 
-`block(32,32)` = 1024 work-items = **16 wave64s** per workgroup; the padded tile
-costs `32*33*4 = 4224 B` of LDS, leaving plenty of the 64 kB/CU budget for high
-occupancy. Bounds checks compile to predication, but for power-of-two tiles you
+`block(32,32)` = 1024 work-items = **16 wave64s** per workgroup. The padded tile
+costs 4224 B on gfx942 or 4352 B on gfx950, leaving ample per-CU LDS. Bounds
+checks compile to predication, but for power-of-two tiles you
 can instead lean on `buffer_load`'s
 [hardware OOB semantics](../techniques/buffer-oob-guard.md) to drop the branches.
 
 ## Fix 2 — XOR swizzle (no wasted LDS)
 
-Padding wastes a column and breaks vectorized `ds_read_b128`/`ds_write_b128`
+Padding wastes capacity and can break vectorized `ds_read_b128`/`ds_write_b128`
 alignment. The alternative is a **swizzled layout** (see
 [LDS swizzling](../techniques/lds-swizzling.md)): keep the tight `TILE × TILE`
-storage but permute the column index with `col ^ row`. Because XOR is a
-bijection, both the write and the transposed read touch distinct banks, with no
-padding overhead:
+storage but permute selected row bits into the column index. Using the same
+mapping on store and load preserves logical correctness, but XOR being a
+bijection does **not** by itself prove conflict freedom; the mask must be derived
+for the actual lane mapping, opcode width, and target phase groups:
 
 ```cpp
-// store: tile[row][col ^ row] = v;   load: v = tile[col][row ^ col];
-__device__ inline int sw(int row, int col) { return row * TILE + (col ^ row); }
+// Schematic only: derive swizzle_bits(row) against the target phase table.
+__device__ inline int sw(int row, int col) {
+    return row * TILE + (col ^ swizzle_bits(row));
+}
 ```
 
-This is the layout CK/Tensile GEMM prologues use when they need a transposed
-operand staged in LDS without paying the padding tax.
+CK/Tensile-style GEMM prologues use such layout-specific bit permutations when
+they need a transposed operand staged in LDS without paying the padding tax.
 
 ## What the inner loop looks like in GCN/CDNA assembly
 
-The hot path is two `ds_*` instructions bracketed by a barrier. With a padded
-33-dword row stride, the transposed read offsets are computed once and the
+The hot path is two `ds_*` instructions bracketed by a barrier. With the padded
+33-/34-dword target-specific row stride, the transposed read offsets are computed once and the
 `s_waitcnt lgkmcnt(0)` gates the LDS round-trip ([waitcnt](../hardware/s-waitcnt.md)):
 
 ```asm
-; v2 = byte offset of tile[threadIdx.y][threadIdx.x]  (stride 33 dwords = 132 B)
+; v2 = byte offset of tile[threadIdx.y][threadIdx.x]  (stride 33 or 34 dwords)
 ; v3 = byte offset of tile[threadIdx.x][threadIdx.y]  (transposed read offset)
 ; v4 = loaded input element (already in VGPR from global_load)
     ds_write_b32   v2, v4                ; LDS[ tile[ty][tx] ] = v4
@@ -167,9 +183,10 @@ The hot path is two `ds_*` instructions bracketed by a barrier. With a padded
     ; ... global_store_dword (coalesced) of v5 ...
 ```
 
-Without the `+1` stride the `ds_read_b32` above would still issue one
-instruction, but the 32-bank serialization stretches it to ~32× its
-conflict-free latency — the single biggest knob on this kernel. Verify it with
+Without the target's `+1`/`+2` stride the `ds_read_b32` above would still issue
+one instruction, but this mapping is 32-way conflicted per gfx942 phase and
+16-way conflicted across four banks in the gfx950 wave64 phase. That
+serialization is the single biggest knob on this kernel. Verify it with
 `rocprofv3`/`rocprof-compute` LDS bank-conflict counters
 ([bank-conflicts pattern](../patterns/bank-conflicts.md)).
 
@@ -182,8 +199,9 @@ conflict-free latency — the single biggest knob on this kernel. Verify it with
 - **Rectangular thread tiles.** A `block(64,16)` with each thread handling 2 rows
   often beats `32×32`: the wave then spans 64 contiguous columns, matching the
   full coalesced cache line while keeping the LDS access pattern conflict-free.
-- **gfx950 banks.** CDNA4 has 64 LDS banks. A `64×64` tile needs stride `65`
-  (`gcd(65,64)=1`) for the padded variant; the XOR-swizzle variant is unchanged.
+- **gfx950 banks.** CDNA4 has 64 LDS banks. A `64×64` mapping where one wave
+  reads one 64-row column can use stride `65` (`gcd(65,64)=1`); other mappings
+  need their own phase-level proof. Re-derive the XOR mask as well.
 - **Direct-to-LDS.** The input load can bypass VGPRs entirely with
   `buffer_load_dword ... lds` ([async copy to LDS](../hardware/async-copy-lds.md)),
   overlapping the HBM stream with the previous tile's store — useful when fusing

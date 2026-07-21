@@ -2,6 +2,9 @@
 id: technique-occupancy-tuning
 title: Occupancy Tuning — Waves per SIMD vs ILP on CDNA
 type: technique
+version_sensitive:
+- vs-wave-slots-cdna3-cdna4
+- vs-cdna-unified-vgpr-agpr-allocation
 architectures:
 - gfx942
 - gfx950
@@ -53,21 +56,36 @@ implemented_by:
 
 A CDNA Compute Unit (CU) is built from **4 SIMD16 units** (the "execution units",
 or EUs). Each SIMD time-slices a pool of resident **wave64** wavefronts, switching
-between them to hide memory and instruction latency. The hardware ceiling is
-**10 waves per SIMD → 40 waves per CU** (4 pools × 10). *Occupancy* is the number
+between them to hide memory and instruction latency. The CDNA3/CDNA4 ceiling is
+**8 waves per SIMD → 32 waves per CU** (4 pools × 8). *Occupancy* is the number
 of resident waves you actually achieve, usually expressed as waves/SIMD or as a
-percentage of that 40-wave ceiling.
+percentage of that 32-wave ceiling.
 
-You almost never hit 40. Achieved occupancy is the **minimum** over every
-per-wave / per-workgroup resource the wave consumes:
+You almost never hit 32. Keep all terms in the same unit when estimating the
+minimum. Compute register capacity per SIMD, then convert it to waves/CU before
+comparing it with the LDS limit:
 
 ```
-waves_per_simd = min(
-    10,                                            # hard slot limit
-    floor(ArchVGPR_file_per_simd / vgprs_per_wave),# ArchVGPR pressure
-    floor(AccVGPR_file_per_simd / agprs_per_wave), # AGPR pressure (MFMA accumulators)
-    lds_limited_waves,                             # see below
-    workgroup_slot_limit )                         # max workgroups/CU
+# gfx942 vector allocation; gfx950 instead uses round_up(combined_vgpr_count, 8)
+vector_alloc = round_up(
+    round_up(arch_vgprs_per_lane, 4) + accum_vgprs_per_lane, 8)
+sgpr_alloc = round_up(sgpr_count_including_target_specials, 16)
+
+vector_limited_waves_per_simd = min(8, floor(512 / vector_alloc))
+vector_limited_waves_per_cu = 4 * vector_limited_waves_per_simd
+sgpr_limited_waves_per_simd = min(
+    8, floor(sgpr_capacity_per_simd / sgpr_alloc))
+sgpr_limited_waves_per_cu = 4 * sgpr_limited_waves_per_simd
+
+lds_limited_waves_per_cu =
+    floor(lds_per_cu / allocated_lds_per_workgroup) * waves_per_workgroup
+
+resident_waves_per_cu = min(
+    32,
+    vector_limited_waves_per_cu,
+    sgpr_limited_waves_per_cu,
+    lds_limited_waves_per_cu,
+    other_workgroup_and_scheduler_limits)
 ```
 
 The two knobs you almost always end up fighting are **VGPR count** and **LDS
@@ -92,26 +110,36 @@ hipcc -O3 --offload-arch=gfx942 \
 estimate per dispatch — compare the static prediction against the dynamic number
 to catch scratch spills.
 
+On gfx942, resource metadata commonly exposes regular `.vgpr_count` and
+accumulator `.agpr_count` separately. Compute
+`round_up(round_up(vgpr_count, 4) + agpr_count, 8)`; rounding each component to
+eight first would overestimate the allocation. On gfx950, `.vgpr_count` already
+includes both views, so use `round_up(vgpr_count, 8)` and do not add
+`.agpr_count` again.
+
 ## VGPR-limited occupancy
 
 VGPRs are allocated per wave in **groups of 8 dwords**, and a wave can hold up to
-512 (256 ArchVGPR + 256 AGPR). Because the per-SIMD register file is fixed, the
-number of waves that fit scales **inversely** with the per-wave VGPR count: rounding
-your VGPR usage down across an allocation boundary lets one more wave move in.
+512 total (up to 256 regular ArchVGPR names plus up to 256 AccVGPR/AGPR names).
+CDNA3/CDNA4 use one combined 512-entry-per-lane capacity per SIMD, so regular
+and accumulator allocations are **summed**, not treated as independent banks.
+Because that capacity is fixed, the number of waves that fit scales inversely
+with the combined per-wave allocation: rounding usage down across a residency
+boundary lets one more wave move in.
 As a rule of thumb on gfx942, *halving* a kernel's VGPR footprint roughly *doubles*
-its VGPR-limited occupancy until you saturate the 10-wave slot cap.
+its VGPR-limited occupancy until you saturate the 8-wave slot cap.
 
-MFMA accumulators live in a **separate AGPR bank** (see
-[wavefront / register files](../hardware/wavefront.md)), so a large
-`v_mfma`-tiled GEMM is frequently **AGPR-bound**: the accumulator tile alone can
-pin occupancy regardless of how lean the ArchVGPR addressing code is. Shrinking
-the macro-tile (fewer accumulators) is the lever there — see
+MFMA accumulators use the **AGPR register view** (see
+[wavefront / register files](../hardware/wavefront.md)), but their allocation
+consumes the same combined physical capacity. A large `v_mfma`-tiled GEMM can
+therefore be accumulator-dominated even when its regular addressing code is
+lean. Shrinking the macro-tile (fewer accumulators) is the lever there — see
 [VGPR budgeting](vgpr-budgeting.md).
 
 If the compiler cannot fit your VGPRs at the requested occupancy it **spills to
 scratch** (`ScratchSize > 0`), which is global-memory traffic on the hot path —
-almost always worse than simply accepting lower occupancy. Treat any non-zero
-scratch as a bug to fix.
+almost always worse than simply accepting lower occupancy. Investigate any
+hot-path scratch and distinguish compiler spills from explicit private objects.
 
 ## LDS-limited occupancy
 
@@ -119,14 +147,16 @@ LDS is a **per-CU** resource shared by all resident workgroups: **64 kB/CU on
 gfx942**, **160 kB/CU on gfx950**. The number of concurrent workgroups is
 
 ```
-workgroups_per_cu = floor(LDS_per_cu / LDS_bytes_per_workgroup)
+workgroups_per_cu = floor(LDS_per_cu / allocated_LDS_bytes_per_workgroup)
 ```
 
 Example (gfx942): a workgroup of 256 threads (= 4 wave64s) that statically
 allocates a 32 kB `__shared__` double-buffer fits only `floor(65536 / 32768) = 2`
-workgroups per CU → **8 waves/CU**, i.e. 20% of the 40-wave ceiling, *before*
-VGPRs are even considered. The same kernel rebuilt for gfx950 (160 kB) fits 4
-workgroups → 16 waves/CU. This is exactly why
+workgroups per CU → **8 waves/CU**, i.e. 25% of the 32-wave ceiling, *before*
+VGPRs are even considered. On gfx950, LDS is allocated in 1280-byte units, so
+32 KiB rounds up to `round_up(32768, 1280) = 33280` bytes. The 160 KiB LDS then
+fits `floor(163840 / 33280) = 4` workgroups → **16 waves/CU** (not five).
+This is exactly why
 [LDS double-buffering](lds-double-buffering.md) trades occupancy for latency
 hiding — and why the larger gfx950 LDS relaxes that trade.
 
@@ -210,8 +240,9 @@ def gemm_kernel(a_ptr, b_ptr, c_ptr, M, N, K, waves_per_eu: tl.constexpr,
 ```
 
 In practice you autotune `waves_per_eu` *jointly* with the block shape and
-`num_stages`, because raising occupancy and enlarging the pipeline both consume
-VGPRs and either can trip a scratch spill. AMD's Triton optimization guide
+`num_stages`, because a higher occupancy target tightens the register budget
+while a deeper pipeline consumes it; their combination can trip a scratch
+spill. AMD's Triton optimization guide
 recommends sweeping `waves_per_eu ∈ {0,1,2,3,4}` against your real problem sizes
 rather than guessing.
 
@@ -220,20 +251,27 @@ rather than guessing.
 1. Build with `-Rpass-analysis=kernel-resource-usage`; record VGPR/AGPR/LDS.
 2. Confirm **ScratchSize == 0** — fix spills before chasing occupancy.
 3. Compute the static `waves_per_simd` ceiling from each resource; identify the
-   binding one (VGPR, AGPR, or LDS).
+   binding one (combined regular-plus-accumulator vector allocation, or LDS).
 4. Classify the kernel: memory-bound → raise occupancy; compute-bound → favor ILP
    / bigger tile at low occupancy.
 5. Sweep `__launch_bounds__` / `waves_per_eu` and measure; keep the fastest point,
    not the highest-occupancy point.
 
-> **Concrete caps (MI300, per the shark-ai guide):** up to **104 SGPRs/workgroup**,
-> **256 VGPRs/thread**, **256 AGPRs/thread** (VGPR/AGPR share one file on CDNA2+).
-> The default register cap is **128** — exceed it deliberately with
-> `__launch_bounds__(MAX_THREADS_PER_BLOCK, MIN_WARPS_PER_EXECUTION_UNIT)` and hint
-> the allocator via the LLVM `amdgpu-waves-per-eu` attribute. When a kernel spills,
-> it goes **first to AGPRs** (`v_accvgpr_*`), **then to scratch** (`scratch_store_*`)
-> — so a few spilled VGPRs landing in unused AGPRs is far cheaper than scratch
-> traffic. Verify with `.sgpr_spill_count` / `.vgpr_spill_count` in the ISA dump.
+> **Concrete CDNA3/CDNA4 limits and guide corrections:** the general scalar
+> namespace is `s0`–`s101` (102 names). `.sgpr_count` is a per-wave raw count
+> that also includes enabled target-special pairs such as VCC, FLAT_SCRATCH, and
+> XNACK; GFX9 rounds it to 16-register allocation blocks, so the encoded
+> allocation can reach 112. AMDHSA **User SGPR** instead means at most 16
+> dispatch-initialized registers. The guide's 104-SGPR per-workgroup wording
+> conflates these concepts. A wave can name up to **256 regular VGPRs**
+> and **256 accumulator VGPRs**; their target-specific combined allocation is
+> encoded in groups of 8 against one 512-entry-per-lane SIMD capacity. Exactly
+> 256 combined entries permit two
+> waves/SIMD; a legal allocation above 256 permits one and does not inherently
+> spill. The guide's “default 128” cap is compiler/snapshot-specific rather than
+> an architectural limit. Remapping a regular value to an unused AGPR index is
+> register allocation inside that unified file, not a spill; actual spills are
+> identified by scratch/private-segment allocation and scratch instructions.
 
 ## See also
 
@@ -248,6 +286,6 @@ rather than guessing.
 - [HIP Performance Guidelines (occupancy, launch bounds)](https://rocm.docs.amd.com/projects/HIP/en/latest/how-to/performance_guidelines.html)
 - [Triton kernel performance optimization on AMD](https://rocm.blogs.amd.com/software-tools-optimization/triton-kernel-optimization/README.html)
 - [GEMM kernel optimization on AMD GPUs](https://rocm.blogs.amd.com/artificial-intelligence/matrix-cores/README.html)
-- [AMDGPU Kernel Optimization Guide (nod-ai/shark-ai)](https://github.com/nod-ai/amd-shark-ai/blob/main/docs/amdgpu_kernel_optimization_guide.md) — register caps, launch_bounds, spill order
+- [AMDGPU Kernel Optimization Guide (captured snapshot)](https://github.com/nod-ai/amd-shark-ai/blob/efa471aeef66a260c85983cc41e833bfa769dade/docs/amdgpu_kernel_optimization_guide.md) — register claims, launch bounds, and documented corrections
 - [AMD Instinct MI300 / CDNA3 ISA Reference Guide](https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/instruction-set-architectures/amd-instinct-mi300-cdna3-instruction-set-architecture.pdf)
 - [Optimizing an FP8 GEMM with a 4-wave ping-pong schedule](https://rocm.blogs.amd.com/artificial-intelligence/fp8-gemm/README.html)

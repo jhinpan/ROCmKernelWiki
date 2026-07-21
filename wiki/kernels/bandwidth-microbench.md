@@ -16,6 +16,8 @@ tags:
 - buffer-instructions
 confidence: source-reported
 reproducibility: runnable
+version_sensitive:
+- vs-amdgpu-nontemporal-lowering
 artifact_dir: examples/bandwidth-microbench
 kernel_types:
 - bandwidth-bench
@@ -91,9 +93,10 @@ raises sustained bandwidth:
    This minimizes the number of in-flight memory instructions needed to
    saturate the VMEM pipe and keeps the `s_waitcnt vmcnt` accounting cheap.
 2. **Non-temporal hint** ([nontemporal-loads]). A streaming read touched once
-   should not evict reuse-friendly lines from L2 / Infinity Cache. The
-   `nt` modifier (`__builtin_nontemporal_load`, lowered to a `glc`/`slc`-flagged
-   `global_load`) marks the access as streaming.
+   can use a target-specific cache-policy hint. On the pinned clang 20 path,
+   `__builtin_nontemporal_load` lowers to a `global_load ... nt` modifier for
+   gfx942/gfx950. Treat `nt` as a policy hint: it does not promise to bypass L2,
+   MALL, or every cache level, and does not change coherency.
 3. **Persistent grid** ([persistent-kernel](../techniques/persistent-kernel.md)).
    Launch exactly one block per CU (304 on MI300X-class, fewer active CUs on
    MI308X), then grid-stride over the whole buffer. This removes block-launch
@@ -109,12 +112,14 @@ overhead for a flat, in-bounds streaming pattern.
 ```cpp
 #include <hip/hip_runtime.h>
 
-using float4 = __attribute__((__vector_size__(16))) float;  // 128-bit load
+// Use a compiler-native vector: this clang accepts it for the nontemporal
+// builtin, while HIP's float4 wrapper is rejected by that builtin.
+using f32x4 = float __attribute__((ext_vector_type(4)));
 
 // One persistent block per CU; grid-stride over the whole array.
 // Each thread issues UNROLL non-temporal float4 loads per iteration.
 template <int UNROLL = 8>
-__global__ void bandwidth_memread(const float4* __restrict__ in,
+__global__ void bandwidth_memread(const f32x4* __restrict__ in,
                                   float* __restrict__ sink,
                                   size_t n_vec4 /* number of float4 elements */)
 {
@@ -122,32 +127,33 @@ __global__ void bandwidth_memread(const float4* __restrict__ in,
     const size_t stride = (size_t)gridDim.x * blockDim.x;
 
     // Register accumulator: forces the loads to be live (no DCE).
-    float4 acc = {0.f, 0.f, 0.f, 0.f};
+    f32x4 acc = {0.f, 0.f, 0.f, 0.f};
 
     // Grid-stride loop, manually unrolled so multiple loads are in flight
     // before the first s_waitcnt vmcnt() stalls the wave.
     size_t i = tid;
     for (; i + UNROLL * stride < n_vec4; i += UNROLL * stride) {
-        float4 v[UNROLL];
+        f32x4 v[UNROLL];
 #pragma unroll
         for (int u = 0; u < UNROLL; ++u)
-            // Non-temporal: stream past L2, do not pollute reuse-friendly lines.
+            // Target-specific non-temporal cache-policy hint.
             v[u] = __builtin_nontemporal_load(in + i + (size_t)u * stride);
 #pragma unroll
         for (int u = 0; u < UNROLL; ++u) {
-            acc.x += v[u].x; acc.y += v[u].y;
-            acc.z += v[u].z; acc.w += v[u].w;
+            acc[0] += v[u][0]; acc[1] += v[u][1];
+            acc[2] += v[u][2]; acc[3] += v[u][3];
         }
     }
     // Tail.
     for (; i < n_vec4; i += stride) {
-        float4 v = __builtin_nontemporal_load(in + i);
-        acc.x += v.x; acc.y += v.y; acc.z += v.z; acc.w += v.w;
+        f32x4 v = __builtin_nontemporal_load(in + i);
+        acc[0] += v[0]; acc[1] += v[1]; acc[2] += v[2]; acc[3] += v[3];
     }
 
     // Only thread 0 of the last block writes — keeps the sink alive without
     // adding measurable store traffic to the read benchmark.
-    if (acc.x == -1.0f) sink[tid] = acc.x + acc.y + acc.z + acc.w;
+    if (acc[0] == -1.0f)
+        sink[tid] = acc[0] + acc[1] + acc[2] + acc[3];
 }
 ```
 
@@ -157,11 +163,11 @@ Host-side launch and timing:
 int dev = 0; hipDeviceProp_t p; hipGetDeviceProperties(&p, dev);
 
 const size_t bytes   = (size_t)4 << 30;          // 4 GiB working set >> L2+LLC
-const size_t n_vec4  = bytes / sizeof(float4);
+const size_t n_vec4  = bytes / sizeof(f32x4);
 const int    block   = 256;
 const int    grid    = p.multiProcessorCount;     // one persistent block / CU
 
-float4 *in; float *sink;
+f32x4 *in; float *sink;
 hipMalloc(&in, bytes); hipMalloc(&sink, grid * block * sizeof(float));
 
 hipEvent_t a, b; hipEventCreate(&a); hipEventCreate(&b);
@@ -190,15 +196,16 @@ single most common reason a bandwidth bench underperforms:
 
 ```bash
 hipcc -O3 --offload-arch=gfx942 -S bandwidth_memread.hip -o - | \
-    grep -E 'global_load_dwordx4|glc|slc'
+    grep -E 'global_load_dwordx4.*[[:space:]]nt([[:space:]]|$)'
 ```
 
-You want `global_load_dwordx4` (128-bit) in the hot loop, *not* four separate
-`global_load_dword`s. If the unroll factor is too low the scheduler runs out of
-independent loads to hide latency and inserts an early `s_waitcnt vmcnt(0)`; if
-the accumulator is eliminated, the loop vanishes entirely. The register sink and
-the `if (acc.x == -1.0f)` guard exist specifically to keep the loads live
-without adding store traffic.
+You want `global_load_dwordx4 ... nt` (128-bit with the expected policy token)
+in the hot loop, *not* four separate `global_load_dword`s. The exact modifier is
+compiler/target-sensitive, so inspect rather than assuming `glc`/`slc`. If the
+unroll factor is too low the scheduler runs out of independent loads to hide
+latency and inserts an early `s_waitcnt vmcnt(0)`; if the accumulator is
+eliminated, the loop vanishes entirely. The register sink and impossible guard
+exist specifically to keep the loads live without adding store traffic.
 
 ## Tuning notes
 

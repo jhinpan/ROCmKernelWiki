@@ -2,6 +2,8 @@
 id: lang-hip
 title: HIP — Kernel Basics, LDS, and AMDGCN Builtins
 type: language
+version_sensitive:
+- vs-permlane16-gfx950
 architectures:
 - gfx942
 - gfx950
@@ -101,7 +103,9 @@ usage is a primary occupancy limiter, so size tiles deliberately.
 ```cpp
 template <int TILE>
 __global__ void transpose(const float* in, float* out, int w, int h) {
-    __shared__ float tile[TILE][TILE + 1];   // +1 pad: avoid bank conflicts
+    // +1 is an illustrative correctness-preserving pad, not a universal
+    // conflict-free choice; derive it from lane mapping/opcode/target phases.
+    __shared__ float tile[TILE][TILE + 1];
 
     int x = blockIdx.x * TILE + threadIdx.x;
     int y = blockIdx.y * TILE + threadIdx.y;
@@ -116,6 +120,9 @@ __global__ void transpose(const float* in, float* out, int w, int h) {
         out[ty * h + tx] = tile[threadIdx.x][threadIdx.y];
 }
 ```
+
+For the exact `TILE=32`, `block(32,32)` mapping, gfx942 uses `+1` while gfx950
+needs `+2`; see the [worked transpose](../kernels/transpose-lds.md).
 
 `__syncthreads()` lowers to `s_barrier` and synchronizes **all wavefronts in the
 block**, not a single wave. The `TILE + 1` column padding skews the row stride so
@@ -186,8 +193,9 @@ __device__ float xor_shuffle32(float v) {
 
 Related lane ops: `__builtin_amdgcn_ds_permute` (forward scatter),
 `__builtin_amdgcn_mov_dpp` (row shift/broadcast), and
-`__builtin_amdgcn_readlane`/`readfirstlane`. Note `v_permlane16_*` is
-**gfx950-only**. See [hw-cross-lane](../hardware/cross-lane.md) and the
+`__builtin_amdgcn_readlane`/`readfirstlane`. Note
+`v_permlane16_swap_b32` / `v_permlane32_swap_b32` are **gfx950-only**; the RDNA
+selector form is different. See [hw-cross-lane](../hardware/cross-lane.md) and the
 [wave-reduce technique](../techniques/wave-reduce.md).
 
 **Scheduler control.** `__builtin_amdgcn_sched_barrier(mask)` constrains how the

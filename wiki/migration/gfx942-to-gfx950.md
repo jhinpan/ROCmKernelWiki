@@ -29,9 +29,10 @@ cross_vendor_note: 'This is a cross-*generation* port within AMD CDNA, not a cro
   on gfx942 can compile and launch on gfx950 yet produce wrong numbers. The sharp
   edge is FP8 — CDNA3 uses AMD''s OCP-incompatible FNUZ (E4M3/E5M2) encoding while
   CDNA4 uses standard OCP FP8 — so FP8 weights/activations and their scales are NOT
-  bit-portable across the two. TF32/XF32 matrix support is also gone on gfx950 (emulated
-  via BF16) and FP64 matrix throughput per CU is halved. Treat every FP8 and FP64
-  path as requiring re-validation, not just recompilation.
+  bit-portable across the two. Native TF32/XF32 matrix support is also gone on
+  gfx950—the gfx942 intrinsic does not lower, so software must explicitly select
+  a supported datatype/path—and FP64 matrix throughput per CU is halved. Treat
+  every affected numeric path as requiring re-validation, not just recompilation.
 
   '
 related:
@@ -80,8 +81,8 @@ The big-ticket changes:
 | LDS size | 64 KB/CU | 160 KB/CU | Can grow tiles / occupancy |
 | LDS banks | 32 banks × 512 dwords | 64 banks × 640 dwords | Re-check swizzle/padding |
 | Direct-to-LDS width | ≤4 B (one dword) | ≤16 B (`global_load_lds_dwordx4`; also `dwordx3`) | Wider async copies |
-| `v_permlane16_*` | absent | present | Faster cross-lane reductions |
-| TF32/XF32 matrix | native MFMA path | **dropped** (BF16-emulated) | Switch to BF16 or accept emulation |
+| `v_permlane16/32_swap` | absent | present | Faster cross-lane reductions |
+| TF32/XF32 matrix | native MFMA path | **dropped**; gfx942 intrinsic does not lower | Explicitly select BF16 or another supported path |
 | FP64 matrix | full rate | **halved per CU** | Re-budget FP64-heavy kernels |
 
 ## 1. FP8 numerics — the one that bites silently
@@ -179,25 +180,32 @@ The lane-swap op `v_permlane16_swap_b32` (and `v_permlane32_swap_b32`) is
 **gfx950-only** (absent on gfx942) — see
 [cross-lane ops](../hardware/cross-lane.md). On gfx942 a full wave reduction
 typically does DPP within 16-lane rows, then `ds_swizzle`/`ds_bpermute` for the
-cross-row step. On gfx950 you can replace the LDS-crossbar hop with
-`__builtin_amdgcn_permlane16_swap`, shortening the reduction critical path. Keep
-the gfx942 path under an arch guard:
+cross-row step. On gfx950 you can replace compatible LDS-crossbar hops with the
+`_swap` builtins. Each returns the swapped versions of its two inputs, so when
+both inputs are the same value the partner is in element 1 for a lane in the
+lower half and element 0 for a lane in the upper half. Keep the gfx942 path
+under an arch guard:
 
 ```cpp
-__device__ float row_then_cross_reduce(float v) {
-    // intra-16-lane reduction via DPP works on both archs ...
-    v = dpp_row_reduce(v);
+__device__ float add_partner_row16(float v, int lane) {
 #if defined(__gfx950__)
-    // single op, no LDS traffic: swap the partner 16-lane half and add it.
+    // One 16-lane-half butterfly, with no LDS-unit traffic.
     auto sw = __builtin_amdgcn_permlane16_swap(
         __float_as_int(v), __float_as_int(v), false, false);
-    v += __int_as_float(sw[1]);
+    int partner = (lane & 16) ? sw[0] : sw[1];
+    return v + __int_as_float(partner);
 #else
-    v = bpermute_cross_reduce(v);       // gfx942: route through LDS crossbar
+    // gfx942: pull the corresponding lane from the other 16-lane half.
+    int partner = __builtin_amdgcn_ds_bpermute((lane ^ 16) << 2,
+                                                __float_as_int(v));
+    return v + __int_as_float(partner);
 #endif
-    return v;
 }
 ```
+
+This helper is one butterfly step and assumes every lane already holds a valid
+row partial. A complete wave64 reduction also needs the analogous 32-lane-half
+step (`permlane32_swap` on gfx950, or `ds_bpermute` with `lane ^ 32` on gfx942).
 
 > **Do not use** `__builtin_amdgcn_permlanex16(v, v, sel0, sel1, …)` here: that
 > SGPR-selector form is an RDNA (gfx10+) instruction and fails to compile for
@@ -207,10 +215,11 @@ __device__ float row_then_cross_reduce(float v) {
 ## 6. TF32/XF32 dropped; FP64 matrix halved
 
 - **TF32 (XF32) has no native matrix path on CDNA4.** gfx942's
-  `v_mfma_f32_16x16x8_xf32` / `32x32x4` are gone; the operation is *emulated via
-  BF16*. A kernel relying on TF32 MFMA for "fast FP32-ish" GEMM will still
-  produce results but should be re-evaluated — prefer an explicit BF16 path so
-  the precision/throughput tradeoff is visible and intentional.
+  `v_mfma_f32_16x16x8_xf32` / `32x32x4` are gone. With ROCm 7.2 / clang 22 the
+  gfx942 intrinsic fails during gfx950 instruction selection (`Cannot select`);
+  there is no automatic BF16 fallback guarantee. Port the kernel to an explicit
+  BF16 or other supported path so the precision/throughput tradeoff is visible
+  and intentional.
 - **FP64 matrix throughput per CU is halved** on gfx950 (silicon reallocated to
   MX formats). MI355X still lists 78.6 TF FP64 vs the relatively higher
   per-CU rate on MI300X — FP64-matrix-bound kernels (mostly HPC, not ML) need a

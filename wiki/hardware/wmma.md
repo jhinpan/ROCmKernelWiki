@@ -2,6 +2,8 @@
 id: hw-wmma
 title: WMMA — RDNA Wave Matrix Multiply-Accumulate (RDNA4 / gfx1201)
 type: hardware
+version_sensitive:
+- vs-cdna-unified-vgpr-agpr-allocation
 architectures:
 - gfx1201
 tags:
@@ -56,10 +58,10 @@ execution model:
    **wave32** and **wave64**. The same logical 16×16 tile is therefore spread
    across either 32 or 64 lanes, which changes how many VGPRs each lane holds for
    a fragment. Query `warpSize` — do not hardcode it.
-2. **No AGPRs.** RDNA has a single vector register bank; there are no separate
-   accumulation registers (AGPRs). WMMA reads and writes its A/B/C/D fragments
-   out of ordinary VGPRs, so matrix tiles compete directly with addressing and
-   live state for the one VGPR file.
+2. **No AGPR namespace.** RDNA has no separately named accumulation registers
+   (AGPRs). WMMA reads and writes its A/B/C/D fragments through ordinary
+   ArchVGPRs, so matrix tiles compete directly with addressing and live state in
+   the VGPR allocation.
 
 ## Programming WMMA — the portable path
 
@@ -157,7 +159,7 @@ rather than assuming it from the RDNA3 set above; that part is marked
 | | WMMA (RDNA4 / gfx1201) | MFMA (CDNA3/4 / gfx942/gfx950) |
 |---|---|---|
 | Wave width | wave32 **and** wave64 | wave64 only |
-| Accumulator regs | ordinary VGPRs | AGPRs (separate bank) |
+| Accumulator regs | ordinary ArchVGPRs | ArchVGPR or AGPR names (shared unified allocation on gfx942/gfx950) |
 | Base shapes | 16×16×16 (fixed K=16 for ≤16-bit) | 16×16 and 32×32, type-dependent K |
 | Encoding | VOP3P (`v_wmma_*`) | VOP3P-MAI (`v_mfma_*`) |
 | Sparsity | structured-sparse WMMA variants | `v_smfmac_*` (4:2) |
@@ -172,7 +174,7 @@ For a deeper porting walkthrough see
   HIP launch/codegen equivalent) only after measuring; wave32 often wins on RDNA
   for matrix-light, latency-bound kernels, while wave64 reduces per-lane
   accumulator VGPRs for big tiles.
-- **VGPR budget is the ceiling.** With no AGPR bank, large WMMA accumulator
+- **VGPR budget is the ceiling.** With no AGPR namespace, large WMMA accumulator
   tiles eat the same register file as your loads and addressing. Treat
   accumulator tile size as an occupancy knob — see
   [VGPR pressure](../patterns/vgpr-pressure.md).

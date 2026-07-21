@@ -5,6 +5,8 @@ type: technique
 architectures:
 - gfx942
 - gfx950
+version_sensitive:
+- vs-permlane16-gfx950
 tags:
 - wave-reduce
 - dpp-reduction
@@ -74,103 +76,109 @@ three cross-lane primitives, in increasing cost:
 3. **`v_readlane_b32`** — extract the final scalar from lane 0 into an SGPR.
 
 This is the canonical pattern documented for gfx942; gfx950 adds
-`v_permlane16_b32` which replaces the `ds_*` cross-row step with a pure-ALU op.
-See the [cross-lane hardware page](../hardware/cross-lane.md) for the primitive
-semantics; this page is about composing them into a correct, fast reduction.
+`v_permlane16_swap_b32` / `v_permlane32_swap_b32`, which can replace compatible
+`ds_*` cross-row exchanges with pure-VALU swaps. See the
+[cross-lane hardware page](../hardware/cross-lane.md) for the exact primitive
+semantics; this page is about composing them into a correct reduction.
 
-## The reduction tree on wave64
+## A correct wave64 baseline
 
-A wave64 sum reduces in `log2(64) = 6` steps. The first 4 steps fold *within*
-each 16-lane row using DPP; the last 2 steps cross rows. Because the DPP modifier
-**does not forward `EXEC` from a producing VALU op**, the compiler must insert
-wait states — let the builtin handle that and never interleave DPP with a
-dependent VALU write by hand.
+A wave64 butterfly needs `log2(64) = 6` exchanges. HIP's `__shfl_xor` is the
+safest starting point because it preserves the butterfly invariant across all
+six masks and lets the backend choose target-appropriate DPP/cross-lane ops:
 
 ```cpp
 #include <hip/hip_runtime.h>
 
-// Full wave64 sum reduction. Result is valid in lane 0 (broadcast below).
-// DPP row ops (steps 1-4) + ds_swizzle cross-row (steps 5-6).
-__device__ __forceinline__ float wave_reduce_sum(float v) {
-    // --- Steps 1-4: intra-row tree over 16 lanes via DPP ---
-    // dpp_ctrl 0x111/0x112/0x114/0x118 = row_shr by 1/2/4/8 (shift right within row)
-    // row_mask=0xf, bank_mask=0xf, bound_ctrl=1 (OOB lanes contribute 0)
-    v += __builtin_amdgcn_mov_dpp(v, 0x111, 0xf, 0xf, true); // +lane^1 pattern (shr 1)
-    v += __builtin_amdgcn_mov_dpp(v, 0x112, 0xf, 0xf, true); // shr 2
-    v += __builtin_amdgcn_mov_dpp(v, 0x114, 0xf, 0xf, true); // shr 4
-    v += __builtin_amdgcn_mov_dpp(v, 0x118, 0xf, 0xf, true); // shr 8 -> lane 0 of each row holds row sum
-
-    // --- Steps 5-6: cross the 16-lane row boundary ---
-    // ds_swizzle handles 32-lane groups; do an explicit bpermute for the 32->64 fold.
-    int self  = __lane_id();                 // 0..63
-    // Bring lane (self+16) and (self+32) home with backward permute (addr = src_lane*4).
-    float v16 = __builtin_amdgcn_ds_bpermute((self ^ 16) << 2, __builtin_bit_cast(int, v))
-                ? 0.0f : 0.0f; // placeholder, see typed helper below
-    (void)v16;
+// Requires all 64 lanes to participate; every lane receives the full sum.
+__device__ __forceinline__ float wave_sum64(float v) {
+    #pragma unroll
+    for (int mask = 32; mask > 0; mask >>= 1)
+        v += __shfl_xor(v, mask, 64);
     return v;
 }
 ```
 
-The bit-cast dance above is the real friction point: `ds_bpermute` operates on
-**`int`/b32** payloads and takes a **byte address** (`src_lane * 4`). A robust
-helper wraps the cast and the address arithmetic:
+For a partially active wave, first define which inactive lanes contribute and
+predicate them to the identity value. Inspect final ISA before assuming which
+shuffle masks became DPP rather than LDS-crossbar operations.
+
+## Explicit DPP row reduction plus full-wave gather
+
+When hand-scheduling DPP, two details are easy to get wrong: the control must be
+an immediate, and `row_shr` moves the complete 16-lane result to the row's
+**last** lane (`15`, `31`, `47`, `63`). `bound_ctrl=true` makes an invalid source
+contribute zero. The b32 intrinsics also require bit casts, not numeric
+int/float conversions:
 
 ```cpp
+__device__ __forceinline__ float dpp_row_sum_at_end(float v) {
+    int n = __builtin_amdgcn_mov_dpp(__builtin_bit_cast(int, v),
+                                     0x111, 0xf, 0xf, true);
+    v += __builtin_bit_cast(float, n);
+    n = __builtin_amdgcn_mov_dpp(__builtin_bit_cast(int, v),
+                                 0x112, 0xf, 0xf, true);
+    v += __builtin_bit_cast(float, n);
+    n = __builtin_amdgcn_mov_dpp(__builtin_bit_cast(int, v),
+                                 0x114, 0xf, 0xf, true);
+    v += __builtin_bit_cast(float, n);
+    n = __builtin_amdgcn_mov_dpp(__builtin_bit_cast(int, v),
+                                 0x118, 0xf, 0xf, true);
+    v += __builtin_bit_cast(float, n);
+    return v;
+}
+
 __device__ __forceinline__ float bpermute_f32(float v, int src_lane) {
-    int iv = __builtin_bit_cast(int, v);
-    int r  = __builtin_amdgcn_ds_bpermute(src_lane << 2, iv); // byte addr = lane*4
+    int r = __builtin_amdgcn_ds_bpermute(src_lane << 2,
+                                         __builtin_bit_cast(int, v));
     return __builtin_bit_cast(float, r);
 }
 
-// Clean wave64 sum: 4 DPP steps + 2 bpermute steps + readlane broadcast.
-__device__ __forceinline__ float wave_sum64(float v) {
-    v += __builtin_amdgcn_mov_dpp(v, 0x111, 0xf, 0xf, true);
-    v += __builtin_amdgcn_mov_dpp(v, 0x112, 0xf, 0xf, true);
-    v += __builtin_amdgcn_mov_dpp(v, 0x114, 0xf, 0xf, true);
-    v += __builtin_amdgcn_mov_dpp(v, 0x118, 0xf, 0xf, true); // lane (row*16) holds its row's sum
-
-    int lane = __lane_id();
-    v += bpermute_f32(v, lane ^ 16);  // fold rows 0+1, 2+3
-    v += bpermute_f32(v, lane ^ 32);  // fold {0,1}+{2,3}  -> every lane now holds the full sum
-    return v;                          // (already broadcast; readlane optional)
+// Correctness-oriented explicit path: every lane gathers all four row ends.
+__device__ __forceinline__ float wave_sum64_dpp(float v) {
+    v = dpp_row_sum_at_end(v);
+    return bpermute_f32(v, 15) + bpermute_f32(v, 31)
+         + bpermute_f32(v, 47) + bpermute_f32(v, 63);
 }
 ```
 
-After the two `xor`-stride bpermute steps every lane holds the complete wave sum,
-so a separate broadcast is unnecessary. If you instead use `row_shr` all the way
-down, the result lands only in lane 0 and you must broadcast it:
+This explicit path uses four gathers per lane and is a clarity reference, not a
+claim of optimal scheduling. More selective leader-lane schemes can reduce
+crossbar work, but must preserve the row-end locations and then broadcast a
+correctly bit-cast result.
 
-```cpp
-// Pull the scalar from lane 0 into an SGPR, then it is uniform across the wave.
-float total = __builtin_amdgcn_readlane(v, 0);   // v_readlane_b32 -> s#
-```
+## gfx950: use `v_permlane*_swap`, not the RDNA selector form
 
-> **`__shfl` shortcut.** HIP's `__shfl_xor(v, mask)` lowers to exactly these
-> primitives (DPP where possible, `ds_bpermute` for the wide masks). A portable
-> `for (int m = 32; m > 0; m >>= 1) v += __shfl_xor(v, m);` is the easiest
-> correct version; drop to the builtins above only when the compiler fails to
-> keep the first four steps in DPP.
+CDNA4's relevant instructions are `v_permlane16_swap_b32` and
+`v_permlane32_swap_b32`, exposed as
+`__builtin_amdgcn_permlane16_swap` / `permlane32_swap`. They return a two-element
+vector corresponding to the swapped first and second input registers; with the
+same input passed twice, the partner is element 1 in the lower half and element
+0 in the upper half. They take only `fi` and `bound_ctrl` booleans. The
+selector-form `__builtin_amdgcn_permlane16` / `permlanex16` needs the RDNA
+`gfx10-insts` feature and does **not** compile for gfx950.
 
-## gfx950: `v_permlane16` replaces the cross-row `ds_*`
-
-On CDNA4 the cross-row fold can stay in the VALU. `v_permlane16_b32` is
-**gfx950-only** (absent on gfx942) and permutes across the 32-lane half-wave
-without touching the LDS crossbar, removing the `LGKMCNT` dependency that
-`ds_bpermute` introduces:
+If a row partial has already been replicated to every lane in its 16-lane row,
+the two cross-row butterfly steps can stay in the VALU:
 
 ```cpp
 #if defined(__gfx950__)
-// Cross-row fold without LDS: lower the two ds_bpermute steps to permlane16.
-v = __builtin_amdgcn_permlane16(v, v, /*src0*/0, /*src1*/0,
-                                /*fi*/false, /*bc*/false);
+int lane = __lane_id();
+int bits = __builtin_bit_cast(int, row_partial_replicated);
+auto p16 = __builtin_amdgcn_permlane16_swap(bits, bits, false, false);
+int partner16 = (lane & 16) ? p16[0] : p16[1];
+float v = row_partial_replicated + __builtin_bit_cast(float, partner16);
+bits = __builtin_bit_cast(int, v);
+auto p32 = __builtin_amdgcn_permlane32_swap(bits, bits, false, false);
+int partner32 = (lane & 32) ? p32[0] : p32[1];
+v += __builtin_bit_cast(float, partner32);
 #endif
 ```
 
-Because `permlane16` keeps the whole reduction in the vector ALU, it avoids the
-`s_waitcnt lgkmcnt(0)` that gates every `ds_*` step — a measurable win in
-latency-bound decode kernels (`rmsnorm`, `softmax`) where the reduction sits on
-the critical path. Guard it behind `__gfx950__` and keep the `ds_bpermute` path
-for gfx942.
+That precondition matters: the DPP `row_shr` example above leaves a valid sum
+only at each row end, so use the explicit gathers (or replicate the row partial)
+before applying the swap/add form. The swaps avoid LDS-unit traffic, but their
+latency benefit remains architecture/workload-specific and should be measured.
 
 ## Correctness pitfalls
 
@@ -178,9 +186,10 @@ for gfx942.
   Reduce `double` or `int64` as two halves, or reduce in FP32 and cast.
 - **Byte address, not lane index.** `ds_bpermute` takes `src_lane * 4`. Forgetting
   the `<< 2` silently reads the wrong lane.
-- **Collision rule.** If two lanes target the same `ds_bpermute` destination, the
-  **highest source lane wins** (per the CDNA3 ISA). The `xor`-stride pattern above
-  is a permutation, so no collisions occur — but ad-hoc gathers can hit this.
+- **Direction-specific collision rule.** `ds_bpermute` is a pull/gather: each
+  destination lane independently names one source, so there is no multi-writer
+  destination collision. The “highest source lane wins” rule belongs to the
+  push/scatter `ds_permute` when several sources name one destination.
 - **Inactive lanes.** With a partial `EXEC` mask, disabled source lanes return 0
   for `ds_bpermute` and `ds_swizzle` returns 0 for invalid lanes. Use
   `bound_ctrl=1` on DPP so out-of-range row lanes contribute the additive
@@ -203,7 +212,7 @@ first, write one scalar per wave to LDS, then reduce those (see
 
 ## See also
 
-- [Cross-lane primitives (DPP/swizzle/permute/permlane16)](../hardware/cross-lane.md)
+- [Cross-lane primitives (DPP/swizzle/permute/permlane swap)](../hardware/cross-lane.md)
 - [Wavefront / EXEC / register files](../hardware/wavefront.md)
 - [RMSNorm fused kernel](../kernels/rmsnorm.md)
 - [gfx942 → gfx950 migration](../migration/gfx942-to-gfx950.md)
@@ -211,7 +220,7 @@ first, write one scalar per wave to LDS, then reduce those (see
 ## Sources
 
 - [AMD CDNA3 ISA Reference Guide](https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/instruction-set-architectures/amd-instinct-mi300-cdna3-instruction-set-architecture.pdf) — DPP modifiers, `ds_bpermute_b32`/`ds_swizzle_b32`, `v_readlane_b32`, wait-state hazards.
-- [AMD CDNA4 ISA Reference Guide](https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/instruction-set-architectures/amd-instinct-cdna4-instruction-set-architecture.pdf) — `v_permlane16_b32`.
+- [AMD CDNA4 ISA Reference Guide](https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/instruction-set-architectures/amd-instinct-cdna4-instruction-set-architecture.pdf) — `v_permlane16_swap_b32` / `v_permlane32_swap_b32`.
 - [LLVM AMDGPU User Guide](https://llvm.org/docs/AMDGPUUsage.html) — `llvm.amdgcn.mov.dpp`, `llvm.amdgcn.ds.bpermute`, `llvm.amdgcn.readlane` intrinsics.
 - [AMD Lab Notes / GCN assembly reference (gcnasm)](https://gpuopen.com/learn/amd-gcn-assembly-cross-lane-operations/) — cross-lane operations walkthrough.
-- [AMDGPU Kernel Optimization Guide (nod-ai/shark-ai)](https://github.com/nod-ai/amd-shark-ai/blob/main/docs/amdgpu_kernel_optimization_guide.md)
+- [AMDGPU Kernel Optimization Guide (captured snapshot)](https://github.com/nod-ai/amd-shark-ai/blob/efa471aeef66a260c85983cc41e833bfa769dade/docs/amdgpu_kernel_optimization_guide.md)

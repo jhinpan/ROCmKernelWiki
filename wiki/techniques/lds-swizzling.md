@@ -15,6 +15,8 @@ tags:
 - swizzle
 confidence: source-reported
 reproducibility: snippet
+version_sensitive:
+- vs-lds-phase-groups-gfx942-gfx950
 hardware_features:
 - lds
 - ds-instructions
@@ -76,65 +78,61 @@ bound.
 On gfx942 LDS has **32 banks of 32-bit words**; on gfx950, **64 banks**
 (see [the LDS page](../hardware/lds.md)). A bank conflict is two or more lanes
 addressing different words in the *same* bank in the same cycle; the hardware
-serializes them (2–64 cycles). A wave64 `ds_read` is dispatched over 4 cycles,
-**16 lanes per cycle**, so the question is whether each 16-lane group hits 16
-distinct banks.
+serializes them. The relevant competing lanes come from the emitted opcode's
+architecture-specific **phase group**. For example, `ds_read_b128` uses eight
+eight-lane, non-contiguous groups on gfx942 and four 16-lane groups on gfx950;
+see the complete [LDS phase tables](../hardware/lds.md).
 
-Consider an FP16 A-tile stored row-major as `__half a_lds[64][16]` and an MFMA
-layout where 16 consecutive lanes read down a *column* (the same `col`,
-successive `row`). The byte address of `a_lds[row][col]` is
-`(row*16 + col)*2`, so its bank is `((row*16 + col)*2 / 4) % 32 = (row*8 + col) % 32`.
-For a fixed `col`, stepping `row` by 1 steps the bank by 8 — so rows
-`0,4,8,12,...` all map to the **same bank**. Sixteen lanes collapse onto 4
-banks: a 4-way conflict on every operand read.
+Consider a row-major FP16 tile `a_lds[64][32]`, viewed as four 128-bit vectors
+per row, and the simplified mapping where lane `i` reads row `i` at one fixed
+vector-column `col_vec`. The vector's starting bank is
+`4 * (4*row + col_vec) mod num_banks`, because every vector occupies four
+dwords. Equivalently, measure 4-bank vector slots: `(4*row + col_vec) mod 16`
+on gfx950 or `mod 8` on gfx942.
+
+Enumerating the actual b128 phase groups shows the conflict. Without a swizzle,
+each gfx950 16-lane phase reaches only four start slots, each repeated four
+times; each gfx942 eight-lane phase reaches two start slots, also repeated four
+times. Thus this simplified row-major mapping has a 4-way conflict on every
+dword of the vector access — not a generic “consecutive 16 lanes” rule.
 
 ## The XOR swizzle
 
-Replace the stored column with `col ^ swizzle(row)`, where `swizzle` injects the
-high row bits into the column index so equal-`col` accesses fan out across banks.
-A general form that works for a `ds_read_b128` (8-element FP16 vector) tile is:
+Replace the stored vector-column with `col_vec ^ swizzle(row)`, where `swizzle`
+injects selected row bits into the column index. The exact bits are a property
+of the lane-to-row mapping, emitted opcode, and architecture — there is no one
+universal XOR mask. For the simplified model above (**lane id equals `row`**,
+every lane in a phase reads the same `col_vec`, four vector-columns per row),
+the reported b128 phase tables give these target-specific masks:
 
 ```cpp
-// One K-slab of an A tile staged in LDS, swizzled to be MFMA-conflict-free.
-// TILE_M rows x TILE_K cols of __half. Vector width = 8 halves (ds_read_b128).
-constexpr int TILE_M = 64;
-constexpr int TILE_K = 32;
-constexpr int VEC    = 8;                 // 128-bit ds access granularity
-constexpr int COLS_V = TILE_K / VEC;      // vectors per row (=4)
+// Schematic 64x32 FP16 tile; offsets are in units of 8-half (128-bit) vectors.
+constexpr int COLS_V = 4;
 
 __device__ __forceinline__
-int swizzled_offset(int row, int col_vec) {
-    // XOR the low bits of the row into the vector-column index.
-    // COLS_V is a power of two, so the permutation is a bijection on [0,COLS_V).
-    int x = col_vec ^ (row & (COLS_V - 1));
-    return row * COLS_V + x;              // index in units of VEC halves
-}
-
-__device__ void store_A_tile(__half2_8 *lds, const __half2_8 *g, int lane) {
-    // 64 rows x 4 vec-cols = 256 vectors; wave64 writes 64 per pass.
-    #pragma unroll
-    for (int i = 0; i < TILE_M * COLS_V / 64; ++i) {
-        int idx = i * 64 + lane;
-        int row = idx / COLS_V, col_vec = idx % COLS_V;
-        lds[swizzled_offset(row, col_vec)] = g[idx];   // ds_write_b128
-    }
-}
-
-__device__ __half2_8 load_A_for_mfma(const __half2_8 *lds, int row, int col_vec) {
-    return lds[swizzled_offset(row, col_vec)];         // ds_read_b128
+int schematic_b128_offset(int row, int col_vec) {
+#if !defined(__HIP_DEVICE_COMPILE__)
+    int x = col_vec;  // host parse pass; this __device__ helper is not executed
+#elif defined(__gfx950__)
+    int x = col_vec ^ ((row >> 2) & 3);
+#elif defined(__gfx942__)
+    int x = col_vec ^ ((row >> 1) & 3);
+#else
+#error "derive the b128 swizzle for this target's phase groups"
+#endif
+    return row * COLS_V + x;
 }
 ```
 
-The key property: **store and load use the identical `swizzled_offset`**, so the
-permutation cancels — `load_A_for_mfma(row, col_vec)` returns exactly the
-logical element that `store_A_tile` wrote for `(row, col_vec)`. Correctness is
-preserved while the physical bank assignment changes.
-
-After swizzling, the bank for the 16 lanes that previously collided becomes
-`((row*COLS_V + (col_vec ^ (row & (COLS_V-1)))) ...) % banks`, and the
-row-dependent XOR term breaks the arithmetic progression that caused the
-collapse — the 16 lanes now cover 16 distinct banks. Verify with the profiler
-rather than by hand (see below).
+Use the identical function on the store and load paths so the permutation
+cancels logically. In this specific model, divide each 128-bit start-bank index
+by four: gfx950 evaluates `(4*row + x) mod 16`, which covers `0..15` once in
+each reported 16-lane b128 phase; gfx942 evaluates `(4*row + x) mod 8`, which
+covers `0..7` once in each reported eight-lane phase. Because each vector then
+occupies four adjacent banks, the phase covers all 64 or 32 banks without
+overlap. This proof does **not** transfer automatically to a real MFMA fragment
+whose lane-to-`(row,col_vec)` mapping differs. Enumerate that actual mapping
+against the phase table, then verify with the profiler (see below).
 
 ## Choosing the swizzle width
 
@@ -144,10 +142,10 @@ touched per cycle. Rules of thumb:
 
 - Swizzle at the **vector granularity you actually `ds_read`** (`b32`/`b64`/`b128`),
   not per scalar element — the bank stride is set by the access width.
-- Pick the mask so that `log2(banks_per_cycle)` row bits participate. On gfx942
-  the 16 lanes/cycle want 16 distinct banks; on gfx950 the same pattern has
-  twice the banks (64) to play with, so a too-narrow gfx942 mask is harmless but
-  may leave a wider tile sub-optimal — re-tune per arch.
+- Pick the mask so lanes in each actual phase group map to distinct banks. The
+  group membership changes with `b32`/`b64`/`b128` and between gfx942/gfx950;
+  a swizzle proven for one combination is not automatically safe or optimal for
+  another. Re-tune and measure per emitted opcode and architecture.
 - Keep the swizzle consistent across **both** double-buffer halves so the steady
   state never reverts to a conflicting layout — see
   [LDS double-buffering](lds-double-buffering.md).

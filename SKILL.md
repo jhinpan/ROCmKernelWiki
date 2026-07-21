@@ -7,9 +7,11 @@ allowed-tools: "Bash Read Grep Glob"
 
 # ROCmKernelWiki — AMD CDNA / RDNA Kernel Optimization Wiki
 
-> **Knowledge cutoff: 2026-05-15.** All upstream PR data, doc summaries, and
-> blog summaries reflect upstream state on or before this date (per
-> `data/refresh-cutoff.yaml`). Re-run the harvest tooling to advance the cutoff.
+> **Corpus dates:** the merged-PR harvest runs through **2026-05-30** (per
+> `data/refresh-cutoff.yaml`); doc/blog pages carry individual retrieval dates.
+> The nod-ai AMDGPU optimization guide is synchronized through commit
+> `efa471ae` on **2026-07-20**. Re-run the relevant harvest or source-sync work
+> before advancing either boundary.
 
 Query a structured, cross-referenced knowledge base of AMD GPU kernel
 optimization for CDNA3 (gfx942 / MI300), CDNA4 (gfx950 / MI350-MI355X), and
@@ -141,7 +143,7 @@ When answering from this KB:
 5. **Report performance claims with all fields** — gpu, dtype, shape, metric,
    value, source_id.
 
-## Knowledge Base Contents (cutoff 2026-05-15)
+## Knowledge Base Contents (PR cutoff 2026-05-30)
 
 - **7,400+ PR reference pages** across ROCm/composable_kernel, aiter, hipBLASLt,
   Tensile, rocBLAS, flash-attention, FlyDSL, triton, plus ROCm-filtered vLLM/SGLang

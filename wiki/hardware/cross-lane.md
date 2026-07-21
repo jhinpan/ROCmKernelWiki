@@ -4,6 +4,7 @@ title: Cross-Lane Data Movement (DPP, ds_swizzle, ds_permute/bpermute, permlane)
 type: hardware
 version_sensitive:
 - vs-permlane16-gfx950
+- vs-mlir-dpp-combine-llvm20
 architectures:
 - gfx942
 - gfx950
@@ -63,6 +64,11 @@ CDNA is **wave64-only**, so all of these operate over a 64-lane wavefront and a
 `__reduce_*` warp primitives; HIP's `__shfl*` family is implemented on top of
 `ds_bpermute`/DPP. Query `warpSize` (64 on gfx9) — never hardcode 32.
 
+Architecture manuals use different DPP names and encodings: **CDNA calls the
+VALU modifier DPP**, while **RDNA documents DPP8/DPP16** forms. The programming
+idea overlaps, but selectors, masks, and supported opcodes are target-specific;
+do not copy an RDNA DPP8/DPP16 encoding into a CDNA kernel.
+
 ## DPP — Data Parallel Primitives modifier
 
 DPP is not a standalone instruction; it is a **modifier** attached to a normal
@@ -74,19 +80,23 @@ row shift/rotate (`row_shl`, `row_shr`, `row_ror`), full-row broadcast, mirror,
 and (on CDNA) some cross-row broadcasts (`row_bcast:15`, `row_bcast:31`).
 
 ```cpp
-// Tree reduction inside a 16-lane row using DPP add.
+// Tree reduction inside a 16-lane row using DPP shifts.
 // __builtin_amdgcn_mov_dpp(src, dpp_ctrl, row_mask, bank_mask, bound_ctrl)
 // dpp_ctrl 0x111 == row_shr:1, 0x112 == row_shr:2, ...
 __device__ float row_reduce_add(float v) {
-    for (int off = 1; off < 16; off <<= 1) {
-        float n = __builtin_amdgcn_mov_dpp(
-            __builtin_bit_cast(int, v),
-            0x110 | off,   // row_shr by `off`
-            0xf, 0xf,      // all 4 rows, all 4 banks active
-            false);        // bound_ctrl: out-of-range lane => use own value
-        v += n;
-    }
-    return v; // lane 0 of each row now holds the row sum
+    int n = __builtin_amdgcn_mov_dpp(__builtin_bit_cast(int, v),
+                                     0x111, 0xf, 0xf, true);
+    v += __builtin_bit_cast(float, n);
+    n = __builtin_amdgcn_mov_dpp(__builtin_bit_cast(int, v),
+                                 0x112, 0xf, 0xf, true);
+    v += __builtin_bit_cast(float, n);
+    n = __builtin_amdgcn_mov_dpp(__builtin_bit_cast(int, v),
+                                 0x114, 0xf, 0xf, true);
+    v += __builtin_bit_cast(float, n);
+    n = __builtin_amdgcn_mov_dpp(__builtin_bit_cast(int, v),
+                                 0x118, 0xf, 0xf, true);
+    v += __builtin_bit_cast(float, n);
+    return v; // lanes 15,31,47,63 now hold their 16-lane row sums
 }
 ```
 
@@ -94,8 +104,10 @@ __device__ float row_reduce_add(float v) {
 > mask to a following DPP op; the compiler must insert wait states (NOPs)
 > between a write of a register and its DPP consumption. With the builtin this is
 > handled for you, but in hand assembly you must respect the documented
-> `v_*_dpp` wait-state rules or you read stale lane data. `bound_ctrl` selects
-> what an out-of-range neighbor contributes (0 vs. the lane's own value).
+> `v_*_dpp` wait-state rules or you read stale lane data. With these row shifts,
+> `bound_ctrl=true` makes an invalid source contribute zero; `false` suppresses
+> the update and preserves the prior destination value. A `row_shr` accumulation
+> leaves the complete row result in the **last** lane, not lane 0.
 
 ## ds_swizzle_b32 — fixed intra-group shuffle
 
@@ -125,8 +137,8 @@ nothing in LDS:
 - `ds_permute_b32` — **forward / push / scatter**: each lane provides a
   destination lane id; it sends its data there. "Write my value to lane `idx`."
 
-The index is a **byte address** = `lane_id * 4` (the hardware multiplies the lane
-id by 4 to index dwords), so an index VGPR must hold `target_lane << 2`. On a
+The index is a **byte address** = `lane_id * 4`, so an index VGPR must hold
+`target_lane << 2`. On a
 scatter collision (two lanes target the same destination) the **highest source
 lane wins**; for `ds_bpermute` an out-of-range source yields 0.
 
@@ -135,16 +147,19 @@ lane wins**; for `ds_bpermute` an out-of-range source yields 0.
 // idx in *bytes*: (target_lane << 2). Builtin takes the byte address directly.
 __device__ float wave_reduce_add(float v) {
     // 1) reduce within each 16-lane row with DPP (see above)
-    v = row_reduce_add(v);                 // lane{0,16,32,48} hold partials
-    // 2) gather the 4 row-leaders into lane 0 via ds_bpermute
-    int self = __builtin_amdgcn_ds_bpermute(0  << 2, __builtin_bit_cast(int,v));
-    int r1   = __builtin_amdgcn_ds_bpermute(16 << 2, __builtin_bit_cast(int,v));
-    int r2   = __builtin_amdgcn_ds_bpermute(32 << 2, __builtin_bit_cast(int,v));
-    int r3   = __builtin_amdgcn_ds_bpermute(48 << 2, __builtin_bit_cast(int,v));
-    float acc = __builtin_bit_cast(float,self) + __builtin_bit_cast(float,r1)
-              + __builtin_bit_cast(float,r2)   + __builtin_bit_cast(float,r3);
-    // 3) broadcast lane-0 result to the whole wave
-    return __builtin_amdgcn_readfirstlane(__builtin_bit_cast(int, acc));
+    v = row_reduce_add(v);                 // lanes 15,31,47,63 hold partials
+    int bits = __builtin_bit_cast(int, v);
+    // 2) every lane gathers and adds the four valid row-end partials
+    int r0 = __builtin_amdgcn_ds_bpermute(15 << 2, bits);
+    int r1 = __builtin_amdgcn_ds_bpermute(31 << 2, bits);
+    int r2 = __builtin_amdgcn_ds_bpermute(47 << 2, bits);
+    int r3 = __builtin_amdgcn_ds_bpermute(63 << 2, bits);
+    float acc = __builtin_bit_cast(float, r0) + __builtin_bit_cast(float, r1)
+              + __builtin_bit_cast(float, r2) + __builtin_bit_cast(float, r3);
+    // 3) uniformize via an SGPR; bit-cast instead of numerically converting int
+    int scalar_bits = __builtin_amdgcn_readfirstlane(
+        __builtin_bit_cast(int, acc));
+    return __builtin_bit_cast(float, scalar_bits);
 }
 ```
 
@@ -159,10 +174,14 @@ CDNA4 adds the lane-**swap** instructions `v_permlane16_swap_b32` and
 wavefront in a single op without touching the LDS crossbar — useful for the
 cross-row step of a reduction without occupying the LDS unit. They are reached
 via `__builtin_amdgcn_permlane16_swap` / `__builtin_amdgcn_permlane32_swap`,
-which return a 2-element vector (`r[0]` = this lane's value, `r[1]` = the swapped
-partner) and take only `fi` / `bound_ctrl` boolean modifiers — there are **no
-SGPR selector operands**. These are **absent on gfx942** (a portable kernel must
-fall back to `ds_bpermute`/DPP there).
+which return the two destination registers produced by swapping their two input
+registers. Element 0 is the swapped first input and element 1 is the swapped
+second input; neither element is universally “self” or “partner.” With the same
+value passed twice, select element 0 in the upper 16-/32-lane half and element 1
+in the lower half to obtain the partner. The builtins take only `fi` /
+`bound_ctrl` boolean modifiers — there are **no SGPR selector operands**. These
+are **absent on gfx942** (a portable kernel must fall back to
+`ds_bpermute`/DPP there).
 
 > **Watch the name.** The RDNA selector-form `v_permlane16_b32` /
 > `v_permlanex16_b32` (`__builtin_amdgcn_permlane16` / `permlanex16`, taking two
@@ -175,10 +194,11 @@ fall back to `ds_bpermute`/DPP there).
 ```cpp
 #if defined(__gfx950__)
     // gfx950: swap the two 16-lane halves of each 32-lane group with
-    // v_permlane16_swap_b32 — no LDS-unit traffic; r[1] is the partner lane.
+    // v_permlane16_swap_b32 — no LDS-unit traffic. The partner is in a
+    // different result element in the lower and upper 16-lane halves.
     // (The RDNA selector-form permlanex16(...) does NOT assemble for CDNA4.)
     auto sw = __builtin_amdgcn_permlane16_swap(v, v, /*fi=*/false, /*bound_ctrl=*/false);
-    int hi = sw[1];
+    int hi = (lane & 16) ? sw[0] : sw[1];
 #else
     // gfx942 fallback: pull from the partner lane via the LDS crossbar
     int hi = __builtin_amdgcn_ds_bpermute((lane ^ 16) << 2, v);
@@ -206,34 +226,72 @@ or the way to feed a per-wave scalar into a `buffer`/`ds` address.
 contend with real `ds_read`/`ds_write` traffic; on a heavily LDS-bound kernel a
 DPP or `v_permlane16` path can be cheaper even when its reach is narrower.
 
-## Measured latency (MI300) and how to choose
+## Guide-reported latency estimates and how to choose
 
-The nod-ai/shark-ai *AMDGPU Kernel Optimization Guide* reports measured
-per-primitive latencies on MI300 (Fused Softmax microbenchmark; cycles include
-the instruction **plus its `s_waitcnt`**):
+The nod-ai/shark-ai *AMDGPU Kernel Optimization Guide* labels this table as a
+Fused Softmax measurement on MI300 using `rocprofv2`; cycles for LDS-crossbar
+operations include the instruction **plus its `s_waitcnt`**. However, the same
+table includes `v_permlane`, while the guide's own `v_permlane` section says it
+is a CDNA4 TODO and gfx942 does not have the gfx950 `_swap` instructions. The
+first three rows can therefore be retained as MI300 guide measurements; the
+`v_permlane` row is only an architecture-scoped estimate of unclear provenance,
+not an MI300 measurement or a local verification result.
 
-| Primitive | Approx. cycles | Needs `s_waitcnt`? | Reach |
-|---|---|---|---|
-| `ds_permute` / `ds_bpermute` | ~50 | yes (LDS unit) | full 64-lane, arbitrary |
-| `ds_swizzle` | ~50 | yes (LDS unit) | fixed pattern, 32-lane groups |
-| DPP | 4–12 | no | adjacent rows / fixed shifts |
-| `v_permlane` (gfx950) | 4–8 | no | 16/32-lane, gfx950 only |
+| Primitive | Approx. cycles | Needs `s_waitcnt`? | Reach | Evidence scope |
+|---|---:|---|---|---|
+| `ds_permute` / `ds_bpermute` | ~50 | yes (LDS unit) | full 64-lane, arbitrary | guide-reported MI300 measurement |
+| `ds_swizzle` | ~50 | yes (LDS unit) | fixed pattern, 32-lane groups | guide-reported MI300 measurement |
+| DPP | 4–12 | no | adjacent rows / fixed shifts | guide-reported MI300 measurement |
+| `v_permlane` (gfx950) | 4–8 | no | 16/32-lane, gfx950 only | guide estimate; cannot be from the stated MI300 instruction set |
 
-The guide's rule of thumb — **speed:**
+The guide's unverified rule of thumb — **speed:**
 `v_permlane ≥ DPP > ds_swizzle ≥ ds_permute > ds_bpermute`; **generality** is the
 exact reverse. Practical guidance: reach for **DPP** (or `v_permlane16` on gfx950)
 whenever the access pattern fits (on gfx950 use `v_permlane16_swap` for the
-cross-row step) — it is ~5–10× cheaper than the LDS-crossbar ops
-and needs no `s_waitcnt` — and fall back to `ds_permute`/`ds_bpermute` only when
+cross-row step). The guide's MI300 numbers make DPP roughly 4–12× lower latency
+than its LDS-crossbar measurements and it needs no `s_waitcnt`; fall back to
+`ds_permute`/`ds_bpermute` when
 you need arbitrary full-wave gather/scatter. In MLIR these surface as
 `amdgpu.dpp` / `rocdl.update.dpp`, `rocdl.ds_swizzle`, `rocdl.ds_bpermute`, and
 `rocdl.permlane*` / `amdgpu.permlane_swap`.
+
+## MLIR lowering and DPP fusion
+
+The guide's MLIR mapping is tied to its LLVM 20-era snapshot:
+
+| Hardware operation | MLIR operation | Important qualification |
+|---|---|---|
+| `ds_bpermute_b32` | `rocdl.ds_bpermute` | direct LDS-crossbar operation; requires an LDS wait |
+| `ds_swizzle_b32` | `rocdl.ds_swizzle` | pattern encoded in the op; requires an LDS wait |
+| `ds_permute_b32` | no dedicated `rocdl.ds_permute` in the captured snapshot | re-check when changing LLVM/MLIR revisions |
+| DPP | `rocdl.update.dpp`, or the enum-friendly `amdgpu.dpp` wrapper | represented as a DPP move before backend combining |
+| gfx950 lane swap | `rocdl.permlane*`, `amdgpu.permlane_swap` | exact op depends on the lane-swap form and MLIR revision |
+
+DPP is a modifier on a VALU source, while the generic MLIR operation can be
+represented initially as `v_mov_b32_dpp`. LLVM's `GCNDPPCombine` then makes a
+**best-effort** attempt to fold that move into a compatible following VALU op:
+
+```text
+v_mov_b32_dpp + v_add_f32_e32  ->  v_add_f32_dpp   (when legal)
+```
+
+This fusion is not guaranteed. In the captured combine implementation,
+non-default `row_mask` or `bank_mask` values (`!= 0xf`) are among the reasons a
+move cannot be folded. Other operand, opcode, liveness, and modifier constraints
+also apply. Inspect the final ISA instead of counting MLIR operations and
+assuming a fused DPP instruction was selected. The exact historical condition
+is visible in
+[`GCNDPPCombine::combineDPPMov`](https://github.com/llvm/llvm-project/blob/ab51eccf88f5321e7c60591c5546b254b6afab99/llvm/lib/Target/AMDGPU/GCNDPPCombine.cpp#L522).
 
 ## Sources
 
 - [CDNA3 ISA Reference Guide](https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/instruction-set-architectures/amd-instinct-mi300-cdna3-instruction-set-architecture.pdf)
 - [CDNA4 ISA Reference Guide](https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/instruction-set-architectures/amd-instinct-cdna4-instruction-set-architecture.pdf)
+- [RDNA3 ISA Reference Guide — DPP8/DPP16](https://www.amd.com/content/dam/amd/en/documents/radeon-tech-docs/instruction-set-architectures/rdna3-shader-instruction-set-architecture-feb-2023_0.pdf)
 - [LLVM AMDGPU User Guide — cross-lane intrinsics](https://llvm.org/docs/AMDGPUUsage.html)
 - [GCN/CDNA assembly notes (gcnasm)](https://github.com/carlushuang/gcnasm)
 - [AMD Matrix Cores blog](https://gpuopen.com/learn/amd-lab-notes/amd-lab-notes-matrix-cores-readme/)
-- [AMDGPU Kernel Optimization Guide (nod-ai/shark-ai)](https://github.com/nod-ai/amd-shark-ai/blob/main/docs/amdgpu_kernel_optimization_guide.md) — measured cross-lane latencies
+- [AMDGPU Kernel Optimization Guide (captured snapshot)](https://github.com/nod-ai/amd-shark-ai/blob/efa471aeef66a260c85983cc41e833bfa769dade/docs/amdgpu_kernel_optimization_guide.md) — measured cross-lane latencies and LLVM/MLIR lowering notes
+- [`rocprofv2`/rocprofiler link cited by the captured guide](https://github.com/ROCm/rocprofiler?tab=readme-ov-file#plugin-support)
+- [MLIR ROCDL dialect reference](https://mlir.llvm.org/docs/Dialects/ROCDLDialect/)
+- [MLIR AMDGPU dialect reference](https://mlir.llvm.org/docs/Dialects/AMDGPU/)

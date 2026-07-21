@@ -2,6 +2,8 @@
 id: technique-vectorized-loads
 title: Vectorized & Non-Temporal Loads (128-bit) to Saturate HBM
 type: technique
+version_sensitive:
+- vs-amdgpu-nontemporal-lowering
 architectures:
 - gfx942
 - gfx950
@@ -61,11 +63,13 @@ and one entry in the `VMCNT` queue. On a wave64 that is `64 lanes × 16 B = 1 Ki
 per instruction — the natural granularity for streaming HBM.
 
 For data that is read **once and never reused** (streaming copies, residual
-adds, the A/B operands of a single-pass GEMM tail), add the **non-temporal**
-hint so the load bypasses L2 residency policy and does not evict useful cache
-lines. The combination — wide + non-temporal + enough outstanding loads to hide
-latency — is what gets you close to the **5.3 TB/s** HBM3 ceiling on MI300X (and
-up to **8 TB/s** HBM3E on MI355X).
+adds, the A/B operands of a single-pass GEMM tail), a **non-temporal** hint can
+make it less likely that the stream displaces useful cache lines. The exact
+AMDGPU cache-policy encoding and which level is affected are target/compiler
+specific; non-temporal is not a promise to bypass every cache and does not alter
+coherency semantics. Wide accesses plus enough outstanding work are what get a
+kernel close to the **5.3 TB/s** HBM3 ceiling on MI300X (and up to **8 TB/s**
+HBM3E on MI355X).
 
 ## Why width matters
 
@@ -94,12 +98,13 @@ aligned** and contiguous. The most robust way to force it is to load through a
 ```cpp
 #include <hip/hip_runtime.h>
 
-// 16-byte aligned, 4 dwords -> compiles to global_load_dwordx4
-using float4 = __attribute__((__vector_size__(16))) float;
+// A Clang-native vector (unlike HIP's float4 wrapper) is accepted by the
+// nontemporal builtins and compiles to one global_load/store_dwordx4.
+using f32x4 = float __attribute__((ext_vector_type(4)));
 
 // Streaming copy: each thread moves 16 B per iteration, grid-strided.
-__global__ void copy_vec4(const float4* __restrict__ in,
-                          float4* __restrict__ out,
+__global__ void copy_vec4(const f32x4* __restrict__ in,
+                          f32x4* __restrict__ out,
                           size_t n_vec4 /* = n_floats / 4 */) {
     size_t i = blockIdx.x * blockDim.x + threadIdx.x;
     size_t stride = size_t(gridDim.x) * blockDim.x;
@@ -120,19 +125,21 @@ Two correctness preconditions for the wide form to actually be emitted:
 
 ## HIP: non-temporal (streaming) loads
 
-For read-once data, use the LLVM AMDGPU non-temporal builtins so the access is
-tagged streaming (sets the `slc`/non-temporal bits) and avoids polluting L2:
+For read-once data, use the LLVM non-temporal builtins so the access is tagged
+as streaming. Inspect the target ISA to see how the current backend encoded the
+hint; do not assume a particular `slc`/`nt` bit or cache-bypass behavior across
+gfx generations:
 
 ```cpp
 // Read-once residual add: a[] is streamed, never revisited.
-__global__ void residual_add_nt(const float4* __restrict__ a,
-                                const float4* __restrict__ b,
-                                float4* __restrict__ c, size_t n) {
+__global__ void residual_add_nt(const f32x4* __restrict__ a,
+                                const f32x4* __restrict__ b,
+                                f32x4* __restrict__ c, size_t n) {
     size_t i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= n) return;
-    float4 va = __builtin_nontemporal_load(&a[i]);   // streaming 128-bit load
-    float4 vb = __builtin_nontemporal_load(&b[i]);
-    float4 vc;
+    f32x4 va = __builtin_nontemporal_load(&a[i]);   // streaming 128-bit load
+    f32x4 vb = __builtin_nontemporal_load(&b[i]);
+    f32x4 vc;
     for (int k = 0; k < 4; ++k) vc[k] = va[k] + vb[k];
     __builtin_nontemporal_store(vc, &c[i]);          // streaming 128-bit store
 }
@@ -140,9 +147,17 @@ __global__ void residual_add_nt(const float4* __restrict__ a,
 
 `__builtin_nontemporal_load/store` are documented in the
 [LLVM AMDGPU backend](../../sources/docs/doc-llvm-amdgpu.md). They are a *hint*:
-they change cache replacement policy, not correctness. Use them only for data
-with no temporal reuse — applying them to a tile that you re-read from L2 (e.g. a
-GEMM operand reused across the K-loop) will *cost* you bandwidth.
+they request non-temporal treatment without changing correctness. Use them only
+for data with no temporal reuse — applying them to a tile that you intend to
+re-read from cache (for example a GEMM operand reused across the K-loop) can
+cost bandwidth.
+
+> **Compiler check (2026-07-20).** ROCm 7.1.1 / clang 20 compiled the native
+> `f32x4` form above for both gfx942 and gfx950 as
+> `global_load_dwordx4 ... nt` / `global_store_dwordx4 ... nt`. HIP's built-in
+> `float4` wrapper was rejected by these Clang non-temporal builtins, which is
+> why the snippet deliberately uses `ext_vector_type(4)`. Re-check final ISA
+> when changing compiler or target.
 
 ## Assembly: what to look for
 
@@ -203,16 +218,22 @@ memory-bound (see [memory-bound pattern](../patterns/memory-bound.md)):
 
 1. **Use 16 B / 128-bit accesses** — `global_load_dwordx4` / `global_store_dwordx4`.
 2. **Make the access subgroup-contiguous** so the whole 64-lane wave touches
-   **512 B at once** (64 lanes × 8 B, or the natural span of the dwordx4 pattern).
-3. **Form clauses:** up to **4 adjacent `global_load_dwordx4`** instructions
-   implicitly form a *clause* that issues as a **single data-fabric transaction** —
-   far cheaper than four independent transactions.
-4. **Engage all four L1 cache sets** by having a workgroup load 4 distinct 128 B
-   cache lines that map to different sets.
+   a **1 KiB payload** per `dwordx4` (`64 lanes × 16 B`). The guide's 512 B
+   figure corresponds to wave64×8 B or wave32×16 B, not wave64 dwordx4.
+3. **Keep candidate clauses adjacent:** the guide reports that up to four
+   neighboring `global_load_dwordx4` instructions can be treated as one clause
+   and reduce data-fabric transactions. This is **guide-reported and
+   target/compiler-sensitive**; confirm final ISA and fabric counters rather
+   than assuming one transaction.
+4. **Cover all four L1D sets:** the guide recommends four distinct 128 B lines
+   per workgroup. Treat the mapping as a layout experiment and verify with cache
+   counters.
 5. **Launch enough work:** make the grid a **multiple of the CU count** and engage
-   all **4 IODs** (and, on MI300, all 8 XCDs) to reach peak HBM bandwidth.
+   all XCDs and memory interfaces. MI300X has **4 IODs**; MI355X has **2**, so
+   do not hardcode four as a cross-generation rule.
 6. **Use non-temporal** loads/stores for streamed, write-once / read-once data so
-   it bypasses the caches.
+   the backend can apply an appropriate cache-policy hint. It does not disable
+   coherency or guarantee bypass of every cache.
 
 These rules are exactly what the [bandwidth microbenchmark](../kernels/bandwidth-microbench.md)
 exploits to reach multi-TB/s on MI300-class parts.
@@ -232,4 +253,4 @@ exploits to reach multi-TB/s on MI300-class parts.
 - [AMD Instinct MI300X Datasheet](https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/data-sheets/amd-instinct-mi300x-data-sheet.pdf)
 - [LLVM User Guide for AMDGPU Backend](https://llvm.org/docs/AMDGPUUsage.html)
 - [Optimizing GEMM on AMD GPUs](https://rocm.blogs.amd.com/artificial-intelligence/matrix-cores/README.html)
-- [AMDGPU Kernel Optimization Guide (nod-ai/shark-ai)](https://github.com/nod-ai/amd-shark-ai/blob/main/docs/amdgpu_kernel_optimization_guide.md) — coalescing & clause rules
+- [AMDGPU Kernel Optimization Guide (captured snapshot)](https://github.com/nod-ai/amd-shark-ai/blob/efa471aeef66a260c85983cc41e833bfa769dade/docs/amdgpu_kernel_optimization_guide.md) — coalescing, cache-set, and clause recommendations (with the qualifications above)

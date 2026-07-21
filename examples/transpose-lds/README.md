@@ -3,15 +3,16 @@
 Out-of-place fp32 transpose `out[x][y] = in[y][x]` staged through LDS. A
 `TILE x TILE` (32x32) block is loaded with a coalesced row-major global read,
 transposed inside LDS, then written back with a coalesced row-major global
-write. The LDS tile is padded to `[TILE][TILE+1]` so the transposed
-column-wise reads land in distinct banks (`gcd(TILE+1, banks) == 1`),
-eliminating the 32-way bank conflict the naive unpadded layout would suffer.
+write. Padding is selected for this exact `block(32,32)` lane mapping: the LDS
+tile is `[TILE][TILE+1]` on gfx942/default RDNA wave32, while gfx950 uses
+`[TILE][TILE+2]` because one wave64 b32 phase contains two adjacent columns.
+The two columns then map to its even and odd banks instead of overlapping.
 
 ## Classification
 
 **PORTABLE** — pure HIP (LDS + `__syncthreads()`, no MFMA/WMMA intrinsics).
-Builds and runs natively on this gfx1201 (RDNA4) box; the same source also
-compiles for gfx942/gfx950.
+Builds and runs on gfx1201 (RDNA4) and gfx950 (CDNA4); the guarded source also
+device-compiles for gfx942.
 
 ## Build & run
 
@@ -43,5 +44,6 @@ not as a tuned peak-bandwidth benchmark.
 
 ## Runs on vs cross-compiles for
 
-- **Runs:** gfx1201 (verified here).
-- **Also compiles for:** gfx942, gfx950 (pure HIP, no arch-specific intrinsics).
+- **Runs:** gfx1201; MI355X/gfx950 rechecked 2026-07-20 (`max abs error: 0`).
+- **Also compiles for:** gfx942 (device compile; runtime host unavailable in the
+  2026-07-20 pass).

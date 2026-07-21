@@ -41,7 +41,9 @@ def load_pages():
                 continue
             if not isinstance(fm, dict):
                 continue
-            pages.append({"path": str(md.relative_to(WIKI_ROOT)), "fm": fm})
+            # Query pages are Markdown and their links must use URL-style paths
+            # regardless of the host OS used to regenerate them.
+            pages.append({"path": md.relative_to(WIKI_ROOT).as_posix(), "fm": fm})
     return pages
 
 

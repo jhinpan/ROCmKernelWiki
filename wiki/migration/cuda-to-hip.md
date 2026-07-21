@@ -2,6 +2,8 @@
 id: migration-cuda-to-hip
 title: CUDA → HIP Kernel Porting (CDNA3/CDNA4)
 type: migration
+version_sensitive:
+- vs-permlane16-gfx950
 architectures:
 - gfx942
 - gfx950
@@ -92,7 +94,8 @@ Query the width; do not assume it:
 // WRONG on CDNA: assumes 32-lane warps
 // int lane = threadIdx.x % 32;
 
-// PORTABLE: warpSize is 64 on gfx9xx, 32 on gfx10+/RDNA
+// PORTABLE: query warpSize. These gfx942/gfx950 targets report 64;
+// RDNA can use wave32 or wave64 depending on target and compile mode.
 const int lane = threadIdx.x % warpSize;   // warpSize is a builtin
 const int wid  = threadIdx.x / warpSize;
 
@@ -122,7 +125,8 @@ for (int o = warpSize / 2; o > 0; o >>= 1)
 For the lowest-latency cross-lane patterns on AMD, prefer the native intrinsics
 (`__builtin_amdgcn_ds_bpermute`, `__builtin_amdgcn_mov_dpp`,
 `__builtin_amdgcn_readlane`) — see the [cross-lane page](../hardware/cross-lane.md).
-Note `v_permlane16_*` exists only on gfx950, not gfx942.
+Note `v_permlane16_swap_b32` / `v_permlane32_swap_b32` exist on gfx950, not
+gfx942; the RDNA selector form with a similar name is a different instruction.
 
 ## `cp.async` → direct-to-LDS load
 
