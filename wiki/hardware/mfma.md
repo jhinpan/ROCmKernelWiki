@@ -127,8 +127,9 @@ Structured 4:2 sparsity is available through the `v_smfmac_*` family.
 
 ## Shapes and dtypes — CDNA4 (gfx950)
 
-CDNA4 keeps the full CDNA3 set and adds a **unified low-precision** path plus
-microscaling. The headline new instructions:
+CDNA4 keeps most of the CDNA3 set, drops the native TF32/XF32 matrix path, and
+adds a **unified low-precision** path plus microscaling. The headline new
+instructions:
 
 ```ptx
 ; Unified FP8/FP6/FP4 dense MMA, FP32 accumulate (no scale)

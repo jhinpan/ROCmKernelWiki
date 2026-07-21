@@ -170,6 +170,10 @@ def test_amdgpu_guide_sync_regression():
     assert "Keeps the full CDNA3 MFMA/SMFMAC set" not in source_generator
     assert "`v_permlane16_*` cross-lane ops" not in source_generator
 
+    mfma = (ROOT / "wiki/hardware/mfma.md").read_text(encoding="utf-8")
+    assert "keeps the full CDNA3 set" not in mfma
+    assert "keeps most of the CDNA3 set" in mfma
+
     phase_consumers = [
         "wiki/techniques/bank-conflict-avoidance.md",
         "wiki/patterns/bank-conflicts.md",
