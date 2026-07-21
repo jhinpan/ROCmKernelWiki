@@ -29,7 +29,8 @@ the wiki root without changing the user's working directory.
 | Query launched from an unrelated working directory | PASS |
 | Forced cp1252 child process emits UTF-8 safely | PASS |
 | User-scoped query cache writes outside the skill checkout | PASS |
-| `tests/test_validate.py` (11 tests) | PASS x11 |
+| Corrupted and stale query caches rebuild automatically | PASS |
+| `tests/test_validate.py` (12 tests) | PASS x12 |
 | `scripts/validate.py` | 0 errors / 7,541 pages |
 | Natural-language query ("avoid LDS bank conflicts on MI300") | returns pattern + technique + kernel, correctly ranked |
 | Alias arch filter (`--architecture MI355X` -> gfx950) + `--repo` | returns real gfx950 CK PRs |

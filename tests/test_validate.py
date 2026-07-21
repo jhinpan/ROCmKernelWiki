@@ -60,6 +60,56 @@ def test_query_runs():
         assert user_cache_root.name == f"rocm-kernel-wiki-uid-{getuid()}"
 
 
+def test_query_recovers_from_invalid_cache():
+    import json
+
+    scripts_dir = str(ROOT / "scripts")
+    sys.path.insert(0, scripts_dir)
+    try:
+        import query
+    finally:
+        sys.path.remove(scripts_dir)
+
+    original_root = query.WIKI_ROOT
+    configured_cache = os.environ.get("ROCM_WIKI_CACHE_DIR")
+    try:
+        with tempfile.TemporaryDirectory() as workspace:
+            workspace = Path(workspace)
+            wiki_dir = workspace / "wiki"
+            wiki_dir.mkdir()
+            (wiki_dir / "cache-test.md").write_text(
+                "---\nid: cache-test\ntitle: Cache Test\n"
+                "page_type: wiki-technique\n---\ncache recovery body\n",
+                encoding="utf-8",
+            )
+            os.environ["ROCM_WIKI_CACHE_DIR"] = str(workspace / "cache")
+            query.WIKI_ROOT = workspace
+            cache_path = query.query_cache_path()
+            expected_pages = query.load_all_pages(use_cache=True)
+            expected_cache = json.loads(cache_path.read_text(encoding="utf-8"))
+            assert [page["fm"]["id"] for page in expected_pages] == ["cache-test"]
+
+            bad_caches = {
+                "malformed JSON": "{broken json",
+                "stale signature": json.dumps(
+                    {"sig": "stale", "pages": [{"sentinel": True}]}
+                ),
+            }
+            for case, contents in bad_caches.items():
+                cache_path.write_text(contents, encoding="utf-8")
+                pages = query.load_all_pages(use_cache=True)
+                rebuilt = json.loads(cache_path.read_text(encoding="utf-8"))
+                assert pages == expected_pages, case
+                assert rebuilt["sig"] == expected_cache["sig"], case
+                assert rebuilt["pages"] == expected_pages, case
+    finally:
+        query.WIKI_ROOT = original_root
+        if configured_cache is None:
+            os.environ.pop("ROCM_WIKI_CACHE_DIR", None)
+        else:
+            os.environ["ROCM_WIKI_CACHE_DIR"] = configured_cache
+
+
 def test_codex_skill_contract():
     skill = frontmatter("SKILL.md")
     skill_text = (ROOT / "SKILL.md").read_text(encoding="utf-8")
