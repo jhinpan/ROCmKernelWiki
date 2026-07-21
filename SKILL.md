@@ -1,8 +1,6 @@
 ---
-name: ROCmKernelWiki
-description: Use when the user asks about optimizing AMD Instinct / Radeon GPU kernels — MI300 (gfx942/CDNA3), MI350/MI355X (gfx950/CDNA4), or RDNA4 (gfx1201) — MFMA/matrix-core programming, LDS bank conflicts, direct-to-LDS async copy, s_waitcnt pipelining, FP8/FP6/FP4/MXFP block scaling, wave64 reductions, GEMM/FlashAttention/fused-MoE/paged-attention kernels, or Composable-Kernel/CK-tile/FlyDSL/Triton-AMD/rocWMMA/HIP/GCN-assembly. Also for concrete merged-PR references from ROCm/composable_kernel, aiter, hipBLASLt, Tensile, rocBLAS, flash-attention, FlyDSL, and triton. Do NOT use for generic CUDA/NVIDIA-only questions, host-side framework integration, or ROCm install/driver troubleshooting.
-argument-hint: "[natural-language-question] | [--tag mfma --type kernel] | [page-id]"
-allowed-tools: "Bash Read Grep Glob"
+name: rocm-kernel-wiki
+description: Search and apply ROCmKernelWiki when optimizing AMD GPU kernels for MI300/gfx942, MI350/MI355X/gfx950, or RDNA4/gfx1201. Use for MFMA/WMMA, LDS, direct-to-LDS, s_waitcnt, FP8/FP6/FP4/MXFP, wave reductions, GEMM/attention/MoE, CUDA-to-HIP migration, and CK/CK-Tile/AITER/hipBLASLt/FlyDSL/Triton/HIP/GCN implementations. Also use for merged-PR evidence from composable_kernel, AITER, Tensile, rocBLAS, flash-attention, FlyDSL, Triton, vLLM, or SGLang. Do not use for NVIDIA-only kernels, host framework behavior, or ROCm installation and driver troubleshooting.
 ---
 
 # ROCmKernelWiki — AMD CDNA / RDNA Kernel Optimization Wiki
@@ -15,73 +13,40 @@ allowed-tools: "Bash Read Grep Glob"
 
 Query a structured, cross-referenced knowledge base of AMD GPU kernel
 optimization for CDNA3 (gfx942 / MI300), CDNA4 (gfx950 / MI350-MI355X), and
-RDNA4 (gfx1201) — **7,400+ merged-PR references**, ~53 wiki synthesis pages,
-20 doc/blog summaries, and 8 reference-repository studies.
+RDNA4 (gfx1201) — **7,454 merged-PR references**, 57 wiki synthesis pages,
+21 doc/blog summaries, and 9 reference-repository studies.
 
 > Inspired by, and modeled on, MIT Han Lab's
 > [KernelWiki](https://github.com/mit-han-lab/KernelWiki) (the Blackwell/Hopper
 > kernel knowledge base) — see the citation in the README.
 
-## When To Use This Skill
-
-Trigger this skill when the user asks about:
-
-- **AMD matrix-core programming** — `v_mfma_*` shapes/dtypes, AGPR accumulators,
-  the gfx950 `f8f6f4` unified low-precision path, MX (E8M0) block scaling
-- **CDNA memory model** — LDS bank conflicts (32-bank gfx942 vs 64-bank gfx950),
-  buffer vs global vs flat, OOB branchless guards, direct-to-LDS async copy,
-  `s_waitcnt` (vmcnt/lgkmcnt) pipelining
-- **Kernel implementations** — CK/hipBLASLt GEMM, FP8 block-scaled GEMM,
-  FlashAttention-2 (CK-tile), paged attention, fused MoE, MLA decode, RMSNorm,
-  bandwidth microbenchmarks
-- **Performance problems** — bank conflicts, low occupancy, VGPR/AGPR pressure,
-  memory-bound, idle matrix cores, tail effects, XCD/L2 locality
-- **DSLs & languages** — HIP, GCN/CDNA assembly, Composable Kernel / CK-tile,
-  FlyDSL, Triton (AMD backend), rocWMMA
-- **Migration** — CUDA→HIP (cp.async→direct-LDS, mbarrier→s_waitcnt, wgmma→mfma),
-  gfx942→gfx950 (FNUZ→OCP FP8!), RDNA WMMA vs CDNA MFMA
-- **PR references** — "how did CK/AITER/hipBLASLt/Triton implement X on MI300/MI350?"
-
-Do NOT use this skill for:
-
-- Generic CUDA / NVIDIA-only kernel questions (use KernelWiki for Blackwell/Hopper)
-- Host-side framework integration (model loading, request routing, scheduling)
-- ROCm installation, driver, or environment troubleshooting
-
 ## How To Query
 
-**First, cd into the skill directory** (the clone root — where this `SKILL.md`
-lives), then run the tools. The scripts auto-resolve the wiki root from their own
-location, so once you `cd` there no environment variable is needed:
+Treat the directory containing this `SKILL.md` as `<skill-root>`. Keep the
+user's working directory unchanged and invoke the query tools by absolute path;
+they resolve the corpus from their own location. Set `<python>` to
+`<skill-root>/.venv/bin/python` on POSIX or
+`<skill-root>/.venv/Scripts/python.exe` on Windows when that install-time venv
+exists; otherwise use an available Python 3 with `requirements.txt` installed.
+Resolve every relative result path against `<skill-root>`.
 
-```bash
-cd "$(dirname "$(find ~/.claude/skills -name SKILL.md -path '*ROCmKernelWiki*' | head -1)")"
-# ...or just: cd ~/.claude/skills/ROCmKernelWiki
-```
-
-If you cannot `cd` (e.g. running from another working directory), call the
-scripts by absolute path — they still resolve the wiki root correctly:
-
-```bash
-python3 ~/.claude/skills/ROCmKernelWiki/scripts/query.py --tag mfma --type kernel
-```
-
-All example commands below assume you have `cd`'d into the skill directory.
+Start with search output and load only the relevant pages. Do not read the full
+7,454-page PR corpus into context.
 
 ### Path 1: Unified search (preferred for natural language)
 
 ```bash
-python3 scripts/query.py "how to pipeline MFMA on MI300"
-python3 scripts/query.py --tag mfma --type kernel
-python3 scripts/query.py --repo composable_kernel --architecture gfx950 --limit 20
-python3 scripts/query.py --symptom bank-conflicts --compact
+"<python>" "<skill-root>/scripts/query.py" "how to pipeline MFMA on MI300"
+"<python>" "<skill-root>/scripts/query.py" --tag mfma --type kernel
+"<python>" "<skill-root>/scripts/query.py" --repo composable_kernel --architecture gfx950 --limit 20
+"<python>" "<skill-root>/scripts/query.py" --symptom bank-conflicts --compact
 ```
 
 Filters: `--type`, `--tag`, `--repo`, `--language`, `--architecture`,
 `--symptom`, `--confidence`, `--synthesis`, `--limit`, `--compact`, `--paths-only`.
 Results are ranked IDF-weighted with priors that surface curated wiki pages and
 runnable examples above raw PR noise, and each hit shows a matched-text snippet.
-Add `--synthesis` to restrict to curated wiki pages (skip the 7,400+ PR sources).
+Add `--synthesis` to restrict to curated wiki pages (skip the 7,454 PR sources).
 `--tag` and `--architecture` accept aliases — `--tag XDLOP` matches `mfma`,
 `--tag cp.async` matches `async-copy`, `--architecture MI300` matches `gfx942`,
 `--architecture MI355X` matches `gfx950`.
@@ -89,11 +54,11 @@ Add `--synthesis` to restrict to curated wiki pages (skip the 7,400+ PR sources)
 ### Path 2: Fetch a specific page by id or path
 
 ```bash
-python3 scripts/get_page.py kernel-fp8-gemm           # wiki page lists "Implementing PRs"
-python3 scripts/get_page.py pr-composable_kernel-1234  # PR page lists "Synthesized in" wiki pages
-python3 scripts/get_page.py kernel-fp8-gemm --follow-sources
-python3 scripts/get_page.py pr-composable_kernel-1234 --include-code --summary  # compact diff
-python3 scripts/get_page.py hw-mfma --body-only
+"<python>" "<skill-root>/scripts/get_page.py" kernel-fp8-gemm
+"<python>" "<skill-root>/scripts/get_page.py" pr-composable_kernel-1234
+"<python>" "<skill-root>/scripts/get_page.py" kernel-fp8-gemm --follow-sources
+"<python>" "<skill-root>/scripts/get_page.py" pr-composable_kernel-1234 --include-code --summary
+"<python>" "<skill-root>/scripts/get_page.py" hw-mfma --body-only
 ```
 
 Every wiki page now carries `implemented_by:` (the real PRs that built it) and
@@ -105,9 +70,9 @@ the full diff.
 ### Path 3: Regex text search across wiki bodies and PR pages
 
 ```bash
-python3 scripts/grep_wiki.py "v_mfma_f32_16x16x16"
-python3 scripts/grep_wiki.py "global_load_lds" --only sources
-python3 scripts/grep_wiki.py "ds_bpermute|mov_dpp" --any
+"<python>" "<skill-root>/scripts/grep_wiki.py" "v_mfma_f32_16x16x16"
+"<python>" "<skill-root>/scripts/grep_wiki.py" "global_load_lds" --only sources
+"<python>" "<skill-root>/scripts/grep_wiki.py" "ds_bpermute|mov_dpp" --any
 ```
 
 ### Path 4: Pre-built cross-reference indices
@@ -119,7 +84,7 @@ Auto-generated under `queries/`:
 - `queries/by-hardware-feature.md` — mfma/lds/async-copy/mxfp/… → pages
 - `queries/by-kernel-type.md` — gemm/attention/moe/… → pages
 - `queries/by-language.md` — hip/gcn-asm/composable-kernel/flydsl/triton → pages
-- `queries/by-repo.md` — all 7,400+ PRs across the tracked ROCm repos
+- `queries/by-repo.md` — all 7,454 PRs across the tracked ROCm repos
 
 ### Path 5: Primer, schema, examples
 
@@ -145,11 +110,11 @@ When answering from this KB:
 
 ## Knowledge Base Contents (PR cutoff 2026-05-30)
 
-- **7,400+ PR reference pages** across ROCm/composable_kernel, aiter, hipBLASLt,
-  Tensile, rocBLAS, flash-attention, FlyDSL, triton, plus ROCm-filtered vLLM/SGLang
-- **~53 wiki synthesis pages** — hardware, techniques, kernels, patterns,
+- **7,454 PR reference pages** across ROCm/composable_kernel, aiter, Tensile,
+  rocBLAS, flash-attention, FlyDSL, triton, plus ROCm-filtered vLLM/SGLang
+- **57 wiki synthesis pages** — hardware, techniques, kernels, patterns,
   languages, migration
-- **20 doc/blog summaries** + **8 reference-repository studies**
+- **21 doc/blog summaries** + **9 reference-repository studies**
 - **9 candidate ledgers** classifying every scanned PR (include/defer/exclude)
 - **6 auto-generated query indices**
 - **959 real upstream PR diffs** in `artifacts/` + **12 runnable, hipcc-compiled kernel examples** in `examples/`

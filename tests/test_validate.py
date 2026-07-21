@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import yaml
@@ -40,6 +41,179 @@ def test_query_runs():
     r = run("scripts/query.py", "--tag", "mfma", "--type", "kernel", "--compact")
     assert r.returncode == 0
     assert "result" in r.stdout
+
+    scripts_dir = str(ROOT / "scripts")
+    sys.path.insert(0, scripts_dir)
+    configured_cache = os.environ.pop("ROCM_WIKI_CACHE_DIR", None)
+    try:
+        from query import query_cache_path
+
+        default_cache = query_cache_path()
+    finally:
+        if configured_cache is not None:
+            os.environ["ROCM_WIKI_CACHE_DIR"] = configured_cache
+        sys.path.remove(scripts_dir)
+    user_cache_root = default_cache.parents[1]
+    assert user_cache_root.name.startswith("rocm-kernel-wiki-")
+    getuid = getattr(os, "getuid", None)
+    if getuid is not None:
+        assert user_cache_root.name == f"rocm-kernel-wiki-uid-{getuid()}"
+
+
+def test_query_recovers_from_invalid_cache():
+    import json
+
+    scripts_dir = str(ROOT / "scripts")
+    sys.path.insert(0, scripts_dir)
+    try:
+        import query
+    finally:
+        sys.path.remove(scripts_dir)
+
+    original_root = query.WIKI_ROOT
+    configured_cache = os.environ.get("ROCM_WIKI_CACHE_DIR")
+    try:
+        with tempfile.TemporaryDirectory() as workspace:
+            workspace = Path(workspace)
+            wiki_dir = workspace / "wiki"
+            wiki_dir.mkdir()
+            (wiki_dir / "cache-test.md").write_text(
+                "---\nid: cache-test\ntitle: Cache Test\n"
+                "page_type: wiki-technique\n---\ncache recovery body\n",
+                encoding="utf-8",
+            )
+            os.environ["ROCM_WIKI_CACHE_DIR"] = str(workspace / "cache")
+            query.WIKI_ROOT = workspace
+            cache_path = query.query_cache_path()
+            expected_pages = query.load_all_pages(use_cache=True)
+            expected_cache = json.loads(cache_path.read_text(encoding="utf-8"))
+            assert [page["fm"]["id"] for page in expected_pages] == ["cache-test"]
+
+            bad_caches = {
+                "malformed JSON": "{broken json",
+                "stale signature": json.dumps(
+                    {"sig": "stale", "pages": [{"sentinel": True}]}
+                ),
+            }
+            for case, contents in bad_caches.items():
+                cache_path.write_text(contents, encoding="utf-8")
+                pages = query.load_all_pages(use_cache=True)
+                rebuilt = json.loads(cache_path.read_text(encoding="utf-8"))
+                assert pages == expected_pages, case
+                assert rebuilt["sig"] == expected_cache["sig"], case
+                assert rebuilt["pages"] == expected_pages, case
+    finally:
+        query.WIKI_ROOT = original_root
+        if configured_cache is None:
+            os.environ.pop("ROCM_WIKI_CACHE_DIR", None)
+        else:
+            os.environ["ROCM_WIKI_CACHE_DIR"] = configured_cache
+
+
+def test_codex_skill_contract():
+    skill = frontmatter("SKILL.md")
+    skill_text = (ROOT / "SKILL.md").read_text(encoding="utf-8")
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert set(skill) == {"name", "description"}
+    assert skill["name"] == "rocm-kernel-wiki"
+    assert re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", skill["name"])
+    assert len(skill["description"]) <= 1024
+    assert "merged-PR" in skill["description"]
+    for repo in (ROOT / "sources/prs").iterdir():
+        if repo.is_dir():
+            assert repo.name.lower() in skill["description"].lower(), repo.name
+    assert len(skill_text.splitlines()) < 500
+    assert "~/.claude/skills" not in skill_text
+    assert "$HOME/.agents/skills" in readme
+    assert ".venv/bin/python" in readme
+    assert ".venv\\Scripts\\python.exe" in readme
+    assert "same clone-and-venv procedure" in readme
+    query_docs = readme.split("## Query Tools", 1)[1].split("## Architecture", 1)[0]
+    assert "python3 scripts/" not in query_docs
+
+    metadata = yaml.safe_load(
+        (ROOT / "agents/openai.yaml").read_text(encoding="utf-8")
+    )
+    assert metadata["interface"]["display_name"] == "ROCm Kernel Wiki"
+    assert "$rocm-kernel-wiki" in metadata["interface"]["default_prompt"]
+    assert metadata["policy"]["allow_implicit_invocation"] is True
+
+
+def test_documented_corpus_inventory():
+    counts = {
+        "prs": len(list((ROOT / "sources/prs").glob("*/*.md"))),
+        "wiki": len(list((ROOT / "wiki").glob("**/*.md"))),
+        "docs_blogs": sum(
+            len(list((ROOT / "sources" / subdir).glob("*.md")))
+            for subdir in ("docs", "blogs")
+        ),
+        "refs": len(list((ROOT / "sources/refs").glob("*.md"))),
+    }
+    assert counts == {"prs": 7454, "wiki": 57, "docs_blogs": 21, "refs": 9}
+
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
+    architecture = (ROOT / "docs/architecture.svg").read_text(encoding="utf-8")
+    readme_inventory = readme.split("## What's Here", 1)[1].split(
+        "## Install as a Codex CLI Skill", 1
+    )[0]
+    assert "ROCm/hipBLASLt" not in readme_inventory
+    for marker in (
+        "7,454 PR reference pages",
+        "57 synthesized wiki pages",
+        "21 doc/blog summaries",
+        "9 reference-repository studies",
+    ):
+        assert marker in readme, marker
+    for marker in (
+        "7,454 merged-PR references",
+        "57 wiki synthesis pages",
+        "21 doc/blog summaries",
+        "9 reference-repository studies",
+    ):
+        assert marker in skill, marker
+    assert "7,454 merged PRs" in architecture
+
+
+def test_query_runs_outside_skill_directory():
+    env = os.environ.copy()
+    env.pop("PYTHONUTF8", None)
+    env["PYTHONIOENCODING"] = "cp1252"
+    commands = [
+        [
+            str(ROOT / "scripts/query.py"),
+            "avoid LDS bank conflicts on MI300",
+            "--limit",
+            "3",
+        ],
+        [str(ROOT / "scripts/get_page.py"), "hw-mfma", "--body-only"],
+        [
+            str(ROOT / "scripts/grep_wiki.py"),
+            "v_mfma_f32_16x16x16",
+            "--only",
+            "wiki",
+        ],
+    ]
+    with tempfile.TemporaryDirectory() as cwd:
+        cache_root = Path(cwd) / "query-cache"
+        env["ROCM_WIKI_CACHE_DIR"] = str(cache_root)
+        outputs = {}
+        for command in commands:
+            r = subprocess.run(
+                [sys.executable, *command],
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                env=env,
+            )
+            assert r.returncode == 0, (
+                f"{Path(command[0]).name} failed:\n{r.stdout}\n{r.stderr}"
+            )
+            assert r.stdout
+            outputs[Path(command[0]).name] = r.stdout
+        assert "→" in outputs["grep_wiki.py"]
+        assert len(list(cache_root.glob("*/query-index.json"))) == 1
 
 
 def test_get_page_by_id():

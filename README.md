@@ -2,8 +2,9 @@
 
 A structured, agent-queryable knowledge base of **AMD Instinct & Radeon GPU kernel
 optimization** for CDNA3 (gfx942 / MI300), CDNA4 (gfx950 / MI350–MI355X), and RDNA4
-(gfx1201), **packaged as a Claude Code skill**. The repository root **is** the skill
-directory — clone it into `~/.claude/skills/` and it works out of the box.
+(gfx1201), packaged as a **Codex CLI skill** (and compatible with Claude Code).
+The repository root **is** the skill directory, so the full corpus remains
+git-updatable instead of being copied into a separate wrapper.
 
 > **Corpus dates:** merged-PR harvest through **2026-05-30**; each doc/blog page
 > carries its own retrieval date. The nod-ai AMDGPU optimization guide is synced
@@ -50,12 +51,12 @@ in [`VERIFICATION.md`](VERIFICATION.md).
 
 ## What's Here
 
-- **7,400+ PR reference pages** from ROCm/composable_kernel, ROCm/aiter,
-  ROCm/hipBLASLt, ROCm/Tensile, ROCm/rocBLAS, ROCm/flash-attention, ROCm/FlyDSL,
-  ROCm/triton, plus ROCm-filtered vllm-project/vllm and sgl-project/sglang
-- **~54 synthesized wiki pages** — hardware features, optimization techniques,
+- **7,454 PR reference pages** from ROCm/composable_kernel, ROCm/aiter,
+  ROCm/Tensile, ROCm/rocBLAS, ROCm/flash-attention, ROCm/FlyDSL, ROCm/triton,
+  plus ROCm-filtered vllm-project/vllm and sgl-project/sglang
+- **57 synthesized wiki pages** — hardware features, optimization techniques,
   kernel case studies, problem patterns, DSL/language guides, migration guides
-- **20 doc/blog summaries** (AMD CDNA3/CDNA4 ISA, whitepapers, ROCm blogs) and
+- **21 doc/blog summaries** (AMD CDNA3/CDNA4 ISA, whitepapers, ROCm blogs) and
   **9 reference-repository studies** (FlyDSL, the FlyDSL MI350X profiling sweep,
   gcnasm, Composable Kernel, rocWMMA, AITER, hipBLASLt, Tensile, the Matrix Instruction Calculator)
 - **9 candidate ledgers** in `candidates/` recording the include/defer/exclude
@@ -65,24 +66,112 @@ in [`VERIFICATION.md`](VERIFICATION.md).
 - **12 runnable kernel examples** under `examples/` — compiled with hipcc; all 12 build with
   `--offload-arch=gfx950` and run on an MI350X (see [`VERIFICATION.md`](VERIFICATION.md))
 
-## Install as a Claude Code Skill
+## Install as a Codex CLI Skill
+
+Codex discovers personal skills under
+[`$HOME/.agents/skills`](https://developers.openai.com/codex/skills#where-to-save-skills).
+Clone this repo there using the lowercase skill name from `SKILL.md`:
 
 ```bash
-git clone https://github.com/jhinpan/ROCmKernelWiki ~/.claude/skills/ROCmKernelWiki
-pip install -r ~/.claude/skills/ROCmKernelWiki/requirements.txt
+ROCM_WIKI_SKILL="$HOME/.agents/skills/rocm-kernel-wiki"
+mkdir -p "$HOME/.agents/skills"
+git clone --depth 1 https://github.com/jhinpan/ROCmKernelWiki \
+  "$ROCM_WIKI_SKILL"
+python3 -m venv "$ROCM_WIKI_SKILL/.venv"
+"$ROCM_WIKI_SKILL/.venv/bin/python" -m pip install -r \
+  "$ROCM_WIKI_SKILL/requirements.txt"
 ```
 
-The skill auto-registers (`SKILL.md` lives at the clone root) and the query
-scripts auto-resolve the wiki root to their own directory — no environment
-variable required. Optional override: `export ROCM_WIKI_ROOT=/path/to/ROCmKernelWiki`.
+PowerShell:
+
+```powershell
+$RocmWikiSkill = Join-Path $HOME '.agents\skills\rocm-kernel-wiki'
+New-Item -ItemType Directory -Force (Split-Path $RocmWikiSkill) | Out-Null
+git clone --depth 1 https://github.com/jhinpan/ROCmKernelWiki $RocmWikiSkill
+$RocmWikiBootstrap = $null
+$RocmWikiBootstrapArgs = @()
+foreach ($RocmWikiCandidate in @(
+  @{ Name = 'python'; Args = @() },
+  @{ Name = 'python3'; Args = @() },
+  @{ Name = 'py'; Args = @('-3') }
+)) {
+  $RocmWikiCommand = Get-Command $RocmWikiCandidate.Name -ErrorAction SilentlyContinue
+  if (-not $RocmWikiCommand) { continue }
+  $RocmWikiCandidateArgs = @($RocmWikiCandidate.Args)
+  $RocmWikiProbeOk = $false
+  try {
+    $LASTEXITCODE = 1
+    & $RocmWikiCommand.Source @RocmWikiCandidateArgs -c "import sys; raise SystemExit(sys.version_info < (3, 9))" 2>$null
+    $RocmWikiProbeOk = ($LASTEXITCODE -eq 0)
+  } catch {}
+  if ($RocmWikiProbeOk) {
+    $RocmWikiBootstrap = $RocmWikiCommand.Source
+    $RocmWikiBootstrapArgs = $RocmWikiCandidateArgs
+    break
+  }
+}
+if (-not $RocmWikiBootstrap) { throw 'Install Python 3 and add its launcher to PATH.' }
+& $RocmWikiBootstrap @RocmWikiBootstrapArgs -m venv (Join-Path $RocmWikiSkill '.venv')
+$RocmWikiPython = Join-Path $RocmWikiSkill '.venv\Scripts\python.exe'
+& $RocmWikiPython -m pip install -r (Join-Path $RocmWikiSkill 'requirements.txt')
+```
+
+Start a new Codex CLI session, run `/skills`, and select
+`$rocm-kernel-wiki`, or invoke it directly:
+
+```text
+$rocm-kernel-wiki find the best LDS swizzle for this gfx950 transpose kernel
+```
+
+Codex may also activate it automatically when a request matches the skill
+description. If a newly installed skill does not appear, restart Codex. Update
+the corpus later with:
+
+```bash
+ROCM_WIKI_SKILL="$HOME/.agents/skills/rocm-kernel-wiki"
+git -C "$ROCM_WIKI_SKILL" pull --ff-only
+"$ROCM_WIKI_SKILL/.venv/bin/python" -m pip install -r \
+  "$ROCM_WIKI_SKILL/requirements.txt"
+```
+
+PowerShell update:
+
+```powershell
+$RocmWikiSkill = Join-Path $HOME '.agents\skills\rocm-kernel-wiki'
+$RocmWikiPython = Join-Path $RocmWikiSkill '.venv\Scripts\python.exe'
+git -C $RocmWikiSkill pull --ff-only
+& $RocmWikiPython -m pip install -r (Join-Path $RocmWikiSkill 'requirements.txt')
+```
+
+The query scripts resolve the wiki root from their own location, so Codex can
+run them by absolute path without changing the user's project directory. No
+environment variable is required. Optional overrides are
+`ROCM_WIKI_ROOT=/path/to/ROCmKernelWiki` and
+`ROCM_WIKI_CACHE_DIR=/writable/cache/path`; by default, the query cache lives
+under the OS temporary directory rather than modifying the skill checkout.
 
 Smoke test:
 
 ```bash
-cd ~/.claude/skills/ROCmKernelWiki
-python3 scripts/query.py --tag mfma --type hardware --compact
-python3 scripts/get_page.py kernel-flydsl-flash-attention --frontmatter-only
+ROCM_WIKI_SKILL="$HOME/.agents/skills/rocm-kernel-wiki"
+ROCM_WIKI_PYTHON="$ROCM_WIKI_SKILL/.venv/bin/python"
+"$ROCM_WIKI_PYTHON" "$ROCM_WIKI_SKILL/scripts/query.py" \
+  --tag mfma --type hardware --compact
+"$ROCM_WIKI_PYTHON" "$ROCM_WIKI_SKILL/scripts/get_page.py" \
+  kernel-flydsl-flash-attention --frontmatter-only
 ```
+
+PowerShell smoke test:
+
+```powershell
+$RocmWikiSkill = Join-Path $HOME '.agents\skills\rocm-kernel-wiki'
+$RocmWikiPython = Join-Path $RocmWikiSkill '.venv\Scripts\python.exe'
+& $RocmWikiPython (Join-Path $RocmWikiSkill 'scripts\query.py') --tag mfma --type hardware --compact
+```
+
+For Claude Code, use the same clone-and-venv procedure with
+`~/.claude/skills/rocm-kernel-wiki` as the skill path; install the same
+`requirements.txt`. The shared `SKILL.md` stays compatible.
 
 ## Query Tools
 
@@ -93,10 +182,12 @@ python3 scripts/get_page.py kernel-flydsl-flash-attention --frontmatter-only
 | `scripts/grep_wiki.py` | Regex text search across wiki bodies and PR pages |
 
 ```bash
-python3 scripts/query.py "flash attention ck-tile" --limit 5
-python3 scripts/query.py --architecture MI355X --type kernel       # alias → gfx950
-python3 scripts/get_page.py kernel-flash-attention-ck --follow-sources
-python3 scripts/grep_wiki.py "v_mfma_f32_16x16x128_f8f6f4" --only wiki
+ROCM_WIKI_SKILL="$HOME/.agents/skills/rocm-kernel-wiki"
+ROCM_WIKI_PYTHON="$ROCM_WIKI_SKILL/.venv/bin/python"
+"$ROCM_WIKI_PYTHON" "$ROCM_WIKI_SKILL/scripts/query.py" "flash attention ck-tile" --limit 5
+"$ROCM_WIKI_PYTHON" "$ROCM_WIKI_SKILL/scripts/query.py" --architecture MI355X --type kernel
+"$ROCM_WIKI_PYTHON" "$ROCM_WIKI_SKILL/scripts/get_page.py" kernel-flash-attention-ck --follow-sources
+"$ROCM_WIKI_PYTHON" "$ROCM_WIKI_SKILL/scripts/grep_wiki.py" "v_mfma_f32_16x16x128_f8f6f4" --only wiki
 ```
 
 ## Architecture
@@ -134,9 +225,10 @@ CI (`.github/workflows/ci.yml`) gates every push on the validator, the query-too
 smoke tests, and index freshness.
 
 ```bash
-pip install -r requirements.txt
-python3 scripts/validate.py            # schema + vocabulary + link integrity
-python3 scripts/generate-indices.py    # regenerate query indices
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python scripts/validate.py            # schema + vocabulary + link integrity
+.venv/bin/python scripts/generate-indices.py    # regenerate query indices
 ```
 
 ### Quality Gates

@@ -1,25 +1,42 @@
-# Skill Installation Test Results
+# Codex Skill Contract Test Results
 
-Tested on: AMD Radeon RX 9070 XT (gfx1201, RDNA4), ROCm 7.2.3, Python 3.14, PyYAML 6.0.3.
+Validated on 2026-07-21 with Python and PyYAML on Windows. The AMD kernel
+content has separate hardware evidence in [`VERIFICATION.md`](../VERIFICATION.md);
+this check covers Codex skill packaging and query portability. It does not
+exercise the interactive `/skills` picker.
 
 ## Install (per README)
-```bash
-ln -s ~/ROCmKernelWiki ~/.claude/skills/ROCmKernelWiki   # (or git clone)
-pip install -r ~/.claude/skills/ROCmKernelWiki/requirements.txt
-```
-Skill auto-registers via SKILL.md at clone root; scripts auto-resolve the wiki
-root (no env var needed). Verified by running every tool from the installed path.
 
-## Results (all from ~/.claude/skills/ROCmKernelWiki)
+```bash
+ROCM_WIKI_SKILL="$HOME/.agents/skills/rocm-kernel-wiki"
+git clone --depth 1 https://github.com/jhinpan/ROCmKernelWiki \
+  "$ROCM_WIKI_SKILL"
+python3 -m venv "$ROCM_WIKI_SKILL/.venv"
+"$ROCM_WIKI_SKILL/.venv/bin/python" -m pip install -r \
+  "$ROCM_WIKI_SKILL/requirements.txt"
+```
+
+The root `SKILL.md` passes the Codex skill validator. Its `name` matches the
+install directory, `agents/openai.yaml` provides UI metadata, and scripts resolve
+the wiki root without changing the user's working directory.
+
+## Results
 
 | Check | Result |
 |---|---|
-| `tests/test_validate.py` (4 tests) | PASS x4 |
-| `scripts/validate.py` | 0 errors / 7,535 pages |
+| Codex `SKILL.md` contract | PASS |
+| `agents/openai.yaml` contract | PASS |
+| Query launched from an unrelated working directory | PASS |
+| Forced cp1252 child process emits UTF-8 safely | PASS |
+| User-scoped query cache writes outside the skill checkout | PASS |
+| Corrupted and stale query caches rebuild automatically | PASS |
+| `tests/test_validate.py` (12 tests) | PASS x12 |
+| `scripts/validate.py` | 0 errors / 7,541 pages |
 | Natural-language query ("avoid LDS bank conflicts on MI300") | returns pattern + technique + kernel, correctly ranked |
 | Alias arch filter (`--architecture MI355X` -> gfx950) + `--repo` | returns real gfx950 CK PRs |
 | Symptom path (`--symptom bank-conflicts`) | -> pattern-bank-conflicts |
 | `get_page.py` by id | frontmatter + body resolve |
-| `grep_wiki.py` ISA mnemonic across 7,500 pages | 0.2 s, correct hits |
+| `grep_wiki.py` ISA mnemonic across 7,541 pages | correct hits |
 
-Conclusion: installs cleanly and is fully functional as a Claude Code skill.
+Conclusion: the repository satisfies the published Codex discovery contract,
+and its query tools work from a separate project directory.
