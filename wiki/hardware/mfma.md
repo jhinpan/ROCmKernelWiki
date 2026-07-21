@@ -28,8 +28,6 @@ related:
 - hw-mxfp
 - hw-wavefront
 - technique-mfma-pipelining
-- lang-rocwmma
-- migration-wmma-vs-mfma
 sources:
 - doc-cdna3-isa
 - doc-cdna4-isa

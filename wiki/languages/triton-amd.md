@@ -7,7 +7,6 @@ version_sensitive:
 architectures:
 - gfx942
 - gfx950
-- gfx1201
 tags:
 - triton
 - mlir

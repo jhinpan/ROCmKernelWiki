@@ -28,7 +28,6 @@ related:
 - migration-gfx942-to-gfx950
 - kernel-fp8-gemm
 - technique-fine-grained-quantization
-- lang-rocwmma
 sources:
 - doc-cdna4-isa
 - doc-cdna4-whitepaper

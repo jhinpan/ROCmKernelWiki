@@ -230,6 +230,35 @@ def test_alias_architecture():
     assert "result" in r.stdout
 
 
+def test_active_scope_contract():
+    scope = yaml.safe_load((ROOT / "data/scope.yaml").read_text(encoding="utf-8"))
+    assert scope["in_scope_architectures"] == ["gfx942", "gfx950"]
+    active = set(scope["in_scope_architectures"])
+    quarantined = set(scope["quarantined_pages"])
+
+    for path in (ROOT / "wiki").rglob("*.md"):
+        fm = frontmatter(path.relative_to(ROOT))
+        if fm["id"] in quarantined:
+            continue
+        assert set(fm.get("architectures") or []) <= active, path.relative_to(ROOT)
+
+
+def test_scope_quarantine_query_and_indices():
+    quarantined = {"hw-wmma", "lang-rocwmma", "migration-wmma-vs-mfma"}
+    default = run("scripts/query.py", "wmma", "--synthesis", "--limit", "100",
+                  "--compact", "--no-cache")
+    recovery = run("scripts/query.py", "wmma", "--synthesis", "--limit", "100",
+                   "--compact", "--no-cache", "--include-out-of-scope")
+    assert default.returncode == recovery.returncode == 0
+    assert not any(page_id in default.stdout for page_id in quarantined)
+    assert all(page_id in recovery.stdout for page_id in quarantined)
+
+    indices = "\n".join(
+        path.read_text(encoding="utf-8") for path in (ROOT / "queries").glob("*.md")
+    )
+    assert not any(page_id in indices for page_id in quarantined)
+
+
 def test_rerank_surfaces_synthesis_first():
     # cp.async (alias) must surface the migration synthesis page, not PR noise
     r = run("scripts/query.py", "how port cuda cp.async to rocm", "--limit", "3",

@@ -5,7 +5,6 @@ type: hardware
 architectures:
 - gfx942
 - gfx950
-- gfx1201
 tags:
 - global-instructions
 - buffer-instructions

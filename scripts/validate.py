@@ -18,6 +18,13 @@ import sys
 import yaml
 from pathlib import Path
 
+from _scope import (
+    in_scope_architectures,
+    is_active,
+    quarantined_architectures,
+    quarantined_pages,
+)
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SOURCES_DIR = REPO_ROOT / "sources"
 WIKI_DIR = REPO_ROOT / "wiki"
@@ -101,6 +108,7 @@ def main():
     warnings = []
     all_ids = {}
     referenced_ids = set()
+    active_referenced_ids = set()
     version_refs = []
     stale = []
     files = []
@@ -195,6 +203,16 @@ def main():
         if ptype == "source-pr" and fm.get("status") == "merged" and not fm.get("merge_sha"):
             warnings.append(f"{rel}: merged PR without merge_sha")
 
+        if ptype.startswith("wiki-") and is_active(fm):
+            outside = set(fm.get("architectures") or []) - set(
+                in_scope_architectures()
+            )
+            if outside:
+                errors.append(
+                    f"{rel}: active wiki page declares out-of-scope "
+                    f"architectures {sorted(outside)}"
+                )
+
         # Reproducibility floor + code snippet presence
         if ptype in REPRO_FLOOR:
             repro = fm.get("reproducibility")
@@ -225,12 +243,20 @@ def main():
         # collect references
         for ref in (fm.get("sources") or []):
             referenced_ids.add((str(rel), ref))
+            if ptype.startswith("wiki-") and is_active(fm):
+                active_referenced_ids.add((str(rel), ref))
         for ref in (fm.get("related") or []):
             referenced_ids.add((str(rel), ref))
+            if ptype.startswith("wiki-") and is_active(fm):
+                active_referenced_ids.add((str(rel), ref))
         for ref in (fm.get("candidate_techniques") or []):
             referenced_ids.add((str(rel), ref))
+            if ptype.startswith("wiki-") and is_active(fm):
+                active_referenced_ids.add((str(rel), ref))
         for ref in (fm.get("implemented_by") or []):
             referenced_ids.add((str(rel), ref))
+            if ptype.startswith("wiki-") and is_active(fm):
+                active_referenced_ids.add((str(rel), ref))
 
         # version-sensitive claim pointers (validated against version-claims.yaml)
         vs = fm.get("version_sensitive")
@@ -249,6 +275,22 @@ def main():
     for src, ref in sorted(referenced_ids):
         if ref not in id_set:
             errors.append(f"{src}: dangling reference '{ref}' (no page with that id)")
+    for page_id in sorted(quarantined_pages()):
+        if page_id not in id_set:
+            errors.append(f"data/scope.yaml: quarantined page '{page_id}' does not exist")
+    for src, ref in sorted(active_referenced_ids):
+        if ref in quarantined_pages():
+            errors.append(f"{src}: active page references quarantined page '{ref}'")
+
+    scope_architectures = (
+        set(in_scope_architectures()) | set(quarantined_architectures())
+    )
+    unknown_scope_architectures = scope_architectures - vocab["architectures"]
+    if unknown_scope_architectures:
+        errors.append(
+            "data/scope.yaml: unknown architectures "
+            f"{sorted(unknown_scope_architectures)}"
+        )
 
     # version_sensitive pointers must resolve to data/version-claims.yaml
     for src, vid in sorted(version_refs):

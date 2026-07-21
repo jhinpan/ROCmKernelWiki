@@ -7,7 +7,6 @@ version_sensitive:
 architectures:
 - gfx942
 - gfx950
-- gfx1201
 tags:
 - composable-kernel
 - cpp
@@ -25,7 +24,6 @@ languages:
 - cpp
 related:
 - hw-mfma
-- lang-rocwmma
 - lang-triton-amd
 - kernel-ck-hgemm
 - kernel-flash-attention-ck

@@ -5,8 +5,6 @@ type: language
 architectures:
 - gfx942
 - gfx950
-- gfx1201
-- gfx1250
 tags:
 - flydsl
 - mlir

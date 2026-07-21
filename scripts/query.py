@@ -21,6 +21,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _wiki_root import WIKI_ROOT, configure_utf8_stdio  # noqa: E402
+from _scope import (  # noqa: E402
+    in_scope_architectures,
+    is_active,
+    scope_signature,
+)
 
 
 _ALIAS_CACHE = None
@@ -121,7 +126,10 @@ def load_all_pages(use_cache=True):
     if not md_files:
         return []
     latest = max(f.stat().st_mtime for f in md_files)
-    sig = f"v{_QUERY_CACHE_VERSION}:{len(md_files)}:{latest:.3f}"
+    sig = (
+        f"v{_QUERY_CACHE_VERSION}:{len(md_files)}:{latest:.3f}:"
+        f"{scope_signature()}"
+    )
 
     if use_cache and cache_path.exists():
         try:
@@ -285,6 +293,9 @@ def filter_pages(pages, args):
         ptype = detect_page_type(fm, path)
         p["_ptype"] = ptype
 
+        if not getattr(args, "include_out_of_scope", False) and not is_active(fm):
+            continue
+
         if args.type:
             if not ptype.endswith(args.type) and ptype != args.type:
                 continue
@@ -311,6 +322,12 @@ def filter_pages(pages, args):
         if args.architecture:
             archs = {str(a).lower() for a in (fm.get("architectures") or [])}
             arch_variants = {v.lower() for v in expand_keyword(args.architecture)}
+            if (
+                not getattr(args, "include_out_of_scope", False)
+                and not arch_variants
+                & {arch.lower() for arch in in_scope_architectures()}
+            ):
+                continue
             if not (archs & arch_variants):
                 continue
 
@@ -386,6 +403,11 @@ def main():
     parser.add_argument("--compact", action="store_true", help="Compact one-line-per-result output")
     parser.add_argument("--paths-only", action="store_true", help="Output only file paths")
     parser.add_argument("--no-cache", action="store_true", help="Bypass the JSON query index")
+    parser.add_argument(
+        "--include-out-of-scope",
+        action="store_true",
+        help="Include retained raw and synthesis pages outside gfx942/gfx950",
+    )
     args = parser.parse_args()
 
     all_pages = load_all_pages(use_cache=not args.no_cache)

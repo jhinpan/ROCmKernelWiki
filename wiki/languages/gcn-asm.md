@@ -5,7 +5,6 @@ type: language
 architectures:
 - gfx942
 - gfx950
-- gfx1201
 tags:
 - gcn-asm
 - sgpr

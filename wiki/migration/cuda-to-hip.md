@@ -27,7 +27,6 @@ related:
 - hw-async-copy-lds
 - hw-s-waitcnt
 - hw-mfma
-- migration-wmma-vs-mfma
 - hw-wavefront
 - lang-hip
 sources:

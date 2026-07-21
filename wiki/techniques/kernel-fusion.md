@@ -5,7 +5,6 @@ type: technique
 architectures:
 - gfx942
 - gfx950
-- gfx1201
 tags:
 - kernel-fusion
 - epilogue-fusion
