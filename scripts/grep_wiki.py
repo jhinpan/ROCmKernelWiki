@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _wiki_root import WIKI_ROOT  # noqa: E402
+from _wiki_root import WIKI_ROOT, configure_utf8_stdio  # noqa: E402
 
 CODE_EXTS = {
     ".md", ".cu", ".cuh", ".hip", ".s", ".asm", ".inc",
@@ -106,4 +106,5 @@ def main():
 
 
 if __name__ == "__main__":
+    configure_utf8_stdio()
     main()

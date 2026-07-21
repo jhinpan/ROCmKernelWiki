@@ -20,10 +20,36 @@ import yaml
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _wiki_root import WIKI_ROOT  # noqa: E402
+from _wiki_root import WIKI_ROOT, configure_utf8_stdio  # noqa: E402
 
 
 _ALIAS_CACHE = None
+_QUERY_CACHE_VERSION = 1
+
+
+def query_cache_path() -> Path:
+    """Return a writable, checkout-specific cache path outside the skill tree."""
+    import hashlib
+    import os
+    import tempfile
+
+    configured = os.environ.get("ROCM_WIKI_CACHE_DIR")
+    if configured:
+        cache_root = Path(configured).expanduser()
+    else:
+        getuid = getattr(os, "getuid", None)
+        if getuid is not None:
+            user_key = f"uid-{getuid()}"
+        else:
+            identity = (
+                os.environ.get("USERNAME")
+                or os.environ.get("USER")
+                or str(Path.home())
+            )
+            user_key = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:12]
+        cache_root = Path(tempfile.gettempdir()) / f"rocm-kernel-wiki-{user_key}"
+    root_key = hashlib.sha256(str(WIKI_ROOT).encode("utf-8")).hexdigest()[:16]
+    return cache_root / root_key / "query-index.json"
 
 
 def load_alias_expansions():
@@ -79,12 +105,14 @@ def load_frontmatter(path):
 def load_all_pages(use_cache=True):
     """Load frontmatter + body for every sources/*.md and wiki/*.md file.
 
-    Results are cached to a JSON index (.query_index.json) keyed by the max mtime
-    of the corpus, so repeat queries skip the multi-thousand-file parse. The cache
-    is rebuilt automatically when any page changes.
+    Results are cached to a checkout-specific JSON index under the OS temporary
+    directory (or ROCM_WIKI_CACHE_DIR), keyed by the max corpus mtime. Keeping
+    the cache outside the skill tree supports read-only and sandboxed installs.
     """
     import json
-    cache_path = WIKI_ROOT / ".query_index.json"
+    import tempfile
+
+    cache_path = query_cache_path()
     md_files = []
     for subdir in ("sources", "wiki"):
         base = WIKI_ROOT / subdir
@@ -93,7 +121,7 @@ def load_all_pages(use_cache=True):
     if not md_files:
         return []
     latest = max(f.stat().st_mtime for f in md_files)
-    sig = f"{len(md_files)}:{latest:.3f}"
+    sig = f"v{_QUERY_CACHE_VERSION}:{len(md_files)}:{latest:.3f}"
 
     if use_cache and cache_path.exists():
         try:
@@ -114,11 +142,28 @@ def load_all_pages(use_cache=True):
             "body": body or "",
         })
     if use_cache:
+        temporary_path = None
         try:
-            cache_path.write_text(json.dumps({"sig": sig, "pages": pages}),
-                                  encoding="utf-8")
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=cache_path.parent,
+                prefix=f".{cache_path.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as temporary_file:
+                json.dump({"sig": sig, "pages": pages}, temporary_file)
+                temporary_path = Path(temporary_file.name)
+            temporary_path.replace(cache_path)
         except Exception:
             pass
+        finally:
+            try:
+                if temporary_path is not None:
+                    temporary_path.unlink(missing_ok=True)
+            except OSError:
+                pass
     return pages
 
 
@@ -384,4 +429,5 @@ def main():
 
 
 if __name__ == "__main__":
+    configure_utf8_stdio()
     main()

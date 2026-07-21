@@ -1,15 +1,16 @@
 # CLAUDE.md — Agent Guide for ROCmKernelWiki
 
-This repository is a **Claude Code skill** and an LLM-queryable knowledge base of
-AMD GPU kernel optimization (CDNA3 gfx942 / CDNA4 gfx950 / RDNA4 gfx1201). Read
-`SKILL.md` for the user-facing trigger conditions; this file is the extended
-schema + navigation reference for agents working *in* the repo.
+This repository is an **agent skill for Codex CLI and Claude Code** and an
+LLM-queryable knowledge base of AMD GPU kernel optimization (CDNA3 gfx942 /
+CDNA4 gfx950 / RDNA4 gfx1201). Read `SKILL.md` for the user-facing trigger
+conditions; this file is the extended schema + navigation reference for agents
+working *in* the repo.
 
 ## Layout
 
 ```
 sources/      raw immutable summaries (cross-referenced by id)
-  prs/<repo>/PR-<N>.md     7,400+ merged-PR reference pages
+  prs/<repo>/PR-<N>.md     7,454 merged-PR reference pages
   docs/                    official AMD/ROCm doc + paper summaries (doc-*)
   blogs/                   ROCm/community blog summaries (blog-*)
   refs/                    reference-repository studies (ref-*)

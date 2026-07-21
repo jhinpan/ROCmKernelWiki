@@ -19,6 +19,20 @@ import sys
 from pathlib import Path
 
 
+def configure_utf8_stdio() -> None:
+    """Make Unicode-rich wiki output safe on legacy Windows code pages."""
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            # Some embedded/captured streams expose reconfigure but reject it.
+            pass
+
+
 def _looks_like_wiki_root(p: Path) -> bool:
     return (p / "data" / "tags.yaml").is_file() and (p / "wiki").is_dir()
 
