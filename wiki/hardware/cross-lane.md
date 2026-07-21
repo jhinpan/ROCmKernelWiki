@@ -5,6 +5,7 @@ type: hardware
 version_sensitive:
 - vs-permlane16-gfx950
 - vs-mlir-dpp-combine-llvm20
+- vs-ds-bpermute-address-cdna3-cdna4
 architectures:
 - gfx942
 - gfx950
@@ -137,10 +138,12 @@ nothing in LDS:
 - `ds_permute_b32` — **forward / push / scatter**: each lane provides a
   destination lane id; it sends its data there. "Write my value to lane `idx`."
 
-The index is a **byte address** = `lane_id * 4`, so an index VGPR must hold
-`target_lane << 2`. On a
-scatter collision (two lanes target the same destination) the **highest source
-lane wins**; for `ds_bpermute` an out-of-range source yields 0.
+The index is a **byte address** = `lane_id * 4`, so an index VGPR normally holds
+`target_lane << 2`. The crossbar selects `((address + offset) / 4) % 64`, so
+high address bits wrap rather than providing lane-index OOB protection. A
+`ds_bpermute` read returns 0 when its selected source lane is disabled in
+`EXEC`. On a `ds_permute` scatter collision (two lanes target the same
+destination), the **highest source lane wins**.
 
 ```cpp
 // Full 64-lane reduction: DPP within rows, then ds_bpermute across rows.

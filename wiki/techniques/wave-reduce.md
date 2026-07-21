@@ -7,6 +7,7 @@ architectures:
 - gfx950
 version_sensitive:
 - vs-permlane16-gfx950
+- vs-ds-bpermute-address-cdna3-cdna4
 tags:
 - wave-reduce
 - dpp-reduction
@@ -190,8 +191,10 @@ latency benefit remains architecture/workload-specific and should be measured.
   destination lane independently names one source, so there is no multi-writer
   destination collision. The “highest source lane wins” rule belongs to the
   push/scatter `ds_permute` when several sources name one destination.
-- **Inactive lanes.** With a partial `EXEC` mask, disabled source lanes return 0
-  for `ds_bpermute` and `ds_swizzle` returns 0 for invalid lanes. Use
+- **Address wrapping and inactive lanes.** `ds_bpermute` selects
+  `((byte_address + offset) / 4) % 64`; an index beyond lane 63 wraps rather
+  than acting as an OOB guard. With a partial `EXEC` mask, a selected disabled
+  source lane returns 0. `ds_swizzle` returns 0 for invalid routes. Use
   `bound_ctrl=1` on DPP so out-of-range row lanes contribute the additive
   identity (0). For `max`/`min`, seed inactive lanes with `-INF`/`+INF` instead.
 - **DPP EXEC hazard.** The VALU does not forward `EXEC` to a DPP read; the

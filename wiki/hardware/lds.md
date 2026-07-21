@@ -5,6 +5,7 @@ type: hardware
 version_sensitive:
 - vs-lds-size-gfx950
 - vs-lds-phase-groups-gfx942-gfx950
+- vs-ds-bpermute-address-cdna3-cdna4
 architectures:
 - gfx942
 - gfx950
@@ -191,11 +192,12 @@ Two efficiency rules of thumb:
 
 `ds_swizzle`, `ds_permute`, and `ds_bpermute` are special: they reuse the LDS
 crossbar for **lane-to-lane data movement without occupying LDS storage**. For
-the pull/gather `ds_bpermute`, each lane's byte address is the requested *source
-lane index ×4* and an out-of-range source reads 0. For the push/scatter
-`ds_permute`, each source lane names a destination; if several sources collide,
-the highest source lane wins. These are the building blocks of cross-row wave
-reductions — see
+the pull/gather `ds_bpermute`, the selected source is
+`((byte_address + offset) / 4) % 64`: high address bits wrap, so this is not a
+lane-index OOB guard. The result is 0 when the selected source lane is disabled
+in `EXEC`. For the push/scatter `ds_permute`, each source lane names a
+destination; if several sources collide, the highest source lane wins. These
+are the building blocks of cross-row wave reductions — see
 [cross-lane operations](cross-lane.md) and [wave reduce](../techniques/wave-reduce.md).
 
 ```cpp

@@ -201,6 +201,18 @@ def test_amdgpu_guide_sync_regression():
         assert "r[1] is the partner" not in body
         assert "second element is the swapped partner" not in body
         assert "auto sw = __builtin_amdgcn_permlanex16" not in body
+    for relpath in (
+        "wiki/hardware/cross-lane.md",
+        "wiki/hardware/lds.md",
+        "wiki/techniques/wave-reduce.md",
+    ):
+        assert "vs-ds-bpermute-address-cdna3-cdna4" in frontmatter(relpath).get(
+            "version_sensitive", []
+        ), relpath
+        body = (ROOT / relpath).read_text(encoding="utf-8")
+        assert "out-of-range source yields 0" not in body
+        assert "out-of-range source reads 0" not in body
+        assert "% 64" in body
 
     bandwidth = (ROOT / "wiki/kernels/bandwidth-microbench.md").read_text(
         encoding="utf-8"

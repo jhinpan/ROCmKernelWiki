@@ -131,6 +131,14 @@ incorrect assumption that result element 1 is always the partner. The guarded
 source also device-compiled for gfx942 and emitted the expected
 `ds_bpermute_b32` fallback path.
 
+A review follow-up checked `ds_bpermute` address and `EXEC` behavior directly.
+With every lane holding `lane + 1`, byte addresses `64 << 2` and `65 << 2`
+returned 1 and 2 on every destination lane: source selection wraps modulo 64
+rather than treating those logical indices as OOB. In a divergent branch where
+source lane 1 was disabled in `EXEC`, selecting lane 1 returned 0. All checks
+passed on MI355X; the same probe device-compiled for gfx942. This corrected the
+earlier, unsafe “out-of-range source returns zero” wording.
+
 ### MI300X/gfx942 access limit
 
 The configured MI300X SSH candidates all timed out on TCP/22. The VPN interface
