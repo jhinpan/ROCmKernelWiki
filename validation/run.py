@@ -60,6 +60,12 @@ def unique(items: list[str]) -> list[str]:
     return list(dict.fromkeys(items))
 
 
+def normalize_text_output(text: str) -> str:
+    """Keep textual evidence stable and Git-friendly without changing content."""
+    normalized = "\n".join(line.rstrip() for line in text.splitlines())
+    return normalized + ("\n" if text.endswith(("\n", "\r")) else "")
+
+
 def load_and_validate_manifest() -> dict[str, Any]:
     manifest = json.loads(HARNESS_MANIFEST.read_text(encoding="utf-8"))
     if manifest.get("schema_version") != 1:
@@ -204,6 +210,8 @@ class Harness:
             stderr = f"{type(error).__name__}: {error}\n"
 
         duration_seconds = round(time.monotonic() - start, 6)
+        stdout = normalize_text_output(stdout)
+        stderr = normalize_text_output(stderr)
         stdout_path.write_text(stdout, encoding="utf-8")
         stderr_path.write_text(stderr, encoding="utf-8")
         record = {
