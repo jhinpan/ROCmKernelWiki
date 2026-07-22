@@ -52,6 +52,11 @@ reproducibility: snippet
 languages:
 - hip
 - gcn-asm
+aliases:
+- MI300 to MI355X
+- CDNA3 to CDNA4
+- FP8 portability
+- FNUZ to OCP
 implemented_by:
 - pr-FlyDSL-191
 - pr-aiter-2136

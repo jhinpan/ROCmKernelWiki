@@ -37,8 +37,12 @@ def _markdown_files():
 
 
 def _signature(files):
-    latest = max((path.stat().st_mtime_ns for path in files), default=0)
-    return f"v1:{len(files)}:{latest}"
+    digest = hashlib.sha256()
+    for path in sorted(files):
+        stat = path.stat()
+        digest.update(path.relative_to(WIKI_ROOT).as_posix().encode("utf-8"))
+        digest.update(f":{stat.st_size}:{stat.st_mtime_ns}\n".encode("ascii"))
+    return f"v1:{digest.hexdigest()}"
 
 
 def _extract_id(path):

@@ -305,6 +305,26 @@ def test_scope_quarantine_query_and_indices():
     assert not any(page_id in indices for page_id in quarantined)
 
 
+def test_out_of_scope_query_refusal_and_recovery():
+    queries = (
+        "WMMA tuning on RDNA4 gfx1201",
+        "MI400 gfx1250 MFMA instruction reference",
+        "Optimize wave32 kernels on RX9070",
+    )
+    for query in queries:
+        blocked = run("scripts/query.py", query, "--synthesis", "--compact")
+        recovery = run(
+            "scripts/query.py",
+            query,
+            "--synthesis",
+            "--compact",
+            "--include-out-of-scope",
+        )
+        assert blocked.returncode == 2, (query, blocked.stdout, blocked.stderr)
+        assert "unsupported architecture" in blocked.stderr
+        assert recovery.returncode == 0, (query, recovery.stderr)
+
+
 def test_gfx950_first_examples_and_claims():
     for build_script in (ROOT / "examples").glob("*/build.sh"):
         body = build_script.read_text(encoding="utf-8")

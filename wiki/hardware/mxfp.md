@@ -41,6 +41,7 @@ aliases:
 - MXFP4
 - MXFP6
 - f8f6f4
+- v_mfma_scale_f32_16x16x128_f8f6f4
 - E8M0
 implemented_by:
 - pr-composable_kernel-3603

@@ -95,8 +95,31 @@ def test_guide_registry_pins_source_and_pages():
             assert page_id in pages, (claim["id"], page_id)
 
 
+def test_unseen_paraphrase_retrieval():
+    fixture = yaml.safe_load(
+        (ROOT / "data/retrieval-paraphrases.yaml").read_text(encoding="utf-8")
+    )
+    top1 = 0
+    top5 = 0
+    misses = []
+    for case in fixture["cases"]:
+        hits = _query({**case, "architecture": "both"})
+        canonical = case["canonical_pages"]
+        top1 += bool(hits and hits[0] in canonical)
+        matched = any(page_id in hits for page_id in canonical)
+        top5 += matched
+        if not matched:
+            misses.append((case["id"], canonical, hits))
+    total = len(fixture["cases"])
+    assert total == 15
+    assert top1 >= 12, f"paraphrase top1={top1}/{total}"
+    assert top5 == total, f"paraphrase top5={top5}/{total}; misses={misses}"
+
+
 if __name__ == "__main__":
     test_guide_retrieval()
     test_guide_registry_pins_source_and_pages()
+    test_unseen_paraphrase_retrieval()
     print("PASS test_guide_retrieval")
     print("PASS test_guide_registry_pins_source_and_pages")
+    print("PASS test_unseen_paraphrase_retrieval")

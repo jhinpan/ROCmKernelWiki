@@ -24,6 +24,7 @@ from _wiki_root import WIKI_ROOT, configure_utf8_stdio  # noqa: E402
 from _scope import (  # noqa: E402
     in_scope_architectures,
     is_active,
+    quarantined_architectures,
     scope_signature,
 )
 
@@ -150,11 +151,14 @@ def load_all_pages(use_cache=True):
             md_files.extend(base.rglob("*.md"))
     if not md_files:
         return []
-    latest = max(f.stat().st_mtime for f in md_files)
-    sig = (
-        f"v{_QUERY_CACHE_VERSION}:{len(md_files)}:{latest:.3f}:"
-        f"{scope_signature()}"
-    )
+    import hashlib
+
+    digest = hashlib.sha256()
+    for markdown in sorted(md_files):
+        stat = markdown.stat()
+        digest.update(markdown.relative_to(WIKI_ROOT).as_posix().encode("utf-8"))
+        digest.update(f":{stat.st_size}:{stat.st_mtime_ns}\n".encode("ascii"))
+    sig = f"v{_QUERY_CACHE_VERSION}:{digest.hexdigest()}:{scope_signature()}"
 
     if use_cache and cache_path.exists():
         try:
@@ -291,13 +295,24 @@ def score_keyword_match(fm, body, keywords, idf=None, ptype="unknown"):
             if v_l in tag_text:
                 vs += 5
             if v_l in guide_text:
-                vs += 12
+                # Curated questions are weak aliases/tie-breakers, not a test-
+                # answer key. Unseen paraphrases must still rank from corpus text.
+                vs += 3
             vs += min(body_lower.count(v_l), 3)
             best = max(best, vs * w)
         raw += best
     if raw <= 0:
         return 0.0
-    return raw * _page_signal_prior(fm, ptype)
+    factor = _page_signal_prior(fm, ptype)
+    source_intent = {
+        "official", "manual", "manuals", "whitepaper", "whitepapers",
+        "source", "sources", "documentation", "reference", "references",
+    }
+    if ptype in {"source-doc", "source-blog", "source-ref"} and any(
+        keyword.lower() in source_intent for keyword in keywords
+    ):
+        factor *= 1.8
+    return raw * factor
 
 
 def extract_snippet(body, keywords, width=160):
@@ -370,7 +385,7 @@ def filter_pages(pages, args):
             if str(fm.get("confidence", "")) != args.confidence:
                 continue
 
-        if getattr(args, "synthesis", False) and not ptype.startswith("wiki-"):
+        if getattr(args, "synthesis", False) and ptype == "source-pr":
             continue
 
         out.append(p)
@@ -428,7 +443,7 @@ def main():
     parser.add_argument("--symptom", help="Filter by pattern symptom (bank-conflicts, low-occupancy, ...)")
     parser.add_argument("--confidence", help="Filter by confidence (verified, source-reported, inferred, experimental)")
     parser.add_argument("--synthesis", action="store_true",
-                        help="Only curated wiki synthesis pages (skip raw PR sources)")
+                        help="Curated wiki/source pages only (skip raw PR sources)")
     parser.add_argument("--limit", type=int, default=10, help="Max results (default 10)")
     parser.add_argument("--compact", action="store_true", help="Compact one-line-per-result output")
     parser.add_argument("--paths-only", action="store_true", help="Output only file paths")
@@ -440,20 +455,36 @@ def main():
     )
     args = parser.parse_args()
 
+    keywords = []
+    for query_part in args.query:
+        keywords.extend(re.findall(r"[A-Za-z0-9_.+-]+", query_part))
+    aliases = load_alias_expansions()
+    mentioned_architectures = {
+        canonical
+        for keyword in keywords
+        if (canonical := aliases.get(keyword.lower()))
+        in (in_scope_architectures() | quarantined_architectures())
+    }
+    if args.architecture:
+        mentioned_architectures.update(
+            variant
+            for variant in expand_keyword(args.architecture)
+            if variant in (in_scope_architectures() | quarantined_architectures())
+        )
+    unsupported = mentioned_architectures & quarantined_architectures()
+    if unsupported and not args.include_out_of_scope:
+        print(
+            "ERROR: query targets retained but unsupported architecture(s): "
+            f"{', '.join(sorted(unsupported))}. Active scope is gfx942/gfx950; "
+            "use --include-out-of-scope for raw recovery research.",
+            file=sys.stderr,
+        )
+        return 2
+
     all_pages = load_all_pages(use_cache=not args.no_cache)
     pages = filter_pages(all_pages, args)
 
-    keywords = []
-    for q in args.query:
-        for tok in re.split(r"\s+", q.strip()):
-            if tok:
-                keywords.append(tok)
-    detected_architectures = {
-        canonical
-        for keyword in keywords
-        if (canonical := load_alias_expansions().get(keyword.lower()))
-        in in_scope_architectures()
-    }
+    detected_architectures = mentioned_architectures & in_scope_architectures()
     detected_architecture = (
         next(iter(detected_architectures))
         if len(detected_architectures) == 1
@@ -489,11 +520,11 @@ def main():
     if args.paths_only:
         for p in pages:
             print(p["path"])
-        return
+        return 0
 
     if not pages:
         print("No matching pages.")
-        return
+        return 0
 
     print(f"# {len(pages)} result(s)")
     print()
@@ -501,8 +532,9 @@ def main():
         print(format_result(p, compact=args.compact))
         if not args.compact:
             print()
+    return 0
 
 
 if __name__ == "__main__":
     configure_utf8_stdio()
-    main()
+    raise SystemExit(main())
