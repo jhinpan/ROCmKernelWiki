@@ -25,6 +25,7 @@ from _scope import (  # noqa: E402
     in_scope_architectures,
     is_active,
     quarantined_architectures,
+    quarantined_query_terms,
     scope_signature,
 )
 
@@ -441,10 +442,17 @@ def main():
             if variant in (in_scope_architectures() | quarantined_architectures())
         )
     unsupported = mentioned_architectures & quarantined_architectures()
-    if unsupported and not args.include_out_of_scope:
+    unsupported_terms = {
+        canonical.lower()
+        for keyword in keywords
+        if (canonical := aliases.get(keyword.lower(), keyword.lower())).lower()
+        in quarantined_query_terms()
+    }
+    if (unsupported or unsupported_terms) and not args.include_out_of_scope:
+        details = sorted(unsupported | unsupported_terms)
         print(
-            "ERROR: query targets retained but unsupported architecture(s): "
-            f"{', '.join(sorted(unsupported))}. Active scope is gfx942/gfx950; "
+            "ERROR: query targets retained but unsupported architecture/topic: "
+            f"{', '.join(details)}. Active scope is gfx942/gfx950 MFMA; "
             "use --include-out-of-scope for raw recovery research.",
             file=sys.stderr,
         )

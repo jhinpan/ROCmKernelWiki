@@ -62,7 +62,7 @@ def ptype(p):
 
 def link(p):
     fm = p["fm"]
-    return f"[{fm.get('id','?')}]({p['path']}) — {fm.get('title','')}"
+    return f"[{fm.get('id','?')}](../{p['path']}) — {fm.get('title','')}"
 
 
 def write(path, lines):
@@ -166,7 +166,7 @@ def main():
         lines.append("")
         for p in sorted(repo[r], key=lambda x: int(x["fm"].get("pr", 0))):
             fm = p["fm"]
-            lines.append(f"- [PR #{fm.get('pr')}]({p['path']}) — {fm.get('title','')}")
+            lines.append(f"- [PR #{fm.get('pr')}](../{p['path']}) — {fm.get('title','')}")
         lines.append("")
     write("queries/by-repo.md", lines)
 

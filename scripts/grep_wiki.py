@@ -15,7 +15,11 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _scope import is_active, quarantined_architectures  # noqa: E402
+from _scope import (  # noqa: E402
+    is_active,
+    quarantined_architectures,
+    quarantined_query_terms,
+)
 from _wiki_root import WIKI_ROOT, configure_utf8_stdio  # noqa: E402
 from query import load_alias_expansions, load_frontmatter  # noqa: E402
 
@@ -102,10 +106,18 @@ def main():
         for alias, canonical in aliases.items()
         if alias in query_text and canonical in quarantined_architectures()
     }
-    if unsupported and not args.include_out_of_scope:
+    unsupported_terms = {
+        canonical.lower()
+        for alias, canonical in aliases.items()
+        if alias in query_text and canonical.lower() in quarantined_query_terms()
+    }
+    unsupported_terms.update(
+        term for term in quarantined_query_terms() if term in query_text
+    )
+    if (unsupported or unsupported_terms) and not args.include_out_of_scope:
         print(
             "ERROR: search targets retained but unsupported architecture(s): "
-            f"{', '.join(sorted(unsupported))}. Use --include-out-of-scope "
+            f"{', '.join(sorted(unsupported | unsupported_terms))}. Use --include-out-of-scope "
             "for raw recovery research.",
             file=sys.stderr,
         )

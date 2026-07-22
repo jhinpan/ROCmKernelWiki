@@ -122,20 +122,27 @@ __global__ void prefetch_tile(const float* __restrict__ g_in, float* out, int n)
 
     const int wave = threadIdx.x / warpSize;
     const int global_index = blockIdx.x * 256 + threadIdx.x;
-    float* src = const_cast<float*>(g_in + global_index);  // source is read-only
+    const bool valid = global_index < n;
     float* wave_uniform_dst = &tile[wave * warpSize];
-    __builtin_amdgcn_load_to_lds(
-        /*src  global ptr */ src,
-        /*wave-uniform LDS base*/ wave_uniform_dst,
-        /*size bytes      */ sizeof(float),
-        /*offset          */ 0,
-        /*aux (cache ctrl)*/ 0);
+    if (valid) {
+        float* src = const_cast<float*>(g_in + global_index);  // read-only source
+        __builtin_amdgcn_load_to_lds(
+            /*src global ptr*/ src,
+            /*wave-uniform LDS base*/ wave_uniform_dst,
+            /*size bytes*/ sizeof(float),
+            /*offset*/ 0,
+            /*aux (cache ctrl)*/ 0);
+    } else {
+        // Plain global direct-to-LDS has no object-bound guard. Initialize the
+        // inactive lane explicitly; do not form or issue an OOB source load.
+        tile[threadIdx.x] = 0.0f;
+    }
 
     // The copy is async and counted by VMCNT. Drain before reading LDS.
     __builtin_amdgcn_s_waitcnt(0);               // or vmcnt(0) via the encoded imm
     __syncthreads();                             // s_barrier: tile visible to all
 
-    if (global_index < n)
+    if (valid)
         out[global_index] = tile[threadIdx.x] * 2.0f;
 }
 ```

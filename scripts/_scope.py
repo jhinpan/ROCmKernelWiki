@@ -22,11 +22,19 @@ def load_scope():
         str(v) for v in raw.get("quarantined_architectures", [])
     )
     quarantined_pages = frozenset(str(v) for v in raw.get("quarantined_pages", []))
+    quarantined_query_terms = frozenset(
+        str(v).lower() for v in raw.get("quarantined_query_terms", [])
+    )
     if not active:
         raise ValueError("data/scope.yaml must declare in_scope_architectures")
     if active & quarantined_architectures:
         raise ValueError("active and quarantined architectures must be disjoint")
-    result = (active, quarantined_architectures, quarantined_pages)
+    result = (
+        active,
+        quarantined_architectures,
+        quarantined_pages,
+        quarantined_query_terms,
+    )
     _SCOPE_CACHE = (signature, result)
     return result
 
@@ -43,11 +51,20 @@ def quarantined_pages():
     return load_scope()[2]
 
 
+def quarantined_query_terms():
+    return load_scope()[3]
+
+
 def is_active(frontmatter):
     """Return whether a page belongs to the default published knowledge layer."""
     if str(frontmatter.get("id", "")) in quarantined_pages():
         return False
     architectures = {str(v) for v in (frontmatter.get("architectures") or [])}
+    if frontmatter.get("source_category") == "upstream-code":
+        # A mixed-architecture PR is retained as raw evidence but excluded from
+        # active retrieval: its change cannot be assumed safe for gfx942/gfx950.
+        if architectures & quarantined_architectures():
+            return False
     return not architectures or bool(architectures & in_scope_architectures())
 
 

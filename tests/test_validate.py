@@ -553,6 +553,8 @@ def test_amdgpu_guide_sync_regression():
     for query in (ROOT / "queries").glob("*.md"):
         for target in re.findall(r"\]\(([^)]+)\)", query.read_text(encoding="utf-8")):
             assert "\\" not in target, f"{query.name}: non-portable link {target!r}"
+            destination = (query.parent / target).resolve()
+            assert destination.exists(), f"{query.name}: broken link {target!r}"
 
     source_generator = (ROOT / "scripts/gen_source_anchors.py").read_text(
         encoding="utf-8"
