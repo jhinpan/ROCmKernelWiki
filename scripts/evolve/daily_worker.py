@@ -94,7 +94,20 @@ def _sync_with_base(
         ],
         cwd=clone,
     )
-    _run(["git", "rebase", f"origin/{base}"], cwd=clone)
+    try:
+        _run(["git", "rebase", f"origin/{base}"], cwd=clone)
+    except RuntimeError:
+        # The clone is disposable, but abort explicitly so diagnostics see a
+        # clean branch and no caller can accidentally continue in a conflicted
+        # rebase state.
+        subprocess.run(
+            ["git", "rebase", "--abort"],
+            cwd=clone,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        raise
 
 
 def run_daily(args: argparse.Namespace) -> dict[str, str]:

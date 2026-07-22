@@ -453,6 +453,7 @@ def test_final_summary_is_inside_the_enforced_budget():
 
 def test_rolling_worker_rebases_state_onto_latest_main():
     from evolve.daily_worker import _configure_bot_identity, _sync_with_base
+    from evolve.draft_pr import _push_branch
 
     def git(cwd, *arguments):
         return subprocess.run(
@@ -534,6 +535,91 @@ def test_rolling_worker_rebases_state_onto_latest_main():
             cwd=clone,
             check=True,
         )
+        _push_branch(clone, "bot/evolution")
+        assert git(clone, "rev-parse", "HEAD") == git(
+            remote, "rev-parse", "refs/heads/bot/evolution"
+        )
+
+        new_clone = root / "new-clone"
+        git(root, "clone", "-q", "--branch", "main", str(remote), str(new_clone))
+        _configure_bot_identity(new_clone)
+        _sync_with_base(
+            new_clone,
+            base="main",
+            branch="bot/new-evolution",
+            source_branch="main",
+        )
+        assert git(new_clone, "branch", "--show-current") == "bot/new-evolution"
+        assert git(new_clone, "rev-parse", "HEAD") == git(
+            new_clone, "rev-parse", "origin/main"
+        )
+
+
+def test_rolling_worker_aborts_conflicted_base_sync():
+    from evolve.daily_worker import _configure_bot_identity, _sync_with_base
+
+    def git(cwd, *arguments):
+        return subprocess.run(
+            ["git", *arguments],
+            cwd=cwd,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
+    def commit(cwd, message):
+        git(cwd, "add", "conflict.txt")
+        git(
+            cwd,
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-q",
+            "-m",
+            message,
+        )
+
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        source = root / "source"
+        remote = root / "remote.git"
+        clone = root / "clone"
+        git(root, "init", "-q", "-b", "main", str(source))
+        (source / "conflict.txt").write_text("base\n", encoding="utf-8")
+        commit(source, "base")
+        git(root, "init", "--bare", "-q", str(remote))
+        git(source, "remote", "add", "origin", str(remote))
+        git(source, "push", "-q", "-u", "origin", "main")
+
+        git(source, "switch", "-q", "-c", "bot/evolution")
+        (source / "conflict.txt").write_text("bot\n", encoding="utf-8")
+        commit(source, "bot state")
+        git(source, "push", "-q", "-u", "origin", "bot/evolution")
+        git(source, "switch", "-q", "main")
+        (source / "conflict.txt").write_text("main\n", encoding="utf-8")
+        commit(source, "main update")
+        git(source, "push", "-q", "origin", "main")
+
+        git(root, "clone", "-q", "--branch", "bot/evolution", str(remote), str(clone))
+        _configure_bot_identity(clone)
+        old_head = git(clone, "rev-parse", "HEAD")
+        try:
+            _sync_with_base(
+                clone,
+                base="main",
+                branch="bot/evolution",
+                source_branch="bot/evolution",
+            )
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("conflicted rebase unexpectedly succeeded")
+        assert git(clone, "rev-parse", "HEAD") == old_head
+        assert git(clone, "status", "--porcelain=v1") == ""
+        assert not (clone / ".git" / "rebase-merge").exists()
+        assert not (clone / ".git" / "rebase-apply").exists()
 
 
 def test_query_marks_upstream_pr_snippets_as_untrusted():
