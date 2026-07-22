@@ -67,7 +67,10 @@ def _run(command: list[str], root: Path) -> str:
 
 
 def _git_changes(root: Path) -> tuple[list[str], int]:
-    output = _run(["git", "status", "--porcelain=v1"], root)
+    output = _run(
+        ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+        root,
+    )
     files = []
     for line in output.splitlines():
         if not line:
@@ -104,6 +107,41 @@ def _write_summary(root: Path, run_date: str, summary: dict[str, Any]) -> Path:
         encoding="utf-8",
     )
     return path
+
+
+def _finalize_summary(
+    root: Path,
+    run_date: str,
+    summary: dict[str, Any],
+    *,
+    max_files: int,
+    max_lines: int,
+    max_passes: int = 5,
+) -> dict[str, Any]:
+    """Write and measure until summary metadata matches the on-disk diff.
+
+    The summary includes its own path and line contribution, so one measurement
+    cannot be final. A bounded fixed-point loop makes the invariant explicit:
+    budgets are enforced only when the values stored in the summary equal a
+    fresh measurement of the exact state that contains that summary.
+    """
+    for _ in range(max_passes):
+        _write_summary(root, run_date, summary)
+        changed_files, changed_lines = _git_changes(root)
+        if (
+            summary.get("changed_files") == changed_files
+            and summary.get("changed_lines") == changed_lines
+        ):
+            enforce_change_budget(
+                changed_files,
+                changed_lines=changed_lines,
+                max_files=max_files,
+                max_lines=max_lines,
+            )
+            return summary
+        summary["changed_files"] = changed_files
+        summary["changed_lines"] = changed_lines
+    raise RuntimeError("refresh summary accounting did not converge")
 
 
 def run_refresh(args: argparse.Namespace, root: Path = WIKI_ROOT) -> dict[str, Any]:
@@ -202,7 +240,13 @@ def run_refresh(args: argparse.Namespace, root: Path = WIKI_ROOT) -> dict[str, A
         "dry_run": bool(args.dry_run),
     }
     if not args.dry_run:
-        _write_summary(root, run_date, summary)
+        summary = _finalize_summary(
+            root,
+            run_date,
+            summary,
+            max_files=args.max_files,
+            max_lines=args.max_lines,
+        )
         _run([sys.executable, "scripts/validate.py"], root)
         _run([sys.executable, "tests/test_evolution.py"], root)
     return summary

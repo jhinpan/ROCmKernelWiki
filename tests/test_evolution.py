@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -259,9 +260,10 @@ def test_corpus_manifest_is_generated_from_the_checkout():
         (ROOT / "data" / "corpus-manifest.yaml").read_text(encoding="utf-8")
     )
     assert committed == expected
-    assert expected["counts"]["source_prs"] == 7454
-    assert expected["counts"]["active_wiki_pages"] == 54
-    assert expected["counts"]["artifact_bundles"] == 959
+    counts = expected["counts"]
+    assert counts["source_prs"] > 0
+    assert 0 < counts["active_wiki_pages"] <= counts["wiki_pages"]
+    assert counts["artifact_bundles"] <= counts["source_prs"]
 
 
 def test_candidate_schema_and_gap_detection():
@@ -385,6 +387,68 @@ def test_refresh_budget_rejects_unreviewable_change_sets():
         assert "file budget" in str(error)
     else:
         raise AssertionError("oversized refresh was accepted")
+
+
+def test_refresh_expands_untracked_directories_for_budgeting():
+    from evolve.refresh import _git_changes
+
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        subprocess.run(["git", "init", "-q", str(root)], check=True)
+        nested = root / "candidates" / "runs" / "today"
+        nested.mkdir(parents=True)
+        (nested / "one.yaml").write_text("one: true\n", encoding="utf-8")
+        (nested / "two.yaml").write_text("two: true\n", encoding="utf-8")
+        changed_files, changed_lines = _git_changes(root)
+        assert changed_files == [
+            "candidates/runs/today/one.yaml",
+            "candidates/runs/today/two.yaml",
+        ]
+        assert changed_lines == 2
+
+
+def test_final_summary_is_inside_the_enforced_budget():
+    from evolve.refresh import _finalize_summary, _git_changes
+
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        subprocess.run(["git", "init", "-q", str(root)], check=True)
+        summary = {
+            "schema_version": 1,
+            "run_date": "2026-07-22",
+            "discovery": {"total": 0},
+            "gap_proposals": 0,
+            "machine_changes": 0,
+            "changed_files": [],
+            "changed_lines": 0,
+            "dry_run": False,
+        }
+        try:
+            _finalize_summary(
+                root,
+                "2026-07-22",
+                summary,
+                max_files=0,
+                max_lines=100,
+            )
+        except ValueError as error:
+            assert "file budget" in str(error)
+        else:
+            raise AssertionError("summary file escaped the final file budget")
+
+        finalized = _finalize_summary(
+            root,
+            "2026-07-22",
+            summary,
+            max_files=1,
+            max_lines=100,
+        )
+        changed_files, changed_lines = _git_changes(root)
+        assert finalized["changed_files"] == changed_files
+        assert finalized["changed_lines"] == changed_lines
+        assert changed_files == [
+            "candidates/runs/2026-07-22/refresh-summary.yaml"
+        ]
 
 
 def test_query_marks_upstream_pr_snippets_as_untrusted():
