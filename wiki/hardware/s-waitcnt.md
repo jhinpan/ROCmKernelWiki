@@ -33,12 +33,10 @@ aliases:
 - lgkmcnt
 - expcnt
 implemented_by:
-- pr-aiter-2394
 - pr-composable_kernel-3098
 - pr-composable_kernel-2715
 - pr-aiter-3072
 - pr-FlyDSL-388
-- pr-FlyDSL-346
 ---
 # s_waitcnt — Asynchronous Memory Counters (CDNA)
 
@@ -125,7 +123,8 @@ canonical double-buffered GEMM prologue therefore waits on `vmcnt` before the
 consuming `ds_read`, then on a separate `s_barrier`:
 
 ```asm
-    buffer_load_dwordx4 v[off], s[desc:desc+3], 0 offen lds   ; VMCNT++ ; HBM -> LDS
+    ; gfx942: one dword/lane. gfx950 may instead use global_load_lds_dwordx4.
+    buffer_load_dword v[off], s[desc:desc+3], 0 offen lds     ; VMCNT++ ; HBM -> LDS
     ; ... issue more tile loads, overlap with MFMA on the previous tile ...
     s_waitcnt vmcnt(0)        ; all direct-to-LDS copies have written LDS
     s_barrier                 ; make this tile visible to the whole workgroup

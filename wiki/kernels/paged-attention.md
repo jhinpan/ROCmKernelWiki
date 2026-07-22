@@ -237,26 +237,25 @@ ragged sequences with partial tail blocks, GQA (`GROUP` query heads per KV head)
 and the numerically-stable online-softmax recurrence — in fp32, and verifies
 every output element against a CPU reference. Decode is bandwidth-bound (no large
 GEMM at `q_len=1`), so the reference uses generic HIP (LDS reduction + FMA) and
-runs natively on **gfx1201 (RDNA4)** as well as CDNA.
+runs on **gfx950**. No gfx942 runtime is claimed.
 
 ```bash
-cd examples/paged-attention
-hipcc --offload-arch=gfx1201 -O3 paged_attention.cpp -o paged_attention && ./paged_attention
+cd examples/paged-attention && ./build.sh
 ```
 
-Expected output (captured on a Radeon RX 9070 XT, gfx1201, ROCm 7.2.3):
+Expected output (captured on MI355X / gfx950):
 
 ```
-paged-attention decode (fp32, portable HIP, gfx1201)
+paged-attention decode (fp32, portable HIP, gfx950)
   num_seqs=3  num_q_heads=8  num_kv_heads=2  GROUP=4
   HEAD_DIM=64  BLOCK_SIZE=16  seq_lens={40,17,64}
-  kernel time: 0.0471 ms/iter (avg of 200)
+  kernel time: 0.0416 ms/iter (avg of 200)
   max abs error vs CPU: 8.941e-08
 PASS
 ```
 
 The production AITER/vLLM kernels add FP8 KV cache, 128-bit vectorized KV loads,
-flash-decoding chunk-parallel split with a reduction pass, and MFMA/WMMA tiling
+flash-decoding chunk-parallel split with a reduction pass, and MFMA tiling
 for large GQA groups — see the notes above.
 
 ## See also

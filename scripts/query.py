@@ -21,6 +21,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _wiki_root import WIKI_ROOT, configure_utf8_stdio  # noqa: E402
+from _scope import (  # noqa: E402
+    in_scope_architectures,
+    is_active,
+    quarantined_architectures,
+    quarantined_query_terms,
+    scope_signature,
+)
 
 
 _ALIAS_CACHE = None
@@ -87,7 +94,7 @@ def expand_keyword(kw):
 def load_frontmatter(path):
     """Parse YAML frontmatter. Returns (fm_dict, body_str) or (None, None)."""
     try:
-        content = path.read_text(encoding="utf-8")
+        content = path.read_text(encoding="utf-8-sig")
     except Exception:
         return None, None
     m = re.match(r'^---\s*\r?\n(.*?)\r?\n---\s*\r?\n(.*)', content, re.DOTALL)
@@ -120,8 +127,14 @@ def load_all_pages(use_cache=True):
             md_files.extend(base.rglob("*.md"))
     if not md_files:
         return []
-    latest = max(f.stat().st_mtime for f in md_files)
-    sig = f"v{_QUERY_CACHE_VERSION}:{len(md_files)}:{latest:.3f}"
+    import hashlib
+
+    digest = hashlib.sha256()
+    for markdown in sorted(md_files):
+        stat = markdown.stat()
+        digest.update(markdown.relative_to(WIKI_ROOT).as_posix().encode("utf-8"))
+        digest.update(f":{stat.st_size}:{stat.st_mtime_ns}\n".encode("ascii"))
+    sig = f"v{_QUERY_CACHE_VERSION}:{digest.hexdigest()}:{scope_signature()}"
 
     if use_cache and cache_path.exists():
         try:
@@ -177,8 +190,8 @@ STOPWORDS = {
 
 # Multiplicative priors: surface curated synthesis + runnable assets above raw PRs.
 PTYPE_PRIOR = {
-    "wiki-kernel": 1.7, "wiki-technique": 1.6, "wiki-hardware": 1.6,
-    "wiki-pattern": 1.6, "wiki-language": 1.5, "wiki-migration": 1.5,
+    "wiki-kernel": 1.5, "wiki-technique": 1.8, "wiki-hardware": 1.9,
+    "wiki-pattern": 1.7, "wiki-language": 1.5, "wiki-migration": 1.6,
     "source-doc": 1.3, "source-ref": 1.3, "source-blog": 1.2,
     "source-pr": 1.0,
 }
@@ -195,7 +208,8 @@ def build_idf(pages):
         text = (str(fm.get("title", "")) + " " +
                 " ".join(str(v) for k in ("tags", "techniques", "hardware_features",
                                           "kernel_types", "languages", "aliases",
-                                          "symptoms") for v in (fm.get(k) or [])) +
+                                          "symptoms", "architectures")
+                         for v in (fm.get(k) or [])) +
                 " " + p["body"]).lower()
         toks = set(re.findall(r"[a-z0-9_.+-]{2,}", text))
         for t in toks:
@@ -237,7 +251,7 @@ def score_keyword_match(fm, body, keywords, idf=None, ptype="unknown"):
     title_text = str(fm.get("title", "")).lower()
     tag_text = " ".join(
         str(v) for k in ("tags", "techniques", "hardware_features", "kernel_types",
-                          "languages", "aliases", "symptoms")
+                          "languages", "aliases", "symptoms", "architectures")
         for v in (fm.get(k) or [])
     ).lower()
     body_lower = body.lower()
@@ -259,7 +273,16 @@ def score_keyword_match(fm, body, keywords, idf=None, ptype="unknown"):
         raw += best
     if raw <= 0:
         return 0.0
-    return raw * _page_signal_prior(fm, ptype)
+    factor = _page_signal_prior(fm, ptype)
+    source_intent = {
+        "official", "manual", "manuals", "whitepaper", "whitepapers",
+        "source", "sources", "documentation", "reference", "references",
+    }
+    if ptype in {"source-doc", "source-blog", "source-ref"} and any(
+        keyword.lower() in source_intent for keyword in keywords
+    ):
+        factor *= 1.8
+    return raw * factor
 
 
 def extract_snippet(body, keywords, width=160):
@@ -284,6 +307,9 @@ def filter_pages(pages, args):
         path = p["path"]
         ptype = detect_page_type(fm, path)
         p["_ptype"] = ptype
+
+        if not getattr(args, "include_out_of_scope", False) and not is_active(fm):
+            continue
 
         if args.type:
             if not ptype.endswith(args.type) and ptype != args.type:
@@ -311,7 +337,13 @@ def filter_pages(pages, args):
         if args.architecture:
             archs = {str(a).lower() for a in (fm.get("architectures") or [])}
             arch_variants = {v.lower() for v in expand_keyword(args.architecture)}
-            if not (archs & arch_variants):
+            if (
+                not getattr(args, "include_out_of_scope", False)
+                and not arch_variants
+                & {arch.lower() for arch in in_scope_architectures()}
+            ):
+                continue
+            if archs and not (archs & arch_variants):
                 continue
 
         if args.symptom:
@@ -323,7 +355,7 @@ def filter_pages(pages, args):
             if str(fm.get("confidence", "")) != args.confidence:
                 continue
 
-        if getattr(args, "synthesis", False) and not ptype.startswith("wiki-"):
+        if getattr(args, "synthesis", False) and ptype == "source-pr":
             continue
 
         out.append(p)
@@ -381,21 +413,67 @@ def main():
     parser.add_argument("--symptom", help="Filter by pattern symptom (bank-conflicts, low-occupancy, ...)")
     parser.add_argument("--confidence", help="Filter by confidence (verified, source-reported, inferred, experimental)")
     parser.add_argument("--synthesis", action="store_true",
-                        help="Only curated wiki synthesis pages (skip raw PR sources)")
+                        help="Curated wiki/source pages only (skip raw PR sources)")
     parser.add_argument("--limit", type=int, default=10, help="Max results (default 10)")
     parser.add_argument("--compact", action="store_true", help="Compact one-line-per-result output")
     parser.add_argument("--paths-only", action="store_true", help="Output only file paths")
     parser.add_argument("--no-cache", action="store_true", help="Bypass the JSON query index")
+    parser.add_argument(
+        "--include-out-of-scope",
+        action="store_true",
+        help="Include retained raw and synthesis pages outside gfx942/gfx950",
+    )
     args = parser.parse_args()
+
+    keywords = []
+    for query_part in args.query:
+        keywords.extend(re.findall(r"[A-Za-z0-9_.+-]+", query_part))
+    aliases = load_alias_expansions()
+    mentioned_architectures = {
+        canonical
+        for keyword in keywords
+        if (canonical := aliases.get(keyword.lower()))
+        in (in_scope_architectures() | quarantined_architectures())
+    }
+    if args.architecture:
+        mentioned_architectures.update(
+            variant
+            for variant in expand_keyword(args.architecture)
+            if variant in (in_scope_architectures() | quarantined_architectures())
+        )
+    unsupported = mentioned_architectures & quarantined_architectures()
+    unsupported_terms = {
+        canonical.lower()
+        for keyword in keywords
+        if (canonical := aliases.get(keyword.lower(), keyword.lower())).lower()
+        in quarantined_query_terms()
+    }
+    if (unsupported or unsupported_terms) and not args.include_out_of_scope:
+        details = sorted(unsupported | unsupported_terms)
+        print(
+            "ERROR: query targets retained but unsupported architecture/topic: "
+            f"{', '.join(details)}. Active scope is gfx942/gfx950 MFMA; "
+            "use --include-out-of-scope for raw recovery research.",
+            file=sys.stderr,
+        )
+        return 2
 
     all_pages = load_all_pages(use_cache=not args.no_cache)
     pages = filter_pages(all_pages, args)
 
-    keywords = []
-    for q in args.query:
-        for tok in re.split(r"\s+", q.strip()):
-            if tok:
-                keywords.append(tok)
+    detected_architectures = mentioned_architectures & in_scope_architectures()
+    detected_architecture = (
+        next(iter(detected_architectures))
+        if len(detected_architectures) == 1
+        else None
+    )
+    if detected_architecture and not args.architecture:
+        pages = [
+            page
+            for page in pages
+            if not page["fm"].get("architectures")
+            or detected_architecture in page["fm"].get("architectures", [])
+        ]
     if keywords:
         # IDF is computed over the full corpus so term rarity is global, not
         # relative to the post-filter subset.
@@ -403,6 +481,11 @@ def main():
         for p in pages:
             p["_score"] = score_keyword_match(
                 p["fm"], p["body"], keywords, idf=idf, ptype=p.get("_ptype", "unknown"))
+            if (
+                detected_architecture
+                and detected_architecture in (p["fm"].get("architectures") or [])
+            ):
+                p["_score"] *= 1.35
             p["_snippet"] = extract_snippet(p["body"], keywords)
         pages = [p for p in pages if p["_score"] > 0]
         pages.sort(key=lambda x: (-x["_score"], x["path"]))
@@ -414,11 +497,11 @@ def main():
     if args.paths_only:
         for p in pages:
             print(p["path"])
-        return
+        return 0
 
     if not pages:
         print("No matching pages.")
-        return
+        return 0
 
     print(f"# {len(pages)} result(s)")
     print()
@@ -426,8 +509,9 @@ def main():
         print(format_result(p, compact=args.compact))
         if not args.compact:
             print()
+    return 0
 
 
 if __name__ == "__main__":
     configure_utf8_stdio()
-    main()
+    raise SystemExit(main())

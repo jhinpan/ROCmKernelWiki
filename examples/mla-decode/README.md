@@ -20,7 +20,7 @@ with key width `D_C + D_PE` and value width `D_C`.
   latent (DeepSeek-V3 uses `D_C=512`, `D_PE=64`; here `D_C=64`, `D_PE=16`).
 
 This is **portable** (pure HIP — FMA, LDS, `__syncthreads`): it builds *and runs*
-on this gfx1201 (RDNA4) box and verifies against a double-precision CPU reference.
+on gfx950 and verifies against a double-precision CPU reference.
 
 ## Build & run
 
@@ -31,19 +31,18 @@ on this gfx1201 (RDNA4) box and verifies against a double-precision CPU referenc
 `build.sh` runs:
 
 ```bash
-hipcc --offload-arch=gfx1201 -O3 mla_decode.cpp -o mla_decode && ./mla_decode
+hipcc --offload-arch=gfx950 -O3 mla_decode.cpp -o mla_decode && ./mla_decode
 ```
 
-Runs natively on **gfx1201**; pure HIP so it also builds for any other arch by
-swapping `--offload-arch`.
+The captured runtime is MI355X / gfx950. No gfx942 runtime is claimed.
 
-## Expected output
+## Expected output (captured on MI355X / gfx950)
 
 ```
 build: OK
 MLA decode (absorbed, low-rank latent KV) -- portable HIP, fp32
   H=16 heads, D_C=64 latent, D_PE=16 rope, N=256 KV tokens
-  per-decode: 252.82 us   KV-stream BW: 0.3 GB/s
+  per-decode: 173.68 us   KV-stream BW: 0.5 GB/s
   max_abs_err = 3.353e-08   max_rel_err = 1.301e-04
 PASS
 ```

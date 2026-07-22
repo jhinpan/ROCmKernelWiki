@@ -5,7 +5,6 @@ type: hardware
 architectures:
 - gfx942
 - gfx950
-- gfx1201
 tags:
 - buffer-instructions
 - global-instructions
@@ -47,7 +46,6 @@ aliases:
 - resource descriptor
 implemented_by:
 - pr-composable_kernel-2984
-- pr-Tensile-1521
 - pr-Tensile-1288
 ---
 # Memory Instructions — buffer (MUBUF) vs global vs flat
@@ -95,15 +93,8 @@ part of the raw range comparison.
 // Match CK Tile's architecture-selected buffer-resource word 3.
 #if !defined(__HIP_DEVICE_COMPILE__) || !__HIP_DEVICE_COMPILE__
 #define WIKI_RAW_BUFFER_FLAGS 0xffffffffu  // host-pass placeholder; never issued
-#elif defined(__gfx803__) || defined(__gfx900__) || defined(__gfx906__) || \
-      defined(__gfx908__) || defined(__gfx90a__) || defined(__gfx940__) || \
-      defined(__gfx941__) || defined(__gfx942__) || defined(__gfx950__)
-#define WIKI_RAW_BUFFER_FLAGS 0x00020000u  // GFX9
-#elif defined(__gfx1100__) || defined(__gfx1101__) || defined(__gfx1102__) || \
-      defined(__gfx1103__) || defined(__gfx1150__) || defined(__gfx1151__) || \
-      defined(__gfx1152__) || defined(__gfx1153__) || defined(__gfx1200__) || \
-      defined(__gfx1201__)
-#define WIKI_RAW_BUFFER_FLAGS 0x31004000u  // GFX11 / gfx1200-gfx1201
+#elif defined(__gfx942__) || defined(__gfx950__)
+#define WIKI_RAW_BUFFER_FLAGS 0x00020000u  // active GFX9 targets
 #else
 #error "Add the target's raw-buffer resource flags before using this helper"
 #endif
@@ -153,10 +144,9 @@ buffer_load_dwordx4 v[8:11], v0, s[4:7], 0 offen   ; each OOB dword -> 0
 s_waitcnt      vmcnt(0)
 ```
 
-Do not reuse that literal for gfx1201: gfx11/gfx1200/gfx1201 use
-`0x31004000`. CK Tile maintains this split as
-`CK_TILE_BUFFER_RESOURCE_3RD_DWORD`; prefer an equivalent target-selected
-constant in multi-architecture source.
+The active gfx942/gfx950 examples use the same GFX9 raw-buffer literal.
+Prefer a maintained target-selected helper such as CK Tile's
+`CK_TILE_BUFFER_RESOURCE_3RD_DWORD` when broadening scope.
 
 ### The raw-buffer window is about 4 GiB, not the allocation
 
@@ -277,7 +267,7 @@ without burning VGPRs, the **direct-to-LDS** variants (`buffer_load_dword ... ld
 - [AMD Instinct MI300 / CDNA3 Instruction Set Architecture](https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/instruction-set-architectures/amd-instinct-mi300-cdna3-instruction-set-architecture.pdf) — MUBUF / FLAT / GLOBAL / SCRATCH formats, buffer resource descriptor, OOB semantics.
 - [AMD Instinct CDNA4 Instruction Set Architecture](https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/instruction-set-architectures/amd-instinct-cdna4-instruction-set-architecture.pdf) — gfx950 MUBUF and flat/global memory semantics.
 - [LLVM AMDGPU Backend User Guide](https://llvm.org/docs/AMDGPUUsage.html) — `make.buffer.rsrc`, `raw.buffer.load/store` intrinsics, address spaces.
-- [CK Tile target configuration](https://github.com/ROCm/rocm-libraries/blob/5840fddc0f6f42cbedd9ecc113376d760bc177b1/projects/composablekernel/include/ck_tile/core/config.hpp) — `CK_TILE_BUFFER_RESOURCE_3RD_DWORD` values for gfx9, gfx11, and gfx1200/gfx1201.
+- [CK Tile target configuration](https://github.com/ROCm/rocm-libraries/blob/5840fddc0f6f42cbedd9ecc113376d760bc177b1/projects/composablekernel/include/ck_tile/core/config.hpp) — maintained `CK_TILE_BUFFER_RESOURCE_3RD_DWORD` values.
 - [AMD ISA assembly examples (gcnasm)](https://github.com/AMDResearch) — standalone MUBUF descriptor setup and buffer-op idioms.
 - [ROCm HIP hardware programming guide](https://rocm.docs.amd.com/) — memory address spaces and pointer mapping.
 - [AMDGPU Kernel Optimization Guide (captured snapshot)](https://github.com/nod-ai/amd-shark-ai/blob/efa471aeef66a260c85983cc41e833bfa769dade/docs/amdgpu_kernel_optimization_guide.md) — raw-buffer predication and the 32-bit descriptor-window caveat.

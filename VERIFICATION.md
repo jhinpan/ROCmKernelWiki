@@ -7,12 +7,22 @@
 > then independently **re-run by a second adversarial pass** that tried to refute
 > it (all agreed). Raw evidence excerpts are kept inline.
 
-The wiki content was originally authored against **ROCm 7.0.2** on an **RDNA4
-(gfx1201)** box, where the CDNA-MFMA paths could only be *cross-compiled* and the
-hardware facts traced to ISA docs/whitepapers. This pass re-grounds the
-gfx950-specific claims and the runnable examples against **actual MI350X silicon**
-on a newer stack (ROCm 7.2 > the pinned 7.0.2, so confirmations are strictly
-stronger). It corrects the handful of claims the silicon contradicted.
+The active wiki is now scoped to gfx950 and gfx942. gfx950 claims combine
+primary-source grounding with MI350X/MI355X execution; gfx942 remains
+source-backed and compiler-checked until MI300 hardware is available. Toolchain
+versions are separate evidence cells: a newer compiler confirms current
+behavior but does not supersede version-sensitive results from an older stack.
+
+## Reproducible MI355X harness — 2026-07-22
+
+`validation/run.py` pinned runtime execution to MI355X device 0 under ROCm 7.2 /
+clang 22 and retained a machine-readable bundle at
+`validation/results/gfx950-mi355x-rocm720/`. It produced **26 pass, 0 fail, and 1
+source-recorded** verdict. The suite covers device properties, direct-to-LDS
+accepted widths and a 16-byte uniform-destination runtime check, permlane and
+f8f6f4 availability, XF32 rejection, and HSA metadata extraction. gfx942 cells
+are compile-only. The harness deliberately makes no cache, partition,
+LDS-phase, numeric-MXFP, or performance claim.
 
 ## Additional pass — MI355X, 2026-07-20
 

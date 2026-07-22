@@ -7,7 +7,6 @@ version_sensitive:
 architectures:
 - gfx942
 - gfx950
-- gfx1201
 tags:
 - composable-kernel
 - cpp
@@ -25,7 +24,6 @@ languages:
 - cpp
 related:
 - hw-mfma
-- lang-rocwmma
 - lang-triton-amd
 - kernel-ck-hgemm
 - kernel-flash-attention-ck
@@ -40,11 +38,11 @@ implemented_by:
 - pr-composable_kernel-2836
 - pr-composable_kernel-1705
 - pr-flash-attention-179
-- pr-composable_kernel-3603
 - pr-composable_kernel-3359
 - pr-composable_kernel-3038
 - pr-composable_kernel-2955
 - pr-composable_kernel-2878
+- pr-composable_kernel-2663
 ---
 # Composable Kernel (CK / ck_tile) — A Tile DSL for CDNA
 
@@ -68,8 +66,7 @@ CK comes in two layers:
   focuses on ck_tile.
 
 Everything ultimately lowers to HIP and emits
-[`v_mfma_*` matrix-core instructions](../hardware/mfma.md) on CDNA (and `v_wmma_*`
-on RDNA4 gfx1201).
+[`v_mfma_*` matrix-core instructions](../hardware/mfma.md) on gfx942/gfx950.
 
 ## The four tiers
 
@@ -167,8 +164,8 @@ typically combine:
 
 On gfx950, `async_load_tile` can use the wider `global_load_lds_dwordx3/x4`
 copies; on gfx942 it uses the 32-bit direct-to-LDS path. ck_tile selects this per
-target, so the same kernel source recompiles for CDNA3, CDNA4, and RDNA4
-(gfx1201, where it emits WMMA instead of MFMA).
+target, so the same kernel source recompiles for CDNA3 and CDNA4 while
+selecting their architecture-specific MFMA and direct-to-LDS forms.
 
 ## Building
 
@@ -193,8 +190,6 @@ make tile_example_gemm_basic -j
 - Use [hipBLASLt](../../sources/refs/ref-hipblaslt.md) (CK/Tensile-backed) for
   drop-in GEMM with autotuning, or [Triton](../languages/triton-amd.md) for
   faster iteration with less boilerplate.
-- Use [rocWMMA](../languages/rocwmma.md) when you only need a thin
-  fragment-level wrapper over a single MMA shape, not a full pipeline.
 
 ## Sources
 

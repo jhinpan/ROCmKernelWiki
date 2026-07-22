@@ -1,8 +1,8 @@
 // preshuffle_gemm_rocwmma.cpp
 //
 // PORTABLE demonstration of the "preshuffle the weights" idea from the FlyDSL
-// 04-preshuffle_gemm.py tutorial, written with rocWMMA so it RUNS natively on
-// gfx1201 (RDNA4 WMMA) as well as on CDNA (MFMA) -- rocWMMA abstracts both.
+// 04-preshuffle_gemm.py tutorial. The source uses rocWMMA's fragment API; on
+// gfx950 the compiler emits MFMA instructions. Both kernels run and self-check.
 //
 // Idea being demonstrated
 // -----------------------
@@ -159,8 +159,8 @@ int main() {
   HIP_CHECK(hipMemcpy(dB, hB.data(), hB.size() * sizeof(__half), hipMemcpyHostToDevice));
   HIP_CHECK(hipMemcpy(dBsh, hBsh.data(), hBsh.size() * sizeof(__half), hipMemcpyHostToDevice));
 
-  // One wave per 16x16 output tile. warpSize is 32 on gfx1201, 64 on CDNA;
-  // query it at runtime (warpSize is device-only, not valid in host code).
+  // One wave per 16x16 output tile. Query the wave size at runtime because
+  // warpSize is device-only and is not valid in host code.
   int dev = 0;
   hipDeviceProp_t prop;
   HIP_CHECK(hipGetDeviceProperties(&prop, dev));

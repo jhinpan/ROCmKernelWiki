@@ -58,13 +58,13 @@ performance_claims:
   confidence: inferred
 implemented_by:
 - pr-composable_kernel-2152
-- pr-aiter-3228
 - pr-FlyDSL-554
 - pr-composable_kernel-933
 - pr-composable_kernel-785
 - pr-composable_kernel-767
 - pr-composable_kernel-2476
 - pr-composable_kernel-2016
+- pr-composable_kernel-2059
 ---
 # FP8 Block-Scaled GEMM on CDNA4 (gfx950)
 
@@ -246,15 +246,13 @@ bytes per element, at the cost of accuracy — choose the format per layer.
 ## Runnable example
 
 A worked example lives in [`examples/fp8-gemm/`](../../examples/fp8-gemm/). It
-contains two pieces, kept separate because the FP8 `f8f6f4` path is **CDNA-only
-(MFMA)** while RDNA4 (gfx1201) has WMMA:
+contains two pieces: an FP8 compiler/ISA probe and a runnable FP16 fallback.
 
 1. **`fp8_gemm_cdna.cpp`** — the CDNA FP8 GEMM using the real matrix-core
-   builtins. It builds for gfx950/gfx942 and, on a real MI350X (gfx950, ROCm 7.2),
-   compiles and runs to completion. **Caveat:** its `main()` only confirms that
-   the right MFMA instruction is *emitted* — it does **not** launch the kernel or
-   run a numeric GEMM correctness check, so treat it as a codegen/ISA probe, not a
-   validated numeric example. The emitted instructions are
+   builtins. `build.sh` compiles gfx950 and gfx942 device code and inspects the
+   emitted ISA. Its host `main()` does not launch either kernel, and the script
+   does not execute the FP8 binary. Treat it as a codegen/ISA probe, not a
+   numeric correctness test. The emitted instructions are
    `v_mfma_scale_f32_16x16x128_f8f6f4` for gfx950 (OCP E4M3, hardware MX) and
    `v_mfma_f32_16x16x32_fp8_fp8` for gfx942 (FNUZ E4M3, software scaling).
 
@@ -264,15 +262,15 @@ contains two pieces, kept separate because the FP8 `f8f6f4` path is **CDNA-only
    hipcc --offload-arch=gfx942 -c fp8_gemm_cdna.cpp -o fp8_gemm_gfx942.o
    ```
 
-2. **`wmma_hgemm.cpp`** — a portable rocWMMA FP16 GEMM with the same tiled
-   matrix-core structure that **builds and runs on gfx1201**, self-checking
-   against a CPU reference, so the directory has a demonstrable running binary:
+2. **`wmma_hgemm.cpp`** — a rocWMMA API FP16 GEMM with the same tiled
+   matrix-core structure. It builds and runs on gfx950 and self-checks against a
+   CPU reference. rocWMMA is the API; gfx950 emits MFMA instructions:
 
    ```bash
-   hipcc --offload-arch=gfx1201 -I/opt/rocm/include wmma_hgemm.cpp -o wmma_hgemm
+   hipcc --offload-arch=gfx950 -I/opt/rocm/include wmma_hgemm.cpp -o wmma_hgemm
    ./wmma_hgemm
-   # rocWMMA FP16 GEMM  M=256 N=256 K=256 (warpSize=32)
-   # avg 0.0069 ms/iter   4863.5 GFLOP/s
+   # rocWMMA FP16 GEMM  M=256 N=256 K=256 (warpSize=64)
+   # avg 0.0035 ms/iter   9657.6 GFLOP/s
    # max abs error = 0.000000
    # PASS
    ```

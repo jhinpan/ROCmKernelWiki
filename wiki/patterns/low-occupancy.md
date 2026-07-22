@@ -8,7 +8,6 @@ version_sensitive:
 architectures:
 - gfx942
 - gfx950
-- gfx1201
 tags:
 - low-occupancy
 - idle-cu
@@ -38,8 +37,6 @@ sources:
 - blog-triton-optimizations
 - doc-cdna3-isa
 - blog-gemm-optimization
-implemented_by:
-- pr-Tensile-1383
 ---
 # Low Occupancy / Idle CUs
 
@@ -73,7 +70,7 @@ grid limits. The binding constraint is usually one of these:
 
 | Limiting resource | CDNA3 (gfx942) | CDNA4 (gfx950) | Effect |
 |---|---|---|---|
-| Vector registers | One combined 512-entry-per-lane SIMD budget; gfx942 combines `align4(regular) + accumulator`, then rounds to 8 | Combined `.vgpr_count`, rounded to 8 | High combined allocation/wave → fewer waves fit |
+| Vector registers | One combined 512-entry-per-lane SIMD budget | HSA metadata `.vgpr_count`, rounded to 8 | High combined allocation/wave → fewer waves fit |
 | Scalar registers | Raw per-wave `.sgpr_count`, then allocated in groups of 16 | same | High scalar allocation can also cap waves/SIMD |
 | LDS | 64 KB/CU | 160 KB/CU | Large `__shared__` tiles cap workgroups/CU |
 | Waves/CU | 32 (4×8) | 32 (4×8) | Hard architectural ceiling |
@@ -108,11 +105,11 @@ rocprofv3 --pmc GRBM_GUI_ACTIVE SQ_WAVES SQ_BUSY_CYCLES \
           SQ_WAIT_INST_LDS SQ_INSTS_VALU -- ./my_app
 ```
 
-On gfx942, compute
-`round_up(round_up(vgpr_count, 4) + agpr_count, 8)`; rounding the two components
-independently to eight would overestimate allocation. On gfx950, `.vgpr_count`
-already includes both, so round it to eight and do not add the accumulator count
-a second time.
+On gfx942 and gfx950, HSA metadata `.vgpr_count` already includes the
+accumulator subset, so round it to eight and do not add `.agpr_count`. If you
+are reading separate lower-level `NumVgprs`/`NumAgprs` compiler remarks instead
+of code-object metadata, use the derivation on the
+[wavefront page](../hardware/wavefront.md).
 
 A useful first sanity check from host code is the occupancy API, which reports
 the max resident blocks given the kernel's actual resource use:
@@ -137,9 +134,8 @@ printf("max blocks/CU = %d -> ~%d waves/CU (device ceiling %d)\n",
        max_blocks, waves_per_cu, wave_ceiling);
 ```
 
-> `warpSize` is **64 on gfx9 (CDNA)**. RDNA can be compiled in wave32 or wave64
-> mode, so query it rather than inferring it from the gfx generation. A
-> 256-thread block is four wave64 wavefronts or eight wave32 wavefronts.
+> `warpSize` is **64 on gfx942/gfx950**. A 256-thread block is four
+> wave64 wavefronts.
 
 ## Fixes
 

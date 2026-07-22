@@ -1,4 +1,4 @@
-// Portable HIP fused-MoE reference (fp32, runs on gfx1201 / RDNA4).
+// Portable HIP fused-MoE reference (fp32), verified on gfx950.
 //
 // One thread-block processes one token end to end:
 //   1. router GEMV  : logits[e] = X . Wrouter[e]   (e in 0..E)

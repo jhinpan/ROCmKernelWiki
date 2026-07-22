@@ -5,7 +5,6 @@ type: language
 architectures:
 - gfx942
 - gfx950
-- gfx1201
 tags:
 - gcn-asm
 - sgpr
@@ -40,11 +39,8 @@ aliases:
 - AMDGCN asm
 - amdgcn ISA
 implemented_by:
-- pr-Tensile-1383
-- pr-Tensile-1521
 - pr-composable_kernel-3098
 - pr-aiter-3072
-- pr-aiter-2394
 - pr-Tensile-1406
 - pr-Tensile-1288
 - pr-Tensile-1185
@@ -64,8 +60,7 @@ assembly).
 
 This page covers the register model, the mnemonic families you will see most,
 the structure of a standalone `.s` kernel, and how to drop inline assembly into
-HIP. CDNA (gfx9xx) is **wave64-only**; RDNA4 (gfx1201) shares most of the scalar
-and memory ISA but uses `v_wmma_*` instead of `v_mfma_*` and can run wave32.
+HIP. The active gfx942/gfx950 CDNA targets are **wave64-only**.
 
 ## Register model
 
@@ -229,7 +224,7 @@ builtin and verify with `llvm-objdump`.
 ## Practical notes
 
 - **`warpSize` is 64 on CDNA** — never hardcode 32. Lane masks (`__ballot`,
-  `exec`, `vcc`) are 64-bit. RDNA4 may run wave32.
+  `exec`, `vcc`) are 64-bit on the active CDNA targets.
 - The compiler's scheduler hoists loads and packs `s_waitcnt` aggressively;
   if you see a stall, check whether a `vmcnt(0)` is gating more than necessary.
 - Read disassembly to confirm vector width: a tight copy loop should show

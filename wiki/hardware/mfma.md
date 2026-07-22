@@ -22,14 +22,12 @@ evidence_basis:
   evidence_type: official-doc
 - source_id: doc-cdna4-isa
   evidence_type: official-doc
-- source_id: blog-matrix-cores-cdna
+- source_id: ref-matrix-calculator
   evidence_type: upstream-code
 related:
 - hw-mxfp
 - hw-wavefront
 - technique-mfma-pipelining
-- lang-rocwmma
-- migration-wmma-vs-mfma
 sources:
 - doc-cdna3-isa
 - doc-cdna4-isa
@@ -80,8 +78,7 @@ __device__ float4 mfma_16x16x16_f16(
 ```
 
 Most kernels do **not** call the builtin directly. Prefer
-[`rocWMMA`](../languages/rocwmma.md) (a portable C++ fragment API) or let
-[Composable Kernel](../languages/composable-kernel.md) / hipBLASLt / Triton emit
+[Composable Kernel](../languages/composable-kernel.md), hipBLASLt, or Triton to emit
 MFMA for you. Use the builtin (or hand assembly) only when you need full control
 of the register layout.
 
@@ -178,8 +175,9 @@ python3 matrix_calculator.py --architecture cdna3 \
 
 ## Performance claims
 
-See [MI300X datasheet](../../sources/docs/doc-mi300x-datasheet.md) and the
-[CDNA4 whitepaper](../../sources/docs/doc-cdna4-whitepaper.md):
+The following product-level peaks are **source-reported**, not local
+measurements. See the [MI300X datasheet](../../sources/docs/doc-mi300x-datasheet.md)
+and [CDNA4 whitepaper](../../sources/docs/doc-cdna4-whitepaper.md):
 
 - MI300X: FP16/BF16 1307 TFLOPS, FP8 2615 TFLOPS, INT8 2615 TOPS (dense).
 - MI355X: FP16/BF16 2.5 PF, OCP-FP8 5.0 PF, MXFP6/MXFP4 10 PF (dense).
@@ -188,8 +186,6 @@ See [MI300X datasheet](../../sources/docs/doc-mi300x-datasheet.md) and the
 
 - [MXFP / block-scaled FP8-FP6-FP4](mxfp.md)
 - [MFMA pipelining technique](../techniques/mfma-pipelining.md)
-- [rocWMMA language guide](../languages/rocwmma.md)
-- [WMMA vs MFMA migration](../migration/wmma-vs-mfma.md)
 
 ## Sources
 

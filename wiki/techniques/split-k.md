@@ -5,7 +5,6 @@ type: technique
 architectures:
 - gfx942
 - gfx950
-- gfx1201
 tags:
 - split-k
 - gemm
@@ -47,9 +46,9 @@ implemented_by:
 - pr-composable_kernel-2059
 - pr-Tensile-1355
 - pr-FlyDSL-370
-- pr-FlyDSL-346
 - pr-composable_kernel-785
 - pr-composable_kernel-767
+- pr-composable_kernel-1591
 ---
 # Split-K / GlobalSplitU — Partial-Sum Reduction GEMM
 

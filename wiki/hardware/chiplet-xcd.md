@@ -35,6 +35,9 @@ aliases:
 - SPX
 - CPX
 - partition modes
+- MI355X compute units topology
+- MI300 L2 kernel dispatch persistence
+- cache flush between launches
 ---
 # XCD Chiplets, Per-XCD L2, Infinity Cache & Partition Modes (CDNA3/CDNA4)
 

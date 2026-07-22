@@ -1,7 +1,7 @@
-# AMD CDNA / RDNA Kernel Optimization Knowledge Base
+# AMD CDNA Kernel Optimization Knowledge Base
 
 > Comprehensive, agent-queryable knowledge base for GPU kernel optimization on
-> AMD Instinct (CDNA3 gfx942 / CDNA4 gfx950) and Radeon (RDNA4 gfx1201).
+> AMD Instinct (CDNA3 gfx942 / CDNA4 gfx950).
 > Optimized for LLM agent retrieval. See [CLAUDE.md](CLAUDE.md) for schema and
 > conventions, and [SKILL.md](SKILL.md) for skill usage.
 >
@@ -44,7 +44,6 @@ See [references/examples.md](references/examples.md) for worked query patterns.
 - [hw-wavefront](wiki/hardware/wavefront.md) — wave64, EXEC, SGPR/VGPR/AGPR
 - [hw-cross-lane](wiki/hardware/cross-lane.md) — DPP, ds_permute, permlane16
 - [hw-chiplet-xcd](wiki/hardware/chiplet-xcd.md) — XCD chiplets, Infinity Cache, NUMA
-- [hw-wmma](wiki/hardware/wmma.md) — RDNA4 WMMA matrix instructions
 
 ## Optimization Techniques
 
@@ -97,13 +96,11 @@ See [references/examples.md](references/examples.md) for worked query patterns.
 - [lang-composable-kernel](wiki/languages/composable-kernel.md) — CK / ck_tile
 - [lang-flydsl](wiki/languages/flydsl.md) — FlyDSL layout DSL
 - [lang-triton-amd](wiki/languages/triton-amd.md) — Triton (AMD backend)
-- [lang-rocwmma](wiki/languages/rocwmma.md) — rocWMMA fragment API
 
 ## Migration Guides
 
 - [migration-cuda-to-hip](wiki/migration/cuda-to-hip.md) — CUDA → HIP / ROCm
 - [migration-gfx942-to-gfx950](wiki/migration/gfx942-to-gfx950.md) — CDNA3 → CDNA4
-- [migration-wmma-vs-mfma](wiki/migration/wmma-vs-mfma.md) — RDNA WMMA vs CDNA MFMA
 
 ## Source Repositories
 

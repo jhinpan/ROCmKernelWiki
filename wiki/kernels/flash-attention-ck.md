@@ -64,12 +64,12 @@ performance_claims:
 implemented_by:
 - pr-composable_kernel-1224
 - pr-aiter-1383
-- pr-FlyDSL-346
 - pr-triton-247
 - pr-aiter-2945
 - pr-vllm-40871
 - pr-aiter-3357
 - pr-aiter-2525
+- pr-composable_kernel-1789
 ---
 # FlashAttention-2 via CK-tile on CDNA (MI300X)
 
@@ -243,25 +243,23 @@ make tile_example_fmha_fwd -j
 ## Runnable example
 
 The production CK-tile path above issues both GEMMs as `v_mfma_*` matrix-core
-instructions, which **do not execute on RDNA4 (gfx1201)**. A portable, pure-HIP
-fp32 reference that reproduces the same FlashAttention-2 online-softmax
-recurrence — tiled over KV, one block per `(head, query-tile)`, `(m, l, O)` state
-in registers, `1/l` hoisted to the epilogue — is in
-[`examples/flash-attention-ck/`](../../examples/flash-attention-ck/). It runs and
-self-checks against a naive CPU `softmax(QKᵀ)V` on this gfx1201 box.
+instructions. A pure-HIP fp32 reference that reproduces the same
+FlashAttention-2 online-softmax recurrence — tiled over KV, one block per
+`(head, query-tile)`, `(m, l, O)` state in registers, `1/l` hoisted to the
+epilogue — is in
+[`examples/flash-attention-ck/`](../../examples/flash-attention-ck/). It runs on
+gfx950 and checks against a naive CPU `softmax(QKᵀ)V`.
 
 ```bash
-cd examples/flash-attention-ck
-hipcc --offload-arch=gfx1201 -O3 flash_attention_fwd.hip -o flash_attention_fwd
-./flash_attention_fwd          # H=4 N=256 D=64
+cd examples/flash-attention-ck && ./build.sh
 ```
 
-Expected output (captured on gfx1201, ROCm 7.2.3):
+Expected output (captured on MI355X / gfx950):
 
 ```
-FlashAttention-2 fwd (portable HIP, fp32) on gfx1201
+FlashAttention-2 fwd (portable HIP, fp32) on gfx950
   H=4 N=256 D=64  BR=64 BC=64  scale=0.12500
-  avg kernel time: 2.1091 ms   (31.8 GFLOP/s)
+  avg kernel time: 1.8350 ms   (36.6 GFLOP/s)
   max abs error: 1.490e-07   max rel error: 4.404e-03
 PASS
 ```

@@ -44,14 +44,14 @@ sources:
 - blog-gemm-optimization
 - ref-gcnasm
 implemented_by:
-- pr-FlyDSL-346
-- pr-Tensile-1521
 - pr-composable_kernel-3098
-- pr-composable_kernel-3237
 - pr-aiter-3072
 - pr-composable_kernel-3401
 - pr-composable_kernel-2836
-- pr-composable_kernel-2528
+- pr-composable_kernel-2436
+- pr-composable_kernel-1838
+- pr-composable_kernel-1705
+- pr-Tensile-299
 ---
 # LDS Double / Multi-Buffering
 
@@ -123,10 +123,10 @@ constexpr int TILE = 128 * BK;      // elements of A (and B) per K-tile
 constexpr int NBUF = 2;             // double buffer
 
 // Stream one 4-byte dword per lane from global -> LDS, bypassing VGPRs.
-__device__ inline void cp_async_lds(__attribute__((address_space(3))) float* dst,
+// dst_base must be wave-uniform; hardware adds 4*lane to it.
+__device__ inline void cp_async_lds(__attribute__((address_space(3))) float* dst_base,
                                     const float* src) {
-  // size_in_bytes = 4 (dword). gfx950 also supports 12/16-byte widths.
-  __builtin_amdgcn_load_to_lds(src, dst, /*size=*/4, /*offset=*/0, /*aux=*/0);
+  __builtin_amdgcn_load_to_lds(src, dst_base, /*size=*/4, /*offset=*/0, /*aux=*/0);
 }
 
 __global__ void gemm_db(const float* __restrict__ A,
@@ -135,12 +135,13 @@ __global__ void gemm_db(const float* __restrict__ A,
   __shared__ float a_lds[NBUF][TILE];
   __shared__ float b_lds[NBUF][TILE];
 
-  const int lane = threadIdx.x;
+  const int wave = threadIdx.x / warpSize;
+  const int wave_base = wave * warpSize;
   int buf = 0;
 
   // ---- Prologue: kick off the first tile's loads (no compute yet) ----
-  cp_async_lds(&a_lds[buf][lane], &A[lane]);
-  cp_async_lds(&b_lds[buf][lane], &B[lane]);
+  cp_async_lds(&a_lds[buf][wave_base], &A[threadIdx.x]);
+  cp_async_lds(&b_lds[buf][wave_base], &B[threadIdx.x]);
 
   acc_t acc = {};                                   // AGPR accumulator tile
   for (int k0 = 0; k0 < K; k0 += BK) {
@@ -148,8 +149,10 @@ __global__ void gemm_db(const float* __restrict__ A,
 
     // 1) Prefetch NEXT tile into the other buffer (stays in flight).
     if (k0 + BK < K) {
-      cp_async_lds(&a_lds[nbuf][lane], &A[(k0 + BK) * 128 + lane]);
-      cp_async_lds(&b_lds[nbuf][lane], &B[(k0 + BK) * 128 + lane]);
+      cp_async_lds(&a_lds[nbuf][wave_base],
+                   &A[(k0 + BK) * 128 + threadIdx.x]);
+      cp_async_lds(&b_lds[nbuf][wave_base],
+                   &B[(k0 + BK) * 128 + threadIdx.x]);
     }
 
     // 2) Wait only for THIS tile's loads (vmcnt leaves next-tile loads pending).

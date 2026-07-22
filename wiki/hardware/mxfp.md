@@ -21,14 +21,13 @@ evidence_basis:
   evidence_type: official-doc
 - source_id: doc-cdna4-whitepaper
   evidence_type: official-doc
-- source_id: blog-matrix-cores-cdna
+- source_id: ref-matrix-calculator
   evidence_type: upstream-code
 related:
 - hw-mfma
 - migration-gfx942-to-gfx950
 - kernel-fp8-gemm
 - technique-fine-grained-quantization
-- lang-rocwmma
 sources:
 - doc-cdna4-isa
 - doc-cdna4-whitepaper
@@ -42,16 +41,17 @@ aliases:
 - MXFP4
 - MXFP6
 - f8f6f4
+- v_mfma_scale_f32_16x16x128_f8f6f4
 - E8M0
 implemented_by:
-- pr-composable_kernel-3603
 - pr-composable_kernel-2297
-- pr-composable_kernel-3601
 - pr-composable_kernel-2152
-- pr-composable_kernel-2000
-- pr-vllm-42952
-- pr-composable_kernel-2665
 - pr-FlyDSL-191
+- pr-aiter-2037
+- pr-composable_kernel-2294
+- pr-composable_kernel-2199
+- pr-aiter-490
+- pr-aiter-488
 ---
 # MXFP — Block-Scaled FP8/FP6/FP4 Microscaling (CDNA4 gfx950)
 
@@ -134,8 +134,8 @@ The LLVM/Clang intrinsic for the 16×16 scaled form is:
 
 ```cpp
 // gfx950 only. acc, A, B are wavefront-distributed register tiles.
-// opselA/opselB pick the byte lane of the packed E8M0 scale; the two trailing
-// immediates carry the A-format and B-format selectors (see table above).
+// cbsz/blgp, the first two immediates after the register operands, select the
+// A/B formats; opselA/opselB select bytes from the packed E8M0 scales.
 using f32x4  = __attribute__((__vector_size__(16))) float;
 using i32x8  = __attribute__((__vector_size__(32))) int;  // packed narrow A/B
 
@@ -198,11 +198,13 @@ From the [CDNA4 whitepaper](../../sources/docs/doc-cdna4-whitepaper.md):
 | MXFP4 | 10 PFLOPS | 2× |
 | FP16/BF16 | 2.5 PFLOPS | 0.5× |
 
-The 2× step from FP8 to FP6/FP4 comes directly from the wider-K opcodes
-(`16x16x128` vs the FP8 `16x16x32`): more reduction work per issued instruction
-at the same issue rate. Note the silicon trade — to make room for the MX path,
-CDNA4 **dropped the native TF32/XF32 matrix path** and **halved per-CU FP64
-matrix** throughput vs CDNA3.
+These product-level figures are **source-reported**, not local throughput
+measurements. The unified `16x16x128_f8f6f4` opcode has the same K dimension
+for FP8, FP6, and FP4 selectors. Its 2× FP6/FP4 advantage over FP8 comes from
+the ISA's datatype-dependent execution rate: the operation takes 32 cycles
+when either input is FP8 and 16 cycles for FP6/FP4. Note the silicon trade — to
+make room for the MX path, CDNA4 **dropped the native TF32/XF32 matrix path**
+and **halved per-CU FP64 matrix** throughput vs CDNA3.
 
 > Verified on MI350X (gfx950, ROCm 7.2): the TF32 drop is not a soft
 > "emulation" — the native intrinsic literally does not lower. Compiling

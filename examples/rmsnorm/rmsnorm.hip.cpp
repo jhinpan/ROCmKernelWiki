@@ -6,9 +6,9 @@
 // Reduction: intra-wave with __shfl_down, cross-wave through a small LDS array.
 // Accumulation is always FP32 even for FP16 I/O (squaring FP16 loses precision).
 //
-// Builds and RUNS on gfx1201 (RDNA4, wave32) and is portable to CDNA (wave64):
-// warpSize is queried at runtime via the host and the kernel uses __shfl_down
-// + a wave-count-agnostic LDS finalize, so nothing is hardcoded to 32 or 64.
+// Builds and runs on gfx950. warpSize is queried at runtime via the host and the
+// kernel uses __shfl_down plus a wave-count-agnostic LDS finalize, so the wave
+// width is not hardcoded.
 //
 // Self-checks fp32 and fp16-IO paths against a CPU reference and prints PASS/FAIL.
 
@@ -50,7 +50,7 @@ __global__ void rmsnorm_kernel(IO* __restrict__ y, const IO* __restrict__ x,
     local += v * v;
   }
 
-  // 2) Intra-wave reduction. warpSize is a builtin (32 on RDNA, 64 on CDNA).
+  // 2) Intra-wave reduction. warpSize is a device builtin.
   const int ws = warpSize;
   for (int off = ws >> 1; off > 0; off >>= 1)
     local += __shfl_down(local, off);

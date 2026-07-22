@@ -5,7 +5,6 @@ type: technique
 architectures:
 - gfx942
 - gfx950
-- gfx1201
 tags:
 - buffer-oob-guard
 - buffer-instructions
@@ -39,11 +38,11 @@ implemented_by:
 - pr-triton-729
 - pr-aiter-2328
 - pr-aiter-2685
-- pr-aiter-2394
 - pr-composable_kernel-3512
 - pr-composable_kernel-2425
-- pr-Tensile-1521
 - pr-Tensile-1288
+- pr-FlyDSL-197
+- pr-FlyDSL-131
 ---
 # Branchless Boundary Handling with Buffer OOB Guards
 
@@ -116,15 +115,8 @@ descriptor with the number of **bytes** of valid data:
 // CK_TILE_BUFFER_RESOURCE_3RD_DWORD for the targets covered by this page.
 #if !defined(__HIP_DEVICE_COMPILE__) || !__HIP_DEVICE_COMPILE__
 #define WIKI_RAW_BUFFER_FLAGS 0xffffffffu  // host-pass placeholder; never issued
-#elif defined(__gfx803__) || defined(__gfx900__) || defined(__gfx906__) || \
-      defined(__gfx908__) || defined(__gfx90a__) || defined(__gfx940__) || \
-      defined(__gfx941__) || defined(__gfx942__) || defined(__gfx950__)
-#define WIKI_RAW_BUFFER_FLAGS 0x00020000u  // GFX9
-#elif defined(__gfx1100__) || defined(__gfx1101__) || defined(__gfx1102__) || \
-      defined(__gfx1103__) || defined(__gfx1150__) || defined(__gfx1151__) || \
-      defined(__gfx1152__) || defined(__gfx1153__) || defined(__gfx1200__) || \
-      defined(__gfx1201__)
-#define WIKI_RAW_BUFFER_FLAGS 0x31004000u  // GFX11 / gfx1200-gfx1201
+#elif defined(__gfx942__) || defined(__gfx950__)
+#define WIKI_RAW_BUFFER_FLAGS 0x00020000u  // active GFX9 targets
 #else
 #error "Add the target's raw-buffer resource flags before using this helper"
 #endif
@@ -257,10 +249,9 @@ pointer is provably a tensor base plus offset — see
   the raw comparison is against `InstOffset + voffset`. Keep it zero for the
   shown window-relative idiom, or account for it when constructing the SRD base
   and range.
-- **Descriptor flags are target-specific.** The raw-dword flags used here are
-  `0x00020000` on gfx942/gfx950 and `0x31004000` on gfx11/gfx1200/gfx1201. Do not
-  copy a gfx9 literal into a gfx1201 build; use a target-selected helper such as
-  the one above (or CK Tile's maintained constant).
+- **Descriptor flags are target-specific.** The active gfx942/gfx950 targets
+  use `0x00020000`. Use a maintained target-selected helper before broadening
+  this code beyond the active GFX9 scope.
 - **Negative offsets wrap.** The comparison is unsigned; a negative `voffset`
   becomes a huge positive value (still OOB → 0), which is usually what you want,
   but do not rely on signed clamping.

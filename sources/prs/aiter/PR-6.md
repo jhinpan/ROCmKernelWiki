@@ -27,9 +27,9 @@ inclusion_reason: kernel path 'csrc/py_itfs_ck/attention_kernels.cu'; keyword 'a
 changed_paths:
 - csrc/py_itfs_ck/attention_kernels.cu
 related:
+- lang-flydsl
 - kernel-paged-attention
 - kernel-mla-decode
-- kernel-flash-attention-ck
 ---
 # fix naive attn api args
 

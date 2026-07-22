@@ -47,10 +47,6 @@ changed_paths:
 - setup.py
 - tests/test_flash_attn.py
 facet_source: inferred
-related:
-- kernel-flash-attention-ck
-- kernel-mla-decode
-- technique-vgpr-budgeting
 ---
 # Jhzhan/release test
 

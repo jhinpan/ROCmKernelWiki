@@ -1,44 +1,42 @@
-# FP8 Block-Scaled GEMM — runnable example
+# FP8 Block-Scaled GEMM — ISA probe + runtime fallback
 
-This directory contains **two** GEMM examples that together demonstrate the FP8
-GEMM page. They are deliberately separate because the FP8 matrix-core path is a
-**CDNA-only (MFMA)** instruction set, while the box this was authored on is an
-**RX 9070 XT = gfx1201 = RDNA4**, which has **WMMA, not MFMA**.
+This directory contains two deliberately separate paths: an FP8 compiler/ISA
+probe and a runnable FP16 correctness fallback.
 
-| File | What | Arch | Runs here? |
+| File | What | Target | Runtime status |
 |---|---|---|---|
-| `wmma_hgemm.cpp` | Portable rocWMMA **FP16** tiled GEMM (16×16×16), CPU-checked | gfx1201 (and any rocWMMA target) | ✅ builds **and runs** |
-| `fp8_gemm_cdna.cpp` | CDNA-MFMA **FP8** GEMM via the real `f8f6f4` / `fp8_fp8` builtins | gfx950 (CDNA4) + gfx942 (CDNA3) | ❌ cross-compile-verify only |
+| `wmma_hgemm.cpp` | rocWMMA API **FP16** tiled GEMM, CPU-checked | gfx950 | Builds, runs, passes |
+| `fp8_gemm_cdna.cpp` | **FP8** builtins for `f8f6f4` / `fp8_fp8` | gfx950 + gfx942 | Compiler/ISA-only; no kernel launch |
 
-## Build / run everything
+## Build and verify
 
 ```bash
 ./build.sh
 ```
 
-`build.sh` exits 0 only if: the portable kernel builds **and self-checks PASS**,
-the gfx950 object+exe build, the gfx942 object builds, and the expected
-matrix-core instructions are confirmed present in the emitted device assembly.
+`build.sh` exits zero only if the FP16 fallback self-check passes, the FP8
+gfx950 object/executable and gfx942 object build, and both expected instructions
+are present in emitted device assembly.
 
 ---
 
-## 1. Portable rocWMMA FP16 GEMM (runs on gfx1201)
+## 1. rocWMMA API FP16 GEMM (runs on gfx950)
 
-The demonstrable fallback. Same tiled matrix-core structure as the FP8 kernel,
-but in FP16 using rocWMMA, which abstracts WMMA on RDNA and MFMA on CDNA so it
-runs natively here. Each wave computes one 16×16 output tile, FP32 accumulate,
-result checked against a CPU reference.
+The runnable fallback uses the same tiled matrix-core structure as the FP8
+kernel, but with FP16 inputs through rocWMMA. rocWMMA is the API; gfx950 emits
+MFMA instructions. Each wave computes one 16×16 output tile with FP32
+accumulation, checked against a CPU reference.
 
 ```bash
-hipcc --offload-arch=gfx1201 -I/opt/rocm/include wmma_hgemm.cpp -o wmma_hgemm
+hipcc --offload-arch=gfx950 -I/opt/rocm/include wmma_hgemm.cpp -o wmma_hgemm
 ./wmma_hgemm
 ```
 
-**Real captured output (gfx1201, ROCm 7.2.3):**
+**Captured output (MI355X / gfx950):**
 
 ```
-rocWMMA FP16 GEMM  M=256 N=256 K=256 (warpSize=32)
-avg 0.0069 ms/iter   4863.5 GFLOP/s
+rocWMMA FP16 GEMM  M=256 N=256 K=256 (warpSize=64)
+avg 0.0035 ms/iter   9657.6 GFLOP/s
 max abs error = 0.000000
 PASS
 ```
@@ -47,12 +45,12 @@ PASS
 
 ---
 
-## 2. CDNA-MFMA FP8 GEMM (cross-compile-verify only)
+## 2. FP8 GEMM (compiler/ISA verification only)
 
 This is the kernel the wiki page is actually about. It calls the real
-matrix-core builtins and is verified to **compile and emit the right
-instructions** for CDNA targets. It will **not execute on gfx1201** (no MFMA),
-so it is not run here — run it on MI350X/MI355X (gfx950) or MI300X (gfx942).
+matrix-core builtins and is verified to compile and emit the expected
+instructions. `build.sh` does not execute the FP8 binary, and the linked host
+`main()` does not launch a kernel. This is not a numeric FP8 correctness test.
 
 ```bash
 # gfx950 (CDNA4): OCP E4M3, unified f8f6f4 scaled MMA, K=128
@@ -91,7 +89,7 @@ or hipBLASLt.
 
 ## Arch summary
 
-- **Runs on:** gfx1201 (the rocWMMA FP16 demo).
-- **Cross-compiles for / runs on:** gfx950 (MI350X/MI355X) and gfx942 (MI300X)
-  for the FP8 MFMA kernel — built and instruction-verified here, executed on
-  CDNA hardware.
+- **gfx950 runtime:** the rocWMMA FP16 fallback runs and passes on MI355X.
+- **gfx950 FP8:** compiler/link/ISA verification only; no kernel launch.
+- **gfx942 FP8:** object cross-compile and ISA verification only; no runtime is
+  claimed.

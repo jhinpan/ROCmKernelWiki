@@ -41,14 +41,14 @@ sources:
 - blog-4wave-fp8-gemm
 - blog-amdgpu-kernel-opt-guide
 implemented_by:
-- pr-Tensile-1383
 - pr-Tensile-1529
 - pr-FlyDSL-591
-- pr-composable_kernel-2825
-- pr-composable_kernel-2722
-- pr-composable_kernel-2319
 - pr-Tensile-1406
-- pr-FlyDSL-447
+- pr-sglang-25898
+- pr-composable_kernel-3288
+- pr-composable_kernel-3137
+- pr-composable_kernel-2276
+- pr-composable_kernel-1776
 ---
 # Occupancy Tuning — Waves per SIMD vs ILP on CDNA
 
@@ -66,9 +66,8 @@ minimum. Compute register capacity per SIMD, then convert it to waves/CU before
 comparing it with the LDS limit:
 
 ```
-# gfx942 vector allocation; gfx950 instead uses round_up(combined_vgpr_count, 8)
-vector_alloc = round_up(
-    round_up(arch_vgprs_per_lane, 4) + accum_vgprs_per_lane, 8)
+# HSA metadata .vgpr_count is already combined on gfx942 and gfx950.
+vector_alloc = round_up(metadata_vgpr_count, 8)
 sgpr_alloc = round_up(sgpr_count_including_target_specials, 16)
 
 vector_limited_waves_per_simd = min(8, floor(512 / vector_alloc))
@@ -110,12 +109,11 @@ hipcc -O3 --offload-arch=gfx942 \
 estimate per dispatch — compare the static prediction against the dynamic number
 to catch scratch spills.
 
-On gfx942, resource metadata commonly exposes regular `.vgpr_count` and
-accumulator `.agpr_count` separately. Compute
-`round_up(round_up(vgpr_count, 4) + agpr_count, 8)`; rounding each component to
-eight first would overestimate the allocation. On gfx950, `.vgpr_count` already
-includes both views, so use `round_up(vgpr_count, 8)` and do not add
-`.agpr_count` again.
+For code-object/HSA metadata on either target, round the combined `.vgpr_count`
+to eight and do not add `.agpr_count` again. If a lower-level compiler remark
+instead exposes separate `NumVgprs` and `NumAgprs`, use the target-specific
+derivation documented on the [wavefront page](../hardware/wavefront.md);
+`TotalNumVgprs`, when present, is already combined.
 
 ## VGPR-limited occupancy
 

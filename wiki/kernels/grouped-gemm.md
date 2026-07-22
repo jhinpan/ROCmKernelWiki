@@ -55,14 +55,14 @@ performance_claims:
   source_id: ref-aiter
   baseline: G separate hipBLASLt launches
 implemented_by:
-- pr-composable_kernel-2466
 - pr-FlyDSL-412
 - pr-composable_kernel-2234
-- pr-composable_kernel-2821
 - pr-vllm-36286
 - pr-vllm-36022
 - pr-sglang-25540
 - pr-sglang-24816
+- pr-composable_kernel-2878
+- pr-composable_kernel-1791
 ---
 # Grouped GEMM — Variable-Size Expert GEMMs in One Launch (MoE)
 
@@ -232,29 +232,31 @@ single-launch scheduling versus a per-expert loop ([AITER](../../sources/refs/re
 ## Runnable example
 
 A portable [rocWMMA grouped GEMM](../../examples/grouped-gemm/) demonstrates the
-single-launch flattened-tile scheduling core on this RDNA4 box (it also compiles
-to MFMA on CDNA). Several **independent, uneven** `(Mg, Ng, Kg)` problems are
-dispatched in **one launch**: a per-group descriptor table plus a prefix sum over
+single-launch flattened-tile scheduling core on gfx950. Several **independent,
+uneven** `(Mg, Ng, Kg)` problems are dispatched in **one launch**: a per-group
+descriptor table plus a prefix sum over
 each group's `ceil(N/16)` tile count maps `tile_id = blockIdx.x` back to
 `(group, m_tile, n_tile)`. Inner tiles use rocWMMA `16×16×16` fragments —
 **fp16 in, fp32 accumulate** — and each group is verified against a CPU
-reference. Ragged sizes (e.g. `17×33×49`) are zero-padded to 16-multiples.
+reference. rocWMMA is the API; the gfx950 device code emits MFMA. The source can
+be cross-compiled for gfx942, but no gfx942 runtime is claimed.
 
 ```bash
 cd examples/grouped-gemm && ./build.sh
-# hipcc --offload-arch=gfx1201 -O3 -std=c++17 -I/opt/rocm/include \
+# hipcc --offload-arch=gfx950 -O3 -std=c++17 -I/opt/rocm/include \
 #       grouped_gemm_wmma.cpp -o grouped_gemm_wmma
 ```
 
-Expected output (gfx1201, RX 9070 XT, ROCm 7.2.3):
+Expected output (MI355X / gfx950):
 
 ```
-Device: AMD Radeon RX 9070 XT  warpSize=32
+Device: AMD Instinct MI355X  warpSize=64
 Groups: 6   total 16x16 output tiles (one launch): 71
   group 0  M= 64 N= 48 K= 80  tiles=12  max|err|=3.8147e-06  ok
   ...
-  group 5  M= 17 N= 33 K= 49  tiles= 6  max|err|=1.9073e-06  ok
-Overall max abs error: 6.6757e-06
+  group 5  M= 17 N= 33 K= 49  tiles= 6  max|err|=1.4305e-06  ok
+Avg kernel time: 0.0027 ms  (761.7 GFLOP/s aggregate over all groups)
+Overall max abs error: 5.2452e-06
 PASS
 ```
 

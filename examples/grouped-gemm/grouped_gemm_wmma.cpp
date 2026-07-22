@@ -13,9 +13,9 @@
 // covers all groups regardless of how uneven the sizes are.
 //
 // fp16 input  ->  fp32 accumulate  ->  fp32 output.
-// rocWMMA 16x16x16 fragments run NATIVELY on gfx1201 (RDNA4 WMMA) and on CDNA
-// (MFMA) -- this file builds AND runs on the gfx1201 box and self-checks each
-// group against a CPU reference.
+// The source uses rocWMMA's 16x16x16 fragment API; on gfx950 the compiler emits
+// MFMA instructions. This file runs on gfx950 and self-checks each group against
+// a CPU reference.
 //
 // Ragged sizes are handled by padding each matrix's storage to a multiple of 16
 // with ZEROS, so rocWMMA's (non-bounds-checked) loads are always in range and
@@ -183,7 +183,7 @@ int main() {
   // One wave per 16x16 output tile.
   hipDeviceProp_t prop;
   HIP_CHECK(hipGetDeviceProperties(&prop, 0));
-  int wave = prop.warpSize;  // 32 on gfx1201, 64 on CDNA
+  int wave = prop.warpSize;  // 64 on the verified gfx950 target
   printf("Device: %s  warpSize=%d\n", prop.name, wave);
   printf("Groups: %d   total 16x16 output tiles (one launch): %d\n", G, total_tiles);
 

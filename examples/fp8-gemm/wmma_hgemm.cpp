@@ -1,14 +1,13 @@
-// wmma_hgemm.cpp — PORTABLE rocWMMA FP16 GEMM (runs on gfx1201 / RDNA4).
+// wmma_hgemm.cpp — portable rocWMMA API FP16 GEMM, verified on gfx950.
 //
-// This is the *demonstrable* fallback for the FP8 GEMM page: gfx1201 has WMMA
-// (not MFMA) and no f8f6f4 path, so we show the same tiled matrix-core GEMM
-// structure in FP16 using rocWMMA, which abstracts WMMA here and MFMA on CDNA.
+// This is the runnable fallback for the FP8 GEMM page. It shows the same tiled
+// matrix-core structure in FP16 through rocWMMA; gfx950 emits MFMA instructions.
 //
 // D = A (MxK, row-major) * B (KxN, col-major) -> C (MxN, row-major), FP32 accum.
 // Each wave computes one 16x16 output tile. Self-checks against a CPU reference.
 //
-// Build (runs natively on gfx1201):
-//   hipcc --offload-arch=gfx1201 -I/opt/rocm/include wmma_hgemm.cpp -o wmma_hgemm
+// Build (runs on gfx950):
+//   hipcc --offload-arch=gfx950 -I/opt/rocm/include wmma_hgemm.cpp -o wmma_hgemm
 
 #include <hip/hip_runtime.h>
 #include <rocwmma/rocwmma.hpp>
@@ -87,8 +86,7 @@ int main()
     HIP_CHECK(hipMemcpy(dA, hA.data(), hA.size() * sizeof(__half), hipMemcpyHostToDevice));
     HIP_CHECK(hipMemcpy(dB, hB.data(), hB.size() * sizeof(__half), hipMemcpyHostToDevice));
 
-    // Wavefront size on gfx1201 is 32 by default; rocWMMA needs one full wave
-    // per 16x16 tile. Use blockDim.x == warpSize.
+    // rocWMMA needs one full wave per 16x16 tile. Query the target's wave size.
     int warp = 0;
     HIP_CHECK(hipDeviceGetAttribute(&warp, hipDeviceAttributeWarpSize, 0));
     dim3 block(warp, 1, 1);

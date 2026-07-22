@@ -1,8 +1,8 @@
 // vadd_asm_gfx942.cpp — GCN inline-assembly vector add for CDNA (gfx942/wave64).
 //
 // CROSS-COMPILE-ONLY here: this file is built with --offload-arch=gfx942 to
-// prove the GCN VMEM asm path assembles. It is NOT run on this gfx1201 (RDNA4)
-// box. The inline asm uses FLAT/GLOBAL VMEM instructions and an explicit
+// prove the GCN VMEM asm path assembles; it is not executed by build.sh.
+// The inline asm uses FLAT/GLOBAL VMEM instructions and an explicit
 // s_waitcnt drain — the same mechanics the wiki page describes for the
 // hand-written buffer_load/buffer_store kernel, reduced to a runnable inline
 // block so the assembler actually validates the encodings.
@@ -50,9 +50,9 @@ __global__ void vadd_asm(const float* __restrict__ A,
       : "memory");
 }
 
-// Host stub: present so the TU links to a full executable when desired. Not
-// executed on gfx1201 — the value of this file is that --offload-arch=gfx942
-// assembles the GCN VMEM instructions above.
+// Host stub: present so the TU links to a full executable when desired. The
+// value of this file is that --offload-arch=gfx942 assembles the GCN VMEM
+// instructions above; build.sh only creates an object.
 int main() {
   const int N = 1 << 20;
   float *dA, *dB, *dC;

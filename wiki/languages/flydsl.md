@@ -5,8 +5,6 @@ type: language
 architectures:
 - gfx942
 - gfx950
-- gfx1201
-- gfx1250
 tags:
 - flydsl
 - mlir
@@ -43,14 +41,14 @@ sources:
 - blog-amd-matrix-cores
 - doc-cdna3-isa
 implemented_by:
-- pr-aiter-2726
-- pr-aiter-2581
-- pr-aiter-2497
-- pr-aiter-2390
-- pr-aiter-2113
-- pr-aiter-1561
-- pr-composable_kernel-2320
-- pr-composable_kernel-2040
+- pr-sglang-22537
+- pr-composable_kernel-1789
+- pr-aiter-2712
+- pr-aiter-1660
+- pr-vllm-40871
+- pr-vllm-40159
+- pr-vllm-39083
+- pr-vllm-36100
 ---
 # FlyDSL — Python + MLIR Layout DSL for AMD Kernels
 
@@ -65,10 +63,9 @@ toolchain. A kernel is authored in Python, lowered through the `fly` dialect to
 **ROCDL** (the AMDGPU LLVM IR dialect), then to LLVM IR, and finally compiled to
 a HIP **fatbin** that you launch like any other device binary.
 
-FlyDSL targets the matrix cores directly through **MFMA atoms** (and WMMA on
-RDNA4), so it is a natural fit for GEMM-shaped work. It supports
-**gfx942 (CDNA3)**, **gfx950 (CDNA4)**, **gfx1250 (CDNA-next)**, and
-**gfx1201 (RDNA4)**. In practice it has shown up as an optional backend inside
+FlyDSL targets the matrix cores directly through **MFMA atoms**, so it is a
+natural fit for GEMM-shaped work. The active wiki covers its **gfx942 (CDNA3)**
+and **gfx950 (CDNA4)** paths. In practice it has shown up as an optional backend inside
 [AITER](../../sources/refs/ref-aiter.md) for fused-MoE expert GEMMs, where
 [pre-shuffled weight layouts](../techniques/preshuffle-layout.md) matter.
 
@@ -154,7 +151,7 @@ def gemm(a, b, c, M, N, K):
 [the MFMA page](../hardware/mfma.md)) with the fragment layouts for A, B and the
 accumulator, so `acc` is automatically allocated in **AGPRs** and `fly.load`
 produces the correct per-lane register distribution. On gfx950 you would select a
-wider-K or `f8f6f4` atom; on gfx1201 the atom maps to a `v_wmma_*` instruction.
+wider-K or `f8f6f4` atom.
 
 ## The lowering pipeline: Fly → ROCDL → LLVM → fatbin
 
@@ -238,9 +235,8 @@ wins, parity, and still-open headroom depending on the kernel.
 
 - **Experimental / moving target.** Dialect op names, pass flags, and the Python
   API are not stable; pin a commit.
-- **wave64 vs wave32.** CDNA targets (gfx942/gfx950/gfx1250) are wave64-only;
-  RDNA4 (gfx1201) supports both. An atom chosen for an MFMA target is not valid
-  on a WMMA target — query the arch, don't hardcode.
+- **wave64.** gfx942/gfx950 are wave64-only. Query the target and do not
+  reuse an atom or register layout across architectures without validation.
 - **FP8 encoding differs by arch.** gfx942 FP8 is FNUZ; gfx950 FP8 is OCP. A
   layout/atom built for one is not bit-compatible with the other.
 - **Debug at the ROCDL level.** When results are wrong, dump `--emit=rocdl` and

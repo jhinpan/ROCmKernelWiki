@@ -42,11 +42,11 @@ implemented_by:
 - pr-triton-775
 - pr-triton-635
 - pr-aiter-3128
-- pr-Tensile-1383
 - pr-composable_kernel-3620
 - pr-composable_kernel-3349
 - pr-composable_kernel-3193
 - pr-composable_kernel-3027
+- pr-composable_kernel-2955
 ---
 # LDS Bank-Conflict Avoidance (padding, swizzle, ds_read2)
 

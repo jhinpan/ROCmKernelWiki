@@ -45,10 +45,10 @@ implemented_by:
 - pr-composable_kernel-933
 - pr-composable_kernel-2059
 - pr-composable_kernel-1862
-- pr-FlyDSL-340
 - pr-composable_kernel-882
-- pr-composable_kernel-3237
 - pr-composable_kernel-2152
+- pr-composable_kernel-2016
+- pr-composable_kernel-1453
 ---
 # Stream-K — Load-Balanced GEMM Tile Scheduling for CUs/XCDs
 

@@ -1,12 +1,13 @@
 // LDS-staged, bank-conflict-free out-of-place matrix transpose.
-// Portable pure HIP — builds and RUNS on gfx1201 (RDNA4), gfx942, gfx950.
+// Portable pure HIP — builds and runs on gfx950; the guarded source also
+// device-compiles for gfx942.
 //
 // Pattern: load a TILE x TILE block with a coalesced row-major read into LDS,
 // then write it out transposed with another coalesced row-major write. The
 // transposed read walks down an LDS column, which is exactly where bank
 // conflicts appear. For this block(32,32) lane mapping the required padding is
-// target-specific: +1 dword on gfx942/default RDNA wave32, +2 on gfx950 where a
-// b32 phase contains two adjacent columns across the same 32 rows.
+// target-specific: +1 dword on gfx942, +2 on gfx950 where one b32 phase contains
+// two adjacent columns across the same 32 rows.
 //
 // Self-checks the result against a CPU reference and reports effective
 // bandwidth.

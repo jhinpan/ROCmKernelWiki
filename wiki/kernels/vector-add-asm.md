@@ -66,13 +66,13 @@ performance_claims:
   confidence: inferred
 implemented_by:
 - pr-Tensile-1288
-- pr-composable_kernel-2949
-- pr-composable_kernel-3603
 - pr-composable_kernel-3208
-- pr-composable_kernel-2963
 - pr-composable_kernel-3520
 - pr-composable_kernel-2715
 - pr-aiter-3072
+- pr-FlyDSL-388
+- pr-composable_kernel-3493
+- pr-sglang-25898
 ---
 # Persistent Vector Add in GCN Assembly (async direct-to-LDS, double-buffered)
 
@@ -229,17 +229,19 @@ __global__ void vadd_persistent(const float* __restrict__ A,
                                 const float* __restrict__ B,
                                 float* __restrict__ C, int N) {
   __shared__ float sA[256], sB[256];
-  const int lane   = threadIdx.x;                  // 0..255 here (4 waves)
+  const int wave   = threadIdx.x / warpSize;
+  const int wave_base = wave * warpSize;
   const int stride = gridDim.x * blockDim.x;
   for (int base = blockIdx.x * blockDim.x; base < N; base += stride) {
-    int i = base + lane;
-    // direct-to-LDS async copy (HBM -> LDS, bypassing VGPRs)
-    __builtin_amdgcn_load_to_lds(/*src*/ A + i, /*dst*/ &sA[lane],
-                                 /*size*/ 4, /*offset*/ 0, /*aux*/ 0);
-    __builtin_amdgcn_load_to_lds(B + i, &sB[lane], 4, 0, 0);
+    int i = base + threadIdx.x;
+    if (i < N) {
+      // The LDS base is wave-uniform; hardware adds 4*lane for this dword copy.
+      __builtin_amdgcn_load_to_lds(A + i, &sA[wave_base], 4, 0, 0);
+      __builtin_amdgcn_load_to_lds(B + i, &sB[wave_base], 4, 0, 0);
+    }
     __builtin_amdgcn_s_waitcnt(/*vmcnt*/ 0);       // simplify: drain for clarity
     __syncthreads();
-    if (i < N) C[i] = sA[lane] + sB[lane];         // bounds check (no V# here)
+    if (i < N) C[i] = sA[threadIdx.x] + sB[threadIdx.x];
   }
 }
 ```
@@ -275,27 +277,27 @@ A runnable companion lives in [`examples/vector-add-asm/`](../../examples/vector
 It has two parts:
 
 1. **`vadd_hip.cpp`** — the portable HIP grid-stride vector add (the "what you'd
-   usually ship" kernel above). It **builds and runs on gfx1201** (RDNA4) and
+   usually ship" kernel above). It builds and runs on gfx950 and
    self-checks against a CPU reference.
 2. **`vadd_asm_gfx942.cpp`** — a GCN inline-assembly vector add
    (`global_load_dword` / `global_store_dword` gated by `s_waitcnt vmcnt(0)`)
    that is **cross-compiled for gfx942** to illustrate the VMEM/wait-counter asm
-   path. It is not executed on this RDNA4 box.
+   path. It is not executed.
 
 ```bash
 cd examples/vector-add-asm && ./build.sh
-# Part 1 (runs on gfx1201):
-#   vadd HIP (portable, gfx1201): N=16777216  block=256 grid=4096
-#     time = 0.350 ms/iter   effective BW = 574.8 GB/s (12 B/elem)
+# Part 1 (runs on gfx950):
+#   vadd HIP (portable, gfx950): N=16777216  block=256 grid=4096
+#     time = 0.031 ms/iter   effective BW = 6520.5 GB/s (12 B/elem)
 #     max abs err = 0
 #     PASS
 # Part 2 (cross-compile-only):
-#   OK: vadd_asm_gfx942.o produced (not executed on gfx1201)
+#   OK: vadd_asm_gfx942.o produced (not executed on gfx950)
 ```
 
 The hand-written `buffer_*` double-buffered kernel in this page targets CDNA and
-is cross-compile-verified; the asm path is demonstrated runnably via the gfx942
-inline-asm object plus the portable HIP kernel that actually executes here.
+is cross-compile-verified. The gfx942 inline-asm file is object-only; only the
+portable HIP path is executed in this example.
 
 ## See also
 

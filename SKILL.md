@@ -1,9 +1,9 @@
 ---
 name: rocm-kernel-wiki
-description: Search and apply ROCmKernelWiki when optimizing AMD GPU kernels for MI300/gfx942, MI350/MI355X/gfx950, or RDNA4/gfx1201. Use for MFMA/WMMA, LDS, direct-to-LDS, s_waitcnt, FP8/FP6/FP4/MXFP, wave reductions, GEMM/attention/MoE, CUDA-to-HIP migration, and CK/CK-Tile/AITER/hipBLASLt/FlyDSL/Triton/HIP/GCN implementations. Also use for merged-PR evidence from composable_kernel, AITER, Tensile, rocBLAS, flash-attention, FlyDSL, Triton, vLLM, or SGLang. Do not use for NVIDIA-only kernels, host framework behavior, or ROCm installation and driver troubleshooting.
+description: Search and apply ROCmKernelWiki when optimizing AMD Instinct kernels for MI300/gfx942 or MI350/MI355X/gfx950. Use for MFMA, LDS, direct-to-LDS, s_waitcnt, FP8/FP6/FP4/MXFP, wave reductions, GEMM/attention/MoE, CUDA-to-HIP migration, and CK/CK-Tile/AITER/hipBLASLt/FlyDSL/Triton/HIP/GCN implementations. Also use for merged-PR evidence from composable_kernel, AITER, Tensile, rocBLAS, flash-attention, FlyDSL, Triton, vLLM, or SGLang. Do not use for other GPU architectures, NVIDIA-only kernels, host framework behavior, or ROCm installation and driver troubleshooting.
 ---
 
-# ROCmKernelWiki — AMD CDNA / RDNA Kernel Optimization Wiki
+# ROCmKernelWiki — AMD CDNA Kernel Optimization Wiki
 
 > **Corpus dates:** the merged-PR harvest runs through **2026-05-30** (per
 > `data/refresh-cutoff.yaml`); doc/blog pages carry individual retrieval dates.
@@ -12,9 +12,11 @@ description: Search and apply ROCmKernelWiki when optimizing AMD GPU kernels for
 > before advancing either boundary.
 
 Query a structured, cross-referenced knowledge base of AMD GPU kernel
-optimization for CDNA3 (gfx942 / MI300), CDNA4 (gfx950 / MI350-MI355X), and
-RDNA4 (gfx1201) — **7,454 merged-PR references**, 57 wiki synthesis pages,
-21 doc/blog summaries, and 9 reference-repository studies.
+optimization for CDNA3 (gfx942 / MI300) and CDNA4
+(gfx950 / MI350-MI355X). The repository retains **7,454 merged-PR references**,
+including quarantined raw material for future architectures; the active layer
+contains 54 synthesis pages, 21 doc/blog summaries, and
+10 reference-repository studies.
 
 > Inspired by, and modeled on, MIT Han Lab's
 > [KernelWiki](https://github.com/mit-han-lab/KernelWiki) (the Blackwell/Hopper
@@ -50,6 +52,8 @@ Add `--synthesis` to restrict to curated wiki pages (skip the 7,454 PR sources).
 `--tag` and `--architecture` accept aliases — `--tag XDLOP` matches `mfma`,
 `--tag cp.async` matches `async-copy`, `--architecture MI300` matches `gfx942`,
 `--architecture MI355X` matches `gfx950`.
+Use `--include-out-of-scope` only for explicit recovery research into retained
+raw material; do not turn those results into supported architecture claims.
 
 ### Path 2: Fetch a specific page by id or path
 
@@ -107,22 +111,25 @@ When answering from this KB:
    `experimental`.
 5. **Report performance claims with all fields** — gpu, dtype, shape, metric,
    value, source_id.
+6. **Do not treat the wiki as an ISA-manual replacement.** For exact encodings,
+   ABI fields, or unsupported instructions, follow the pinned primary source.
+7. Refuse architecture-specific conclusions outside gfx942/gfx950 unless the
+   user explicitly requests retained raw material via `--include-out-of-scope`.
 
 ## Knowledge Base Contents (PR cutoff 2026-05-30)
 
 - **7,454 PR reference pages** across ROCm/composable_kernel, aiter, Tensile,
   rocBLAS, flash-attention, FlyDSL, triton, plus ROCm-filtered vLLM/SGLang
-- **57 wiki synthesis pages** — hardware, techniques, kernels, patterns,
-  languages, migration
-- **21 doc/blog summaries** + **9 reference-repository studies**
+- **54 active wiki synthesis pages** plus 3 quarantined pages retained for recovery
+- **21 doc/blog summaries** + **10 reference-repository studies**
 - **9 candidate ledgers** classifying every scanned PR (include/defer/exclude)
 - **6 auto-generated query indices**
-- **959 real upstream PR diffs** in `artifacts/` + **12 runnable, hipcc-compiled kernel examples** in `examples/`
+- **959 real upstream PR diffs** in `artifacts/` + **12 gfx950-first example suites** in `examples/`
 - **Validator** `scripts/validate.py` — schema, vocabulary, link-integrity (0 errors)
 
 ## Quality Guarantees
 
-- Every hardware fact traces to an official AMD ISA doc / whitepaper.
+- Active hardware claims identify their evidence class and primary source.
 - Every technique/kernel/language page carries a real code snippet.
 - Every PR page has `inclusion_reason` and `status: merged`.
 - `verified` pages carry `evidence_basis` (official-doc + upstream-code/paper).

@@ -27,9 +27,9 @@ inclusion_reason: kernel path 'csrc/attention.cu'; keyword 'attention'
 changed_paths:
 - csrc/attention.cu
 related:
+- lang-flydsl
 - kernel-paged-attention
 - kernel-mla-decode
-- kernel-flash-attention-ck
 ---
 # support rta in pa
 

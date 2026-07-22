@@ -28,9 +28,9 @@ changed_paths:
 - csrc/py_itfs_ck/attention_kernels.cu
 - op_tests/test_pa.py
 related:
+- lang-flydsl
 - kernel-paged-attention
 - kernel-mla-decode
-- kernel-flash-attention-ck
 ---
 # fix err
 

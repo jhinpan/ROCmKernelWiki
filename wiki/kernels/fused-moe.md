@@ -61,10 +61,10 @@ implemented_by:
 - pr-vllm-36286
 - pr-vllm-36022
 - pr-composable_kernel-2978
-- pr-composable_kernel-3259
 - pr-composable_kernel-2913
 - pr-composable_kernel-2878
-- pr-composable_kernel-2466
+- pr-composable_kernel-2388
+- pr-composable_kernel-1880
 ---
 # Fused MoE — Gate-Up + SiLU + Down with FP8 (CDNA)
 
@@ -260,20 +260,21 @@ A portable, self-checking fp32 reference of this dataflow lives in
 router GEMV → top-k gating + softmax → gate-up GEMV + SiLU·mul (kept in LDS) →
 down GEMV with router-weighted reduction — in a single HIP kernel (one block per
 token) and verifies against a CPU reference. It uses **no MFMA/FP8**, so unlike
-the CDNA production kernel above it **builds and runs natively on gfx1201**.
+the production kernel above it is a compact scalar reference. It builds and runs
+on gfx950.
 Production MoE replaces the per-token GEMVs with grouped GEMM on matrix cores and
 FP8 weights (see [grouped GEMM](grouped-gemm.md)).
 
 ```bash
-hipcc --offload-arch=gfx1201 -O3 fused_moe.cpp -o fused_moe && ./fused_moe
+cd examples/fused-moe && ./build.sh
 ```
 
-Expected output (captured on gfx1201, ROCm 7.2.3):
+Expected output (captured on MI355X / gfx950):
 
 ```
 Fused MoE (fp32, portable HIP)
   dims: T=64 D=128 N=256 E=8 top_k=2
-  kernel time: 148.223 us/iter (200 iters)
+  kernel time: 108.413 us/iter (200 iters)
   max abs err: 5.215e-08
   max rel err: 1.508e-03
 PASS

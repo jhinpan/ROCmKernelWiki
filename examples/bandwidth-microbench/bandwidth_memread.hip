@@ -1,4 +1,4 @@
-// HBM read-bandwidth microbenchmark — PORTABLE HIP, runs on gfx1201 (RDNA4).
+// HBM read-bandwidth microbenchmark — portable HIP, verified on gfx950.
 //
 // Each persistent block streams a large array with 128-bit (float4) vectorized
 // loads and accumulates into a register sink so the compiler cannot dead-code

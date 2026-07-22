@@ -41,13 +41,13 @@ sources:
 - blog-amd-matrix-cores
 implemented_by:
 - pr-FlyDSL-554
-- pr-composable_kernel-3603
 - pr-aiter-580
 - pr-aiter-2136
 - pr-FlyDSL-153
-- pr-aiter-3228
-- pr-FlyDSL-278
 - pr-sglang-22338
+- pr-composable_kernel-3629
+- pr-composable_kernel-2877
+- pr-composable_kernel-2125
 ---
 # Fine-Grained FP8 Quantization & Block Scaling
 

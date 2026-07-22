@@ -290,7 +290,6 @@ is visible in
 
 - [CDNA3 ISA Reference Guide](https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/instruction-set-architectures/amd-instinct-mi300-cdna3-instruction-set-architecture.pdf)
 - [CDNA4 ISA Reference Guide](https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/instruction-set-architectures/amd-instinct-cdna4-instruction-set-architecture.pdf)
-- [RDNA3 ISA Reference Guide — DPP8/DPP16](https://www.amd.com/content/dam/amd/en/documents/radeon-tech-docs/instruction-set-architectures/rdna3-shader-instruction-set-architecture-feb-2023_0.pdf)
 - [LLVM AMDGPU User Guide — cross-lane intrinsics](https://llvm.org/docs/AMDGPUUsage.html)
 - [GCN/CDNA assembly notes (gcnasm)](https://github.com/carlushuang/gcnasm)
 - [AMD Matrix Cores blog](https://gpuopen.com/learn/amd-lab-notes/amd-lab-notes-matrix-cores-readme/)

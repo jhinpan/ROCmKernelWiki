@@ -7,13 +7,11 @@ version_sensitive:
 architectures:
 - gfx942
 - gfx950
-- gfx1201
 tags:
 - hip
 - cpp
 - lds
 - wave64
-- wave32
 - mfma
 - permute
 - co-issue
@@ -36,13 +34,6 @@ sources:
 - blog-matrix-cores-cdna
 implemented_by:
 - pr-aiter-2136
-- pr-composable_kernel-2723
-- pr-composable_kernel-2722
-- pr-composable_kernel-2606
-- pr-composable_kernel-2528
-- pr-aiter-2394
-- pr-Tensile-1521
-- pr-Tensile-1383
 ---
 # HIP — Kernel Basics, LDS, and AMDGCN Builtins
 
@@ -134,12 +125,11 @@ Dynamic LDS (the `sharedBytes` launch argument) is reached via an
 ## `warpSize` is not 32 — query it
 
 The single most common porting bug. CUDA code assumes a 32-lane warp; on **CDNA
-(gfx9xx) every wavefront is 64 lanes** and is wave64-only, while RDNA supports
-both. Never hardcode `32`:
+(gfx9xx) every wavefront is 64 lanes** and is wave64-only. Never hardcode `32`:
 
 ```cpp
 __global__ void reduce_assumption_safe(const float* in, float* out, int n) {
-    // warpSize is a built-in: 64 on gfx942/gfx950, 32 or 64 on gfx1201
+    // warpSize is a built-in: 64 on gfx942/gfx950
     int lane = threadIdx.x % warpSize;
     // __ballot returns a 64-bit mask on AMD — use unsigned long long
     unsigned long long active = __ballot(in[blockIdx.x] > 0.0f);
@@ -173,7 +163,7 @@ __device__ float4 mma_16x16x16(half4 a, half4 b, float4 c) {
 ```
 
 Operand-to-register layout is shape-specific; prefer
-[rocWMMA](rocwmma.md) or [Composable Kernel](composable-kernel.md), and consult
+[Composable Kernel](composable-kernel.md), and consult
 [hw-mfma](../hardware/mfma.md) before hand-rolling builtins.
 
 **Cross-lane permute.** `__builtin_amdgcn_ds_bpermute` is a backward 64-lane
@@ -215,9 +205,8 @@ compute_on_current_tile(...);
 ## Compiling
 
 ```bash
-# Multi-target fat binary for CDNA3, CDNA4, and RDNA4
-hipcc -O3 --offload-arch=gfx942 --offload-arch=gfx950 \
-      --offload-arch=gfx1201 saxpy.hip -o saxpy
+# Multi-target fat binary for the active CDNA3 and CDNA4 scope
+hipcc -O3 --offload-arch=gfx942 --offload-arch=gfx950 saxpy.hip -o saxpy
 
 # Inspect the generated ISA (verify MFMA / ds_bpermute actually emitted)
 hipcc -O3 --offload-arch=gfx942 -S -o - saxpy.hip | less

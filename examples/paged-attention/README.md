@@ -7,8 +7,8 @@ vLLM / AITER decode. Online-softmax (FlashAttention) recurrence streams the
 gathered KV blocks. GQA is included (`GROUP` query heads share one KV head).
 
 This is **PORTABLE pure-HIP** — FMA math, LDS tree reduction, `__syncthreads()`.
-It **builds and runs on gfx1201 (RDNA4)** and self-checks every output element
-against a CPU reference. No MFMA/WMMA needed (decode is bandwidth-bound, not a
+It builds and runs on gfx950 and self-checks every output element against a CPU
+reference. No matrix instruction is needed (decode is bandwidth-bound, not a
 big GEMM).
 
 ## What it demonstrates
@@ -40,28 +40,27 @@ per block (one thread per head-dim element).
 ```bash
 ./build.sh
 # or directly:
-hipcc --offload-arch=gfx1201 -O3 paged_attention.cpp -o paged_attention && ./paged_attention
+hipcc --offload-arch=gfx950 -O3 paged_attention.cpp -o paged_attention && ./paged_attention
 ```
 
-## Expected output (captured on this gfx1201 box, ROCm 7.2.3)
+## Expected output (captured on MI355X / gfx950)
 
 ```
 build: OK
-paged-attention decode (fp32, portable HIP, gfx1201)
+paged-attention decode (fp32, portable HIP, gfx950)
   num_seqs=3  num_q_heads=8  num_kv_heads=2  GROUP=4
   HEAD_DIM=64  BLOCK_SIZE=16  seq_lens={40,17,64}
-  kernel time: 0.0471 ms/iter (avg of 200)
+  kernel time: 0.0416 ms/iter (avg of 200)
   max abs error vs CPU: 8.941e-08
 PASS
 ```
 
-`max abs error ~9e-8` (fp32 rounding) and `PASS`. Timing is for the tiny demo
-problem on a Radeon RX 9070 XT; it is illustrative, not a tuned benchmark.
+The timing is for the tiny demo problem and is not a tuned benchmark.
 
 ## Arch
 
-- **Runs on:** gfx1201 (RDNA4, this box). Portable — also runs on any other ROCm
-  GPU (gfx942/gfx950) since it uses only generic HIP.
+- **Verified runtime:** MI355X / gfx950.
+- The source uses generic HIP; no gfx942 runtime result is claimed here.
 - This is a *reference* for clarity. Production AITER/vLLM kernels add: FP8 KV
   cache, 128-bit vectorized KV loads, flash-decoding chunk-parallel split with a
-  reduction pass, and MFMA/WMMA tiling for large GQA groups.
+  reduction pass, and MFMA tiling for large GQA groups.

@@ -1,11 +1,10 @@
 // FlashAttention-2 forward — PORTABLE pure-HIP reference (fp32).
 //
 // This is the *algorithmic* core of the CK-tile FlashAttention pipeline written
-// in plain HIP so it BUILDS AND RUNS on RDNA4 (gfx1201), where MFMA does not
-// execute. The production AMD path (ck_tile BlockFmhaPipelineQRKSVS) issues the
-// two GEMMs as v_mfma_* matrix-core instructions on CDNA (MI300X/MI350); here we
-// reproduce the same online-softmax recurrence with scalar FMA math so the
-// numerics are demonstrable and self-checkable on consumer hardware.
+// in plain HIP and verified on gfx950. The production AMD path
+// (ck_tile BlockFmhaPipelineQRKSVS) issues the two GEMMs as v_mfma_* matrix-core
+// instructions; here scalar FMA math reproduces the online-softmax recurrence
+// for a compact numeric self-check.
 //
 // Mapping: one thread block per (head, query-tile). Each thread owns one query
 // row. The block streams over KV tiles of width BC, maintaining the running
@@ -227,7 +226,7 @@ int main(int argc, char** argv)
     double flops = (double)H * 2.0 * 2.0 * (double)N * N * D;
     double gflops = flops / (ms * 1e-3) / 1e9;
 
-    printf("FlashAttention-2 fwd (portable HIP, fp32) on gfx1201\n");
+    printf("FlashAttention-2 fwd (portable HIP, fp32) on gfx950\n");
     printf("  H=%d N=%d D=%d  BR=%d BC=%d  scale=%.5f\n", H, N, D, BR, BC, scale);
     printf("  avg kernel time: %.4f ms   (%.1f GFLOP/s)\n", ms, gflops);
     printf("  max abs error: %.3e   max rel error: %.3e\n", max_abs, max_rel);

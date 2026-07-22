@@ -4,14 +4,14 @@ Two complementary pieces for `C[i] = A[i] + B[i]` (FP32), the canonical
 memory-bound elementwise kernel:
 
 1. **`vadd_hip.cpp`** — **PORTABLE** pure-HIP grid-stride vector add. Builds and
-   **runs on gfx1201** (RDNA4, this box). Self-checks against a CPU reference and
+   runs on gfx950. Self-checks against a CPU reference and
    reports effective bandwidth (12 B/element: two reads + one write).
-2. **`vadd_asm_gfx942.cpp`** — **CDNA-MFMA-style asm path, CROSS-COMPILE-ONLY.**
+2. **`vadd_asm_gfx942.cpp`** — **GCN VMEM asm path, CROSS-COMPILE-ONLY.**
    A GCN inline-assembly vector add using `global_load_dword` /
    `global_store_dword` gated by `s_waitcnt vmcnt(0)` — the same VMEM /
    wait-counter mechanics the wiki page's hand-written `buffer_*` kernel uses,
    reduced to a runnable inline block so the assembler validates the encodings.
-   Built with `--offload-arch=gfx942`; **not executed on gfx1201**.
+   Built with `--offload-arch=gfx942`; not executed.
 
 ## Build & run
 
@@ -19,21 +19,20 @@ memory-bound elementwise kernel:
 ./build.sh
 ```
 
-`build.sh` builds and runs Part 1 on gfx1201, then cross-compiles Part 2 to an
+`build.sh` builds and runs Part 1 on gfx950, then cross-compiles Part 2 to an
 object file for gfx942 (object-only — proves the GCN asm assembles).
 
-## Expected output (captured on gfx1201, ROCm 7.2.3)
+## Expected output (captured on MI355X / gfx950)
 
 ```
-=== Part 1: portable HIP vadd (build + RUN on gfx1201) ===
-vadd HIP (portable, gfx1201): N=16777216  block=256 grid=4096
-  time = 0.350 ms/iter   effective BW = 574.8 GB/s (12 B/elem)
+=== Part 1: portable HIP vadd (build + RUN on gfx950) ===
+vadd HIP (portable, gfx950): N=16777216  block=256 grid=4096
+  time = 0.031 ms/iter   effective BW = 6520.5 GB/s (12 B/elem)
   max abs err = 0
   PASS
 
 === Part 2: GCN inline-asm vadd (CROSS-COMPILE-ONLY for gfx942) ===
-OK: vadd_asm_gfx942.o produced (not executed on gfx1201)
--rw-rw-r-- 1 ... vadd_asm_gfx942.o
+OK: vadd_asm_gfx942.o produced (not executed on gfx950)
 ```
 
 (Bandwidth and timing vary by run; `max abs err = 0` / `PASS` are deterministic
@@ -54,10 +53,10 @@ grep -E "global_load_dword|global_store_dword|v_add_f32" vadd_asm.s
 
 ## Which arch runs vs cross-compiles
 
-| File                   | gfx1201 (this box) | gfx942 (MI300) |
-|------------------------|--------------------|----------------|
-| `vadd_hip.cpp`         | builds + **runs**  | builds + runs  |
-| `vadd_asm_gfx942.cpp`  | n/a                | builds (object); runs on CDNA hardware |
+| File | gfx950 / MI355X | gfx942 |
+|---|---|---|
+| `vadd_hip.cpp` | builds, runs, passes | not exercised by this script |
+| `vadd_asm_gfx942.cpp` | not executed | object cross-compile passes |
 
 ## Notes
 

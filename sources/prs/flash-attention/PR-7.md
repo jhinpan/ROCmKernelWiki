@@ -54,10 +54,6 @@ changed_paths:
 - csrc/flash_attn_rocm/src/flash_bwd_runner_kloop_hdim64_fp16_causal_gfx90a.cpp
 - csrc/flash_attn_rocm/src/flash_bwd_runner_kloop_hdim64_fp16_noncausal_gfx90a.cpp
 facet_source: inferred
-related:
-- kernel-flash-attention-ck
-- technique-vgpr-budgeting
-- technique-lds-double-buffering
 ---
 # Increasing the compiling time by spliting into several cpp files
 

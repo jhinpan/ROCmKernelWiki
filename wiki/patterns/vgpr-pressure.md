@@ -8,7 +8,6 @@ version_sensitive:
 architectures:
 - gfx942
 - gfx950
-- gfx1201
 tags:
 - vgpr-pressure
 - register-spill
@@ -38,9 +37,7 @@ sources:
 - doc-llvm-amdgpu
 - blog-gemm-optimization
 implemented_by:
-- pr-Tensile-1371
 - pr-Tensile-1100
-- pr-Tensile-1383
 ---
 # VGPR Pressure, Register Spills, and Occupancy Collapse
 
@@ -59,9 +56,8 @@ On CDNA the VGPR file is the scarcest occupancy resource for most compute-bound
 kernels. CDNA3/CDNA4 provide one combined **512-entry-per-lane vector capacity
 per SIMD** for regular ArchVGPR and accumulator AccVGPR/AGPR allocations. Each
 view has up to 256 names; the combined allocation is encoded in **groups of 8
-dwords**. On gfx942 it is
-`round_up(round_up(arch_count, 4) + accum_count, 8)`; gfx950's combined
-`.vgpr_count` is rounded to 8 directly. CDNA3/CDNA4 support **up to 32 waves
+dwords**. HSA metadata `.vgpr_count` is already the combined total on gfx942
+and gfx950, so it is rounded to 8 directly. CDNA3/CDNA4 support **up to 32 waves
 (4 SIMD pools × 8 waves)** per CU, with the vector-register limit computed as
 `floor(512 / vector_alloc)`, capped at 8 waves/SIMD. See
 [wavefront & occupancy](../hardware/wavefront.md).
@@ -86,10 +82,10 @@ llvm-objdump --arch-name=amdgcn -d gemm.o | head -50
 # Look for:  .vgpr_count / .agpr_count / .sgpr_count / .private_segment_fixed_size
 ```
 
-On gfx942, compute `round_up(round_up(.vgpr_count, 4) + .agpr_count, 8)`;
-rounding both components independently to eight would overestimate allocation.
-On gfx950, `.vgpr_count` already includes both, so round it to eight and do not
-double-count `.agpr_count`. A non-zero
+On both targets, round metadata `.vgpr_count` to eight and do not double-count
+its `.agpr_count` subset. Separate low-level compiler `NumVgprs`/`NumAgprs`
+remarks use the target-specific derivation documented on the
+[wavefront page](../hardware/wavefront.md). A non-zero
 `.private_segment_fixed_size` means scratch/private storage exists, but use
 spill counts and emitted `scratch_*` instructions to distinguish register
 spills from explicit private objects. Hot-path scratch is a red flag; the first
@@ -97,9 +93,7 @@ goal is usually to get actual spill traffic to **zero**, then tune occupancy.
 
 ## Why it happens in CDNA MFMA kernels
 
-The following AGPR and wave64 details are specific to gfx942/gfx950. On RDNA,
-WMMA accumulators use ordinary ArchVGPRs and the target may run wave32 or wave64;
-query the compiled wave mode and re-budget its fragment layout.
+The following AGPR and wave64 details are specific to gfx942/gfx950.
 
 - **MFMA accumulators are register-resident.** A large output tile keeps its
   whole C/D accumulator live across the K-loop. For `v_mfma_f32_16x16x16_f16`
@@ -109,8 +103,7 @@ query the compiled wave mode and re-budget its fragment layout.
   big tile still adds to the same combined physical budget. See
   [MFMA](../hardware/mfma.md).
 - **wave64.** CDNA is wave64-only, so per-lane register costs are paid across
-  64 lanes; there is no wave32 fallback to halve the live state (unlike RDNA4
-  gfx1201, which can run wave32).
+  64 lanes.
 - **Deep software pipelines.** Double-buffering and `num_stages>1` keep multiple
   tiles of A/B in registers (or in flight) at once, multiplying live state.
 - **Address/index bloat.** 64-bit flat addresses, per-lane offsets, and loop
@@ -200,8 +193,7 @@ holding scratch at zero. Always co-optimize with LDS, since LDS per-CU
 - **Ignoring `ScratchSize`.** Spills can hide behind "it still runs." Always
   check the resource report.
 - **Hardcoding `warpSize`/lane counts** when computing register tiling — query
-  it. gfx9 CDNA is wave64, while RDNA supports target/mode-dependent wave32 or
-  wave64 (see [HIP HW model](../../sources/docs/doc-rocm-hip-hw.md)).
+  it. gfx942/gfx950 are wave64 (see [HIP HW model](../../sources/docs/doc-rocm-hip-hw.md)).
 
 ## See also
 

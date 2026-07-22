@@ -27,6 +27,10 @@ tags:
 - profiling
 - cdna
 retrieved_at: '2026-07-20'
+aliases:
+- primary CDNA ISA manuals
+- CDNA3 CDNA4 architecture whitepapers
+- official AMD kernel optimization sources
 ---
 
 # AMDGPU Kernel Optimization Guide (nod-ai / shark-ai)
@@ -101,16 +105,17 @@ a blanket launch-boundary L2 flush.
 - The guide reports regular indices `v0`–`v255` and accumulator indices
   `a0`–`a255`. These are per-lane architectural register names used by a wave,
   not “per-thread versus per-wave” allocation domains. On CDNA2+, their per-wave
-  allocation shares one 512-entry-per-lane SIMD capacity. For gfx942 compute
-  `round_up(round_up(vgpr_count, 4) + agpr_count, 8)`; for gfx950 its
-  `.vgpr_count` is already combined and is rounded to 8. Occupancy is
+  allocation shares one 512-entry-per-lane SIMD capacity. HSA metadata
+  `.vgpr_count` is already the combined total on gfx942 and gfx950 and is
+  rounded to 8; `.agpr_count` is a subset. Separate lower-level gfx942 compiler
+  remarks use `round_up(round_up(NumVgprs, 4) + NumAgprs, 8)`. Occupancy is
   `floor(512 / vector_alloc)`, capped at eight waves/SIMD. Exactly 256 combined
   entries therefore allow two waves, while a legal total above 256 can run as
   one wave without necessarily spilling.
 - Its metadata example uses `.sgpr_spill_count`, `.vgpr_spill_count`,
   `.agpr_count`, `.vgpr_count`, and `.private_segment_fixed_size`. Do not round
-  the gfx942 VGPR and AGPR components independently to eight, and do not add an
-  AGPR count to gfx950's already-combined `.vgpr_count`. Remapping a regular
+  separate low-level gfx942 VGPR and AGPR components independently to eight,
+  and never add `.agpr_count` to metadata `.vgpr_count`. Remapping a regular
   live range into an unused AGPR
   index is register allocation inside the unified vector file, not a spill.
   Real spill evidence is scratch/private-segment allocation plus emitted

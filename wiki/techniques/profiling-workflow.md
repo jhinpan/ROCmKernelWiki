@@ -39,14 +39,14 @@ sources:
 - blog-triton-optimizations
 - blog-amdgpu-kernel-opt-guide
 implemented_by:
-- pr-Tensile-1383
 - pr-sglang-25898
 - pr-composable_kernel-3137
-- pr-composable_kernel-2825
-- pr-composable_kernel-2319
 - pr-Tensile-1529
-- pr-composable_kernel-647
-- pr-composable_kernel-2723
+- pr-composable_kernel-2276
+- pr-composable_kernel-1776
+- pr-Tensile-243
+- pr-Tensile-1406
+- pr-Tensile-1288
 ---
 # Profiling & Roofline Workflow on ROCm (rocprof / Omniperf)
 

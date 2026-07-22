@@ -64,9 +64,9 @@ implemented_by:
 - pr-Tensile-1155
 - pr-Tensile-1124
 - pr-Tensile-972
-- pr-Tensile-2114
-- pr-Tensile-2113
 - pr-Tensile-1702
+- pr-FlyDSL-579
+- pr-Tensile-1703
 ---
 # FP16 GEMM via Composable Kernel / MFMA on MI300X
 
@@ -239,26 +239,23 @@ bound — split-K and tile resizing are the levers there.
 
 A portable, self-checking **rocWMMA** FP16 GEMM is in
 [`examples/ck-hgemm/`](../../examples/ck-hgemm/). It uses the same matrix-core
-abstraction (16×16×16 fragments, FP32 accumulate over K) that lowers to **WMMA**
-on RDNA4 (gfx1201) and to **MFMA** on CDNA (gfx942/gfx950) from one source. It is
-the demonstrable companion to the CK path above; CK/ck_tile remains the production
-route for peak FP16 GEMM on MI300X/MI350.
+abstraction (16×16×16 fragments, FP32 accumulate over K). rocWMMA is the API;
+the gfx950 device code emits **MFMA**. It is the demonstrable companion to the
+CK path above; CK/ck_tile remains the production route for peak FP16 GEMM.
 
 ```bash
-cd examples/ck-hgemm
-hipcc --offload-arch=gfx1201 -O3 -std=c++17 -I/opt/rocm/include \
-      hgemm_wmma.cpp -o hgemm_wmma && ./hgemm_wmma 256 256 256
-# same source cross-compiles for CDNA (lowers to MFMA):
+cd examples/ck-hgemm && ./build.sh
+# same source cross-compiles for gfx942; no gfx942 runtime is claimed:
 #   hipcc --offload-arch=gfx942 -c hgemm_wmma.cpp -o hgemm_gfx942.o
 ```
 
-Expected output (captured on gfx1201, RX 9070 XT):
+Expected output (captured on MI355X / gfx950):
 
 ```
 rocWMMA FP16 GEMM  M=256 N=256 K=256  (16x16x16 fragments)
-Device: AMD Radeon RX 9070 XT (gfx1201), warpSize=32
-max abs err = 0.0000   max rel err = 0.00783   (tol abs = 10.24)
-avg kernel time = 0.0081 ms   ~4120.5 GFLOP/s (4.121 TFLOPS)
+Device: AMD Instinct MI355X (gfx950:sramecc+:xnack-), warpSize=64
+max abs err = 0.0000   max rel err = 0.01253   (tol abs = 10.24)
+avg kernel time = 0.0156 ms   ~2150.4 GFLOP/s (2.150 TFLOPS)
 PASS
 ```
 

@@ -27,7 +27,6 @@ related:
 - hw-async-copy-lds
 - hw-s-waitcnt
 - hw-mfma
-- migration-wmma-vs-mfma
 - hw-wavefront
 - lang-hip
 sources:
@@ -47,13 +46,10 @@ cross_vendor_note: 'NVIDIA SM and AMD CDNA differ in three ways that break a nai
   regenerated, not textually translated.'
 implemented_by:
 - pr-aiter-2136
-- pr-composable_kernel-2466
 - pr-aiter-3072
-- pr-aiter-2394
 - pr-Tensile-1406
 - pr-Tensile-1288
-- pr-composable_kernel-2722
-- pr-composable_kernel-2704
+- pr-FlyDSL-388
 ---
 # CUDA → HIP Kernel Porting (CDNA3/CDNA4)
 
@@ -81,7 +77,7 @@ and CDNA4 (gfx950).
 | `__shared__` | `__shared__` | lowers to LDS allocation |
 | `__shfl_sync(mask, v, src)` | `__shfl(v, src, width)` | **mask dropped; width default = warpSize = 64** |
 | `__ballot_sync(mask, p)` | `__ballot(p)` | returns **`uint64_t`** on CDNA |
-| `wmma::*` fragments (PTX) | `rocwmma::*` / `__builtin_amdgcn_mfma_*` | regenerate, see below |
+| `wmma::*` fragments (PTX) | Composable Kernel / `__builtin_amdgcn_mfma_*` | regenerate, see below |
 | `cp.async` + `cp.async.wait_group` | `__builtin_amdgcn_load_to_lds` + `s_waitcnt` | direct-to-LDS, see below |
 | `__nanosleep` | `__builtin_amdgcn_s_sleep` | coarse granularity |
 
@@ -94,8 +90,7 @@ Query the width; do not assume it:
 // WRONG on CDNA: assumes 32-lane warps
 // int lane = threadIdx.x % 32;
 
-// PORTABLE: query warpSize. These gfx942/gfx950 targets report 64;
-// RDNA can use wave32 or wave64 depending on target and compile mode.
+// PORTABLE: query warpSize. These gfx942/gfx950 targets report 64.
 const int lane = threadIdx.x % warpSize;   // warpSize is a builtin
 const int wid  = threadIdx.x / warpSize;
 
@@ -143,9 +138,10 @@ per-copy handle.
 
 // HIP / CDNA direct-to-LDS via the LLVM intrinsic:
 //   copies 4 bytes/lane HBM -> LDS, no VGPR staging.
+//   sptr_wave_base must be wave-uniform; hardware adds 4*lane.
 __builtin_amdgcn_load_to_lds(
     /*src global ptr*/ gptr + offset,
-    /*dst LDS ptr  */ sptr,
+    /*dst LDS base */ sptr_wave_base,
     /*size bytes   */ 4,          // gfx950 also allows 12/16 (dwordx3/x4)
     /*offset       */ 0,
     /*aux          */ 0);
@@ -211,19 +207,15 @@ __device__ float4 mma_16x16x16(half4 a, half4 b, float4 c) {
 
 Practical guidance:
 
-- **Don't hand-translate.** Use [rocWMMA](../languages/rocwmma.md) (a fragment API
-  intentionally close to `nvcuda::wmma`) so the same source compiles to `wmma`
-  on NVIDIA and `v_mfma_*` on CDNA, or let Composable Kernel / hipBLASLt / Triton
-  emit MFMA.
+- **Don't hand-translate.** Let Composable Kernel, hipBLASLt, or Triton emit
+  the target's MFMA path and regenerate the tile/register layout for CDNA.
 - **Pick a real shape.** gfx942 dense FP16 shapes are `16x16x16` and `32x32x8`;
   FP8 is `16x16x32` / `32x32x16`. gfx950 adds the unified `f8f6f4` path
   (`16x16x128`, `32x32x64`) and MX-scaled variants. See [MFMA](../hardware/mfma.md).
 - **FP8 is not portable bit-for-bit.** gfx942 uses **FNUZ** FP8; gfx950 and NVIDIA
   use **OCP** FP8. Reusing quantized weights across these requires reinterpreting
   the encoding — see [gfx942 → gfx950](gfx942-to-gfx950.md) and
-  [WMMA vs MFMA](wmma-vs-mfma.md).
-- RDNA4 (gfx1201) uses **WMMA**, not MFMA, and supports both wave32 and wave64 —
-  another reason to query `warpSize` rather than branch on vendor.
+  [gfx942 → gfx950](gfx942-to-gfx950.md).
 
 ## Porting checklist
 
@@ -240,7 +232,6 @@ Practical guidance:
 - [Direct-to-LDS async copy](../hardware/async-copy-lds.md)
 - [s_waitcnt counters](../hardware/s-waitcnt.md)
 - [MFMA matrix cores](../hardware/mfma.md)
-- [WMMA vs MFMA](wmma-vs-mfma.md)
 - [Wavefront / occupancy](../hardware/wavefront.md)
 
 ## Sources

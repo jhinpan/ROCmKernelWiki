@@ -52,13 +52,13 @@ performance_claims:
   source_id: doc-cdna3-isa
 implemented_by:
 - pr-composable_kernel-3027
-- pr-composable_kernel-2177
 - pr-composable_kernel-3592
 - pr-composable_kernel-3038
 - pr-composable_kernel-3465
 - pr-composable_kernel-94
-- pr-composable_kernel-3603
 - pr-composable_kernel-2955
+- pr-composable_kernel-2905
+- pr-composable_kernel-984
 ---
 # LDS-Staged Bank-Conflict-Free Matrix Transpose
 
@@ -113,7 +113,7 @@ target-specific pad.
 #if defined(__gfx950__)
 #define LDS_PAD 2  // wave64 phase contains two columns: split even/odd banks
 #else
-#define LDS_PAD 1  // gfx942 b32 phases (and default RDNA wave32 mapping)
+#define LDS_PAD 1  // gfx942 b32 phases
 #endif
 __global__ void transpose_lds(float* __restrict__ out,
                               const float* __restrict__ in,
@@ -223,26 +223,26 @@ the [bandwidth microbenchmark](bandwidth-microbench.md) and profiler counters.
 
 A portable, self-checking version of the padded (Fix 1) kernel lives in
 [`examples/transpose-lds/`](../../examples/transpose-lds/). It is **pure HIP**
-(no MFMA/WMMA), so it builds and runs natively on gfx1201 (RDNA4) as well as
-gfx942/gfx950. It transposes an fp32 matrix, verifies the result is *exactly*
-equal to a CPU reference, and reports effective bandwidth.
+(no MFMA/WMMA), builds and runs on gfx950, and also device-compiles for gfx942.
+No gfx942 runtime is claimed. It transposes an fp32 matrix and requires exact
+agreement with a CPU reference.
 
 ```bash
-cd examples/transpose-lds
-hipcc --offload-arch=gfx1201 -O3 transpose_lds.cpp -o transpose_lds && ./transpose_lds
+cd examples/transpose-lds && ./build.sh
 ```
 
-Expected output (captured on an RX 9070 XT / gfx1201, ROCm 7.2.3):
+Expected output (captured on MI355X / gfx950):
 
 ```
+build: OK
 Transpose 2048 x 4096 (fp32), TILE=32
-avg kernel time: 0.138 ms   effective BW: 487.2 GB/s
+avg kernel time: 0.015 ms   effective BW: 4330.7 GB/s
 max abs error: 0   mismatches: 0
 PASS
 ```
 
-The reported bandwidth is real gfx1201 timing for one mid-size matrix (not a
-tuned peak); the MI300X figures in the frontmatter remain `inferred` targets.
+This is one mid-size run, not a tuned peak. The MI300X frontmatter figures
+remain `inferred` targets.
 
 ## See also
 

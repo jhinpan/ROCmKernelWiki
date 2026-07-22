@@ -7,8 +7,8 @@ the loads away. It sweeps several working-set sizes and reports measured GB/s.
 
 ## What it shows
 
-- 128-bit vectorized loads: the ISA emits `global_load_b128 ... th:TH_LOAD_NT`
-  (verified by `build.sh`), i.e. wide + non-temporal streaming reads.
+- 128-bit vectorized loads: the gfx950 ISA emits
+  `global_load_dwordx4 ... off nt` (verified by `build.sh`).
 - Persistent grid (a couple of blocks per CU) + manual `UNROLL=8` so several
   loads are in flight before the first `vmcnt` wait.
 - A self-check kernel reduces a known buffer (every scalar = 1.0f) and compares
@@ -16,9 +16,8 @@ the loads away. It sweeps several working-set sizes and reports measured GB/s.
 
 ## Classification
 
-**PORTABLE** — pure HIP, no MFMA/WMMA. Builds **and runs natively on gfx1201**
-(RX 9070 XT, RDNA4). The same source also builds for CDNA via
-`--offload-arch=gfx942`.
+**PORTABLE** — pure HIP, no matrix instructions. Builds and runs on gfx950; the
+captured MI355X run below includes both the ISA and numeric checks.
 
 ## Build & run
 
@@ -26,36 +25,32 @@ the loads away. It sweeps several working-set sizes and reports measured GB/s.
 ./build.sh
 ```
 
-This compiles with `hipcc -O3 --offload-arch=gfx1201`, greps the ISA for the
+This compiles with `hipcc -O3 --offload-arch=gfx950`, greps the ISA for the
 wide non-temporal load, then runs the binary.
 
-## Expected output (captured on this gfx1201 box, ROCm 7.2.3)
+## Expected output (captured on MI355X / gfx950)
 
 ```
 === verifying wide non-temporal loads in ISA ===
-	global_load_b128 v[7:10], v[5:6], off
-	global_load_b128 v[13:16], v[4:5], off th:TH_LOAD_NT
-	global_load_b128 v[17:20], v[8:9], off th:TH_LOAD_NT
-	global_load_b128 v[21:24], v[21:22], off th:TH_LOAD_NT
+	global_load_dwordx4 v[8:11], v[6:7], off
+	global_load_dwordx4 v[10:13], v[4:5], off nt
+	global_load_dwordx4 v[14:17], v[42:43], off nt
+	global_load_dwordx4 v[18:21], v[44:45], off nt
 === running ===
-Device: AMD Radeon RX 9070 XT (gfx1201), 32 CUs, 2400 MHz
+Device: AMD Instinct MI355X (gfx950:sramecc+:xnack-), 256 CUs, 2400 MHz
 
 Self-check: sum=16777216 ref=16777216 rel_err=0.000e+00 -> PASS
 
 size(MiB)    iters        GB/s
-64           50           510
-256          50           636
-1024         50           637
-2048         50           635
+64           50           6152
+256          50           6396
+1024         50           6192
+2048         50           6192
+
+RESULT: PASS
 ```
 
-The RX 9070 XT has ~645 GB/s of GDDR6 peak bandwidth, so ~637 GB/s sustained on
-the large (≥256 MiB) working sets is ~99% of peak read bandwidth. The 64 MiB
-case is lower because part of it is served from the on-chip cache hierarchy and
-the kernel is launch/overhead-bound at that size.
-
-> Numbers vary run-to-run with clocks/thermals; treat the large-size figures as
-> the empirical read roofline for this card.
+These are the values from one run, not a peak-bandwidth claim.
 
 ## Files
 

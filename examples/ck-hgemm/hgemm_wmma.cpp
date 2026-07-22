@@ -2,9 +2,9 @@
 //   A: MxK row-major (fp16)
 //   B: KxN col-major (fp16)   [rocWMMA matrix_b wants col_major here]
 //   C: MxN row-major (fp32)
-// Each wave (32 lanes on gfx1201 / 64 on CDNA) computes one 16x16 output tile,
-// accumulating over K in 16x16x16 fragments. rocWMMA lowers mma_sync to WMMA on
-// gfx1201 (RDNA4) and to MFMA on CDNA — the same source runs natively on both.
+// Each gfx950 wave computes one 16x16 output tile, accumulating over K in
+// 16x16x16 fragments. The source uses rocWMMA's API; the gfx950 build emits
+// MFMA instructions.
 //
 // Verifies against a CPU reference (fp16 inputs, fp32 accumulate) and prints
 // PASS/FAIL with max abs/relative error and a rough TFLOPS number.

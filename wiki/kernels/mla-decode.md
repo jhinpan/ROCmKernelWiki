@@ -239,21 +239,20 @@ A self-checking **portable HIP** reference for the absorbed MLA decode math live
 in [`examples/mla-decode/`](../../examples/mla-decode/). It is *not* the tuned
 CDNA/MFMA production kernel — it is a small, readable fp32 implementation of the
 exact decode math (low-rank latent KV, online softmax, value == latent) that
-**builds and runs on gfx1201 (RDNA4)** and verifies against a CPU reference.
-The Triton/CK production path above targets gfx942/gfx950 matrix cores; this
-example exists so the math is demonstrable on commodity RDNA hardware.
+builds and runs on **gfx950** and verifies against a CPU reference. The
+Triton/CK production path above targets gfx942/gfx950 matrix cores; this example
+keeps the math directly inspectable.
 
 ```bash
 cd examples/mla-decode && ./build.sh
-# hipcc --offload-arch=gfx1201 -O3 mla_decode.cpp -o mla_decode && ./mla_decode
 ```
 
-Expected output (real, captured on gfx1201):
+Expected output (captured on MI355X / gfx950):
 
 ```
 MLA decode (absorbed, low-rank latent KV) -- portable HIP, fp32
   H=16 heads, D_C=64 latent, D_PE=16 rope, N=256 KV tokens
-  per-decode: 252.82 us   KV-stream BW: 0.3 GB/s
+  per-decode: 173.68 us   KV-stream BW: 0.5 GB/s
   max_abs_err = 3.353e-08   max_rel_err = 1.301e-04
 PASS
 ```

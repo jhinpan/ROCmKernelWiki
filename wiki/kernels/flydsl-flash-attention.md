@@ -57,7 +57,8 @@ sources:
 performance_claims:
 - gpu: MI350X
   dtype: bf16
-  metric: FlyDSL fwd kernel-time vs CK-tile FlashAttention (throughput ratio, >1 = FlyDSL faster)
+  metric: FlyDSL fwd kernel-time vs CK-tile FlashAttention (throughput ratio, >1 =
+    FlyDSL faster)
   value: 0.92
   bucket: HEADROOM
   baseline: CK-tile FlashAttention
@@ -66,9 +67,13 @@ performance_claims:
   source_id: ref-flydsl-kernel-profiling
 implemented_by:
 - pr-FlyDSL-225
-- pr-FlyDSL-334
-- pr-FlyDSL-346
-- pr-FlyDSL-462
+- pr-aiter-2701
+- pr-aiter-3072
+- pr-aiter-2945
+- pr-composable_kernel-1224
+- pr-flash-attention-179
+- pr-composable_kernel-1789
+- pr-aiter-1383
 ---
 # FlyDSL Flash Attention — generic + gfx950 dual-wave fast path
 
@@ -145,7 +150,6 @@ generate code rather than branch at runtime.
 |---|---|
 | [#225](../../sources/prs/FlyDSL/PR-225.md) | Original FMHA kernel (MFMA-32, online softmax) |
 | [#334](../../sources/prs/FlyDSL/PR-334.md) | Tile-M tuning + `BLOCK_M=128`/`256` runtime dispatch |
-| [#346](../../sources/prs/FlyDSL/PR-346.md) | Dynamic-dispatch refactor of the FA path |
 | [#462](../../sources/prs/FlyDSL/PR-462.md) | Clean-up: low-level MLIR → modern `fly.*`/`Vec`/Pythonic control flow |
 | #629 | gfx950 dual-wave SWP kernel (`flash_attn_gfx950.py`); rename `flash_attn_func.py` → `flash_attn_generic.py` |
 | #661 | Route MFMA through the **layout MMA-atom API** (`make_mma_atom` / `mma_atom_call_ssa`) — same perf, ~1k fewer lines |

@@ -16,26 +16,26 @@ y_ij  = (x_ij / rms_i) * gamma_j      (gamma optional)
    finalized by wave 0, then `rsqrt` broadcast via LDS.
 4. Rescale and apply optional `gamma` in a second pass.
 
-Nothing is hardcoded to a wave size: the kernel uses the `warpSize` builtin
-(32 on RDNA4, 64 on CDNA) for the shuffle stride and the LDS partial count, so
-the same source runs on gfx1201 **and** wave64 CDNA parts.
+Nothing is hardcoded to a wave size: the kernel uses the `warpSize` builtin for
+the shuffle stride and LDS partial count. The captured gfx950 run uses wave64.
 
 ## Classification
 
 **PORTABLE** — pure HIP (FMA math, LDS, wave shuffles). No MFMA/WMMA. Builds and
-**runs on gfx1201 (RDNA4)**; portable to CDNA (wave64) unchanged.
+runs on gfx950.
 
 ## Build & run
 
 ```bash
-./build.sh                 # defaults to --offload-arch=gfx1201, builds and runs
-./build.sh gfx942          # cross-compile for CDNA (build only on this box)
+./build.sh                 # defaults to --offload-arch=gfx950, builds and runs
 ```
 
 Or directly:
 
 ```bash
-hipcc --offload-arch=gfx1201 -O3 -std=c++17 rmsnorm.hip.cpp -o rmsnorm && ./rmsnorm
+hipcc --offload-arch=gfx950 -O3 -std=c++17 rmsnorm.hip.cpp -o rmsnorm && ./rmsnorm
+# gfx942 cross-compile only; no gfx942 runtime is claimed:
+hipcc --offload-arch=gfx942 -O3 -std=c++17 -c rmsnorm.hip.cpp -o rmsnorm_gfx942.o
 ```
 
 The program runs both an **fp32** IO path and an **fp16 IO / fp32 accumulate**
@@ -44,16 +44,16 @@ PASS/FAIL. Exit code is non-zero if any case fails.
 
 ## Expected output
 
-Captured on the target box (AMD Radeon RX 9070 XT, gfx1201, ROCm 7.2.3):
+Captured on AMD Instinct MI355X / gfx950:
 
 ```
-Device: AMD Radeon RX 9070 XT  warpSize=32
+Device: AMD Instinct MI355X  warpSize=64
 ---------------------------------------------------------------
-rmsnorm fp32           [ 1024 x  4096] gamma=1  max|err|=2.384e-07  PASS  0.0707 ms  475 GB/s
-rmsnorm fp32 no-gamma  [  512 x  8192] gamma=0  max|err|=2.384e-07  PASS  0.0533 ms  630 GB/s
+rmsnorm fp32           [ 1024 x  4096] gamma=1  max|err|=2.384e-07  PASS  0.0099 ms  3373 GB/s
+rmsnorm fp32 no-gamma  [  512 x  8192] gamma=0  max|err|=2.384e-07  PASS  0.0115 ms  2924 GB/s
 rmsnorm fp32 odd-H     [  300 x  4097] gamma=1  max|err|=2.384e-07  PASS
-rmsnorm fp16 IO        [ 1024 x  4096] gamma=1  max|err|=4.884e-04  PASS  0.0588 ms  285 GB/s
-rmsnorm fp16 IO big    [  256 x 16384] gamma=1  max|err|=4.884e-04  PASS  0.0551 ms  305 GB/s
+rmsnorm fp16 IO        [ 1024 x  4096] gamma=1  max|err|=4.884e-04  PASS  0.0095 ms  1768 GB/s
+rmsnorm fp16 IO big    [  256 x 16384] gamma=1  max|err|=4.884e-04  PASS  0.0145 ms  1160 GB/s
 ---------------------------------------------------------------
 ALL TESTS PASSED
 ```
@@ -69,8 +69,7 @@ the wiki page.
 
 ## Notes
 
-- Runs on **gfx1201** (verified above). The same source cross-compiles for
-  **gfx942 / gfx950** (`./build.sh gfx942`) and runs there on wave64 with no
-  code change.
+- Runs on **gfx950** (verified above). The same source cross-compiles for
+  **gfx942**; this page does not claim a gfx942 runtime result.
 - `MAX_WAVES = 32` bounds the LDS partials array for `BLOCK ≤ 1024` at any wave
   size ≥ 32.

@@ -16,7 +16,7 @@
 // This is the exact math AITER's absorbed MLA decode runs; dims are kept tiny but
 // realistic in *shape* (latent >> rope, value = latent).  All fp32.
 //
-// PORTABLE: pure HIP (FMA + LDS + wave shuffle). Builds AND runs on gfx1201.
+// Portable pure HIP (FMA + LDS + wave shuffle), verified on gfx950.
 
 #include <hip/hip_runtime.h>
 #include <cstdio>

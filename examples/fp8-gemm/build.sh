@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Builds both examples in this directory:
-#   1) PORTABLE rocWMMA FP16 GEMM  -> builds AND runs on gfx1201 (this box)
+#   1) PORTABLE rocWMMA FP16 GEMM  -> builds AND runs on gfx950 (this box)
 #   2) CDNA-MFMA FP8 f8f6f4 GEMM   -> cross-compile-verify for gfx950 + gfx942
 set -euo pipefail
 cd "$(dirname "$0")"
 
 ROCM_INC=/opt/rocm/include
 
-echo "==> [1/2] PORTABLE rocWMMA FP16 GEMM (gfx1201, build + run)"
-hipcc --offload-arch=gfx1201 -I"${ROCM_INC}" wmma_hgemm.cpp -o wmma_hgemm
+echo "==> [1/2] PORTABLE rocWMMA FP16 GEMM (gfx950, build + run)"
+hipcc --offload-arch=gfx950 -I"${ROCM_INC}" wmma_hgemm.cpp -o wmma_hgemm
 ./wmma_hgemm
 
 echo

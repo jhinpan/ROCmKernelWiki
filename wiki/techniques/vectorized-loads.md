@@ -7,7 +7,6 @@ version_sensitive:
 architectures:
 - gfx942
 - gfx950
-- gfx1201
 tags:
 - vectorized-loads
 - nontemporal-loads
@@ -39,15 +38,20 @@ sources:
 - blog-gemm-optimization
 - doc-llvm-amdgpu
 - blog-amdgpu-kernel-opt-guide
+aliases:
+- wave64 global_load_dwordx4 bytes payload
+- one KiB per wave
+- 128-bit global memory access
+- four L1 cache sets per workgroup
 implemented_by:
-- pr-aiter-2394
 - pr-triton-729
 - pr-composable_kernel-1430
 - pr-aiter-3072
 - pr-Tensile-293
-- pr-Tensile-1521
 - pr-Tensile-1288
 - pr-Tensile-1185
+- pr-FlyDSL-579
+- pr-composable_kernel-3098
 ---
 # Vectorized & Non-Temporal Loads (128-bit) to Saturate HBM
 
@@ -219,7 +223,7 @@ memory-bound (see [memory-bound pattern](../patterns/memory-bound.md)):
 1. **Use 16 B / 128-bit accesses** — `global_load_dwordx4` / `global_store_dwordx4`.
 2. **Make the access subgroup-contiguous** so the whole 64-lane wave touches
    a **1 KiB payload** per `dwordx4` (`64 lanes × 16 B`). The guide's 512 B
-   figure corresponds to wave64×8 B or wave32×16 B, not wave64 dwordx4.
+   figure corresponds to wave64×8 B, not wave64 dwordx4.
 3. **Keep candidate clauses adjacent:** the guide reports that up to four
    neighboring `global_load_dwordx4` instructions can be treated as one clause
    and reduce data-fabric transactions. This is **guide-reported and
