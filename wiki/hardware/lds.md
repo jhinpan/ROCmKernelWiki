@@ -37,6 +37,9 @@ aliases:
 - shared memory
 - groupshared
 - __shared__
+- ds_read_b64 ds_read2_b64 phases
+- MI300 LDS phase groups
+- MI355X LDS phase groups
 implemented_by:
 - pr-FlyDSL-191
 ---

@@ -27,6 +27,10 @@ tags:
 - profiling
 - cdna
 retrieved_at: '2026-07-20'
+aliases:
+- primary CDNA ISA manuals
+- CDNA3 CDNA4 architecture whitepapers
+- official AMD kernel optimization sources
 ---
 
 # AMDGPU Kernel Optimization Guide (nod-ai / shark-ai)

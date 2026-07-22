@@ -274,7 +274,7 @@ def test_id_and_scope_caches_invalidate_in_process():
             (workspace / "wiki/b.md").write_text(
                 "---\nid: page-b\n---\nB\n", encoding="utf-8"
             )
-            assert set(_index.id_index()) == {"page-a", "page-b"}
+            assert set(_index.id_index(refresh=True)) == {"page-a", "page-b"}
             assert set(_index.id_index(use_cache=False)) == {"page-a", "page-b"}
 
             scope_path = workspace / "data/scope.yaml"

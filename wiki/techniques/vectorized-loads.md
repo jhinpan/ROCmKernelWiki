@@ -38,6 +38,11 @@ sources:
 - blog-gemm-optimization
 - doc-llvm-amdgpu
 - blog-amdgpu-kernel-opt-guide
+aliases:
+- wave64 global_load_dwordx4 bytes payload
+- one KiB per wave
+- 128-bit global memory access
+- four L1 cache sets per workgroup
 implemented_by:
 - pr-aiter-2394
 - pr-triton-729

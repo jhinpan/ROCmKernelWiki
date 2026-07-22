@@ -3,15 +3,12 @@
 import hashlib
 import json
 import os
-import re
 import tempfile
 from pathlib import Path
 
-import yaml
 
 from _wiki_root import WIKI_ROOT
 
-_FRONTMATTER = re.compile(r"^---\s*\r?\n(.*?)\r?\n---", re.DOTALL)
 _MEMORY_CACHE = None
 
 
@@ -50,23 +47,25 @@ def _signature(files):
 
 def _extract_id(path):
     try:
-        content = path.read_text(encoding="utf-8-sig")
+        with path.open(encoding="utf-8-sig") as stream:
+            if stream.readline().strip() != "---":
+                return None
+            for line in stream:
+                stripped = line.strip()
+                if stripped == "---":
+                    return None
+                if stripped.startswith("id:"):
+                    value = stripped.split(":", 1)[1].strip().strip("'\"")
+                    return value or None
     except OSError:
         return None
-    match = _FRONTMATTER.match(content)
-    if not match:
-        return None
-    try:
-        frontmatter = yaml.safe_load(match.group(1))
-    except yaml.YAMLError:
-        return None
-    if not isinstance(frontmatter, dict) or not frontmatter.get("id"):
-        return None
-    return str(frontmatter["id"])
+    return None
 
 
-def id_index(use_cache=True):
+def id_index(use_cache=True, refresh=False):
     global _MEMORY_CACHE
+    if use_cache and not refresh and _MEMORY_CACHE is not None:
+        return _MEMORY_CACHE[1]
     files = _markdown_files()
     signature = _signature(files)
     if use_cache and _MEMORY_CACHE is not None and _MEMORY_CACHE[0] == signature:
