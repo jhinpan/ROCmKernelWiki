@@ -38,7 +38,6 @@ sources:
 - doc-cdna3-isa
 - blog-gemm-optimization
 implemented_by:
-- pr-Tensile-1383
 ---
 # Low Occupancy / Idle CUs
 

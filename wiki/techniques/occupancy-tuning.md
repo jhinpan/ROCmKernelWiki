@@ -41,12 +41,10 @@ sources:
 - blog-4wave-fp8-gemm
 - blog-amdgpu-kernel-opt-guide
 implemented_by:
-- pr-Tensile-1383
 - pr-Tensile-1529
 - pr-FlyDSL-591
 - pr-composable_kernel-2825
 - pr-composable_kernel-2722
-- pr-composable_kernel-2319
 - pr-Tensile-1406
 - pr-FlyDSL-447
 ---

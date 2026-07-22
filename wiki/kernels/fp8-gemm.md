@@ -58,7 +58,6 @@ performance_claims:
   confidence: inferred
 implemented_by:
 - pr-composable_kernel-2152
-- pr-aiter-3228
 - pr-FlyDSL-554
 - pr-composable_kernel-933
 - pr-composable_kernel-785

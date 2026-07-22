@@ -42,7 +42,6 @@ implemented_by:
 - pr-triton-775
 - pr-triton-635
 - pr-aiter-3128
-- pr-Tensile-1383
 - pr-composable_kernel-3620
 - pr-composable_kernel-3349
 - pr-composable_kernel-3193

@@ -44,7 +44,6 @@ sources:
 - blog-matrix-cores-cdna
 - ref-composable-kernel
 implemented_by:
-- pr-Tensile-1383
 - pr-composable_kernel-2096
 - pr-composable_kernel-1838
 - pr-Tensile-1521

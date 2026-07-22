@@ -44,7 +44,6 @@ implemented_by:
 - pr-Tensile-293
 - pr-Tensile-291
 - pr-Tensile-1521
-- pr-Tensile-1383
 ---
 # Atomics & Cross-Workgroup Sync (CDNA/RDNA)
 

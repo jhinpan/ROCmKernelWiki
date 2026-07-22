@@ -40,7 +40,6 @@ implemented_by:
 - pr-composable_kernel-2528
 - pr-aiter-2394
 - pr-Tensile-1521
-- pr-Tensile-1383
 ---
 # HIP — Kernel Basics, LDS, and AMDGCN Builtins
 

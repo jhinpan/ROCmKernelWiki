@@ -43,7 +43,6 @@ sources:
 - ref-matrix-calculator
 - blog-amdgpu-kernel-opt-guide
 implemented_by:
-- pr-Tensile-1383
 - pr-sglang-25898
 - pr-composable_kernel-2528
 - pr-composable_kernel-2466

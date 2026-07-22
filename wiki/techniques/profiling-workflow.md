@@ -39,11 +39,9 @@ sources:
 - blog-triton-optimizations
 - blog-amdgpu-kernel-opt-guide
 implemented_by:
-- pr-Tensile-1383
 - pr-sglang-25898
 - pr-composable_kernel-3137
 - pr-composable_kernel-2825
-- pr-composable_kernel-2319
 - pr-Tensile-1529
 - pr-composable_kernel-647
 - pr-composable_kernel-2723

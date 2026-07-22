@@ -39,7 +39,6 @@ aliases:
 - AMDGCN asm
 - amdgcn ISA
 implemented_by:
-- pr-Tensile-1383
 - pr-Tensile-1521
 - pr-composable_kernel-3098
 - pr-aiter-3072

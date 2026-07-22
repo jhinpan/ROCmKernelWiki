@@ -16,7 +16,7 @@ optimization for CDNA3 (gfx942 / MI300) and CDNA4
 (gfx950 / MI350-MI355X). The repository retains **7,454 merged-PR references**,
 including quarantined raw material for future architectures; the active layer
 contains 54 synthesis pages, 21 doc/blog summaries, and
-9 reference-repository studies.
+10 reference-repository studies.
 
 > Inspired by, and modeled on, MIT Han Lab's
 > [KernelWiki](https://github.com/mit-han-lab/KernelWiki) (the Blackwell/Hopper
@@ -121,7 +121,7 @@ When answering from this KB:
 - **7,454 PR reference pages** across ROCm/composable_kernel, aiter, Tensile,
   rocBLAS, flash-attention, FlyDSL, triton, plus ROCm-filtered vLLM/SGLang
 - **54 active wiki synthesis pages** plus 3 quarantined pages retained for recovery
-- **21 doc/blog summaries** + **9 reference-repository studies**
+- **21 doc/blog summaries** + **10 reference-repository studies**
 - **9 candidate ledgers** classifying every scanned PR (include/defer/exclude)
 - **6 auto-generated query indices**
 - **959 real upstream PR diffs** in `artifacts/` + **12 gfx950-first example suites** in `examples/`

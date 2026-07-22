@@ -149,7 +149,7 @@ def test_documented_corpus_inventory():
         ),
         "refs": len(list((ROOT / "sources/refs").glob("*.md"))),
     }
-    assert counts == {"prs": 7454, "wiki": 57, "docs_blogs": 21, "refs": 9}
+    assert counts == {"prs": 7454, "wiki": 57, "docs_blogs": 21, "refs": 10}
 
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
@@ -162,14 +162,14 @@ def test_documented_corpus_inventory():
         "7,454 PR reference pages",
         "54 active synthesized wiki pages",
         "21 doc/blog summaries",
-        "9 reference-repository studies",
+        "10 reference-repository studies",
     ):
         assert marker in readme, marker
     for marker in (
         "7,454 merged-PR references",
         "54 synthesis pages",
         "21 doc/blog summaries",
-        "9 reference-repository studies",
+        "10 reference-repository studies",
     ):
         assert marker in skill, marker
     assert "7,454 merged PRs" in architecture
@@ -240,10 +240,68 @@ def test_get_page_scope_and_index():
     try:
         from _index import id_index
 
-        assert len(id_index()) == 7541
+        assert len(id_index()) == 7542
     finally:
         sys.path.remove(scripts_dir)
 
+
+
+def test_id_and_scope_caches_invalidate_in_process():
+    scripts_dir = str(ROOT / "scripts")
+    sys.path.insert(0, scripts_dir)
+    try:
+        import _index
+        import _scope
+
+        original_index_root = _index.WIKI_ROOT
+        original_scope_root = _scope.WIKI_ROOT
+        configured_cache = os.environ.get("ROCM_WIKI_CACHE_DIR")
+        with tempfile.TemporaryDirectory() as workspace:
+            workspace = Path(workspace)
+            (workspace / "wiki").mkdir()
+            (workspace / "sources").mkdir()
+            (workspace / "data").mkdir()
+            os.environ["ROCM_WIKI_CACHE_DIR"] = str(workspace / "cache")
+            _index.WIKI_ROOT = workspace
+            _index._MEMORY_CACHE = None
+            _scope.WIKI_ROOT = workspace
+            _scope._SCOPE_CACHE = None
+
+            (workspace / "wiki/a.md").write_text(
+                "\ufeff---\nid: page-a\n---\nA\n", encoding="utf-8"
+            )
+            assert set(_index.id_index()) == {"page-a"}
+            (workspace / "wiki/b.md").write_text(
+                "---\nid: page-b\n---\nB\n", encoding="utf-8"
+            )
+            assert set(_index.id_index()) == {"page-a", "page-b"}
+            assert set(_index.id_index(use_cache=False)) == {"page-a", "page-b"}
+
+            scope_path = workspace / "data/scope.yaml"
+            scope_path.write_text(
+                "in_scope_architectures: [gfx950]\n"
+                "quarantined_architectures: [gfx942]\n"
+                "quarantined_pages: []\n",
+                encoding="utf-8",
+            )
+            assert _scope.in_scope_architectures() == {"gfx950"}
+            scope_path.write_text(
+                "in_scope_architectures: [gfx942, gfx950]\n"
+                "quarantined_architectures: []\n"
+                "quarantined_pages: []\n",
+                encoding="utf-8",
+            )
+            assert _scope.in_scope_architectures() == {"gfx942", "gfx950"}
+    finally:
+        _index.WIKI_ROOT = original_index_root
+        _index._MEMORY_CACHE = None
+        _scope.WIKI_ROOT = original_scope_root
+        _scope._SCOPE_CACHE = None
+        if configured_cache is None:
+            os.environ.pop("ROCM_WIKI_CACHE_DIR", None)
+        else:
+            os.environ["ROCM_WIKI_CACHE_DIR"] = configured_cache
+        sys.path.remove(scripts_dir)
 
 
 def test_alias_architecture():
@@ -297,12 +355,17 @@ def test_grep_and_implementation_links_obey_scope():
     assert "hw-wmma" in recovery.stdout
 
     active_page = run("scripts/get_page.py", "kernel-fp8-gemm")
-    raw_page = run(
-        "scripts/get_page.py", "kernel-fp8-gemm", "--include-out-of-scope"
+    blocked_pr = run("scripts/get_page.py", "pr-aiter-3228", "--frontmatter-only")
+    retained_pr = run(
+        "scripts/get_page.py",
+        "pr-aiter-3228",
+        "--frontmatter-only",
+        "--include-out-of-scope",
     )
-    assert active_page.returncode == raw_page.returncode == 0
+    assert active_page.returncode == retained_pr.returncode == 0
+    assert blocked_pr.returncode == 1
     assert "pr-aiter-3228" not in active_page.stdout
-    assert "pr-aiter-3228" in raw_page.stdout
+    assert "pr-aiter-3228" in retained_pr.stdout
 
 
 def test_scope_quarantine_query_and_indices():

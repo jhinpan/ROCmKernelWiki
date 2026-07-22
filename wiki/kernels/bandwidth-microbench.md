@@ -56,7 +56,6 @@ performance_claims:
   confidence: source-reported
 implemented_by:
 - pr-Tensile-1521
-- pr-Tensile-1383
 - pr-Tensile-1185
 - pr-composable_kernel-3603
 - pr-aiter-3072

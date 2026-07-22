@@ -13501,6 +13501,7 @@
 - [ref-aiter](sources/refs/ref-aiter.md) — AITER — AI Tensor Engine for ROCm  `[source-ref]`
 - [ref-composable-kernel](sources/refs/ref-composable-kernel.md) — Composable Kernel (CK / CK-tile)  `[source-ref]`
 - [ref-gcnasm](sources/refs/ref-gcnasm.md) — gcnasm — GCN Assembly & HIP Programming Examples  `[source-ref]`
+- [ref-gfx950-validation-harness](sources/refs/ref-gfx950-validation-harness.md) — ROCmKernelWiki MI355X gfx950 Validation Harness  `[source-ref]`
 - [ref-hipblaslt](sources/refs/ref-hipblaslt.md) — hipBLASLt — GEMM with epilogue fusion  `[source-ref]`
 - [ref-rocwmma](sources/refs/ref-rocwmma.md) — rocWMMA — C++ WMMA-style MMA library  `[source-ref]`
 - [kernel-bandwidth-microbench](wiki/kernels/bandwidth-microbench.md) — HBM Bandwidth Microbenchmark (float4 non-temporal persistent read)  `[wiki-kernel]`
@@ -16733,6 +16734,7 @@
 - [pr-vllm-43898](sources/prs/vllm/PR-43898.md) — [ROCm][DSv4] Remove device pipeline stall in sparse attention  `[source-pr]`
 - [ref-flydsl-kernel-profiling](sources/refs/ref-flydsl-kernel-profiling.md) — FlyDSL Kernel Profiling — MI350X rocprofv3 ATT Sweep & Dashboard  `[source-ref]`
 - [ref-flydsl](sources/refs/ref-flydsl.md) — FlyDSL — Flexible Layout DSL for AMD GPUs  `[source-ref]`
+- [ref-gfx950-validation-harness](sources/refs/ref-gfx950-validation-harness.md) — ROCmKernelWiki MI355X gfx950 Validation Harness  `[source-ref]`
 - [ref-matrix-calculator](sources/refs/ref-matrix-calculator.md) — AMD Matrix Instruction Calculator  `[source-ref]`
 - [ref-tensile](sources/refs/ref-tensile.md) — Tensile — assembly GEMM kernel generator  `[source-ref]`
 - [kernel-flydsl-flash-attention](wiki/kernels/flydsl-flash-attention.md) — FlyDSL Flash Attention — generic + gfx950 dual-wave fast path  `[wiki-kernel]`

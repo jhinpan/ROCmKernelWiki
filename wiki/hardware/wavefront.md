@@ -42,7 +42,6 @@ aliases:
 - EXEC mask
 - occupancy
 implemented_by:
-- pr-Tensile-1383
 ---
 # Wavefronts, EXEC Mask & Register Files (CDNA)
 

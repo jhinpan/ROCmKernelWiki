@@ -21,7 +21,10 @@ def _cache_path():
         root = Path(configured).expanduser()
     else:
         getuid = getattr(os, "getuid", None)
-        identity = f"uid-{getuid()}" if getuid else str(Path.home())
+        if getuid is not None:
+            identity = f"uid-{getuid()}"
+        else:
+            identity = hashlib.sha256(str(Path.home()).encode("utf-8")).hexdigest()[:12]
         root = Path(tempfile.gettempdir()) / f"rocm-kernel-wiki-{identity}"
     root_key = hashlib.sha256(str(WIKI_ROOT).encode("utf-8")).hexdigest()[:16]
     return root / root_key / "id-index.json"
@@ -47,11 +50,10 @@ def _signature(files):
 
 def _extract_id(path):
     try:
-        with path.open(encoding="utf-8") as stream:
-            prefix = stream.read(16 * 1024)
+        content = path.read_text(encoding="utf-8-sig")
     except OSError:
         return None
-    match = _FRONTMATTER.match(prefix)
+    match = _FRONTMATTER.match(content)
     if not match:
         return None
     try:
@@ -65,18 +67,19 @@ def _extract_id(path):
 
 def id_index(use_cache=True):
     global _MEMORY_CACHE
-    if _MEMORY_CACHE is not None:
-        return _MEMORY_CACHE
-
     files = _markdown_files()
     signature = _signature(files)
+    if use_cache and _MEMORY_CACHE is not None and _MEMORY_CACHE[0] == signature:
+        return _MEMORY_CACHE[1]
+
     cache_path = _cache_path()
     if use_cache and cache_path.exists():
         try:
             cached = json.loads(cache_path.read_text(encoding="utf-8"))
             if cached.get("signature") == signature:
-                _MEMORY_CACHE = cached["ids"]
-                return _MEMORY_CACHE
+                ids = cached["ids"]
+                _MEMORY_CACHE = (signature, ids)
+                return ids
         except (OSError, ValueError, TypeError):
             pass
 
@@ -84,8 +87,13 @@ def id_index(use_cache=True):
     for path in files:
         page_id = _extract_id(path)
         if page_id:
+            if page_id in ids:
+                raise ValueError(
+                    f"duplicate page id {page_id!r}: {ids[page_id]} and "
+                    f"{path.relative_to(WIKI_ROOT).as_posix()}"
+                )
             ids[page_id] = path.relative_to(WIKI_ROOT).as_posix()
-    _MEMORY_CACHE = ids
+    _MEMORY_CACHE = (signature, ids)
 
     if use_cache:
         try:

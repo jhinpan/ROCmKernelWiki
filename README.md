@@ -58,8 +58,9 @@ in [`VERIFICATION.md`](VERIFICATION.md).
   plus ROCm-filtered vllm-project/vllm and sgl-project/sglang
 - **54 active synthesized wiki pages** plus 3 quarantined pages retained for recovery
 - **21 doc/blog summaries** (AMD CDNA3/CDNA4 ISA, whitepapers, ROCm blogs) and
-  **9 reference-repository studies** retained for provenance (FlyDSL, the FlyDSL MI350X profiling sweep,
-  gcnasm, Composable Kernel, AITER, hipBLASLt, Tensile, rocWMMA, the Matrix Instruction Calculator)
+  **10 reference-repository studies** retained for provenance (FlyDSL, the FlyDSL MI350X profiling sweep,
+  gcnasm, Composable Kernel, AITER, hipBLASLt, Tensile, rocWMMA, the Matrix Instruction Calculator,
+  and the MI355X validation harness)
 - **9 candidate ledgers** in `candidates/` recording the include/defer/exclude
   decision for every scanned PR
 - **6 auto-generated cross-reference indices** under `queries/`

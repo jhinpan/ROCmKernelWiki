@@ -18,6 +18,7 @@ import sys
 import yaml
 from pathlib import Path
 
+from _wiki_root import WIKI_ROOT
 from _scope import (
     in_scope_architectures,
     is_active,
@@ -25,7 +26,7 @@ from _scope import (
     quarantined_pages,
 )
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = WIKI_ROOT
 SOURCES_DIR = REPO_ROOT / "sources"
 WIKI_DIR = REPO_ROOT / "wiki"
 DATA_DIR = REPO_ROOT / "data"
@@ -35,12 +36,12 @@ REPRO_FLOOR = {"wiki-technique", "wiki-kernel", "wiki-language"}
 
 
 def load_yaml(path):
-    with open(path, encoding="utf-8") as f:
+    with open(path, encoding="utf-8-sig") as f:
         return yaml.safe_load(f)
 
 
 def extract_frontmatter(filepath):
-    with open(filepath, encoding="utf-8") as f:
+    with open(filepath, encoding="utf-8-sig") as f:
         content = f.read()
     m = re.match(r'^---\s*\r?\n(.*?)\r?\n---\s*\r?\n', content, re.DOTALL)
     if not m:
@@ -52,7 +53,7 @@ def extract_frontmatter(filepath):
 
 
 def read_body(filepath):
-    with open(filepath, encoding="utf-8") as f:
+    with open(filepath, encoding="utf-8-sig") as f:
         content = f.read()
     m = re.match(r'^---\s*\r?\n.*?\r?\n---\s*\r?\n', content, re.DOTALL)
     return content[m.end():] if m else content
@@ -264,6 +265,12 @@ def main():
                     for sub in ("gpu", "dtype", "metric", "value", "source_id"):
                         if sub not in pc:
                             errors.append(f"{rel}: performance_claims[{i}] missing '{sub}'")
+                    source_id = pc.get("source_id")
+                    if source_id and source_id not in pages_by_id:
+                        errors.append(
+                            f"{rel}: performance_claims[{i}] source_id "
+                            f"'{source_id}' does not resolve"
+                        )
 
         # verified evidence
         valid_evidence_types = set()
@@ -280,7 +287,13 @@ def main():
                     f"'{source_id}' does not resolve"
                 )
                 continue
-            allowed = set(allowed_evidence.get(evidence_type, []))
+            if evidence_type not in allowed_evidence:
+                errors.append(
+                    f"{rel}: unknown evidence_type '{evidence_type}' in "
+                    f"evidence_basis[{index}]"
+                )
+                continue
+            allowed = set(allowed_evidence[evidence_type])
             source_category = source.get("source_category")
             if source_category not in allowed:
                 errors.append(
@@ -344,10 +357,11 @@ def main():
             if (
                 ptype.startswith("wiki-")
                 and is_active(fm)
-                and destination_id in quarantined_pages()
+                and destination_id in pages_by_id
+                and not is_active(pages_by_id[destination_id])
             ):
                 errors.append(
-                    f"{rel}: active body links to quarantined page "
+                    f"{rel}: active body links to inactive page "
                     f"'{destination_id}'"
                 )
 
@@ -360,8 +374,8 @@ def main():
         if page_id not in id_set:
             errors.append(f"data/scope.yaml: quarantined page '{page_id}' does not exist")
     for src, ref in sorted(active_referenced_ids):
-        if ref in quarantined_pages():
-            errors.append(f"{src}: active page references quarantined page '{ref}'")
+        if ref in pages_by_id and not is_active(pages_by_id[ref]):
+            errors.append(f"{src}: active page references inactive page '{ref}'")
 
     scope_architectures = (
         set(in_scope_architectures()) | set(quarantined_architectures())

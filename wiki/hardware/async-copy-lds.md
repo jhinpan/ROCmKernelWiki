@@ -24,6 +24,8 @@ evidence_basis:
   evidence_type: official-doc
 - source_id: ref-gcnasm
   evidence_type: upstream-code
+- source_id: ref-gfx950-validation-harness
+  evidence_type: reproduction
 related:
 - hw-s-waitcnt
 - hw-lds
@@ -35,6 +37,7 @@ sources:
 - doc-cdna4-isa
 - doc-llvm-amdgpu
 - ref-gcnasm
+- ref-gfx950-validation-harness
 cross_vendor_note: 'This is AMD''s closest analog to NVIDIA''s cp.async (Ampere) —
   an HBM→shared-memory copy that bypasses the register file. There is no TMA/mbarrier
   equivalent on CDNA; completion is gated by the generic VMCNT counter, not a dedicated

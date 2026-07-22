@@ -93,7 +93,7 @@ def expand_keyword(kw):
 def load_frontmatter(path):
     """Parse YAML frontmatter. Returns (fm_dict, body_str) or (None, None)."""
     try:
-        content = path.read_text(encoding="utf-8")
+        content = path.read_text(encoding="utf-8-sig")
     except Exception:
         return None, None
     m = re.match(r'^---\s*\r?\n(.*?)\r?\n---\s*\r?\n(.*)', content, re.DOTALL)

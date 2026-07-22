@@ -45,7 +45,6 @@ implemented_by:
 - pr-aiter-580
 - pr-aiter-2136
 - pr-FlyDSL-153
-- pr-aiter-3228
 - pr-FlyDSL-278
 - pr-sglang-22338
 ---
