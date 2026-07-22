@@ -1,6 +1,6 @@
 ---
 name: rocm-kernel-wiki
-description: Search and apply ROCmKernelWiki when optimizing AMD Instinct kernels for MI300/gfx942 or MI350/MI355X/gfx950. Use for MFMA, LDS, direct-to-LDS, s_waitcnt, FP8/FP6/FP4/MXFP, wave reductions, GEMM/attention/MoE, CUDA-to-HIP migration, and CK/CK-Tile/AITER/hipBLASLt/FlyDSL/Triton/HIP/GCN implementations. Also use for merged-PR evidence from composable_kernel, AITER, Tensile, rocBLAS, flash-attention, FlyDSL, Triton, vLLM, or SGLang. Do not use for other GPU architectures, NVIDIA-only kernels, host framework behavior, or ROCm installation and driver troubleshooting.
+description: Search and apply ROCmKernelWiki when optimizing AMD Instinct kernels for MI300/gfx942 or MI350/MI355X/gfx950. Use for MFMA, LDS, direct-to-LDS, s_waitcnt, FP8/FP6/FP4/MXFP, wave reductions, GEMM/attention/MoE, CUDA-to-HIP migration, and CK/CK-Tile/AITER/ATOM/hipBLASLt/FlyDSL/Triton/HIP/GCN implementations. Also use for merged-PR evidence from ROCm/rocm-libraries, AITER, ATOM, flash-attention, FlyDSL, Triton, vLLM, or SGLang. Do not use for other GPU architectures, NVIDIA-only kernels, host framework behavior, or ROCm installation and driver troubleshooting.
 ---
 
 # ROCmKernelWiki — AMD CDNA Kernel Optimization Wiki
