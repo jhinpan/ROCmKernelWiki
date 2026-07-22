@@ -67,7 +67,10 @@ def _run(command: list[str], root: Path) -> str:
 
 
 def _git_changes(root: Path) -> tuple[list[str], int]:
-    output = _run(["git", "status", "--porcelain=v1"], root)
+    output = _run(
+        ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+        root,
+    )
     files = []
     for line in output.splitlines():
         if not line:
@@ -203,6 +206,23 @@ def run_refresh(args: argparse.Namespace, root: Path = WIKI_ROOT) -> dict[str, A
     }
     if not args.dry_run:
         _write_summary(root, run_date, summary)
+        # Include the generated summary itself and expand every untracked file
+        # before enforcing/reported budgets. A second measurement is needed
+        # because adding the summary path grows the summary by one list entry.
+        changed_files, changed_lines = _git_changes(root)
+        summary["changed_files"] = changed_files
+        summary["changed_lines"] = changed_lines
+        _write_summary(root, run_date, summary)
+        changed_files, changed_lines = _git_changes(root)
+        summary["changed_files"] = changed_files
+        summary["changed_lines"] = changed_lines
+        _write_summary(root, run_date, summary)
+        enforce_change_budget(
+            changed_files,
+            changed_lines=changed_lines,
+            max_files=args.max_files,
+            max_lines=args.max_lines,
+        )
         _run([sys.executable, "scripts/validate.py"], root)
         _run([sys.executable, "tests/test_evolution.py"], root)
     return summary

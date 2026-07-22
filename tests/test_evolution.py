@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -385,6 +386,24 @@ def test_refresh_budget_rejects_unreviewable_change_sets():
         assert "file budget" in str(error)
     else:
         raise AssertionError("oversized refresh was accepted")
+
+
+def test_refresh_expands_untracked_directories_for_budgeting():
+    from evolve.refresh import _git_changes
+
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        subprocess.run(["git", "init", "-q", str(root)], check=True)
+        nested = root / "candidates" / "runs" / "today"
+        nested.mkdir(parents=True)
+        (nested / "one.yaml").write_text("one: true\n", encoding="utf-8")
+        (nested / "two.yaml").write_text("two: true\n", encoding="utf-8")
+        changed_files, changed_lines = _git_changes(root)
+        assert changed_files == [
+            "candidates/runs/today/one.yaml",
+            "candidates/runs/today/two.yaml",
+        ]
+        assert changed_lines == 2
 
 
 def test_query_marks_upstream_pr_snippets_as_untrusted():
