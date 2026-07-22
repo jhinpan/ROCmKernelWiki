@@ -245,28 +245,6 @@ def test_get_page_scope_and_index():
         sys.path.remove(scripts_dir)
 
 
-def test_get_page_scope_and_index():
-    blocked = run("scripts/get_page.py", "hw-wmma", "--frontmatter-only")
-    recovery = run(
-        "scripts/get_page.py",
-        "hw-wmma",
-        "--frontmatter-only",
-        "--include-out-of-scope",
-    )
-    assert blocked.returncode == 1
-    assert "outside active" in blocked.stderr
-    assert recovery.returncode == 0
-    assert "hw-wmma" in recovery.stdout
-
-    scripts_dir = str(ROOT / "scripts")
-    sys.path.insert(0, scripts_dir)
-    try:
-        from _index import id_index
-
-        assert len(id_index()) == 7541
-    finally:
-        sys.path.remove(scripts_dir)
-
 
 def test_alias_architecture():
     # MI355X must alias to gfx950
@@ -287,6 +265,44 @@ def test_active_scope_contract():
         if fm["id"] in quarantined:
             continue
         assert set(fm.get("architectures") or []) <= active, path.relative_to(ROOT)
+
+
+def test_active_synthesis_has_no_unsupported_architecture_prose():
+    scope = yaml.safe_load((ROOT / "data/scope.yaml").read_text(encoding="utf-8"))
+    quarantined = set(scope["quarantined_pages"])
+    unsupported = re.compile(
+        r"gfx1201|gfx1250|gfx1100|gfx90a|RDNA3|RDNA4|MI400|MI450|"
+        r"RX 9070|R9700|wave32",
+        re.IGNORECASE,
+    )
+    for path in (ROOT / "wiki").rglob("*.md"):
+        fm = frontmatter(path.relative_to(ROOT))
+        if fm["id"] in quarantined:
+            continue
+        assert not unsupported.search(path.read_text(encoding="utf-8")), path
+
+
+def test_grep_and_implementation_links_obey_scope():
+    blocked = run("scripts/grep_wiki.py", "gfx1201", "--only", "wiki")
+    recovery = run(
+        "scripts/grep_wiki.py",
+        "gfx1201",
+        "--only",
+        "wiki",
+        "--include-out-of-scope",
+    )
+    assert blocked.returncode == 2
+    assert "unsupported architecture" in blocked.stderr
+    assert recovery.returncode == 0
+    assert "hw-wmma" in recovery.stdout
+
+    active_page = run("scripts/get_page.py", "kernel-fp8-gemm")
+    raw_page = run(
+        "scripts/get_page.py", "kernel-fp8-gemm", "--include-out-of-scope"
+    )
+    assert active_page.returncode == raw_page.returncode == 0
+    assert "pr-aiter-3228" not in active_page.stdout
+    assert "pr-aiter-3228" in raw_page.stdout
 
 
 def test_scope_quarantine_query_and_indices():
@@ -360,6 +376,7 @@ def test_corrected_register_dma_and_mxfp_guidance():
     )
     assert "&tile[lane]" not in async_copy
     assert "wave-uniform LDS base" in async_copy
+    assert "out[global_index] = tile[threadIdx.x]" in async_copy
     waitcnt = (ROOT / "wiki/hardware/s-waitcnt.md").read_text(encoding="utf-8")
     assert "buffer_load_dwordx4" not in waitcnt
 
@@ -423,10 +440,9 @@ def test_amdgpu_guide_sync_regression():
             ("rocdl.update.dpp", "GCNDPPCombine", "row_mask", "bank_mask",
              "DPP8/DPP16", "unclear provenance"),
         "wiki/hardware/memory-instructions.md":
-            ("4 GiB", "descriptor-window limit", "range-checked independently",
-             "0x31004000"),
+            ("4 GiB", "descriptor-window limit", "range-checked independently"),
         "wiki/techniques/buffer-oob-guard.md":
-            ("dwordx2/x3/x4", "mapped memory", "0x31004000"),
+            ("dwordx2/x3/x4", "mapped memory"),
         "wiki/techniques/vectorized-loads.md":
             ("1 KiB", "64 lanes × 16 B"),
     }

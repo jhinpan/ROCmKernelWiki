@@ -51,8 +51,8 @@ implemented_by:
 
 Triton is a Python DSL for GPU kernels that lowers tile-level tensor ops through
 an MLIR pipeline to a target backend. The **AMD backend** (`triton.backends.amd`,
-upstreamed and shipped in ROCm) targets CDNA3 (gfx942), CDNA4 (gfx950) and RDNA4
-(gfx1201). The same Python you write for NVIDIA runs on AMD, but the
+upstreamed and shipped in ROCm) targets CDNA3 (gfx942) and CDNA4 (gfx950) in
+the active wiki scope. The same Python you write for NVIDIA runs on AMD, but the
 performance-critical decisions — which matrix instruction `tl.dot` becomes, how
 the K-loop is pipelined, and how global loads stage through LDS — are controlled
 by a small set of **AMD-specific knobs** passed via `triton.Config` /
@@ -60,8 +60,7 @@ by a small set of **AMD-specific knobs** passed via `triton.Config` /
 
 On CDNA the key fact is that `tl.dot(a, b)` lowers to **`v_mfma_*`** matrix-core
 instructions issued per wavefront (64 lanes) — see [MFMA](../hardware/mfma.md).
-On RDNA4 it lowers to `v_wmma_*` instead. Everything below is about steering that
-lowering.
+Everything below is about steering that lowering on gfx942/gfx950.
 
 ```python
 import triton

@@ -10,7 +10,6 @@ architectures:
 - gfx950
 tags:
 - wave64
-- wave32
 - sgpr
 - vgpr
 - agpr
@@ -51,9 +50,8 @@ implemented_by:
 
 A **wavefront** (AMD's "warp") is the unit of SIMD execution on a CDNA Compute
 Unit (CU). On CDNA (gfx9xx, including gfx942/CDNA3 and gfx950/CDNA4) a wavefront
-is **always 64 work-items wide — wave64**. There is no wave32 mode on CDNA. RDNA
-parts such as gfx1201/RDNA4 support both wave32 and wave64; the kernel-visible
-width is reported by `warpSize` and should be queried, never hard-coded.
+is **always 64 work-items wide — wave64**. The kernel-visible width is
+reported by `warpSize`; query it rather than carrying CUDA's 32-lane assumption.
 
 All 64 lanes of a wavefront share one program counter and step through the same
 instruction stream in lockstep. Per-lane divergence is handled by masking, not by
@@ -176,8 +174,8 @@ A few consequences that drive kernel design:
   allocation on both gfx942 and gfx950; `.agpr_count` is the accumulator subset,
   not an extra allocation to add again. Compute
   `round_up(metadata_vgpr_count, 8)`. A lower-level compiler resource remark may
-  instead expose separate regular `NumVgprs` and accumulator `NumAgprs`; only
-  for those separate counts does gfx942 derive the total as
+  instead expose separate regular `NumVgprs` and accumulator `NumAgprs`; for
+  those separate counts gfx942 and gfx950 derive the total as
   `round_up(round_up(NumVgprs, 4) + NumAgprs, 8)`. Prefer `TotalNumVgprs` when
   the compiler reports it.
 - **SGPR claims need their own namespace and unit.** General SGPR names are

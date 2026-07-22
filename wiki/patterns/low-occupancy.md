@@ -136,9 +136,8 @@ printf("max blocks/CU = %d -> ~%d waves/CU (device ceiling %d)\n",
        max_blocks, waves_per_cu, wave_ceiling);
 ```
 
-> `warpSize` is **64 on gfx9 (CDNA)**. RDNA can be compiled in wave32 or wave64
-> mode, so query it rather than inferring it from the gfx generation. A
-> 256-thread block is four wave64 wavefronts or eight wave32 wavefronts.
+> `warpSize` is **64 on gfx942/gfx950**. A 256-thread block is four
+> wave64 wavefronts.
 
 ## Fixes
 

@@ -43,6 +43,14 @@ def split_frontmatter(content):
     return fm, m.group(2)
 
 
+def active_page_id(page_id):
+    page = find_page(page_id)
+    if page is None:
+        return False
+    frontmatter, _ = split_frontmatter(page.read_text(encoding="utf-8"))
+    return bool(frontmatter and is_active(frontmatter))
+
+
 def _resolve_artifact_dir(page_path, fm):
     """Return (rel_str, abs_path, is_fallback) or (None, None, False)."""
     fm = fm or {}
@@ -104,6 +112,17 @@ def main():
         )
         sys.exit(1)
 
+    if fm and not args.include_out_of_scope:
+        fm = dict(fm)
+        for field in ("implemented_by", "related"):
+            if field in fm:
+                fm[field] = [page_id for page_id in fm[field] if active_page_id(page_id)]
+                if not fm[field]:
+                    del fm[field]
+        content = "---\n" + yaml.dump(
+            fm, allow_unicode=True, sort_keys=False
+        ) + "---\n" + body
+
     if args.frontmatter_only:
         if fm:
             print(yaml.dump(fm, allow_unicode=True, sort_keys=False))
@@ -119,7 +138,11 @@ def main():
     # Surface the PR<->wiki bridge so an agent sees the connection without a
     # second query. implemented_by lives on wiki pages; related-wiki on PR pages.
     if fm:
-        impl = fm.get("implemented_by") or []
+        impl = [
+            page_id
+            for page_id in (fm.get("implemented_by") or [])
+            if active_page_id(page_id)
+        ]
         if impl:
             print()
             print("## Implementing PRs (real upstream changes)")

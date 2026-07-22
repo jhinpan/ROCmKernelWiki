@@ -117,9 +117,9 @@ __global__ void prefetch_tile(const float* __restrict__ g_in, float* out, int n)
 {
     __shared__ float tile[256];
 
-    const int lane = threadIdx.x % warpSize;
     const int wave = threadIdx.x / warpSize;
-    const float* src = g_in + blockIdx.x * 256 + threadIdx.x;
+    const int global_index = blockIdx.x * 256 + threadIdx.x;
+    float* src = const_cast<float*>(g_in + global_index);  // source is read-only
     float* wave_uniform_dst = &tile[wave * warpSize];
     __builtin_amdgcn_load_to_lds(
         /*src  global ptr */ src,
@@ -132,8 +132,8 @@ __global__ void prefetch_tile(const float* __restrict__ g_in, float* out, int n)
     __builtin_amdgcn_s_waitcnt(0);               // or vmcnt(0) via the encoded imm
     __syncthreads();                             // s_barrier: tile visible to all
 
-    if (blockIdx.x * 256 + lane < n)
-        out[blockIdx.x * 256 + lane] = tile[lane] * 2.0f;
+    if (global_index < n)
+        out[global_index] = tile[threadIdx.x] * 2.0f;
 }
 ```
 

@@ -56,6 +56,9 @@ aliases:
 - MI300 to MI355X
 - CDNA3 to CDNA4
 - FP8 portability
+- reuse FP8 weights
+- unchanged FP8 kernels
+- MI300 MI355X
 - FNUZ to OCP
 implemented_by:
 - pr-FlyDSL-191

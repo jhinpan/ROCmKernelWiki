@@ -95,9 +95,7 @@ goal is usually to get actual spill traffic to **zero**, then tune occupancy.
 
 ## Why it happens in CDNA MFMA kernels
 
-The following AGPR and wave64 details are specific to gfx942/gfx950. On RDNA,
-WMMA accumulators use ordinary ArchVGPRs and the target may run wave32 or wave64;
-query the compiled wave mode and re-budget its fragment layout.
+The following AGPR and wave64 details are specific to gfx942/gfx950.
 
 - **MFMA accumulators are register-resident.** A large output tile keeps its
   whole C/D accumulator live across the K-loop. For `v_mfma_f32_16x16x16_f16`
@@ -107,8 +105,7 @@ query the compiled wave mode and re-budget its fragment layout.
   big tile still adds to the same combined physical budget. See
   [MFMA](../hardware/mfma.md).
 - **wave64.** CDNA is wave64-only, so per-lane register costs are paid across
-  64 lanes; there is no wave32 fallback to halve the live state (unlike RDNA4
-  gfx1201, which can run wave32).
+  64 lanes.
 - **Deep software pipelines.** Double-buffering and `num_stages>1` keep multiple
   tiles of A/B in registers (or in flight) at once, multiplying live state.
 - **Address/index bloat.** 64-bit flat addresses, per-lane offsets, and loop
@@ -198,8 +195,7 @@ holding scratch at zero. Always co-optimize with LDS, since LDS per-CU
 - **Ignoring `ScratchSize`.** Spills can hide behind "it still runs." Always
   check the resource report.
 - **Hardcoding `warpSize`/lane counts** when computing register tiling — query
-  it. gfx9 CDNA is wave64, while RDNA supports target/mode-dependent wave32 or
-  wave64 (see [HIP HW model](../../sources/docs/doc-rocm-hip-hw.md)).
+  it. gfx942/gfx950 are wave64 (see [HIP HW model](../../sources/docs/doc-rocm-hip-hw.md)).
 
 ## See also
 

@@ -15,7 +15,9 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _scope import is_active, quarantined_architectures  # noqa: E402
 from _wiki_root import WIKI_ROOT, configure_utf8_stdio  # noqa: E402
+from query import load_alias_expansions, load_frontmatter  # noqa: E402
 
 CODE_EXTS = {
     ".md", ".cu", ".cuh", ".hip", ".s", ".asm", ".inc",
@@ -24,7 +26,7 @@ CODE_EXTS = {
 }
 
 
-def iter_files(scope, exts=None):
+def iter_files(scope, exts=None, include_out_of_scope=False):
     dirs = {
         "wiki": ["wiki"],
         "sources": ["sources"],
@@ -43,8 +45,17 @@ def iter_files(scope, exts=None):
         if not base.exists():
             continue
         for f in base.rglob("*"):
-            if f.is_file() and f.suffix.lower() in search_exts:
-                yield f
+            if not f.is_file() or f.suffix.lower() not in search_exts:
+                continue
+            if (
+                not include_out_of_scope
+                and f.suffix.lower() == ".md"
+                and sub in {"wiki", "sources"}
+            ):
+                frontmatter, _ = load_frontmatter(f)
+                if frontmatter is not None and not is_active(frontmatter):
+                    continue
+            yield f
 
 
 def grep_file(path, patterns, context, any_match):
@@ -77,7 +88,28 @@ def main():
     parser.add_argument("--context", type=int, default=0, help="Context lines around each match")
     parser.add_argument("--ignore-case", "-i", action="store_true")
     parser.add_argument("--limit", type=int, default=200, help="Max matching files to print")
+    parser.add_argument(
+        "--include-out-of-scope",
+        action="store_true",
+        help="Include retained material outside active gfx942/gfx950 scope",
+    )
     args = parser.parse_args()
+
+    query_text = " ".join(args.patterns).lower()
+    aliases = load_alias_expansions()
+    unsupported = {
+        canonical
+        for alias, canonical in aliases.items()
+        if alias in query_text and canonical in quarantined_architectures()
+    }
+    if unsupported and not args.include_out_of_scope:
+        print(
+            "ERROR: search targets retained but unsupported architecture(s): "
+            f"{', '.join(sorted(unsupported))}. Use --include-out-of-scope "
+            "for raw recovery research.",
+            file=sys.stderr,
+        )
+        return 2
 
     flags = re.IGNORECASE if args.ignore_case else 0
     patterns = [re.compile(p, flags) for p in args.patterns]
@@ -85,7 +117,7 @@ def main():
 
     total = 0
     files_with_hits = 0
-    for f in iter_files(args.only, exts):
+    for f in iter_files(args.only, exts, args.include_out_of_scope):
         hits = grep_file(f, patterns, args.context, args.any)
         if not hits:
             continue
@@ -103,8 +135,9 @@ def main():
         print("No matches.")
     else:
         print(f"\n# {total} match(es) across {files_with_hits} file(s)")
+    return 0
 
 
 if __name__ == "__main__":
     configure_utf8_stdio()
-    main()
+    raise SystemExit(main())

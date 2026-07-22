@@ -82,6 +82,19 @@ def has_code_fence(body):
     return bool(re.search(r"```[a-zA-Z0-9_+-]*\s*\r?\n.*?\r?\n```", body, re.DOTALL))
 
 
+def evidence_requirements_satisfied(evidence_types, requirements):
+    for requirement in requirements:
+        if isinstance(requirement, str):
+            if requirement not in evidence_types:
+                return False
+        elif isinstance(requirement, dict) and "one_of" in requirement:
+            if not (set(requirement["one_of"]) & evidence_types):
+                return False
+        else:
+            raise ValueError(f"invalid verified evidence requirement: {requirement!r}")
+    return True
+
+
 def body_relative_links(body):
     for target in re.findall(r"!?\[[^\]]*\]\(([^)]+)\)", body):
         target = target.strip().split(maxsplit=1)[0].strip("<>")
@@ -123,6 +136,7 @@ def main():
     errors = []
     warnings = []
     all_ids = {}
+    ids_by_path = {}
     pages_by_id = {}
     referenced_ids = set()
     active_referenced_ids = set()
@@ -173,6 +187,7 @@ def main():
             if pid in all_ids:
                 errors.append(f"{rel}: duplicate id '{pid}' (also in {all_ids[pid]})")
             all_ids[pid] = str(rel)
+            ids_by_path[rel.as_posix()] = pid
             pages_by_id[pid] = fm
         page_records.append((md, rel, fm, ptype))
 
@@ -276,10 +291,12 @@ def main():
             valid_evidence_types.add(evidence_type)
 
         if fm.get("confidence") == "verified":
-            types = valid_evidence_types
-            if not ({"official-doc"} & types and {"upstream-code", "paper"} & types):
-                errors.append(f"{rel}: confidence=verified requires evidence_basis with "
-                              f"official-doc + upstream-code/paper")
+            requirements = evidence_policy.get("verified_requires") or []
+            if not evidence_requirements_satisfied(valid_evidence_types, requirements):
+                errors.append(
+                    f"{rel}: confidence=verified does not satisfy "
+                    f"data/evidence-policy.yaml requirements {requirements}"
+                )
 
         # collect references
         for ref in (fm.get("sources") or []):
@@ -318,6 +335,21 @@ def main():
             destination = (md.parent / relative_target).resolve()
             if not destination.exists():
                 errors.append(f"{rel}: dangling body link '{target}'")
+                continue
+            try:
+                destination_relative = destination.relative_to(REPO_ROOT).as_posix()
+            except ValueError:
+                continue
+            destination_id = ids_by_path.get(destination_relative)
+            if (
+                ptype.startswith("wiki-")
+                and is_active(fm)
+                and destination_id in quarantined_pages()
+            ):
+                errors.append(
+                    f"{rel}: active body links to quarantined page "
+                    f"'{destination_id}'"
+                )
 
     # link integrity
     id_set = set(all_ids)

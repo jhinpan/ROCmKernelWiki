@@ -134,8 +134,8 @@ The LLVM/Clang intrinsic for the 16×16 scaled form is:
 
 ```cpp
 // gfx950 only. acc, A, B are wavefront-distributed register tiles.
-// opselA/opselB pick the byte lane of the packed E8M0 scale; the two trailing
-// immediates carry the A-format and B-format selectors (see table above).
+// cbsz/blgp, the first two immediates after the register operands, select the
+// A/B formats; opselA/opselB select bytes from the packed E8M0 scales.
 using f32x4  = __attribute__((__vector_size__(16))) float;
 using i32x8  = __attribute__((__vector_size__(32))) int;  // packed narrow A/B
 

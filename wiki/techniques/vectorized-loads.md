@@ -218,7 +218,7 @@ memory-bound (see [memory-bound pattern](../patterns/memory-bound.md)):
 1. **Use 16 B / 128-bit accesses** — `global_load_dwordx4` / `global_store_dwordx4`.
 2. **Make the access subgroup-contiguous** so the whole 64-lane wave touches
    a **1 KiB payload** per `dwordx4` (`64 lanes × 16 B`). The guide's 512 B
-   figure corresponds to wave64×8 B or wave32×16 B, not wave64 dwordx4.
+   figure corresponds to wave64×8 B, not wave64 dwordx4.
 3. **Keep candidate clauses adjacent:** the guide reports that up to four
    neighboring `global_load_dwordx4` instructions can be treated as one clause
    and reduce data-fabric transactions. This is **guide-reported and
