@@ -79,6 +79,13 @@ def _run(
     return result.stdout.strip()
 
 
+def _push_branch(root: Path, branch: str) -> None:
+    _run(
+        ["git", "push", "--force-with-lease", "-u", "origin", branch],
+        root=root,
+    )
+
+
 def publish_draft(
     *,
     root: Path,
@@ -115,7 +122,7 @@ def publish_draft(
         ],
         root=root,
     )
-    _run(["git", "push", "--force-with-lease", "-u", "origin", branch], root=root)
+    _push_branch(root, branch)
     existing = _run(
         [
             "gh",
