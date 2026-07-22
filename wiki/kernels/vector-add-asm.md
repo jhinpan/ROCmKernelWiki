@@ -58,12 +58,14 @@ performance_claims:
   value: ~92% of 5.3 TB/s HBM3 peak
   source_id: doc-mi300x-datasheet
   confidence: inferred
+  unreproduced: true
 - gpu: MI300X
   dtype: fp32
   metric: effective-bandwidth
   value: ~4.9 TB/s (read 2x + write 1x, 12 B/elem)
   source_id: ref-gcnasm
   confidence: inferred
+  unreproduced: true
 implemented_by:
 - pr-Tensile-1288
 - pr-composable_kernel-3208

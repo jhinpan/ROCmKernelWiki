@@ -105,6 +105,8 @@ def is_active(frontmatter):
     """Return whether a page belongs to the default published knowledge layer."""
     if str(frontmatter.get("id", "")) in quarantined_pages():
         return False
+    if str(frontmatter.get("scope_status", "active")) != "active":
+        return False
     architectures = {str(v) for v in (frontmatter.get("architectures") or [])}
     if frontmatter.get("source_category") == "upstream-code":
         # A mixed-architecture PR is retained as raw evidence but excluded from

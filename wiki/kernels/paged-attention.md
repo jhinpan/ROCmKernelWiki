@@ -44,12 +44,14 @@ performance_claims:
   value: ~80% of 5.3 TB/s peak at large batch decode
   source_id: doc-mi300x-datasheet
   confidence: inferred
+  unreproduced: true
 - gpu: MI300X
   dtype: fp8
   metric: kv-cache-read-volume
   value: ~2x lower than fp16 KV cache (1 byte/elem vs 2)
   source_id: ref-aiter
   confidence: source-reported
+  unreproduced: true
 - gpu: MI300X
   dtype: bf16
   metric: decode-throughput
@@ -57,6 +59,7 @@ performance_claims:
     decode
   source_id: blog-flash-attention-amd
   confidence: source-reported
+  unreproduced: true
 implemented_by:
 - pr-aiter-1383
 - pr-triton-718

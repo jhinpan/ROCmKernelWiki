@@ -3,6 +3,7 @@
 # Pure HIP (FMA math, LDS, __shfl_down) with wave-size-agnostic reduction.
 set -euo pipefail
 cd "$(dirname "$0")"
+source ../_common.sh
 
 ARCH="${1:-gfx950}"
 
@@ -10,4 +11,4 @@ echo "== Building rmsnorm for ${ARCH} =="
 hipcc --offload-arch="${ARCH}" -O3 -std=c++17 rmsnorm.hip.cpp -o rmsnorm
 
 echo "== Running =="
-./rmsnorm
+rocm_wiki_run ./rmsnorm

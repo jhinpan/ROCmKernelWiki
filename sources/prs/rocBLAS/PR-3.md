@@ -25,7 +25,7 @@ languages:
 - cpp
 captured_at: '2026-05-15'
 status: merged
-merge_sha: ''
+merge_sha: 774f0bd62c3233de81d5b220f552ab19b773cc06
 inclusion_reason: keyword 'gemm'
 changed_paths:
 - src/include/ablas.h

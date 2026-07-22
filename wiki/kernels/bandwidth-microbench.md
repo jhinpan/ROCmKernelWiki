@@ -54,6 +54,7 @@ performance_claims:
   source_id: ref-gcnasm
   utilization: ~86% of MI300-class 5.3 TB/s HBM3 peak
   confidence: source-reported
+  unreproduced: true
 implemented_by:
 - pr-Tensile-1185
 - pr-aiter-3072

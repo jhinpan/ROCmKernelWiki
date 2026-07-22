@@ -1,43 +1,32 @@
 #!/usr/bin/env python3
 """Guide-derived retrieval and architecture-safety regression."""
 
-import os
 import re
-import subprocess
 import sys
 from pathlib import Path
 
 import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "scripts"))
+from evaluate_skill import evaluate_retrieval, load_gold_cases  # noqa: E402
+
 CLAIMS = yaml.safe_load(
     (ROOT / "data/guide-claims.yaml").read_text(encoding="utf-8")
 )
+_EVAL_RESULTS = None
 
 
 def _query(claim):
-    command = [
-        sys.executable,
-        "scripts/query.py",
-        claim["question"],
-        "--limit",
-        "5",
-        "--compact",
-    ]
-    if claim.get("synthesis", True):
-        command.append("--synthesis")
-    environment = os.environ.copy()
-    environment["PYTHONUTF8"] = "1"
-    result = subprocess.run(
-        command,
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        env=environment,
-    )
-    assert result.returncode == 0, result.stderr
-    return re.findall(r"^  \[[^\]]+\] ([^:]+):", result.stdout, re.MULTILINE)
+    global _EVAL_RESULTS
+    if _EVAL_RESULTS is None:
+        evaluation = evaluate_retrieval(ROOT, load_gold_cases(ROOT))
+        _EVAL_RESULTS = {
+            result["id"]: result for result in evaluation["results"]
+        }
+    result = _EVAL_RESULTS[claim["id"]]
+    assert not result.get("expect_refusal"), claim["id"]
+    return result["top_ids"][:5]
 
 
 def _frontmatter_by_id():

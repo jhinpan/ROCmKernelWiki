@@ -44,18 +44,21 @@ performance_claims:
   value: ~1.3-1.6x end-to-end MoE layer vs separate gate/up/down GEMMs + activation
   source_id: ref-aiter
   confidence: source-reported
+  unreproduced: true
 - gpu: MI300X
   dtype: fp8
   metric: peak-fp8-tensor
   value: 2615 TFLOPS dense FP8 ceiling (expert GEMMs are the dominant term)
   source_id: doc-mi300x-datasheet
   confidence: source-reported
+  unreproduced: true
 - gpu: MI355X
   dtype: fp8
   metric: peak-fp8-tensor
   value: 5.0 PFLOPS dense OCP-FP8 ceiling (gfx950)
   source_id: blog-fp8-gemm-cdna4
   confidence: inferred
+  unreproduced: true
 implemented_by:
 - pr-sglang-24816
 - pr-vllm-36286

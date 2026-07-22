@@ -46,6 +46,7 @@ performance_claims:
   utilization: ~75-88% of 1307 TFLOPS dense FP16 peak
   source_id: blog-cktile-gemm
   baseline: hipBLASLt
+  unreproduced: true
 - gpu: MI300X
   dtype: bf16
   metric: TFLOPS
@@ -53,11 +54,13 @@ performance_claims:
   shape: 8192x8192x8192
   utilization: ~75-88% of 1307 TFLOPS dense BF16 peak
   source_id: doc-mi300x-datasheet
+  unreproduced: true
 - gpu: MI300X
   dtype: fp16
   metric: peak-TFLOPS-reference
   value: 1307 TFLOPS dense FP16/BF16 (hardware ceiling)
   source_id: doc-mi300x-datasheet
+  unreproduced: true
 implemented_by:
 - pr-Tensile-910
 - pr-Tensile-1714

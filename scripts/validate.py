@@ -14,6 +14,7 @@ Exit code 0 on success, 1 on any error.
 """
 
 import re
+import subprocess
 import sys
 import yaml
 from pathlib import Path
@@ -25,6 +26,10 @@ from _scope import (
     quarantined_architectures,
     quarantined_pages,
 )
+from evolve.corpus import build_manifest
+from evolve.registry import load_registry
+from evolve.schema import validate_candidate, validate_proposal
+from verify_provenance import verify_local_provenance
 
 REPO_ROOT = WIKI_ROOT
 SOURCES_DIR = REPO_ROOT / "sources"
@@ -115,6 +120,9 @@ def main():
     tags = load_yaml(DATA_DIR / "tags.yaml")
     evidence_policy = load_yaml(DATA_DIR / "evidence-policy.yaml")
     allowed_evidence = evidence_policy["allowed_source_categories"]
+    machine_forbidden_confidence = set(
+        evidence_policy.get("machine_authored_forbidden_confidence") or []
+    )
 
     vocab = {
         "architectures": set(tags["architectures"]),
@@ -162,6 +170,29 @@ def main():
                     version_claim_ids.add(c["id"])
         except Exception:
             pass
+    claim_markers = {}
+    claim_values_path = DATA_DIR / "claim-values.yaml"
+    if claim_values_path.exists():
+        try:
+            claim_values = load_yaml(claim_values_path) or {}
+            if claim_values.get("schema_version") != 1:
+                errors.append("data/claim-values.yaml: schema_version must be 1")
+            for claim in claim_values.get("claims") or []:
+                claim_id = claim.get("id")
+                if not claim_id or claim_id in claim_markers:
+                    errors.append(
+                        f"data/claim-values.yaml: invalid or duplicate id {claim_id!r}"
+                    )
+                    continue
+                if claim_id not in version_claim_ids:
+                    errors.append(
+                        f"data/claim-values.yaml: {claim_id} is not a version claim"
+                    )
+                claim_markers[claim_id] = list(
+                    claim.get("required_patterns") or []
+                )
+        except (OSError, yaml.YAMLError) as error:
+            errors.append(f"data/claim-values.yaml: {error}")
 
     for base in (SOURCES_DIR, WIKI_DIR):
         if not base.exists():
@@ -235,7 +266,32 @@ def main():
             if fm["status"] not in constraints["status"]:
                 errors.append(f"{rel}: status '{fm['status']}' invalid")
         if ptype == "source-pr" and fm.get("status") == "merged" and not fm.get("merge_sha"):
-            warnings.append(f"{rel}: merged PR without merge_sha")
+            errors.append(f"{rel}: merged PR without merge_sha")
+        if fm.get("scope_status") not in (None, "active", "quarantine", "out-of-scope"):
+            errors.append(f"{rel}: invalid scope_status '{fm.get('scope_status')}'")
+        if fm.get("authored_by") not in (None, "human", "machine"):
+            errors.append(f"{rel}: authored_by must be human or machine")
+        if (
+            fm.get("authored_by") == "machine"
+            and fm.get("confidence") in machine_forbidden_confidence
+        ):
+            errors.append(
+                f"{rel}: machine-authored content cannot set "
+                f"confidence={fm.get('confidence')}"
+            )
+        confidence_history = fm.get("confidence_history")
+        if confidence_history is not None:
+            if not isinstance(confidence_history, list) or not all(
+                isinstance(item, dict) for item in confidence_history
+            ):
+                errors.append(f"{rel}: confidence_history must be a list of objects")
+            elif (
+                confidence_history
+                and confidence_history[-1].get("to") != fm.get("confidence")
+            ):
+                errors.append(
+                    f"{rel}: latest confidence_history.to must equal confidence"
+                )
 
         if ptype.startswith("wiki-") and is_active(fm):
             outside = set(fm.get("architectures") or []) - set(
@@ -270,6 +326,23 @@ def main():
                         errors.append(
                             f"{rel}: performance_claims[{i}] source_id "
                             f"'{source_id}' does not resolve"
+                        )
+                    reproduction_id = pc.get("reproduction_id")
+                    if reproduction_id:
+                        reproduction_path = REPO_ROOT / str(reproduction_id)
+                        if (
+                            not reproduction_path.is_dir()
+                            or not (reproduction_path / "manifest.json").is_file()
+                            or not (reproduction_path / "verdicts.json").is_file()
+                        ):
+                            errors.append(
+                                f"{rel}: performance_claims[{i}] reproduction_id "
+                                f"'{reproduction_id}' is not an evidence bundle"
+                            )
+                    elif pc.get("unreproduced") is not True:
+                        errors.append(
+                            f"{rel}: performance_claims[{i}] must provide a "
+                            "reproduction_id or unreproduced: true"
                         )
 
         # verified evidence
@@ -335,6 +408,12 @@ def main():
             vs_list = vs if isinstance(vs, list) else [vs]
             for vid in vs_list:
                 version_refs.append((str(rel), vid))
+                for pattern in claim_markers.get(vid, []):
+                    if not re.search(pattern, read_body(md), re.IGNORECASE | re.DOTALL):
+                        errors.append(
+                            f"{rel}: canonical claim {vid} is missing marker "
+                            f"/{pattern}/ from data/claim-values.yaml"
+                        )
 
         # freshness: PR merge date must not exceed the declared cutoff
         if ptype == "source-pr" and fm.get("date"):
@@ -398,6 +477,61 @@ def main():
         warnings.append(f"{len(stale)} PR page(s) have merge dates after cutoff "
                         f"{cutoff_date} — advance data/refresh-cutoff.yaml "
                         f"(e.g. {stale[0][0]} = {stale[0][1]})")
+
+    # Evolution registries and generated manifests are part of the publication
+    # contract, not best-effort operational metadata.
+    try:
+        load_registry(DATA_DIR / "sources.yaml")
+    except (OSError, ValueError, yaml.YAMLError) as error:
+        errors.append(f"data/sources.yaml: {error}")
+    schemas_path = DATA_DIR / "evolution-schemas.yaml"
+    for ledger in sorted((REPO_ROOT / "candidates" / "runs").glob("*/*.yaml")):
+        if ledger.name in {"manifest.yaml", "refresh-summary.yaml"}:
+            continue
+        document = load_yaml(ledger) or {}
+        for index, candidate in enumerate(document.get("candidates") or []):
+            for error in validate_candidate(candidate, schemas_path):
+                errors.append(
+                    f"{ledger.relative_to(REPO_ROOT)}: candidates[{index}] {error}"
+                )
+    proposals_path = REPO_ROOT / "candidates" / "synthesis-proposals.yaml"
+    if proposals_path.is_file():
+        document = load_yaml(proposals_path) or {}
+        for index, proposal in enumerate(document.get("proposals") or []):
+            for error in validate_proposal(proposal, schemas_path):
+                errors.append(
+                    f"{proposals_path.relative_to(REPO_ROOT)}: "
+                    f"proposals[{index}] {error}"
+                )
+
+    manifest_path = DATA_DIR / "corpus-manifest.yaml"
+    actual_manifest = load_yaml(manifest_path) if manifest_path.is_file() else None
+    expected_manifest = build_manifest(REPO_ROOT)
+    if actual_manifest != expected_manifest:
+        errors.append(
+            "data/corpus-manifest.yaml: stale; run "
+            "python3 scripts/evolve/corpus.py --write"
+        )
+
+    for error in verify_local_provenance(REPO_ROOT):
+        errors.append(f"artifact provenance: {error}")
+
+    tracked_result = subprocess.run(
+        ["git", "ls-files", "-z", "examples"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        check=False,
+    )
+    tracked_examples = (
+        [REPO_ROOT / path.decode("utf-8") for path in tracked_result.stdout.split(b"\0") if path]
+        if tracked_result.returncode == 0
+        else []
+    )
+    for artifact in tracked_examples:
+        if artifact.is_file() and artifact.read_bytes()[:4] == b"\x7fELF":
+            errors.append(
+                f"{artifact.relative_to(REPO_ROOT)}: generated ELF must not be tracked"
+            )
 
     n_pages = len(page_records)
     print(f"Validated {n_pages} pages, {len(all_ids)} unique ids.")

@@ -23,7 +23,7 @@ languages:
 - cpp
 captured_at: '2026-05-15'
 status: merged
-merge_sha: ''
+merge_sha: bc6f2b5ec2f631477a49d9910dd50c4c080229e1
 inclusion_reason: kernel path 'src/library/blas3/gemm.cpp'; keyword 'gemm'
 changed_paths:
 - .github/CONTRIBUTING.md

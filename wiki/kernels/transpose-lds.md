@@ -45,11 +45,13 @@ performance_claims:
   utilization: ~0.80 of HBM peak
   baseline: naive strided transpose (uncoalesced stores)
   source_id: doc-mi300x-datasheet
+  unreproduced: true
 - gpu: MI300X
   dtype: fp32
   metric: LDS bank conflicts per transposed tile read
   value: 0 (padded/swizzled) vs 32-way (unpadded)
   source_id: doc-cdna3-isa
+  unreproduced: true
 implemented_by:
 - pr-composable_kernel-3027
 - pr-composable_kernel-3592

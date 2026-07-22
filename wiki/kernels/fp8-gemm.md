@@ -44,18 +44,21 @@ performance_claims:
   value: 5000 (5.0 PF)
   source_id: doc-cdna4-whitepaper
   confidence: source-reported
+  unreproduced: true
 - gpu: MI355X
   dtype: MXFP6 / MXFP4
   metric: peak dense TFLOPS
   value: 10000 (10 PF)
   source_id: doc-cdna4-whitepaper
   confidence: source-reported
+  unreproduced: true
 - gpu: MI355X
   dtype: OCP-FP8 (E4M3)
   metric: achieved GEMM TFLOPS (large square M=N=K)
   value: ~3500-4200 (≈70-84% of peak)
   source_id: blog-fp8-gemm-cdna4
   confidence: inferred
+  unreproduced: true
 implemented_by:
 - pr-composable_kernel-2152
 - pr-FlyDSL-554

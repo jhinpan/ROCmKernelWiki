@@ -6,8 +6,9 @@ optimization** for CDNA3 (gfx942 / MI300) and CDNA4
 The repository root **is** the skill directory, so the full corpus remains
 git-updatable instead of being copied into a separate wrapper.
 
-> **Corpus dates:** merged-PR harvest through **2026-05-30**; each doc/blog page
-> carries its own retrieval date. The nod-ai AMDGPU optimization guide is synced
+> **Corpus dates:** the generated
+> [`data/corpus-manifest.yaml`](data/corpus-manifest.yaml) owns the merged-PR
+> cutoff; each doc/blog page carries its own retrieval date. The nod-ai AMDGPU optimization guide is synced
 > through commit `efa471ae` on **2026-07-20**. Tool versions remain pinned in
 > [`data/tool-versions.yaml`](data/tool-versions.yaml). gfx950 facts and examples
 > were verified on MI350X, with guide-specific device/LDS checks repeated on
@@ -53,20 +54,20 @@ in [`VERIFICATION.md`](VERIFICATION.md).
 
 ## What's Here
 
-- **7,454 PR reference pages** from ROCm/composable_kernel, ROCm/aiter,
-  ROCm/Tensile, ROCm/rocBLAS, ROCm/flash-attention, ROCm/FlyDSL, ROCm/triton,
-  plus ROCm-filtered vllm-project/vllm and sgl-project/sglang
-- **54 active synthesized wiki pages** plus 3 quarantined pages retained for recovery
-- **21 doc/blog summaries** (AMD CDNA3/CDNA4 ISA, whitepapers, ROCm blogs) and
-  **10 reference-repository studies** retained for provenance (FlyDSL, the FlyDSL MI350X profiling sweep,
-  gcnasm, Composable Kernel, AITER, hipBLASLt, Tensile, rocWMMA, the Matrix Instruction Calculator,
-  and the MI355X validation harness)
-- **9 candidate ledgers** in `candidates/` recording the include/defer/exclude
+- Merged-PR reference pages from allowlisted ROCm repositories and
+  ROCm-filtered ecosystem projects
+- Active synthesized wiki pages plus quarantined material retained for recovery
+- Official-doc/blog summaries and reference-repository studies retained for provenance
+- Per-source candidate ledgers in `candidates/` recording the include/defer/exclude
   decision for every scanned PR
-- **6 auto-generated cross-reference indices** under `queries/`
-- **959 real upstream PR diffs** under `artifacts/prs/<repo>/PR-<N>/` (byte-capped, SHA-256-pinned via `PROVENANCE.yaml`)
-- **12 gfx950-first example suites** under `examples/`; compiler-only subparts
+- Auto-generated cross-reference indices under `queries/`
+- Byte-capped upstream PR diffs under `artifacts/prs/<repo>/PR-<N>/`, SHA-256-pinned via `PROVENANCE.yaml`
+- gfx950-first example suites under `examples/`; compiler-only subparts
   are labeled explicitly (see [`VERIFICATION.md`](VERIFICATION.md))
+
+Current counts and cutoffs are generated from the checkout into
+[`data/corpus-manifest.yaml`](data/corpus-manifest.yaml); documentation does not
+maintain a second inventory.
 
 ## Install as a Codex CLI Skill
 
@@ -215,23 +216,42 @@ worked examples.
 
 | Script | Purpose |
 |---|---|
-| `scripts/harvest_prs.py` | Harvest merged PRs from tracked ROCm repos (gh GraphQL) |
+| `scripts/evolve/discover.py` | Incrementally discover PR/tree evidence from `data/sources.yaml` |
+| `scripts/harvest_prs.py` | Compatibility wrapper for merge-safe incremental discovery |
+| `scripts/evolve/gaps.py` | Turn uncovered evidence clusters into synthesis proposals |
+| `scripts/evolve/synthesize.py` | Validate a credential-free, path-bounded synthesis adapter |
+| `scripts/evolve/refresh.py` | Run one budgeted discovery→triage→eval→validation refresh |
+| `scripts/evolve/daily_worker.py` | Update the rolling `bot/evolution` Draft PR in a disposable clone |
+| `scripts/evolve/mi355_worker.py` | Run exact-SHA approved evidence tasks on the trusted MI355 node |
 | `scripts/backfill_diffs.py` | Fetch real upstream diffs for top-ranked kernel PRs |
 | `scripts/enrich_facets.py` | Infer techniques/hardware_features/kernel_types from paths + diffs |
 | `scripts/link_prs.py` | Build the bidirectional PR↔wiki bridge |
-| `scripts/gen_source_anchors.py` | (Re)generate doc/blog/ref source anchor pages |
 | `scripts/generate-indices.py` | Regenerate `queries/*.md` from frontmatter |
-| `scripts/validate.py` | Validate frontmatter, vocabulary, links, version-claims, freshness |
+| `scripts/evaluate_skill.py` | Score held-out retrieval, citations, and architecture safety |
+| `scripts/verify_provenance.py` | Re-hash artifact bundles and backfill immutable merge SHAs |
+| `scripts/validate.py` | Validate pages, evidence, candidates, manifests, claims, and provenance |
 
 CI (`.github/workflows/ci.yml`) gates every push on the validator, the query-tool
-smoke tests, and index freshness.
+smoke tests, scored retrieval/answer evals, provenance, and index freshness.
+`main` is protected by required checks, CODEOWNER review, one human approval,
+linear history, and resolved conversations.
 
 ```bash
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 .venv/bin/python scripts/validate.py            # schema + vocabulary + link integrity
 .venv/bin/python scripts/generate-indices.py    # regenerate query indices
+.venv/bin/python scripts/evaluate_skill.py --check
 ```
+
+### Self-evolution boundary
+
+The system discovers, proposes, evaluates, and collects evidence; it does not
+decide its own truth. Every automated change stays in a Draft PR and the bot has
+no approval or merge capability. PR/blog text and stored diffs are rendered as
+`UNTRUSTED-UPSTREAM-*` data. The public repository is not connected to a
+persistent self-hosted runner: [`ops/mi355/`](ops/mi355/) documents the
+node-local, exact-SHA approval and sandbox contract.
 
 ### Quality Gates
 
@@ -240,6 +260,9 @@ python3 -m venv .venv
 - Every technique/kernel/language page has a compilable code snippet
 - Every PR page carries `inclusion_reason` and `status: merged`
 - `verified` pages carry `evidence_basis` (official-doc + upstream-code/paper)
+- Machine-authored pages cannot self-promote to `verified`
+- Performance claims link a reproduction bundle or say `unreproduced: true`
+- Stored PR diffs are re-hashed against `PROVENANCE.yaml`
 - 0 dangling internal references (frontmatter ids **and** in-body relative links)
 - **gfx950 hardware/numeric claims re-verified on real MI350X silicon (ROCm 7.2)** —
   see [`VERIFICATION.md`](VERIFICATION.md) and [`data/hardware-verified.yaml`](data/hardware-verified.yaml)
