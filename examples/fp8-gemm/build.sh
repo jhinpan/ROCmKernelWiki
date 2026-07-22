@@ -4,12 +4,13 @@
 #   2) CDNA-MFMA FP8 f8f6f4 GEMM   -> cross-compile-verify for gfx950 + gfx942
 set -euo pipefail
 cd "$(dirname "$0")"
+source ../_common.sh
 
 ROCM_INC=/opt/rocm/include
 
 echo "==> [1/2] PORTABLE rocWMMA FP16 GEMM (gfx950, build + run)"
 hipcc --offload-arch=gfx950 -I"${ROCM_INC}" wmma_hgemm.cpp -o wmma_hgemm
-./wmma_hgemm
+rocm_wiki_run ./wmma_hgemm
 
 echo
 echo "==> [2/2] CDNA-MFMA FP8 GEMM (cross-compile-verify only, NOT run here)"

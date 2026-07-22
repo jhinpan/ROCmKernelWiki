@@ -21,8 +21,13 @@ from pathlib import Path
 from typing import Any
 
 
-VALIDATION_DIR = Path(__file__).resolve().parent
-REPOSITORY_DIR = VALIDATION_DIR.parent
+CONTROLLER_PATH = Path(__file__).resolve()
+VALIDATION_DIR = Path(
+    os.environ.get("ROCM_WIKI_VALIDATION_PAYLOAD", CONTROLLER_PATH.parent)
+).resolve()
+REPOSITORY_DIR = Path(
+    os.environ.get("ROCM_WIKI_REPOSITORY_DIR", VALIDATION_DIR.parent)
+).resolve()
 HARNESS_MANIFEST = VALIDATION_DIR / "manifest.json"
 EVIDENCE_KINDS = {"hardware", "runtime", "compiler", "source-reported"}
 VERDICT_STATUSES = {"pass", "fail", "recorded"}
@@ -718,7 +723,7 @@ class Harness:
         )
 
     def source_hashes(self) -> dict[str, str]:
-        paths = [Path("manifest.json"), Path("run.py")]
+        paths = [Path("manifest.json")]
         paths.extend(
             path.relative_to(VALIDATION_DIR)
             for path in sorted((VALIDATION_DIR / "probes").glob("*.hip"))
@@ -726,10 +731,12 @@ class Harness:
         readme = Path("README.md")
         if (VALIDATION_DIR / readme).is_file():
             paths.append(readme)
-        return {
+        hashes = {
             path.as_posix(): file_sha256(VALIDATION_DIR / path)
             for path in paths
         }
+        hashes["controller/run.py"] = file_sha256(CONTROLLER_PATH)
+        return hashes
 
     def output_validation_errors(self) -> list[str]:
         errors: list[str] = []

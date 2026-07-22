@@ -3,6 +3,7 @@
 # Runs natively on this gfx950 (CDNA4) box.
 set -euo pipefail
 cd "$(dirname "$0")"
+source ../_common.sh
 
 hipcc -O3 --offload-arch=gfx950 bandwidth_memread.hip -o bwread
 
@@ -12,4 +13,4 @@ grep -E -m4 'global_load_b128|global_load_dwordx4' bwread.s || \
     echo "(no dwordx4 found — check unroll)"
 
 echo "=== running ==="
-./bwread
+rocm_wiki_run ./bwread

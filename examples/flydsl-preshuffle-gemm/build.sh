@@ -6,6 +6,7 @@
 # FlyDSL is not installed here and targets CDNA MFMA, so it is NOT built/run.
 set -euo pipefail
 cd "$(dirname "$0")"
+source ../_common.sh
 
 ARCH="${1:-gfx950}"
 
@@ -14,4 +15,4 @@ hipcc --offload-arch="${ARCH}" -O3 -I/opt/rocm/include \
       preshuffle_gemm_rocwmma.cpp -o demo
 
 echo "== Running =="
-./demo
+rocm_wiki_run ./demo
