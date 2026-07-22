@@ -406,6 +406,50 @@ def test_refresh_expands_untracked_directories_for_budgeting():
         assert changed_lines == 2
 
 
+def test_final_summary_is_inside_the_enforced_budget():
+    from evolve.refresh import _finalize_summary, _git_changes
+
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        subprocess.run(["git", "init", "-q", str(root)], check=True)
+        summary = {
+            "schema_version": 1,
+            "run_date": "2026-07-22",
+            "discovery": {"total": 0},
+            "gap_proposals": 0,
+            "machine_changes": 0,
+            "changed_files": [],
+            "changed_lines": 0,
+            "dry_run": False,
+        }
+        try:
+            _finalize_summary(
+                root,
+                "2026-07-22",
+                summary,
+                max_files=0,
+                max_lines=100,
+            )
+        except ValueError as error:
+            assert "file budget" in str(error)
+        else:
+            raise AssertionError("summary file escaped the final file budget")
+
+        finalized = _finalize_summary(
+            root,
+            "2026-07-22",
+            summary,
+            max_files=1,
+            max_lines=100,
+        )
+        changed_files, changed_lines = _git_changes(root)
+        assert finalized["changed_files"] == changed_files
+        assert finalized["changed_lines"] == changed_lines
+        assert changed_files == [
+            "candidates/runs/2026-07-22/refresh-summary.yaml"
+        ]
+
+
 def test_query_marks_upstream_pr_snippets_as_untrusted():
     import query
 
