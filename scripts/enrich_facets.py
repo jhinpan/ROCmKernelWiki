@@ -169,8 +169,7 @@ def main():
         new_kt = sorted(set((fm.get("kernel_types") or [])
                             + apply_rules(blob, KT_RULES, VOCAB_KT)))
         new_arch = sorted(set((fm.get("architectures") or [])
-                              + apply_rules(blob, ARCH_RULES, VOCAB_ARCH))) \
-            or (fm.get("architectures") or ["gfx942"])
+                              + apply_rules(blob, ARCH_RULES, VOCAB_ARCH)))
 
         # keep tags coherent: union of facets (validator allows any vocab value)
         new_tags = sorted(set((fm.get("tags") or []) + new_hw + new_kt + new_arch))

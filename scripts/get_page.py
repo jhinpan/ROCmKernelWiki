@@ -18,6 +18,8 @@ import yaml
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _index import id_index  # noqa: E402
+from _scope import is_active, quarantined_pages  # noqa: E402
 from _wiki_root import WIKI_ROOT, configure_utf8_stdio  # noqa: E402
 
 
@@ -26,25 +28,8 @@ def find_page(lookup):
     if "/" in lookup or lookup.endswith(".md"):
         p = WIKI_ROOT / lookup
         return p if p.exists() else None
-    for subdir in ["wiki", "sources"]:
-        base = WIKI_ROOT / subdir
-        if not base.exists():
-            continue
-        for md in base.rglob("*.md"):
-            try:
-                content = md.read_text(encoding="utf-8")
-            except Exception:
-                continue
-            m = re.match(r'^---\s*\r?\n(.*?)\r?\n---', content, re.DOTALL)
-            if not m:
-                continue
-            try:
-                fm = yaml.safe_load(m.group(1))
-            except yaml.YAMLError:
-                continue
-            if isinstance(fm, dict) and fm.get("id") == lookup:
-                return md
-    return None
+    relative = id_index().get(lookup)
+    return WIKI_ROOT / relative if relative else None
 
 
 def split_frontmatter(content):
@@ -97,6 +82,11 @@ def main():
                         help="With --include-code: print diff_summary.md instead of the full diff.patch (token-economical)")
     parser.add_argument("--max-bytes", type=int, default=200 * 1024,
                         help="With --include-code: per-file byte cap (default 200 KiB)")
+    parser.add_argument(
+        "--include-out-of-scope",
+        action="store_true",
+        help="Allow retained pages outside the active gfx942/gfx950 scope",
+    )
     args = parser.parse_args()
 
     page_path = find_page(args.lookup)
@@ -106,6 +96,13 @@ def main():
 
     content = page_path.read_text(encoding="utf-8")
     fm, body = split_frontmatter(content)
+    if fm and not args.include_out_of_scope and not is_active(fm):
+        print(
+            f"ERROR: Page '{args.lookup}' is retained but outside active "
+            "gfx942/gfx950 scope (use --include-out-of-scope).",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     if args.frontmatter_only:
         if fm:
@@ -132,7 +129,8 @@ def main():
         if "/prs/" in str(page_path):
             wiki_refs = [r for r in (fm.get("related") or [])
                          if str(r).startswith(("hw-", "technique-", "kernel-",
-                                               "pattern-", "lang-", "migration-"))]
+                                               "pattern-", "lang-", "migration-"))
+                         and r not in quarantined_pages()]
             if wiki_refs:
                 print()
                 print("## Synthesized in (wiki pages explaining this)")

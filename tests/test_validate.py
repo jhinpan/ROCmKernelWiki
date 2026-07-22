@@ -160,14 +160,14 @@ def test_documented_corpus_inventory():
     assert "ROCm/hipBLASLt" not in readme_inventory
     for marker in (
         "7,454 PR reference pages",
-        "57 synthesized wiki pages",
+        "54 active synthesized wiki pages",
         "21 doc/blog summaries",
         "9 reference-repository studies",
     ):
         assert marker in readme, marker
     for marker in (
         "7,454 merged-PR references",
-        "57 wiki synthesis pages",
+        "54 synthesis pages",
         "21 doc/blog summaries",
         "9 reference-repository studies",
     ):
@@ -222,6 +222,52 @@ def test_get_page_by_id():
     assert "hw-mfma" in r.stdout
 
 
+def test_get_page_scope_and_index():
+    blocked = run("scripts/get_page.py", "hw-wmma", "--frontmatter-only")
+    recovery = run(
+        "scripts/get_page.py",
+        "hw-wmma",
+        "--frontmatter-only",
+        "--include-out-of-scope",
+    )
+    assert blocked.returncode == 1
+    assert "outside active" in blocked.stderr
+    assert recovery.returncode == 0
+    assert "hw-wmma" in recovery.stdout
+
+    scripts_dir = str(ROOT / "scripts")
+    sys.path.insert(0, scripts_dir)
+    try:
+        from _index import id_index
+
+        assert len(id_index()) == 7541
+    finally:
+        sys.path.remove(scripts_dir)
+
+
+def test_get_page_scope_and_index():
+    blocked = run("scripts/get_page.py", "hw-wmma", "--frontmatter-only")
+    recovery = run(
+        "scripts/get_page.py",
+        "hw-wmma",
+        "--frontmatter-only",
+        "--include-out-of-scope",
+    )
+    assert blocked.returncode == 1
+    assert "outside active" in blocked.stderr
+    assert recovery.returncode == 0
+    assert "hw-wmma" in recovery.stdout
+
+    scripts_dir = str(ROOT / "scripts")
+    sys.path.insert(0, scripts_dir)
+    try:
+        from _index import id_index
+
+        assert len(id_index()) == 7541
+    finally:
+        sys.path.remove(scripts_dir)
+
+
 def test_alias_architecture():
     # MI355X must alias to gfx950
     r = run("scripts/query.py", "--architecture", "MI355X", "--type", "hardware",
@@ -257,6 +303,49 @@ def test_scope_quarantine_query_and_indices():
         path.read_text(encoding="utf-8") for path in (ROOT / "queries").glob("*.md")
     )
     assert not any(page_id in indices for page_id in quarantined)
+
+
+def test_gfx950_first_examples_and_claims():
+    for build_script in (ROOT / "examples").glob("*/build.sh"):
+        body = build_script.read_text(encoding="utf-8")
+        assert "--offload-arch=gfx1201" not in body, build_script
+        assert ':-gfx1201}' not in body, build_script
+
+    stale_output = ("RX 9070", "warpSize=32", "captured on gfx1201")
+    for page in (ROOT / "wiki/kernels").glob("*.md"):
+        body = page.read_text(encoding="utf-8")
+        for marker in stale_output:
+            assert marker not in body, f"{page}: stale output {marker!r}"
+
+
+def test_corrected_register_dma_and_mxfp_guidance():
+    register_pages = [
+        "wiki/hardware/wavefront.md",
+        "wiki/techniques/occupancy-tuning.md",
+        "wiki/techniques/vgpr-budgeting.md",
+        "wiki/patterns/low-occupancy.md",
+        "wiki/patterns/vgpr-pressure.md",
+    ]
+    for relpath in register_pages:
+        body = (ROOT / relpath).read_text(encoding="utf-8")
+        assert "round_up(round_up(.vgpr_count, 4) + .agpr_count, 8)" not in body
+        assert "round_up(round_up(vgpr_count, 4) + agpr_count, 8)" not in body
+
+    wavefront = (ROOT / register_pages[0]).read_text(encoding="utf-8")
+    assert "metadata `.vgpr_count` already reports the combined total" in wavefront
+    assert "NumVgprs" in wavefront and "NumAgprs" in wavefront
+
+    async_copy = (ROOT / "wiki/hardware/async-copy-lds.md").read_text(
+        encoding="utf-8"
+    )
+    assert "&tile[lane]" not in async_copy
+    assert "wave-uniform LDS base" in async_copy
+    waitcnt = (ROOT / "wiki/hardware/s-waitcnt.md").read_text(encoding="utf-8")
+    assert "buffer_load_dwordx4" not in waitcnt
+
+    mxfp = (ROOT / "wiki/hardware/mxfp.md").read_text(encoding="utf-8")
+    assert "comes directly from the wider-K opcodes" not in mxfp
+    assert "datatype-dependent execution rate" in mxfp
 
 
 def test_rerank_surfaces_synthesis_first():

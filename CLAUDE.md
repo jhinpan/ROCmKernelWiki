@@ -2,7 +2,7 @@
 
 This repository is an **agent skill for Codex CLI and Claude Code** and an
 LLM-queryable knowledge base of AMD GPU kernel optimization (CDNA3 gfx942 /
-CDNA4 gfx950 / RDNA4 gfx1201). Read `SKILL.md` for the user-facing trigger
+CDNA4 gfx950). Read `SKILL.md` for the user-facing trigger
 conditions; this file is the extended schema + navigation reference for agents
 working *in* the repo.
 
@@ -51,14 +51,18 @@ All `architectures`, `hardware_features`, `techniques`, `kernel_types`,
 there first. See `references/schema.md` for the current lists and
 `data/aliases.yaml` for the alias map.
 
+`data/scope.yaml` is the separate source of truth for active publication.
+Vocabulary entries and raw PRs outside gfx942/gfx950 remain valid but are
+excluded from default queries and generated indices.
+
 ## Critical correctness rules for AMD content
 
-- **Always name the architecture.** gfx942 ≠ gfx950 ≠ gfx1201.
+- **Always name the architecture.** gfx942 ≠ gfx950.
 - **FP8 encoding differs by generation**: gfx942 = FNUZ, gfx950 = OCP. They are
   not bit-compatible. Never claim FP8 weights port unchanged across them.
 - **LDS sizing differs**: 64 kB / 32 banks (gfx942) vs 160 kB / 64 banks (gfx950).
 - **`v_permlane16_*` is gfx950-only.** On gfx942, reductions use DPP + ds_bpermute.
-- **CDNA is wave64-only**; RDNA (gfx1201) supports wave32 and wave64.
+- **CDNA is wave64-only.**
 - **No TMA / no mbarrier on AMD.** The async-copy analog is direct-to-LDS
   (`buffer_load…lds` / `global_load_lds`), gated by `s_waitcnt vmcnt(N)`.
 - Prefer citing `doc-*`/`blog-*`/`ref-*` anchors (guaranteed to exist) over

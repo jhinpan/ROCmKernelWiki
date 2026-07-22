@@ -82,9 +82,25 @@ def has_code_fence(body):
     return bool(re.search(r"```[a-zA-Z0-9_+-]*\s*\r?\n.*?\r?\n```", body, re.DOTALL))
 
 
+def body_relative_links(body):
+    for target in re.findall(r"!?\[[^\]]*\]\(([^)]+)\)", body):
+        target = target.strip().split(maxsplit=1)[0].strip("<>")
+        if (
+            not target
+            or target.startswith(("#", "/", "http://", "https://", "mailto:"))
+        ):
+            continue
+        path_part = target.split("#", 1)[0]
+        if "/" not in path_part and not Path(path_part).suffix:
+            continue
+        yield target
+
+
 def main():
     schemas = load_yaml(DATA_DIR / "schemas.yaml")
     tags = load_yaml(DATA_DIR / "tags.yaml")
+    evidence_policy = load_yaml(DATA_DIR / "evidence-policy.yaml")
+    allowed_evidence = evidence_policy["allowed_source_categories"]
 
     vocab = {
         "architectures": set(tags["architectures"]),
@@ -107,6 +123,7 @@ def main():
     errors = []
     warnings = []
     all_ids = {}
+    pages_by_id = {}
     referenced_ids = set()
     active_referenced_ids = set()
     version_refs = []
@@ -156,6 +173,7 @@ def main():
             if pid in all_ids:
                 errors.append(f"{rel}: duplicate id '{pid}' (also in {all_ids[pid]})")
             all_ids[pid] = str(rel)
+            pages_by_id[pid] = fm
         page_records.append((md, rel, fm, ptype))
 
     for md, rel, fm, ptype in page_records:
@@ -167,7 +185,7 @@ def main():
         # List-valued fields that may legitimately be empty on PR pages
         # (a PR can touch kernels without us inferring every facet). The key
         # must still be present; an empty list satisfies "required".
-        EMPTY_OK = {"techniques", "hardware_features", "kernel_types",
+        EMPTY_OK = {"architectures", "techniques", "hardware_features", "kernel_types",
                     "tags", "changed_paths"}
         for field in schema.get("required", []):
             present = field in fm
@@ -233,9 +251,32 @@ def main():
                             errors.append(f"{rel}: performance_claims[{i}] missing '{sub}'")
 
         # verified evidence
+        valid_evidence_types = set()
+        for index, evidence in enumerate(fm.get("evidence_basis") or []):
+            if not isinstance(evidence, dict):
+                errors.append(f"{rel}: evidence_basis[{index}] must be an object")
+                continue
+            source_id = evidence.get("source_id")
+            evidence_type = evidence.get("evidence_type")
+            source = pages_by_id.get(source_id)
+            if source is None:
+                errors.append(
+                    f"{rel}: evidence_basis[{index}] source_id "
+                    f"'{source_id}' does not resolve"
+                )
+                continue
+            allowed = set(allowed_evidence.get(evidence_type, []))
+            source_category = source.get("source_category")
+            if source_category not in allowed:
+                errors.append(
+                    f"{rel}: evidence_type '{evidence_type}' is incompatible "
+                    f"with source '{source_id}' category '{source_category}'"
+                )
+                continue
+            valid_evidence_types.add(evidence_type)
+
         if fm.get("confidence") == "verified":
-            eb = fm.get("evidence_basis") or []
-            types = {e.get("evidence_type") for e in eb if isinstance(e, dict)}
+            types = valid_evidence_types
             if not ({"official-doc"} & types and {"upstream-code", "paper"} & types):
                 errors.append(f"{rel}: confidence=verified requires evidence_basis with "
                               f"official-doc + upstream-code/paper")
@@ -269,6 +310,14 @@ def main():
         if ptype == "source-pr" and fm.get("date"):
             if str(fm["date"]) > cutoff_date:
                 stale.append((str(rel), str(fm["date"])))
+
+        for target in body_relative_links(read_body(md)):
+            relative_target = target.split("#", 1)[0]
+            if not relative_target:
+                continue
+            destination = (md.parent / relative_target).resolve()
+            if not destination.exists():
+                errors.append(f"{rel}: dangling body link '{target}'")
 
     # link integrity
     id_set = set(all_ids)

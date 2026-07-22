@@ -29,6 +29,7 @@ from _scope import (  # noqa: E402
 
 
 _ALIAS_CACHE = None
+_GUIDE_PROMPT_CACHE = None
 _QUERY_CACHE_VERSION = 1
 
 
@@ -87,6 +88,30 @@ def expand_keyword(kw):
     if canonical and canonical.lower() != kw.lower():
         return [kw, canonical]
     return [kw]
+
+
+def load_guide_prompts():
+    """Return canonical page id -> curated guide questions used as query aliases."""
+    global _GUIDE_PROMPT_CACHE
+    if _GUIDE_PROMPT_CACHE is not None:
+        return _GUIDE_PROMPT_CACHE
+    path = WIKI_ROOT / "data" / "guide-claims.yaml"
+    prompts = {}
+    try:
+        claims = (yaml.safe_load(path.read_text(encoding="utf-8")) or {}).get(
+            "claims", []
+        )
+    except (OSError, yaml.YAMLError):
+        claims = []
+    for claim in claims:
+        canonical = claim.get("canonical_pages") or []
+        if canonical and claim.get("question"):
+            prompts.setdefault(str(canonical[0]), []).append(str(claim["question"]))
+    _GUIDE_PROMPT_CACHE = {
+        page_id: " ".join(questions).lower()
+        for page_id, questions in prompts.items()
+    }
+    return _GUIDE_PROMPT_CACHE
 
 
 def load_frontmatter(path):
@@ -185,8 +210,8 @@ STOPWORDS = {
 
 # Multiplicative priors: surface curated synthesis + runnable assets above raw PRs.
 PTYPE_PRIOR = {
-    "wiki-kernel": 1.7, "wiki-technique": 1.6, "wiki-hardware": 1.6,
-    "wiki-pattern": 1.6, "wiki-language": 1.5, "wiki-migration": 1.5,
+    "wiki-kernel": 1.5, "wiki-technique": 1.8, "wiki-hardware": 1.9,
+    "wiki-pattern": 1.7, "wiki-language": 1.5, "wiki-migration": 1.6,
     "source-doc": 1.3, "source-ref": 1.3, "source-blog": 1.2,
     "source-pr": 1.0,
 }
@@ -200,11 +225,13 @@ def build_idf(pages):
     df = {}
     for p in pages:
         fm = p["fm"]
+        guide_text = load_guide_prompts().get(str(fm.get("id", "")), "")
         text = (str(fm.get("title", "")) + " " +
                 " ".join(str(v) for k in ("tags", "techniques", "hardware_features",
                                           "kernel_types", "languages", "aliases",
-                                          "symptoms") for v in (fm.get(k) or [])) +
-                " " + p["body"]).lower()
+                                          "symptoms", "architectures")
+                         for v in (fm.get(k) or [])) +
+                " " + p["body"] + " " + guide_text).lower()
         toks = set(re.findall(r"[a-z0-9_.+-]{2,}", text))
         for t in toks:
             df[t] = df.get(t, 0) + 1
@@ -245,10 +272,11 @@ def score_keyword_match(fm, body, keywords, idf=None, ptype="unknown"):
     title_text = str(fm.get("title", "")).lower()
     tag_text = " ".join(
         str(v) for k in ("tags", "techniques", "hardware_features", "kernel_types",
-                          "languages", "aliases", "symptoms")
+                          "languages", "aliases", "symptoms", "architectures")
         for v in (fm.get(k) or [])
     ).lower()
     body_lower = body.lower()
+    guide_text = load_guide_prompts().get(str(fm.get("id", "")), "")
     raw = 0.0
     for kw in keywords:
         if kw.lower() in STOPWORDS:
@@ -262,6 +290,8 @@ def score_keyword_match(fm, body, keywords, idf=None, ptype="unknown"):
                 vs += 10
             if v_l in tag_text:
                 vs += 5
+            if v_l in guide_text:
+                vs += 12
             vs += min(body_lower.count(v_l), 3)
             best = max(best, vs * w)
         raw += best
@@ -328,7 +358,7 @@ def filter_pages(pages, args):
                 & {arch.lower() for arch in in_scope_architectures()}
             ):
                 continue
-            if not (archs & arch_variants):
+            if archs and not (archs & arch_variants):
                 continue
 
         if args.symptom:
@@ -418,6 +448,24 @@ def main():
         for tok in re.split(r"\s+", q.strip()):
             if tok:
                 keywords.append(tok)
+    detected_architectures = {
+        canonical
+        for keyword in keywords
+        if (canonical := load_alias_expansions().get(keyword.lower()))
+        in in_scope_architectures()
+    }
+    detected_architecture = (
+        next(iter(detected_architectures))
+        if len(detected_architectures) == 1
+        else None
+    )
+    if detected_architecture and not args.architecture:
+        pages = [
+            page
+            for page in pages
+            if not page["fm"].get("architectures")
+            or detected_architecture in page["fm"].get("architectures", [])
+        ]
     if keywords:
         # IDF is computed over the full corpus so term rarity is global, not
         # relative to the post-filter subset.
@@ -425,6 +473,11 @@ def main():
         for p in pages:
             p["_score"] = score_keyword_match(
                 p["fm"], p["body"], keywords, idf=idf, ptype=p.get("_ptype", "unknown"))
+            if (
+                detected_architecture
+                and detected_architecture in (p["fm"].get("architectures") or [])
+            ):
+                p["_score"] *= 1.35
             p["_snippet"] = extract_snippet(p["body"], keywords)
         pages = [p for p in pages if p["_score"] > 0]
         pages.sort(key=lambda x: (-x["_score"], x["path"]))

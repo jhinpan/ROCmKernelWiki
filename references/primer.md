@@ -14,11 +14,11 @@ to the wiki root (the directory containing `data/`, `wiki/`, `sources/`).
 |---|---|---|---|---|---|
 | MI300A/X, MI325X | `gfx942` | CDNA3 | **FNUZ** | MFMA | wave64 |
 | MI350X, MI355X | `gfx950` | CDNA4 | **OCP** (+FP6/FP4/MX) | MFMA | wave64 |
-| Radeon AI PRO R9700 | `gfx1201` | RDNA4 | OCP | **WMMA** | wave32/64 |
-| MI450 | `gfx1250` | CDNA-next | — | MFMA | wave64 |
 
 > The single most important portability fact: **gfx942 FP8 (FNUZ) is not
 > bit-compatible with gfx950 FP8 (OCP)**. See `migration-gfx942-to-gfx950`.
+> Other architectures are retained only in raw sources and quarantined pages;
+> they are not part of the active correctness contract.
 
 ---
 
@@ -35,7 +35,6 @@ to the wiki root (the directory containing `data/`, `wiki/`, `sources/`).
 | Wavefront & registers | `hw-wavefront` | wave64, EXEC, SGPR/VGPR/AGPR, occupancy |
 | Cross-lane ops | `hw-cross-lane` | DPP, ds_swizzle, ds_permute/bpermute, permlane16 (gfx950) |
 | Chiplet / XCD | `hw-chiplet-xcd` | XCDs, per-XCD L2, Infinity Cache, NUMA, partition modes |
-| RDNA4 WMMA | `hw-wmma` | gfx1201 matrix instructions; wave32/64 |
 
 ---
 
@@ -103,7 +102,6 @@ to the wiki root (the directory containing `data/`, `wiki/`, `sources/`).
 | Composable Kernel | `lang-composable-kernel` | CK / ck_tile tile DSL |
 | FlyDSL | `lang-flydsl` | MLIR-native layout DSL |
 | Triton (AMD) | `lang-triton-amd` | `tl.dot`→MFMA; `matrix_instr_nonkdim`, `waves_per_eu` |
-| rocWMMA | `lang-rocwmma` | header-only fragment API |
 
 ---
 
@@ -113,7 +111,6 @@ to the wiki root (the directory containing `data/`, `wiki/`, `sources/`).
 |---|---|
 | `migration-cuda-to-hip` | CUDA→HIP; cp.async→direct-LDS; mbarrier→s_waitcnt; wgmma→mfma |
 | `migration-gfx942-to-gfx950` | CDNA3→CDNA4; FNUZ→OCP FP8; LDS/permlane/f8f6f4 |
-| `migration-wmma-vs-mfma` | RDNA WMMA vs CDNA MFMA |
 
 ---
 

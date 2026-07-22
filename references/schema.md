@@ -104,7 +104,9 @@ For `wiki-technique`, `wiki-kernel`, `wiki-language`, must be ≥ `snippet`.
 All values in these frontmatter fields must appear in
 [`../data/tags.yaml`](../data/tags.yaml):
 
-- **architectures**: gfx942, gfx950, gfx1201, gfx90a, gfx1100, gfx1250
+- **architectures vocabulary**: gfx942, gfx950, gfx1201, gfx90a, gfx1100,
+  gfx1250. Only gfx942/gfx950 are active; `data/scope.yaml` retains the other
+  terms solely so raw sources remain recoverable.
 - **hardware_features**: matrix-core, mfma, wmma, lds, ds-instructions, buffer-instructions, global-instructions, async-copy, s-waitcnt, sgpr, vgpr, agpr, wave64, wave32, dpp, swizzle, permute, fp8, fp6, fp4, mxfp, bf16, fp16, int8, block-scale, xcd, l2-cache, infinity-cache, hbm3, …
 - **techniques**: lds-double-buffering, mfma-pipelining, lds-swizzling, bank-conflict-avoidance, vectorized-loads, buffer-oob-guard, wave-reduce, occupancy-tuning, vgpr-budgeting, split-k, stream-k, preshuffle-layout, fine-grained-quantization, kernel-fusion, persistent-kernel, …
 - **kernel_types**: gemm, hgemm, fp8-gemm, grouped-gemm, gemv, attention, flash-attention, paged-attention, mla, moe, fused-moe, rmsnorm, softmax, rope, kv-cache, all-reduce, transpose, bandwidth-bench, …
@@ -116,7 +118,6 @@ All values in these frontmatter fields must appear in
 When the user asks about:
 - MI300 / MI300X / CDNA3 → architecture `gfx942`
 - MI350 / MI355X / CDNA4 → architecture `gfx950`
-- R9700 / RDNA4 → architecture `gfx1201`
 - XDLOP / "matrix cores" → `mfma`
 - "shared memory" / groupshared → `lds`
 - waitcnt / vmcnt / lgkmcnt → `s-waitcnt`

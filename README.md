@@ -1,8 +1,8 @@
-# ROCmKernelWiki — AMD CDNA / RDNA Kernel Optimization Knowledge Base
+# ROCmKernelWiki — AMD CDNA Kernel Optimization Knowledge Base
 
-A structured, agent-queryable knowledge base of **AMD Instinct & Radeon GPU kernel
-optimization** for CDNA3 (gfx942 / MI300), CDNA4 (gfx950 / MI350–MI355X), and RDNA4
-(gfx1201), packaged as a **Codex CLI skill** (and compatible with Claude Code).
+A structured, agent-queryable knowledge base of **AMD Instinct GPU kernel
+optimization** for CDNA3 (gfx942 / MI300) and CDNA4
+(gfx950 / MI350–MI355X), packaged as a **Codex CLI skill** (and compatible with Claude Code).
 The repository root **is** the skill directory, so the full corpus remains
 git-updatable instead of being copied into a separate wrapper.
 
@@ -19,7 +19,9 @@ git-updatable instead of being copied into a separate wrapper.
 |---|---|---|---|---|---|
 | MI300A / MI300X / MI325X | `gfx942` | CDNA3 | **FNUZ** | MFMA | wave64 |
 | **MI350X / MI355X** | **`gfx950`** | **CDNA4** | **OCP** + FP6/FP4/MX | MFMA | wave64 |
-| Radeon AI PRO R9700 | `gfx1201` | RDNA4 | OCP | **WMMA** | wave32/64 |
+
+Raw PR/source material for other architectures is retained for recovery but is
+excluded from the active skill, default query results, and generated indices.
 
 > The headline portability gotcha: **gfx942 FP8 (FNUZ) is not bit-compatible with
 > gfx950 FP8 (OCP)**. See [`wiki/migration/gfx942-to-gfx950.md`](wiki/migration/gfx942-to-gfx950.md).
@@ -54,17 +56,16 @@ in [`VERIFICATION.md`](VERIFICATION.md).
 - **7,454 PR reference pages** from ROCm/composable_kernel, ROCm/aiter,
   ROCm/Tensile, ROCm/rocBLAS, ROCm/flash-attention, ROCm/FlyDSL, ROCm/triton,
   plus ROCm-filtered vllm-project/vllm and sgl-project/sglang
-- **57 synthesized wiki pages** — hardware features, optimization techniques,
-  kernel case studies, problem patterns, DSL/language guides, migration guides
+- **54 active synthesized wiki pages** plus 3 quarantined pages retained for recovery
 - **21 doc/blog summaries** (AMD CDNA3/CDNA4 ISA, whitepapers, ROCm blogs) and
-  **9 reference-repository studies** (FlyDSL, the FlyDSL MI350X profiling sweep,
-  gcnasm, Composable Kernel, rocWMMA, AITER, hipBLASLt, Tensile, the Matrix Instruction Calculator)
+  **9 reference-repository studies** retained for provenance (FlyDSL, the FlyDSL MI350X profiling sweep,
+  gcnasm, Composable Kernel, AITER, hipBLASLt, Tensile, rocWMMA, the Matrix Instruction Calculator)
 - **9 candidate ledgers** in `candidates/` recording the include/defer/exclude
   decision for every scanned PR
 - **6 auto-generated cross-reference indices** under `queries/`
 - **959 real upstream PR diffs** under `artifacts/prs/<repo>/PR-<N>/` (byte-capped, SHA-256-pinned via `PROVENANCE.yaml`)
-- **12 runnable kernel examples** under `examples/` — compiled with hipcc; all 12 build with
-  `--offload-arch=gfx950` and run on an MI350X (see [`VERIFICATION.md`](VERIFICATION.md))
+- **12 gfx950-first example suites** under `examples/`; compiler-only subparts
+  are labeled explicitly (see [`VERIFICATION.md`](VERIFICATION.md))
 
 ## Install as a Codex CLI Skill
 

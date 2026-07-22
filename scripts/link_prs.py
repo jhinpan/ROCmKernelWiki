@@ -29,6 +29,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _wiki_root import WIKI_ROOT  # noqa: E402
+from _scope import is_active  # noqa: E402
 
 WIKI_DIR = WIKI_ROOT / "wiki"
 PRS_DIR = WIKI_ROOT / "sources" / "prs"
@@ -87,6 +88,7 @@ def main():
     ap.add_argument("--max-per-wiki", type=int, default=8)
     ap.add_argument("--max-per-pr", type=int, default=3)
     ap.add_argument("--min-score", type=float, default=6.0)
+    ap.add_argument("--include-out-of-scope", action="store_true")
     args = ap.parse_args()
 
     # load wiki pages
@@ -94,6 +96,8 @@ def main():
     for md in sorted(WIKI_DIR.rglob("*.md")):
         fm, body = split_fm(md.read_text(encoding="utf-8"))
         if not fm or not fm.get("id"):
+            continue
+        if not args.include_out_of_scope and not is_active(fm):
             continue
         wikis.append({
             "md": md, "fm": fm, "body": body, "id": fm["id"],
@@ -108,6 +112,8 @@ def main():
     for md in PRS_DIR.rglob("PR-*.md"):
         fm, body = split_fm(md.read_text(encoding="utf-8"))
         if not fm or fm.get("status") != "merged" or not fm.get("id"):
+            continue
+        if not args.include_out_of_scope and not is_active(fm):
             continue
         if SKIP_TITLE.search(str(fm.get("title", ""))):
             continue
