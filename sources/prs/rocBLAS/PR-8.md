@@ -23,7 +23,7 @@ languages:
 - cpp
 captured_at: '2026-05-15'
 status: merged
-merge_sha: ''
+merge_sha: 0516e298e389d76d18c0eebaa7acff3159a87e35
 inclusion_reason: kernel path 'clients/samples/gemm-expert/CMakeLists.txt'; keyword
   'gemm'
 changed_paths:

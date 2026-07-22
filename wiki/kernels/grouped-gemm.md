@@ -47,6 +47,7 @@ performance_claims:
   utilization: ~73% of 1307 TFLOPS dense BF16 peak
   source_id: doc-mi300x-datasheet
   baseline: looped per-expert hipBLASLt calls
+  unreproduced: true
 - gpu: MI300X
   dtype: fp8
   metric: speedup
@@ -54,6 +55,7 @@ performance_claims:
   shape: many small/uneven M_g, N=K=7168
   source_id: ref-aiter
   baseline: G separate hipBLASLt launches
+  unreproduced: true
 implemented_by:
 - pr-FlyDSL-412
 - pr-composable_kernel-2234

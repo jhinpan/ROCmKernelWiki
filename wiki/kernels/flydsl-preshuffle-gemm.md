@@ -51,11 +51,13 @@ performance_claims:
   shape: M=N=K=8192
   source_id: ref-flydsl
   baseline: hipBLASLt bf16 GEMM
+  unreproduced: true
 - gpu: MI300X
   dtype: bf16
   metric: ds_read-bank-conflicts
   value: near-zero LDS bank conflicts on the A/B read path vs. naive row-major staging
   source_id: blog-gemm-optimization
+  unreproduced: true
 implemented_by:
 - pr-FlyDSL-79
 - pr-FlyDSL-60

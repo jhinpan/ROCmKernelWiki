@@ -55,12 +55,14 @@ performance_claims:
   shape: batch=2, heads=32, seqlen=8192, headdim=128, causal
   utilization: ~47% of 1307 TFLOPS bf16 peak
   source_id: blog-flash-attention-amd
+  unreproduced: true
 - gpu: MI300X
   dtype: bf16
   metric: TFLOPS
   value: 450
   shape: batch=4, heads=32, seqlen=4096, headdim=128, non-causal
   source_id: blog-cktile-flash
+  unreproduced: true
 implemented_by:
 - pr-composable_kernel-1224
 - pr-aiter-1383

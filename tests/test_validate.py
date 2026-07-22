@@ -149,30 +149,24 @@ def test_documented_corpus_inventory():
         ),
         "refs": len(list((ROOT / "sources/refs").glob("*.md"))),
     }
-    assert counts == {"prs": 7454, "wiki": 57, "docs_blogs": 21, "refs": 10}
-
+    manifest = yaml.safe_load(
+        (ROOT / "data/corpus-manifest.yaml").read_text(encoding="utf-8")
+    )
+    assert counts == {
+        "prs": manifest["counts"]["source_prs"],
+        "wiki": manifest["counts"]["wiki_pages"],
+        "docs_blogs": manifest["counts"]["docs_and_blogs"],
+        "refs": manifest["counts"]["reference_repositories"],
+    }
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
+    claude = (ROOT / "CLAUDE.md").read_text(encoding="utf-8")
     architecture = (ROOT / "docs/architecture.svg").read_text(encoding="utf-8")
-    readme_inventory = readme.split("## What's Here", 1)[1].split(
-        "## Install as a Codex CLI Skill", 1
-    )[0]
-    assert "ROCm/hipBLASLt" not in readme_inventory
-    for marker in (
-        "7,454 PR reference pages",
-        "54 active synthesized wiki pages",
-        "21 doc/blog summaries",
-        "10 reference-repository studies",
-    ):
-        assert marker in readme, marker
-    for marker in (
-        "7,454 merged-PR references",
-        "54 synthesis pages",
-        "21 doc/blog summaries",
-        "10 reference-repository studies",
-    ):
-        assert marker in skill, marker
-    assert "7,454 merged PRs" in architecture
+    assert "data/corpus-manifest.yaml" in readme
+    assert "data/corpus-manifest.yaml" in skill
+    assert "data/corpus-manifest.yaml" in claude
+    for document in (readme, skill, claude, architecture):
+        assert "7,454" not in document
 
 
 def test_query_runs_outside_skill_directory():

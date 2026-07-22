@@ -46,18 +46,21 @@ performance_claims:
   value: ~80-90% of 5.3 TB/s HBM3 peak at large batch
   source_id: doc-mi300x-datasheet
   confidence: inferred
+  unreproduced: true
 - gpu: MI300X
   dtype: bf16
   metric: arithmetic-intensity-vs-mha
   value: weight absorption raises AI ~128x (one latent KV shared across 128 heads)
   source_id: doc-flash-attention-2
   confidence: inferred
+  unreproduced: true
 - gpu: MI300X
   dtype: fp8
   metric: kv-cache-footprint
   value: 576 elems/token/layer (512 latent + 64 rope) vs ~16k for dense MHA
   source_id: ref-aiter
   confidence: source-reported
+  unreproduced: true
 implemented_by:
 - pr-sglang-21511
 - pr-vllm-40871

@@ -65,6 +65,7 @@ performance_claims:
   shape: D=128, causal, seq % 256 == 0
   utilization: register-pressure-capped — 1-2 waves/SIMD resident, VGPR 175-251 live
   source_id: ref-flydsl-kernel-profiling
+  unreproduced: true
 implemented_by:
 - pr-FlyDSL-225
 - pr-aiter-2701
