@@ -31,7 +31,7 @@ from _scope import (  # noqa: E402
 
 
 _ALIAS_CACHE = None
-_QUERY_CACHE_VERSION = 2
+_QUERY_CACHE_VERSION = 3
 _SEARCH_AUX_CACHE = None
 
 
@@ -225,6 +225,31 @@ PTYPE_PRIOR = {
 }
 
 
+def _index_text(page):
+    fm = page["fm"]
+    text = (
+        str(fm.get("title", ""))
+        + " "
+        + " ".join(
+            str(value)
+            for field in (
+                "tags",
+                "techniques",
+                "hardware_features",
+                "kernel_types",
+                "languages",
+                "aliases",
+                "symptoms",
+                "architectures",
+            )
+            for value in (fm.get(field) or [])
+        )
+    )
+    if detect_page_type(fm, page["path"]) != "source-pr":
+        text += " " + page["body"]
+    return text.lower()
+
+
 def build_idf(pages):
     """Document-frequency-based inverse weights over the searchable text of each
     page, so a rare term like `cp.async` outweighs a ubiquitous one like `gemm`."""
@@ -232,13 +257,7 @@ def build_idf(pages):
     n = len(pages) or 1
     df = {}
     for p in pages:
-        fm = p["fm"]
-        text = (str(fm.get("title", "")) + " " +
-                " ".join(str(v) for k in ("tags", "techniques", "hardware_features",
-                                          "kernel_types", "languages", "aliases",
-                                          "symptoms", "architectures")
-                         for v in (fm.get(k) or [])) +
-                " " + p["body"]).lower()
+        text = _index_text(p)
         toks = set(re.findall(r"[a-z0-9_.+-]{2,}", text))
         for t in toks:
             df[t] = df.get(t, 0) + 1
@@ -253,29 +272,7 @@ def build_inverted_index(pages):
     """
     inverted = {}
     for page_index, page in enumerate(pages):
-        fm = page["fm"]
-        ptype = detect_page_type(fm, page["path"])
-        text = (
-            str(fm.get("title", ""))
-            + " "
-            + " ".join(
-                str(value)
-                for field in (
-                    "tags",
-                    "techniques",
-                    "hardware_features",
-                    "kernel_types",
-                    "languages",
-                    "aliases",
-                    "symptoms",
-                    "architectures",
-                )
-                for value in (fm.get(field) or [])
-            )
-        )
-        if ptype != "source-pr":
-            text += " " + page["body"]
-        for token in set(re.findall(r"[a-z0-9_.+-]{2,}", text.lower())):
+        for token in set(re.findall(r"[a-z0-9_.+-]{2,}", _index_text(page))):
             inverted.setdefault(token, set()).add(page_index)
     return inverted
 
