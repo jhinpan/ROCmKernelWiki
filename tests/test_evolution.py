@@ -451,6 +451,91 @@ def test_final_summary_is_inside_the_enforced_budget():
         ]
 
 
+def test_rolling_worker_rebases_state_onto_latest_main():
+    from evolve.daily_worker import _configure_bot_identity, _sync_with_base
+
+    def git(cwd, *arguments):
+        return subprocess.run(
+            ["git", *arguments],
+            cwd=cwd,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        source = root / "source"
+        remote = root / "remote.git"
+        clone = root / "clone"
+        git(root, "init", "-q", "-b", "main", str(source))
+        (source / "base.txt").write_text("base\n", encoding="utf-8")
+        git(source, "add", "base.txt")
+        git(
+            source,
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-q",
+            "-m",
+            "base",
+        )
+        git(root, "init", "--bare", "-q", str(remote))
+        git(source, "remote", "add", "origin", str(remote))
+        git(source, "push", "-q", "-u", "origin", "main")
+
+        git(source, "switch", "-q", "-c", "bot/evolution")
+        (source / "state.txt").write_text("watermark\n", encoding="utf-8")
+        git(source, "add", "state.txt")
+        git(
+            source,
+            "-c",
+            "user.name=Bot",
+            "-c",
+            "user.email=bot@example.com",
+            "commit",
+            "-q",
+            "-m",
+            "state",
+        )
+        git(source, "push", "-q", "-u", "origin", "bot/evolution")
+
+        git(source, "switch", "-q", "main")
+        (source / "controller.txt").write_text("fixed controller\n", encoding="utf-8")
+        git(source, "add", "controller.txt")
+        git(
+            source,
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-q",
+            "-m",
+            "controller fix",
+        )
+        git(source, "push", "-q", "origin", "main")
+
+        git(root, "clone", "-q", "--branch", "bot/evolution", str(remote), str(clone))
+        _configure_bot_identity(clone)
+        _sync_with_base(
+            clone,
+            base="main",
+            branch="bot/evolution",
+            source_branch="bot/evolution",
+        )
+        assert git(clone, "branch", "--show-current") == "bot/evolution"
+        assert git(clone, "show", "HEAD:state.txt") == "watermark"
+        assert git(clone, "show", "HEAD:controller.txt") == "fixed controller"
+        subprocess.run(
+            ["git", "merge-base", "--is-ancestor", "origin/main", "HEAD"],
+            cwd=clone,
+            check=True,
+        )
+
+
 def test_query_marks_upstream_pr_snippets_as_untrusted():
     import query
 

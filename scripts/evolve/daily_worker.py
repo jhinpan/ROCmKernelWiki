@@ -49,6 +49,54 @@ def _remote_branch_exists(remote: str, branch: str, cwd: Path) -> bool:
     return bool(output)
 
 
+def _configure_bot_identity(clone: Path) -> None:
+    _run(
+        [
+            "git",
+            "config",
+            "user.name",
+            os.environ.get("WIKI_BOT_NAME", "rocmkernelwiki-evolution[bot]"),
+        ],
+        cwd=clone,
+    )
+    _run(
+        [
+            "git",
+            "config",
+            "user.email",
+            os.environ.get(
+                "WIKI_BOT_EMAIL",
+                "rocmkernelwiki-evolution[bot]@users.noreply.github.com",
+            ),
+        ],
+        cwd=clone,
+    )
+
+
+def _sync_with_base(
+    clone: Path,
+    *,
+    base: str,
+    branch: str,
+    source_branch: str,
+) -> None:
+    if source_branch != branch:
+        _run(["git", "switch", "-c", branch], cwd=clone)
+        return
+    # A rolling branch owns the discovery watermarks, but executable controller
+    # code and tests must always come from the latest protected base branch.
+    _run(
+        [
+            "git",
+            "fetch",
+            "origin",
+            f"+{base}:refs/remotes/origin/{base}",
+        ],
+        cwd=clone,
+    )
+    _run(["git", "rebase", f"origin/{base}"], cwd=clone)
+
+
 def run_daily(args: argparse.Namespace) -> dict[str, str]:
     run_date = args.run_date or date.today().isoformat()
     branch = args.branch or rolling_branch(run_date)
@@ -74,28 +122,12 @@ def run_daily(args: argparse.Namespace) -> dict[str, str]:
             ],
             cwd=Path(directory),
         )
-        if source_branch != branch:
-            _run(["git", "switch", "-c", branch], cwd=clone)
-        _run(
-            [
-                "git",
-                "config",
-                "user.name",
-                os.environ.get("WIKI_BOT_NAME", "rocmkernelwiki-evolution[bot]"),
-            ],
-            cwd=clone,
-        )
-        _run(
-            [
-                "git",
-                "config",
-                "user.email",
-                os.environ.get(
-                    "WIKI_BOT_EMAIL",
-                    "rocmkernelwiki-evolution[bot]@users.noreply.github.com",
-                ),
-            ],
-            cwd=clone,
+        _configure_bot_identity(clone)
+        _sync_with_base(
+            clone,
+            base=args.base,
+            branch=branch,
+            source_branch=source_branch,
         )
 
         refresh = [
