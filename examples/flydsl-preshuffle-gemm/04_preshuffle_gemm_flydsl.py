@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 # 04_preshuffle_gemm_flydsl.py
 #
-# FAITHFUL FlyDSL REFERENCE SNIPPET -- DOES NOT RUN HERE.
-# FlyDSL is NOT installed on this gfx1201 box (no `import flydsl`), and FlyDSL
-# targets CDNA MFMA (gfx942/gfx950). This file is illustrative of the *pattern*
-# only; the runnable demonstration of the same preshuffle idea is the portable
-# rocWMMA program preshuffle_gemm_rocwmma.cpp in this directory.
+# FAITHFUL FlyDSL REFERENCE SNIPPET -- REFERENCE-ONLY.
+# This file is not invoked by build.sh. It illustrates the CDNA MFMA
+# preshuffle pattern; the runnable gfx950 demonstration is the rocWMMA program
+# preshuffle_gemm_rocwmma.cpp in this directory.
 #
 # FlyDSL is an Apache-2.0 research layout DSL whose `fly` dialect/API is still
 # moving -- check https://github.com/ROCm/FlyDSL for the current spelling.

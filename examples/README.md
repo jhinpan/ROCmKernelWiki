@@ -4,22 +4,23 @@ Each directory is a self-contained, **hipcc-compilable** example backing a
 `wiki/kernels/*.md` page. Every example ships its source, a `build.sh`, and a
 `README.md` with the **real captured output**.
 
-## Two classes (see each README)
+## gfx950 verification
 
-- **Portable** (pure HIP or rocWMMA): builds **and runs** on this RDNA4 / gfx1201
-  box and self-checks numerics against a CPU reference. rocWMMA examples use the
-  same fragment API that maps to **MFMA on CDNA** and **WMMA on RDNA**, so they
-  are also valid on MI300/MI350.
-- **CDNA-MFMA** (`__builtin_amdgcn_mfma_*`, gfx950 `f8f6f4`, gfx942 hand-asm):
-  use the matrix-core path. Where useful, these dirs also include a portable
-  rocWMMA/HIP variant that runs on gfx1201.
+Fresh runs on an **AMD Instinct MI355X (gfx950)** completed all 12 `build.sh`
+scripts with exit code zero. Every runnable path reported `PASS`; that does not
+mean every source file is a numeric test:
 
-> **Verified on MI350X (gfx950), ROCm 7.2 (2026-06-01).** All 12 examples now
-> build with `--offload-arch=gfx950` and **execute on real CDNA4 silicon** — not
-> just cross-compiled. 11/12 self-check PASS on-device; the lone exception is
-> `fp8-gemm`, whose `main()` only verifies that `v_mfma_scale_f32_16x16x128_f8f6f4`
-> is emitted and **does not launch a numeric FP8 GEMM**. See
-> [`../VERIFICATION.md`](../VERIFICATION.md).
+- `fp8-gemm/fp8_gemm_cdna.cpp` is compiler/ISA-only. Its host `main()` does not
+  launch the FP8 kernels. The directory's rocWMMA FP16 fallback does run and
+  self-check on gfx950.
+- `flydsl-preshuffle-gemm/04_preshuffle_gemm_flydsl.py` is reference-only. The
+  rocWMMA C++ demo runs and checks both kernels.
+- `vector-add-asm/vadd_asm_gfx942.cpp` is cross-compiled to a gfx942 object. The
+  portable HIP path is the part run on gfx950.
+
+rocWMMA is the C++ fragment **API** used by several examples. On gfx950 those
+operations are emitted as **MFMA** instructions; “rocWMMA” does not mean the
+hardware executes an RDNA WMMA instruction.
 
 ## Build all
 
@@ -29,21 +30,17 @@ for d in */; do (cd "$d" && bash build.sh) || echo "FAIL $d"; done
 
 ## Index
 
-| Example | Wiki page | Class | Runs on gfx1201 | Runs on MI350X (gfx950) |
-|---|---|---|---|---|
-| `rmsnorm/` | kernel-rmsnorm | portable HIP | ✅ PASS, ~600 GB/s | ✅ PASS (5 cases) |
-| `bandwidth-microbench/` | kernel-bandwidth-microbench | portable HIP | ✅ measured GB/s | ✅ PASS, ~6.2–6.3 TB/s |
-| `transpose-lds/` | kernel-transpose-lds | portable HIP + LDS | ✅ 0 mismatches | ✅ PASS, ~4.1 TB/s |
-| `ck-hgemm/` | kernel-ck-hgemm | portable rocWMMA FP16 | ✅ ~5 TFLOPS, verified | ✅ PASS, max abs err 0 |
-| `grouped-gemm/` | kernel-grouped-gemm | portable rocWMMA | ✅ verified | ✅ PASS, warpSize=64 |
-| `flash-attention-ck/` | kernel-flash-attention-ck | portable HIP FA-2 fwd | ✅ vs CPU softmax | ✅ PASS |
-| `paged-attention/` | kernel-paged-attention | portable HIP | ✅ PASS | ✅ PASS, 0.045 ms |
-| `mla-decode/` | kernel-mla-decode | portable HIP | ✅ PASS | ✅ PASS |
-| `fused-moe/` | kernel-fused-moe | portable HIP | ✅ PASS | ✅ PASS, 122 µs/iter |
-| `vector-add-asm/` | kernel-vector-add-asm | HIP (runs) + gfx942 asm (xcompile) | ✅ HIP part | ✅ HIP part, 6.8 TB/s |
-| `flydsl-preshuffle-gemm/` | kernel-flydsl-preshuffle-gemm | rocWMMA (runs) + FlyDSL .py (ref) | ✅ rocWMMA part | ✅ rocWMMA part, exact |
-| `fp8-gemm/` | kernel-fp8-gemm | gfx950 FP8 MFMA + rocWMMA FP16 (runs) | ⚠️ FP8 on MI350; FP16 runs | ⚠️ builds+runs, but `main()` runs no numeric check |
-
-> Captured on AMD Radeon RX 9070 XT (gfx1201, RDNA4), ROCm 7.2.3. Numbers are
-> illustrative of this consumer part — datacenter MI300/MI350 figures differ; see
-> each kernel page's `performance_claims`.
+| Example | Wiki page | MI355X / gfx950 evidence |
+|---|---|---|
+| `rmsnorm/` | kernel-rmsnorm | Five fp32/fp16 cases passed |
+| `bandwidth-microbench/` | kernel-bandwidth-microbench | ISA check and sum check passed |
+| `transpose-lds/` | kernel-transpose-lds | Exact transpose, zero mismatches |
+| `ck-hgemm/` | kernel-ck-hgemm | rocWMMA API FP16 GEMM passed |
+| `grouped-gemm/` | kernel-grouped-gemm | All six uneven groups passed |
+| `flash-attention-ck/` | kernel-flash-attention-ck | CPU softmax comparison passed |
+| `paged-attention/` | kernel-paged-attention | CPU reference comparison passed |
+| `mla-decode/` | kernel-mla-decode | CPU reference comparison passed |
+| `fused-moe/` | kernel-fused-moe | CPU reference comparison passed |
+| `vector-add-asm/` | kernel-vector-add-asm | HIP path passed; gfx942 asm object built |
+| `flydsl-preshuffle-gemm/` | kernel-flydsl-preshuffle-gemm | rocWMMA kernels passed; Python is reference-only |
+| `fp8-gemm/` | kernel-fp8-gemm | FP16 fallback passed; FP8 ISA probes built |

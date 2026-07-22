@@ -22,7 +22,7 @@ evidence_basis:
   evidence_type: official-doc
 - source_id: doc-cdna4-isa
   evidence_type: official-doc
-- source_id: blog-matrix-cores-cdna
+- source_id: ref-matrix-calculator
   evidence_type: upstream-code
 related:
 - hw-mxfp

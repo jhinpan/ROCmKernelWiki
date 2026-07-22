@@ -58,9 +58,8 @@ On CDNA the VGPR file is the scarcest occupancy resource for most compute-bound
 kernels. CDNA3/CDNA4 provide one combined **512-entry-per-lane vector capacity
 per SIMD** for regular ArchVGPR and accumulator AccVGPR/AGPR allocations. Each
 view has up to 256 names; the combined allocation is encoded in **groups of 8
-dwords**. On gfx942 it is
-`round_up(round_up(arch_count, 4) + accum_count, 8)`; gfx950's combined
-`.vgpr_count` is rounded to 8 directly. CDNA3/CDNA4 support **up to 32 waves
+dwords**. HSA metadata `.vgpr_count` is already the combined total on gfx942
+and gfx950, so it is rounded to 8 directly. CDNA3/CDNA4 support **up to 32 waves
 (4 SIMD pools × 8 waves)** per CU, with the vector-register limit computed as
 `floor(512 / vector_alloc)`, capped at 8 waves/SIMD. See
 [wavefront & occupancy](../hardware/wavefront.md).
@@ -85,10 +84,10 @@ llvm-objdump --arch-name=amdgcn -d gemm.o | head -50
 # Look for:  .vgpr_count / .agpr_count / .sgpr_count / .private_segment_fixed_size
 ```
 
-On gfx942, compute `round_up(round_up(.vgpr_count, 4) + .agpr_count, 8)`;
-rounding both components independently to eight would overestimate allocation.
-On gfx950, `.vgpr_count` already includes both, so round it to eight and do not
-double-count `.agpr_count`. A non-zero
+On both targets, round metadata `.vgpr_count` to eight and do not double-count
+its `.agpr_count` subset. Separate low-level compiler `NumVgprs`/`NumAgprs`
+remarks use the target-specific derivation documented on the
+[wavefront page](../hardware/wavefront.md). A non-zero
 `.private_segment_fixed_size` means scratch/private storage exists, but use
 spill counts and emitted `scratch_*` instructions to distinguish register
 spills from explicit private objects. Hot-path scratch is a red flag; the first

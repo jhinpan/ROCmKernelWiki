@@ -3,19 +3,17 @@
 This directory contains **two** artifacts illustrating the *preshuffle the
 weights* idea from the FlyDSL `04-preshuffle_gemm.py` tutorial:
 
-| File | What it is | Builds? | Runs here? |
+| File | What it is | Builds? | gfx950 runtime? |
 |---|---|---|---|
 | `04_preshuffle_gemm_flydsl.py` | Faithful FlyDSL reference snippet (layout transform + MFMA kernel) | — | **No** — reference only |
-| `preshuffle_gemm_rocwmma.cpp` | Portable rocWMMA HIP GEMM demonstrating the same idea | **Yes** | **Yes (gfx1201)** |
+| `preshuffle_gemm_rocwmma.cpp` | rocWMMA API GEMM demonstrating the same idea | **Yes** | **Yes (gfx950)** |
 
 ## Why two files
 
-FlyDSL is **not installed** on this box and it targets **CDNA MFMA**
-(gfx942/gfx950). So the `.py` is included verbatim as a *pattern reference*
-(it raises immediately if executed). The runnable demonstration is the
-**portable rocWMMA** program: rocWMMA abstracts the wave matrix instruction
-(WMMA on gfx1201 / MFMA on CDNA), so it compiles and runs natively here and
-self-checks against a CPU reference.
+The FlyDSL `.py` is a *pattern reference* and is not invoked by `build.sh`.
+The runnable demonstration is the rocWMMA program. rocWMMA is the fragment API;
+on gfx950 the compiler emits MFMA instructions. The program runs both kernels
+and self-checks against a CPU reference.
 
 ## The idea being demonstrated
 
@@ -31,49 +29,42 @@ lane wants a specific 16×16 fragment of `B`. The demo builds two kernels:
    `base + offset`), with no per-tile address math. This mirrors FlyDSL's
    `copy(Bsh.tile(...), sB.next())` flat-copy path.
 
-Both produce identical numerics; the preshuffled layout is the runtime payoff.
+Both paths are checked against the same reference.
 
 ## Build & run
 
 ```bash
-./build.sh            # builds for gfx1201 and runs the self-check
-# or pick an arch explicitly:
-./build.sh gfx1201
+./build.sh            # defaults to gfx950 and runs the self-check
 ```
 
 `build.sh` issues exactly:
 
 ```bash
-hipcc --offload-arch=gfx1201 -O3 -I/opt/rocm/include \
+hipcc --offload-arch=gfx950 -O3 -I/opt/rocm/include \
       preshuffle_gemm_rocwmma.cpp -o demo && ./demo
 ```
 
-## Expected output (captured on this gfx1201 / RX 9070 XT, ROCm 7.2.3, rocWMMA 2.2.0)
+## Expected output (captured on MI355X / gfx950)
 
 ```
-== Building rocWMMA preshuffle GEMM demo for gfx1201 ==
+== Building rocWMMA preshuffle GEMM demo for gfx950 ==
 == Running ==
 Preshuffle GEMM demo (rocWMMA 16x16x16, fp16->fp32)  M=N=K=256
 Correctness:
   row-major    max abs err = 0.0000  ->  PASS
   preshuffled  max abs err = 0.0000  ->  PASS
 Timing (avg over 200 iters):
-  row-major    0.0102 ms  (3302.1 GFLOP/s)
-  preshuffled  0.0064 ms  (5254.8 GFLOP/s)
+  row-major    0.0037 ms  (9013.2 GFLOP/s)
+  preshuffled  0.0036 ms  (9396.8 GFLOP/s)
 
 RESULT: PASS
 ```
 
-(Exact GFLOP/s vary run to run; both kernels always PASS the numeric check.
-The preshuffled layout is consistently faster because its `B` fragment loads
-are contiguous instead of strided.)
+The timing is one captured run; both numeric checks passed.
 
 ## Arch notes
 
-- **Runs on:** gfx1201 (RDNA4, WMMA) — verified above. Portable rocWMMA also
-  runs on CDNA (gfx942/gfx950, MFMA) unchanged.
-- **`warpSize`** is queried at runtime (32 on gfx1201, 64 on CDNA); one wave
-  computes one 16×16 output tile.
+- **Verified runtime:** MI355X / gfx950, where rocWMMA emits MFMA.
+- **`warpSize`** is queried at runtime; one wave computes one 16×16 output tile.
 - The FlyDSL `.py` snippet's MFMA path (`v_mfma_f32_16x16x16_f16`,
-  AGPR accumulation) is what FlyDSL would emit on **gfx942/gfx950** — it is not
-  exercised here.
+  AGPR accumulation) remains reference-only and is not exercised by `build.sh`.

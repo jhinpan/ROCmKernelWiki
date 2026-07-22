@@ -21,7 +21,7 @@ evidence_basis:
   evidence_type: official-doc
 - source_id: doc-cdna4-whitepaper
   evidence_type: official-doc
-- source_id: blog-matrix-cores-cdna
+- source_id: ref-matrix-calculator
   evidence_type: upstream-code
 related:
 - hw-mfma
@@ -197,11 +197,13 @@ From the [CDNA4 whitepaper](../../sources/docs/doc-cdna4-whitepaper.md):
 | MXFP4 | 10 PFLOPS | 2× |
 | FP16/BF16 | 2.5 PFLOPS | 0.5× |
 
-The 2× step from FP8 to FP6/FP4 comes directly from the wider-K opcodes
-(`16x16x128` vs the FP8 `16x16x32`): more reduction work per issued instruction
-at the same issue rate. Note the silicon trade — to make room for the MX path,
-CDNA4 **dropped the native TF32/XF32 matrix path** and **halved per-CU FP64
-matrix** throughput vs CDNA3.
+These product-level figures are **source-reported**, not local throughput
+measurements. The unified `16x16x128_f8f6f4` opcode has the same K dimension
+for FP8, FP6, and FP4 selectors. Its 2× FP6/FP4 advantage over FP8 comes from
+the ISA's datatype-dependent execution rate: the operation takes 32 cycles
+when either input is FP8 and 16 cycles for FP6/FP4. Note the silicon trade — to
+make room for the MX path, CDNA4 **dropped the native TF32/XF32 matrix path**
+and **halved per-CU FP64 matrix** throughput vs CDNA3.
 
 > Verified on MI350X (gfx950, ROCm 7.2): the TF32 drop is not a soft
 > "emulation" — the native intrinsic literally does not lower. Compiling

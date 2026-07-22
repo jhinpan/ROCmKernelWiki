@@ -1,6 +1,6 @@
 // vadd_hip.cpp — PORTABLE HIP vector add: C[i] = A[i] + B[i] (FP32).
-// Runs natively on gfx1201 (RDNA4) and on CDNA. Grid-stride loop so a fixed
-// launch handles any N. Self-checks against a CPU reference and prints PASS/FAIL
+// Verified on gfx950. The grid-stride loop lets a fixed launch handle any N.
+// Self-checks against a CPU reference and prints PASS/FAIL
 // plus an effective-bandwidth estimate (12 B/elem: 2 reads + 1 write).
 //
 // This is the "what you'd usually ship" companion to the hand-written GCN
@@ -87,7 +87,7 @@ int main() {
   double bw = gbytes / (ms / 1e3);
 
   bool pass = (max_abs_err == 0.0);  // exact for this integer-derived data
-  std::printf("vadd HIP (portable, gfx1201): N=%d  block=%d grid=%d\n", N, block,
+  std::printf("vadd HIP (portable, gfx950): N=%d  block=%d grid=%d\n", N, block,
               grid);
   std::printf("  time = %.3f ms/iter   effective BW = %.1f GB/s (12 B/elem)\n",
               ms, bw);

@@ -76,26 +76,21 @@ that sum across a residency threshold.
 
 ## Occupancy as a function of register use
 
-For CDNA3/CDNA4, use counts expressed as 32-bit registers per lane. The metadata
-accounting differs slightly by target:
+For CDNA3/CDNA4, use counts expressed as 32-bit registers per lane. First
+identify which compiler namespace produced the count:
 
 ```
-# gfx942: align the regular portion to 4, add the accumulator count,
-# then encode the combined allocation in groups of 8.
-vector_alloc_gfx942 = round_up(
-    round_up(arch_vgprs_per_lane, 4) + accum_vgprs_per_lane, 8)
-
-# gfx950: .vgpr_count is already the combined raw count.
-vector_alloc_gfx950 = round_up(vgpr_count, 8)
-
-waves_per_simd = min(8, floor(512 / vector_alloc_for_target))
+# Code-object/HSA metadata on gfx942 and gfx950:
+vector_alloc = round_up(metadata_vgpr_count, 8)
+waves_per_simd = min(8, floor(512 / vector_alloc))
 ```
 
-On gfx942, use the separate `.vgpr_count` and `.agpr_count` in the first formula;
-rounding both independently to eight would overestimate allocation. On gfx950,
-`.vgpr_count` already includes both, so do **not** add `.agpr_count` a second
-time. Large GEMM tiles routinely sit at 2–4 waves/SIMD. Illustrative combined
-thresholds (read the exact numbers from your build — see below):
+HSA metadata `.vgpr_count` is the combined total; `.agpr_count` is a subset and
+must not be added again. A lower-level compiler remark may expose separate
+regular `NumVgprs` and accumulator `NumAgprs`; for gfx942 derive its total as
+`round_up(round_up(NumVgprs, 4) + NumAgprs, 8)`, or use `TotalNumVgprs` when
+present. Large GEMM tiles routinely sit at 2–4 waves/SIMD. Illustrative
+combined thresholds (read the exact numbers from your build — see below):
 
 | Combined vector allocation (per lane) | Waves / SIMD | Notes |
 |---|---|---|

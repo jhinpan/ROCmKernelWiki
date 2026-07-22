@@ -234,24 +234,22 @@ FlyDSL is experimental and unverified against an official benchmark suite.
 
 A runnable demonstration lives in
 [`examples/flydsl-preshuffle-gemm/`](../../examples/flydsl-preshuffle-gemm/).
-Because FlyDSL is not installed on the test box and targets CDNA MFMA, that
-directory ships **two** artifacts:
+The directory ships two artifacts:
 
 - `04_preshuffle_gemm_flydsl.py` — the faithful FlyDSL reference snippet above
-  (layout transform + MFMA kernel), reference-only / not executed.
-- `preshuffle_gemm_rocwmma.cpp` — a **portable rocWMMA** GEMM that demonstrates
+  (layout transform + MFMA kernel), reference-only and not invoked by `build.sh`.
+- `preshuffle_gemm_rocwmma.cpp` — a **rocWMMA API** GEMM that demonstrates
   the *same* preshuffle idea (pre-permute `B` into fragment-contiguous order so
-  the in-kernel load is a flat copy) and **runs natively on gfx1201** (RDNA4
-  WMMA; also runs on CDNA MFMA unchanged). It builds two kernels — naive
-  row-major `B` vs. preshuffled `B` — and checks both against a CPU reference.
+  the in-kernel load is a flat copy). It runs on gfx950, where the compiler
+  emits MFMA, and checks both kernels against a CPU reference.
 
 ```bash
 cd examples/flydsl-preshuffle-gemm
-./build.sh        # hipcc --offload-arch=gfx1201 -O3 -I/opt/rocm/include \
+./build.sh        # hipcc --offload-arch=gfx950 -O3 -I/opt/rocm/include \
                   #       preshuffle_gemm_rocwmma.cpp -o demo && ./demo
 ```
 
-Expected output (captured on an RX 9070 XT / gfx1201, ROCm 7.2.3, rocWMMA 2.2.0):
+Expected output (captured on MI355X / gfx950):
 
 ```
 Preshuffle GEMM demo (rocWMMA 16x16x16, fp16->fp32)  M=N=K=256
@@ -259,8 +257,8 @@ Correctness:
   row-major    max abs err = 0.0000  ->  PASS
   preshuffled  max abs err = 0.0000  ->  PASS
 Timing (avg over 200 iters):
-  row-major    0.0102 ms  (3302.1 GFLOP/s)
-  preshuffled  0.0064 ms  (5254.8 GFLOP/s)
+  row-major    0.0037 ms  (9013.2 GFLOP/s)
+  preshuffled  0.0036 ms  (9396.8 GFLOP/s)
 
 RESULT: PASS
 ```

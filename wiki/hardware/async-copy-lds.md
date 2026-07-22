@@ -83,9 +83,11 @@ GEMM and attention prologue/mainloop pipelines:
 Two MUBUF/FLAT variants carry the `lds` bit:
 
 - **`buffer_load_dword … lds`** (MUBUF) — uses a 128-bit buffer resource
-  descriptor (V#) so you inherit branchless out-of-bounds clamping (OOB reads
-  contribute 0). The per-lane address comes from the V# plus the lane offset; the
-  LDS destination offset comes from `M0`.
+  descriptor (V#). Its source address is range-checked, but do not assume that
+  an OOB direct-to-LDS transfer writes zero into LDS: that destination behavior
+  is distinct from an ordinary MUBUF-to-VGPR load and must be measured for the
+  target. The per-lane source address comes from the V# plus the lane offset;
+  the LDS destination offset comes from `M0`.
 - **`global_load_lds_dword` / `…_dwordx{3,4}`** (FLAT global) — flat 64-bit
   addressing (SADDR + VGPR offset), no descriptor needed.
 
@@ -95,11 +97,9 @@ before issuing the copy. Completion is tracked by **VMCNT** (it is a VMEM op),
 *not* LGKMCNT — even though the destination is LDS — so you drain it like any
 other global load.
 
-> **Width limits.** On **gfx942 (CDNA3)** the direct-to-LDS copy moves **4 bytes
-> per lane** (one dword). On **gfx950 (CDNA4)** the path is widened to **12- and
-> 16-byte** transfers via `global_load_lds_dwordx3` / `global_load_lds_dwordx4`,
-> so a single instruction streams 12/16 bytes/lane into LDS — a large reduction
-> in instruction count for wide tiles.
+> **Width limits.** `__builtin_amdgcn_load_to_lds` accepts byte sizes
+> **1, 2, and 4** on gfx942. gfx950 accepts **1, 2, 4, 12, and 16**; its wider
+> forms lower to `global_load_lds_dwordx3` / `global_load_lds_dwordx4`.
 
 ## Emitting it from HIP / LLVM
 
@@ -111,18 +111,20 @@ Clang exposes the copy through the `llvm.amdgcn.load.to.lds` intrinsic
 #include <hip/hip_runtime.h>
 
 // Stage a tile of `global` (HBM) into `__shared__` LDS without touching VGPRs.
-// size must be 4 on gfx942; 4/12/16 on gfx950 (dword / dwordx3 / dwordx4).
+// The LDS destination passed to the intrinsic must be wave-uniform. Hardware
+// applies the per-lane destination offset (4*lane for this 4-byte copy).
 __global__ void prefetch_tile(const float* __restrict__ g_in, float* out, int n)
 {
     __shared__ float tile[256];
 
-    const int lane = threadIdx.x;                  // 0..255 within block
-    const float* src = g_in + blockIdx.x * 256 + lane;
-    // dst is an LDS (addrspace(3)) pointer; one dword per lane.
+    const int lane = threadIdx.x % warpSize;
+    const int wave = threadIdx.x / warpSize;
+    const float* src = g_in + blockIdx.x * 256 + threadIdx.x;
+    float* wave_uniform_dst = &tile[wave * warpSize];
     __builtin_amdgcn_load_to_lds(
         /*src  global ptr */ src,
-        /*dst  lds ptr    */ &tile[lane],
-        /*size bytes      */ sizeof(float),  // 4; use 16 for x4 on gfx950
+        /*wave-uniform LDS base*/ wave_uniform_dst,
+        /*size bytes      */ sizeof(float),
         /*offset          */ 0,
         /*aux (cache ctrl)*/ 0);
 
@@ -136,7 +138,7 @@ __global__ void prefetch_tile(const float* __restrict__ g_in, float* out, int n)
 ```
 
 The same path is what the Triton AMD backend and Composable Kernel emit for
-their software-pipelined mainloops on gfx950/gfx1250.
+their software-pipelined mainloops on gfx950.
 
 ## What it looks like in assembly
 
@@ -148,7 +150,7 @@ load:
 ; ---- prologue: point M0 at the LDS destination base ----
         s_mov_b32       m0, s_lds_base          ; LDS byte offset for the write
 
-; ---- gfx942: 4 bytes/lane, descriptor-based (OOB-safe) ----
+; ---- gfx942: 4 bytes/lane, descriptor-based ----
         buffer_load_dword  v_addr, s[0:3], 0 offen lds   ; HBM -> LDS, no VGPR dst
 
 ; ---- gfx950: 16 bytes/lane in one shot, flat global addressing ----

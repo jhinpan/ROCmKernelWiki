@@ -1,9 +1,8 @@
 // fp8_gemm_cdna.cpp — CDNA-MFMA FP8 GEMM via the f8f6f4 matrix-core path.
 //
-// CROSS-COMPILE-VERIFY ONLY. These intrinsics map to v_mfma_*_f8f6f4 (gfx950)
-// and v_mfma_*_fp8_fp8 (gfx942). They COMPILE for those targets but will NOT
-// EXECUTE on this gfx1201 (RDNA4) box, which has WMMA, not MFMA. Run on
-// MI350X/MI355X (gfx950) or MI300X/MI325X (gfx942).
+// COMPILER/ISA-VERIFY ONLY. These intrinsics map to v_mfma_*_f8f6f4 (gfx950)
+// and v_mfma_*_fp8_fp8 (gfx942). build.sh compiles both targets and checks the
+// emitted ISA; it does not launch either kernel.
 //
 // Two regimes, both real and selected at compile time by --offload-arch:
 //
@@ -121,9 +120,8 @@ extern "C" __global__ void fp8_gemm_gfx942(const long* __restrict__ A,
 
 #endif // __gfx942__
 
-// Host entry so the file links into an executable when cross-compiled.
-// It does not launch on this gfx1201 host (kernels are MMA-only); it merely
-// proves the translation unit + device code object build end to end.
+// Host entry so the file links into an executable. It does not launch a kernel;
+// it only proves the translation unit and device code object link end to end.
 int main(int argc, char**)
 {
     int dev = 0;

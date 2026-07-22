@@ -9,7 +9,7 @@ for g in 0..G-1:   C_g[Mg, Ng] = A_g[Mg, Kg] · B_g[Kg, Ng]
 
 This is the shape an MoE router produces (each expert `g` gets `Mg` tokens, and
 `Mg` is data-dependent and uneven). This example demonstrates the *scheduling
-core* of a grouped GEMM with portable rocWMMA so it actually runs on this box:
+core of a grouped GEMM with the rocWMMA API on gfx950:
 
 - A per-group **descriptor table** (`GroupDesc`) holds each group's logical
   `M,N,K`, padded leading dims, flat buffer offsets, its `ceil(N/16)` tile count,
@@ -19,7 +19,7 @@ core* of a grouped GEMM with portable rocWMMA so it actually runs on this box:
   decodes `(m_tile, n_tile)`. **One launch covers all G problems** regardless of
   how lopsided the sizes are.
 - The inner 16×16 tile uses rocWMMA `fragment` / `mma_sync` — **fp16 in, fp32
-  accumulate** — which maps to RDNA4 **WMMA** on gfx1201 and to **MFMA** on CDNA.
+  accumulate**. rocWMMA is the API; the gfx950 device code emits **MFMA**.
 - Ragged sizes (e.g. `17×33×49`) are handled by zero-padding each matrix's
   storage up to a multiple of 16, so rocWMMA's loads stay in range and the
   padding contributes 0. The CPU reference and PASS check use the **logical**
@@ -27,9 +27,9 @@ core* of a grouped GEMM with portable rocWMMA so it actually runs on this box:
 
 ## Classification
 
-**PORTABLE** — pure HIP + rocWMMA. Builds **and runs** on gfx1201 (RX 9070 XT,
-RDNA4). The same source is portable to CDNA (gfx942/gfx950) where rocWMMA emits
-MFMA. Self-checks every group against a CPU reference.
+**PORTABLE SOURCE** — HIP + rocWMMA. Builds and runs on gfx950 and self-checks
+every group against a CPU reference. The same source can be cross-compiled for
+gfx942; no gfx942 runtime is claimed.
 
 ## Build & run
 
@@ -40,25 +40,25 @@ MFMA. Self-checks every group against a CPU reference.
 which runs:
 
 ```bash
-hipcc --offload-arch=gfx1201 -O3 -std=c++17 -I/opt/rocm/include \
+hipcc --offload-arch=gfx950 -O3 -std=c++17 -I/opt/rocm/include \
       grouped_gemm_wmma.cpp -o grouped_gemm_wmma
 ./grouped_gemm_wmma
 ```
 
-## Expected output (captured on gfx1201, ROCm 7.2.3)
+## Expected output (captured on MI355X / gfx950)
 
 ```
 Build OK — running:
-Device: AMD Radeon RX 9070 XT  warpSize=32
+Device: AMD Instinct MI355X  warpSize=64
 Groups: 6   total 16x16 output tiles (one launch): 71
   group 0  M= 64 N= 48 K= 80  tiles=12  max|err|=3.8147e-06  ok
   group 1  M= 32 N= 96 K= 32  tiles=12  max|err|=1.4305e-06  ok
-  group 2  M=128 N= 16 K= 64  tiles= 8  max|err|=3.8147e-06  ok
-  group 3  M= 16 N=128 K=112  tiles= 8  max|err|=6.6757e-06  ok
-  group 4  M= 80 N= 80 K= 48  tiles=25  max|err|=2.3842e-06  ok
-  group 5  M= 17 N= 33 K= 49  tiles= 6  max|err|=1.9073e-06  ok
-Avg kernel time: 0.0061 ms  (340.0 GFLOP/s aggregate over all groups)
-Overall max abs error: 6.6757e-06
+  group 2  M=128 N= 16 K= 64  tiles= 8  max|err|=2.3842e-06  ok
+  group 3  M= 16 N=128 K=112  tiles= 8  max|err|=5.2452e-06  ok
+  group 4  M= 80 N= 80 K= 48  tiles=25  max|err|=1.9073e-06  ok
+  group 5  M= 17 N= 33 K= 49  tiles= 6  max|err|=1.4305e-06  ok
+Avg kernel time: 0.0027 ms  (761.7 GFLOP/s aggregate over all groups)
+Overall max abs error: 5.2452e-06
 PASS
 ```
 

@@ -142,9 +142,10 @@ per-copy handle.
 
 // HIP / CDNA direct-to-LDS via the LLVM intrinsic:
 //   copies 4 bytes/lane HBM -> LDS, no VGPR staging.
+//   sptr_wave_base must be wave-uniform; hardware adds 4*lane.
 __builtin_amdgcn_load_to_lds(
     /*src global ptr*/ gptr + offset,
-    /*dst LDS ptr  */ sptr,
+    /*dst LDS base */ sptr_wave_base,
     /*size bytes   */ 4,          // gfx950 also allows 12/16 (dwordx3/x4)
     /*offset       */ 0,
     /*aux          */ 0);

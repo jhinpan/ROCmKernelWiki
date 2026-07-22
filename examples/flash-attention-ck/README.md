@@ -4,9 +4,9 @@ A pure-HIP, fp32 implementation of the **FlashAttention-2 forward** online-softm
 recurrence. It is the *demonstrable* companion to the
 [CK-tile FlashAttention page](../../wiki/kernels/flash-attention-ck.md): the
 production AMD path issues the two GEMMs (`Q·Kᵀ` and `P·V`) as `v_mfma_*`
-matrix-core instructions through `ck_tile`'s `BlockFmhaPipelineQRKSVS`, which
-**does not execute on RDNA4 (gfx1201)**. This example reproduces the same
-algorithm with scalar FMA math so it actually runs on this box and self-checks.
+matrix-core instructions through `ck_tile`'s `BlockFmhaPipelineQRKSVS`. This
+example reproduces the same algorithm with scalar FMA math and self-checks on
+gfx950.
 
 ## What it shows
 
@@ -29,24 +29,23 @@ checkable; for performance see the CK-tile numbers on the wiki page.
 ```bash
 ./build.sh
 # or:
-hipcc --offload-arch=gfx1201 -O3 flash_attention_fwd.hip -o flash_attention_fwd
+hipcc --offload-arch=gfx950 -O3 flash_attention_fwd.hip -o flash_attention_fwd
 ./flash_attention_fwd            # defaults: H=4 N=256 D=64
 ./flash_attention_fwd 8 512 128  # H N D  (D <= 128)
 ```
 
-Runs natively on **gfx1201 (RDNA4)**. Pure HIP — no rocWMMA, no MFMA — so it is
-portable to any ROCm GPU (and the CDNA matrix path is the production CK-tile
-kernel, not this reference).
+The captured runtime is MI355X / gfx950. This reference is pure HIP — no
+rocWMMA or MFMA — while the production matrix path is CK-tile.
 
 ## Expected output
 
-Real output captured on this gfx1201 (RX 9070 XT), ROCm 7.2.3:
+Captured on MI355X / gfx950:
 
 ```
 === build OK, running ===
-FlashAttention-2 fwd (portable HIP, fp32) on gfx1201
+FlashAttention-2 fwd (portable HIP, fp32) on gfx950
   H=4 N=256 D=64  BR=64 BC=64  scale=0.12500
-  avg kernel time: 2.1091 ms   (31.8 GFLOP/s)
+  avg kernel time: 1.8350 ms   (36.6 GFLOP/s)
   max abs error: 1.490e-07   max rel error: 4.404e-03
 PASS
 ```

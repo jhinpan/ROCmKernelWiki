@@ -6,8 +6,8 @@
 // logical KV blocks to scattered physical blocks in HBM. Online-softmax
 // (FlashAttention) recurrence runs across the gathered KV blocks.
 //
-// This is PORTABLE pure-HIP (FMA math + LDS reduction + warp shuffles): it BUILDS
-// AND RUNS on gfx1201 (RDNA4) and is verified against a CPU reference. fp32.
+// This is portable pure HIP (FMA math + LDS reduction + wave shuffles): it builds
+// and runs on gfx950 and is verified against a CPU reference. fp32.
 //
 // Layout (mirrors the wiki page):
 //   q          : [num_seqs, num_q_heads, HEAD_DIM]
@@ -264,7 +264,7 @@ int main() {
   for (size_t i = 0; i < out_cpu.size(); ++i)
     max_abs_err = std::max(max_abs_err, std::fabs(out_cpu[i] - out_gpu[i]));
 
-  printf("paged-attention decode (fp32, portable HIP, gfx1201)\n");
+  printf("paged-attention decode (fp32, portable HIP, gfx950)\n");
   printf("  num_seqs=%d  num_q_heads=%d  num_kv_heads=%d  GROUP=%d\n",
          num_seqs, num_q_heads, num_kv_heads, GROUP);
   printf("  HEAD_DIM=%d  BLOCK_SIZE=%d  seq_lens={40,17,64}\n", HEAD_DIM, BLOCK_SIZE);

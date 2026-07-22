@@ -171,11 +171,15 @@ A few consequences that drive kernel design:
   Accumulators are conventionally kept in the AGPR view so regular names remain
   available for addressing — see [MFMA](mfma.md) and
   [VGPR budgeting](../techniques/vgpr-budgeting.md).
-- **Allocation is quantized.** On gfx942, metadata commonly reports regular
-  `.vgpr_count` and accumulator `.agpr_count` separately; compute
-  `round_up(round_up(vgpr_count, 4) + agpr_count, 8)`. On gfx950, `.vgpr_count`
-  already contains both, so use `round_up(vgpr_count, 8)` and do not add
-  `.agpr_count` again.
+- **Allocation is quantized, and count namespaces must not be mixed.** HSA
+  metadata `.vgpr_count` already reports the combined total vector-register
+  allocation on both gfx942 and gfx950; `.agpr_count` is the accumulator subset,
+  not an extra allocation to add again. Compute
+  `round_up(metadata_vgpr_count, 8)`. A lower-level compiler resource remark may
+  instead expose separate regular `NumVgprs` and accumulator `NumAgprs`; only
+  for those separate counts does gfx942 derive the total as
+  `round_up(round_up(NumVgprs, 4) + NumAgprs, 8)`. Prefer `TotalNumVgprs` when
+  the compiler reports it.
 - **SGPR claims need their own namespace and unit.** General SGPR names are
   `s0`–`s101` (102 total). The raw per-wave `.sgpr_count` also includes enabled
   target-special pairs such as VCC, FLAT_SCRATCH, and XNACK; it is not rounded.
@@ -190,9 +194,8 @@ compare a waves/SIMD quantity directly with a waves/CU quantity. A compact
 CDNA3/CDNA4 estimate is:
 
 ```text
-# gfx942 vector allocation; gfx950 instead uses round_up(combined_vgpr_count, 8)
-vector_alloc = round_up(
-    round_up(arch_vgprs_per_lane, 4) + accum_vgprs_per_lane, 8)
+# HSA metadata .vgpr_count is already the combined vector-register count.
+vector_alloc = round_up(metadata_vgpr_count, 8)
 sgpr_alloc = round_up(sgpr_count_including_target_specials, 16)
 
 vector_waves_per_simd = min(8, floor(512 / vector_alloc))

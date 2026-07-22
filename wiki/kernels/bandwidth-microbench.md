@@ -242,12 +242,11 @@ the empirical roofline for any memory-bound gfx942 kernel — see
 ## Runnable example
 
 A portable, pure-HIP version of this benchmark that **builds and runs on
-gfx1201 (RDNA4)** lives in [`examples/bandwidth-microbench/`](../../examples/bandwidth-microbench/).
-It keeps the same design — persistent grid-stride, `UNROLL=8`, 128-bit
-non-temporal `float4` loads — and adds a CPU-checked correctness pass plus a
-size sweep. The MI308X CDNA3 figure above (~4.56 TB/s) is the source-reported
-number for gfx942; the example reports the **real measured** number for whatever
-GPU it runs on.
+gfx950** lives in
+[`examples/bandwidth-microbench/`](../../examples/bandwidth-microbench/). It
+keeps the same persistent grid-stride, `UNROLL=8`, and non-temporal `float4`
+loads, then adds a CPU-checked sum and size sweep. The MI308X CDNA3 figure above
+remains source-reported; the output below is from MI355X.
 
 ```bash
 cd examples/bandwidth-microbench && ./build.sh
@@ -256,27 +255,26 @@ cd examples/bandwidth-microbench && ./build.sh
 `build.sh` also greps the emitted ISA to confirm the wide non-temporal load:
 
 ```
-	global_load_b128 v[13:16], v[4:5], off th:TH_LOAD_NT
+	global_load_dwordx4 v[10:13], v[4:5], off nt
 ```
 
-Expected output captured on an RX 9070 XT (gfx1201, ROCm 7.2.3):
+Expected output captured on MI355X / gfx950:
 
 ```
-Device: AMD Radeon RX 9070 XT (gfx1201), 32 CUs, 2400 MHz
+Device: AMD Instinct MI355X (gfx950:sramecc+:xnack-), 256 CUs, 2400 MHz
 
 Self-check: sum=16777216 ref=16777216 rel_err=0.000e+00 -> PASS
 
 size(MiB)    iters        GB/s
-64           50           510
-256          50           636
-1024         50           637
-2048         50           635
+64           50           6152
+256          50           6396
+1024         50           6192
+2048         50           6192
 
 RESULT: PASS
 ```
 
-~637 GB/s sustained on the large working sets is ~99% of the card's ~645 GB/s
-GDDR6 peak read bandwidth.
+These are values from one run, not a peak-bandwidth claim.
 
 ## See also
 
