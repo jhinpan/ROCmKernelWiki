@@ -42,14 +42,14 @@ sources:
 - blog-gemm-optimization
 - doc-cdna3-isa
 implemented_by:
-- pr-FlyDSL-346
 - pr-Tensile-1685
 - pr-FlyDSL-579
-- pr-FlyDSL-278
-- pr-Tensile-2114
-- pr-Tensile-2113
-- pr-Tensile-1521
 - pr-Tensile-1327
+- pr-composable_kernel-3098
+- pr-aiter-2136
+- pr-FlyDSL-388
+- pr-Tensile-972
+- pr-aiter-3072
 ---
 # MFMA Software Pipelining
 

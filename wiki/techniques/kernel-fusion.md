@@ -43,11 +43,11 @@ implemented_by:
 - pr-composable_kernel-2978
 - pr-composable_kernel-1789
 - pr-composable_kernel-1791
-- pr-composable_kernel-2594
 - pr-composable_kernel-2551
 - pr-composable_kernel-1862
-- pr-composable_kernel-3259
 - pr-composable_kernel-1591
+- pr-composable_kernel-933
+- pr-composable_kernel-2152
 ---
 # Kernel Fusion — Epilogues and Adjacent-Op Merging
 

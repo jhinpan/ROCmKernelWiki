@@ -47,14 +47,14 @@ sources:
 - ref-gcnasm
 - blog-amdgpu-kernel-opt-guide
 implemented_by:
-- pr-FlyDSL-447
 - pr-FlyDSL-524
-- pr-composable_kernel-2594
 - pr-FlyDSL-450
 - pr-FlyDSL-300
 - pr-sglang-23882
-- pr-composable_kernel-3259
 - pr-composable_kernel-2978
+- pr-composable_kernel-2913
+- pr-composable_kernel-2878
+- pr-composable_kernel-2551
 ---
 # Wave-Level Reduction (DPP rows + ds_bpermute cross-row + readlane)
 

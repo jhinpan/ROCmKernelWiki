@@ -64,6 +64,7 @@ implemented_by:
 - pr-composable_kernel-767
 - pr-composable_kernel-2476
 - pr-composable_kernel-2016
+- pr-composable_kernel-2059
 ---
 # FP8 Block-Scaled GEMM on CDNA4 (gfx950)
 

@@ -40,7 +40,6 @@ sources:
 - blog-gemm-optimization
 - doc-mi300x-datasheet
 implemented_by:
-- pr-composable_kernel-3301
 - pr-composable_kernel-3202
 - pr-composable_kernel-1360
 - pr-composable_kernel-3520
@@ -48,6 +47,7 @@ implemented_by:
 - pr-composable_kernel-3107
 - pr-composable_kernel-2786
 - pr-composable_kernel-2781
+- pr-composable_kernel-2721
 ---
 # Persistent Kernels — Grid-Stride Work Loops for Launch & L2 Reuse
 

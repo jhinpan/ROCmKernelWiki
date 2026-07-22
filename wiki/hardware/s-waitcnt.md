@@ -33,12 +33,10 @@ aliases:
 - lgkmcnt
 - expcnt
 implemented_by:
-- pr-aiter-2394
 - pr-composable_kernel-3098
 - pr-composable_kernel-2715
 - pr-aiter-3072
 - pr-FlyDSL-388
-- pr-FlyDSL-346
 ---
 # s_waitcnt — Asynchronous Memory Counters (CDNA)
 

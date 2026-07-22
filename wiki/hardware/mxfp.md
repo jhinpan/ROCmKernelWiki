@@ -44,14 +44,14 @@ aliases:
 - v_mfma_scale_f32_16x16x128_f8f6f4
 - E8M0
 implemented_by:
-- pr-composable_kernel-3603
 - pr-composable_kernel-2297
-- pr-composable_kernel-3601
 - pr-composable_kernel-2152
-- pr-composable_kernel-2000
-- pr-vllm-42952
-- pr-composable_kernel-2665
 - pr-FlyDSL-191
+- pr-aiter-2037
+- pr-composable_kernel-2294
+- pr-composable_kernel-2199
+- pr-aiter-490
+- pr-aiter-488
 ---
 # MXFP — Block-Scaled FP8/FP6/FP4 Microscaling (CDNA4 gfx950)
 

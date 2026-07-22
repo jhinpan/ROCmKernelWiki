@@ -64,12 +64,12 @@ performance_claims:
 implemented_by:
 - pr-composable_kernel-1224
 - pr-aiter-1383
-- pr-FlyDSL-346
 - pr-triton-247
 - pr-aiter-2945
 - pr-vllm-40871
 - pr-aiter-3357
 - pr-aiter-2525
+- pr-composable_kernel-1789
 ---
 # FlashAttention-2 via CK-tile on CDNA (MI300X)
 

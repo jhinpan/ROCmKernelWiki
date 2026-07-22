@@ -42,8 +42,8 @@ implemented_by:
 - pr-composable_kernel-1705
 - pr-composable_kernel-1262
 - pr-aiter-3072
-- pr-FlyDSL-346
 - pr-triton-879
+- pr-triton-441
 ---
 # Triton on AMD — `tl.dot` → MFMA and the AMD backend knobs
 

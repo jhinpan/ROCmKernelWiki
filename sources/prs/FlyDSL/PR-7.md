@@ -40,8 +40,8 @@ changed_paths:
 facet_source: inferred
 related:
 - technique-wave-reduce
+- kernel-flydsl-flash-attention
 - kernel-flash-attention-ck
-- kernel-rmsnorm
 ---
 # use rocir in softmax/layernorm/rmsnorm ops
 

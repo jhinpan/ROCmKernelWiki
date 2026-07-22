@@ -61,10 +61,10 @@ implemented_by:
 - pr-vllm-36286
 - pr-vllm-36022
 - pr-composable_kernel-2978
-- pr-composable_kernel-3259
 - pr-composable_kernel-2913
 - pr-composable_kernel-2878
-- pr-composable_kernel-2466
+- pr-composable_kernel-2388
+- pr-composable_kernel-1880
 ---
 # Fused MoE — Gate-Up + SiLU + Down with FP8 (CDNA)
 

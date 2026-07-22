@@ -43,10 +43,12 @@ sources:
 implemented_by:
 - pr-Tensile-1529
 - pr-FlyDSL-591
-- pr-composable_kernel-2825
-- pr-composable_kernel-2722
 - pr-Tensile-1406
-- pr-FlyDSL-447
+- pr-sglang-25898
+- pr-composable_kernel-3288
+- pr-composable_kernel-3137
+- pr-composable_kernel-2276
+- pr-composable_kernel-1776
 ---
 # Occupancy Tuning — Waves per SIMD vs ILP on CDNA
 

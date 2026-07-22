@@ -41,10 +41,12 @@ sources:
 implemented_by:
 - pr-sglang-25898
 - pr-composable_kernel-3137
-- pr-composable_kernel-2825
 - pr-Tensile-1529
-- pr-composable_kernel-647
-- pr-composable_kernel-2723
+- pr-composable_kernel-2276
+- pr-composable_kernel-1776
+- pr-Tensile-243
+- pr-Tensile-1406
+- pr-Tensile-1288
 ---
 # Profiling & Roofline Workflow on ROCm (rocprof / Omniperf)
 

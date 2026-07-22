@@ -37,7 +37,6 @@ sources:
 - blog-triton-optimizations
 - doc-cdna3-isa
 - blog-gemm-optimization
-implemented_by:
 ---
 # Low Occupancy / Idle CUs
 

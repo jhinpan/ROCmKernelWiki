@@ -37,7 +37,6 @@ sources:
 - doc-llvm-amdgpu
 - blog-gemm-optimization
 implemented_by:
-- pr-Tensile-1371
 - pr-Tensile-1100
 ---
 # VGPR Pressure, Register Spills, and Occupancy Collapse

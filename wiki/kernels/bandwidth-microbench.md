@@ -55,13 +55,14 @@ performance_claims:
   utilization: ~86% of MI300-class 5.3 TB/s HBM3 peak
   confidence: source-reported
 implemented_by:
-- pr-Tensile-1521
 - pr-Tensile-1185
-- pr-composable_kernel-3603
 - pr-aiter-3072
-- pr-aiter-2394
 - pr-Tensile-311
 - pr-Tensile-1406
+- pr-Tensile-1288
+- pr-Tensile-1184
+- pr-Tensile-1179
+- pr-FlyDSL-60
 ---
 # HBM Bandwidth Microbenchmark (float4 non-temporal persistent read)
 

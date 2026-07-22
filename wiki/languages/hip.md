@@ -34,12 +34,6 @@ sources:
 - blog-matrix-cores-cdna
 implemented_by:
 - pr-aiter-2136
-- pr-composable_kernel-2723
-- pr-composable_kernel-2722
-- pr-composable_kernel-2606
-- pr-composable_kernel-2528
-- pr-aiter-2394
-- pr-Tensile-1521
 ---
 # HIP — Kernel Basics, LDS, and AMDGCN Builtins
 

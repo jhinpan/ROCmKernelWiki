@@ -28,6 +28,7 @@ from _wiki_root import WIKI_ROOT  # noqa: E402
 PRS_DIR = WIKI_ROOT / "sources" / "prs"
 ART_DIR = WIKI_ROOT / "artifacts" / "prs"
 TAGS = yaml.safe_load((WIKI_ROOT / "data" / "tags.yaml").read_text())
+ALIASES = yaml.safe_load((WIKI_ROOT / "data" / "aliases.yaml").read_text()) or {}
 VOCAB_HW = set(TAGS["hardware_features"])
 VOCAB_TECH = set(TAGS["techniques"])
 VOCAB_KT = set(TAGS["kernel_types"])
@@ -83,10 +84,9 @@ KT_RULES = {
     "prefill": "prefill", "convolution": "convolution", "conv": "convolution",
 }
 ARCH_RULES = {
-    "gfx942": "gfx942", "gfx950": "gfx950", "gfx1201": "gfx1201", "gfx90a": "gfx90a",
-    "mi300": "gfx942", "mi325": "gfx942", "cdna3": "gfx942",
-    "mi350": "gfx950", "mi355": "gfx950", "cdna4": "gfx950",
-    "rdna4": "gfx1201", "r9700": "gfx1201",
+    str(alias).lower(): architecture
+    for architecture in sorted(VOCAB_ARCH)
+    for alias in [architecture, *(ALIASES.get(architecture) or [])]
 }
 
 
@@ -106,6 +106,15 @@ def apply_rules(blob, rules, vocab):
     for kw, term in rules.items():
         if term in vocab and kw in blob and term not in found:
             found.append(term)
+    return found
+
+
+def apply_architecture_rules(blob):
+    found = []
+    for keyword, architecture in ARCH_RULES.items():
+        pattern = rf"(?<![a-z0-9]){re.escape(keyword)}(?![a-z0-9])"
+        if re.search(pattern, blob) and architecture not in found:
+            found.append(architecture)
     return found
 
 
@@ -131,18 +140,18 @@ def main():
             if fm.get(cur):
                 before[key] += 1
 
-        # Skip non-kernel PRs entirely: copyright/chore/docs/CI/version bumps
-        # whose paths merely happen to contain words like "gemm" or "moe".
+        # Skip facet inference for non-kernel PRs whose paths merely happen to
+        # contain words like "gemm" or "moe". Architecture inference remains
+        # mandatory because it controls whether a PR enters the active corpus.
         title_l = str(fm.get("title", "")).lower()
-        if re.search(r"copyright|chore|\bdocs?\b|readme|changelog|bump|"
-                     r"\bci\b|lint|pre-commit|typo|comment|license|"
-                     r"clang-format|formatting|whitespace", title_l):
-            # leave existing facets as-is; do not infer new ones from noise
-            for key, cur in (("hw", "hardware_features"), ("tech", "techniques"),
-                             ("kt", "kernel_types")):
-                if fm.get(cur):
-                    after[key] += 1
-            continue
+        skip_facet_inference = bool(
+            re.search(
+                r"copyright|chore|\bdocs?\b|readme|changelog|bump|"
+                r"\bci\b|lint|pre-commit|typo|comment|license|"
+                r"clang-format|formatting|whitespace",
+                title_l,
+            )
+        )
 
         repo_short = str(fm.get("repo", "")).split("/")[-1]
         pr = fm.get("pr")
@@ -162,14 +171,19 @@ def main():
             diff_text,
         ]).lower()
 
-        new_hw = sorted(set((fm.get("hardware_features") or [])
-                            + apply_rules(blob, HW_RULES, VOCAB_HW)))
-        new_tech = sorted(set((fm.get("techniques") or [])
-                              + apply_rules(blob, TECH_RULES, VOCAB_TECH)))
-        new_kt = sorted(set((fm.get("kernel_types") or [])
-                            + apply_rules(blob, KT_RULES, VOCAB_KT)))
+        if skip_facet_inference:
+            new_hw = list(fm.get("hardware_features") or [])
+            new_tech = list(fm.get("techniques") or [])
+            new_kt = list(fm.get("kernel_types") or [])
+        else:
+            new_hw = sorted(set((fm.get("hardware_features") or [])
+                                + apply_rules(blob, HW_RULES, VOCAB_HW)))
+            new_tech = sorted(set((fm.get("techniques") or [])
+                                  + apply_rules(blob, TECH_RULES, VOCAB_TECH)))
+            new_kt = sorted(set((fm.get("kernel_types") or [])
+                                + apply_rules(blob, KT_RULES, VOCAB_KT)))
         new_arch = sorted(set((fm.get("architectures") or [])
-                              + apply_rules(blob, ARCH_RULES, VOCAB_ARCH)))
+                              + apply_architecture_rules(blob)))
 
         # keep tags coherent: union of facets (validator allows any vocab value)
         new_tags = sorted(set((fm.get("tags") or []) + new_hw + new_kt + new_arch))

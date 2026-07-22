@@ -44,12 +44,13 @@ sources:
 - blog-amdgpu-kernel-opt-guide
 implemented_by:
 - pr-sglang-25898
-- pr-composable_kernel-2528
-- pr-composable_kernel-2466
 - pr-composable_kernel-2276
 - pr-composable_kernel-2110
-- pr-FlyDSL-447
 - pr-sglang-26208
+- pr-composable_kernel-1705
+- pr-Tensile-1529
+- pr-triton-247
+- pr-composable_kernel-3359
 ---
 # VGPR Budgeting — ArchVGPR + AGPR Pressure vs Occupancy
 

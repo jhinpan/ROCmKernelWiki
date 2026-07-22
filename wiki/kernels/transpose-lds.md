@@ -52,13 +52,13 @@ performance_claims:
   source_id: doc-cdna3-isa
 implemented_by:
 - pr-composable_kernel-3027
-- pr-composable_kernel-2177
 - pr-composable_kernel-3592
 - pr-composable_kernel-3038
 - pr-composable_kernel-3465
 - pr-composable_kernel-94
-- pr-composable_kernel-3603
 - pr-composable_kernel-2955
+- pr-composable_kernel-2905
+- pr-composable_kernel-984
 ---
 # LDS-Staged Bank-Conflict-Free Matrix Transpose
 

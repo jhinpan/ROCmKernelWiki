@@ -59,12 +59,12 @@ performance_claims:
 implemented_by:
 - pr-FlyDSL-79
 - pr-FlyDSL-60
-- pr-composable_kernel-2963
-- pr-FlyDSL-465
-- pr-composable_kernel-2949
 - pr-FlyDSL-388
 - pr-composable_kernel-2516
-- pr-composable_kernel-3603
+- pr-composable_kernel-2166
+- pr-composable_kernel-1936
+- pr-aiter-3134
+- pr-aiter-3071
 ---
 # FlyDSL Preshuffle GEMM (layout-DSL example)
 

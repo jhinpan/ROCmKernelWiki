@@ -41,7 +41,6 @@ aliases:
 - SIMD lane
 - EXEC mask
 - occupancy
-implemented_by:
 ---
 # Wavefronts, EXEC Mask & Register Files (CDNA)
 

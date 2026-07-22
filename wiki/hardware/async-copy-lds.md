@@ -52,14 +52,14 @@ aliases:
 - buffer_load_dword lds
 - cp.async analog
 implemented_by:
-- pr-composable_kernel-2949
 - pr-composable_kernel-2573
 - pr-composable_kernel-2425
 - pr-FlyDSL-139
-- pr-aiter-2394
 - pr-composable_kernel-2984
 - pr-composable_kernel-2545
-- pr-aiter-3336
+- pr-composable_kernel-3098
+- pr-composable_kernel-2715
+- pr-aiter-3072
 ---
 # Direct-to-LDS Async Copy — `buffer_load…lds` / `global_load_lds`
 

@@ -266,6 +266,11 @@ def test_id_and_scope_caches_invalidate_in_process():
             _index._MEMORY_CACHE = None
             _scope.WIKI_ROOT = workspace
             _scope._SCOPE_CACHE = None
+            aliases_path = workspace / "data/aliases.yaml"
+            aliases_path.write_text(
+                "gfx942: [MI300]\ngfx950: [MI350]\n",
+                encoding="utf-8",
+            )
 
             (workspace / "wiki/a.md").write_text(
                 "\ufeff---\nid: page-a\n---\nA\n", encoding="utf-8"
@@ -285,6 +290,12 @@ def test_id_and_scope_caches_invalidate_in_process():
                 encoding="utf-8",
             )
             assert _scope.in_scope_architectures() == {"gfx950"}
+            assert "mi350" in _scope.active_architecture_aliases()
+            aliases_path.write_text(
+                "gfx942: [MI300]\ngfx950: [MI350, MI355]\n",
+                encoding="utf-8",
+            )
+            assert "mi355" in _scope.active_architecture_aliases()
             scope_path.write_text(
                 "in_scope_architectures: [gfx942, gfx950]\n"
                 "quarantined_architectures: []\n"
@@ -323,6 +334,70 @@ def test_active_scope_contract():
         if fm["id"] in quarantined:
             continue
         assert set(fm.get("architectures") or []) <= active, path.relative_to(ROOT)
+
+
+def test_pr_architecture_metadata_covers_explicit_scope_terms():
+    tags = yaml.safe_load((ROOT / "data/tags.yaml").read_text(encoding="utf-8"))
+    aliases = yaml.safe_load((ROOT / "data/aliases.yaml").read_text(encoding="utf-8"))
+    architecture_terms = {
+        architecture: {
+            str(term).lower()
+            for term in [architecture, *(aliases.get(architecture) or [])]
+        }
+        for architecture in tags["architectures"]
+    }
+
+    for path in (ROOT / "sources/prs").glob("*/*.md"):
+        fm = frontmatter(path.relative_to(ROOT))
+        searchable = " ".join(
+            [
+                str(fm.get("title", "")),
+                *(str(item) for item in (fm.get("changed_paths") or [])),
+            ]
+        ).lower()
+        explicit = {
+            architecture
+            for architecture, terms in architecture_terms.items()
+            if any(
+                re.search(
+                    rf"(?<![a-z0-9]){re.escape(term)}(?![a-z0-9])",
+                    searchable,
+                )
+                for term in terms
+            )
+        }
+        missing = explicit - set(fm.get("architectures") or [])
+        assert not missing, f"{path.relative_to(ROOT)}: missing {sorted(missing)}"
+
+
+def test_upstream_scope_rejects_unmodeled_architecture_terms():
+    scripts_dir = str(ROOT / "scripts")
+    sys.path.insert(0, scripts_dir)
+    try:
+        from _scope import is_active
+
+        base = {
+            "source_category": "upstream-code",
+            "architectures": ["gfx942"],
+            "changed_paths": [],
+        }
+        assert is_active({**base, "title": "Optimize gfx942 and gfx950"})
+        assert is_active({**base, "title": "Tune MI308X and MI35x kernels"})
+        assert is_active({**base, "title": "Tune MI16x16 and MI4x4 instructions"})
+        assert is_active({**base, "title": "Tune MI 32x32x2x1 instruction"})
+        assert not is_active({**base, "title": "Add support for gfx908"})
+        assert not is_active({**base, "title": "Add support for gfx1153"})
+        assert not is_active({**base, "title": "Tune gfx 950 and gfx1200"})
+        assert not is_active({**base, "title": "Navi2x WMMA fix"})
+        assert not is_active({**base, "changed_paths": ["kernels/gfx103x/gemm.cpp"]})
+        assert not is_active({**base, "title": "MI100 GEMM fix"})
+        assert not is_active({**base, "title": "MI2xx support"})
+        assert not is_active({**base, "title": "CDNA1 and CDNA2 support"})
+        assert not is_active({**base, "title": "Vega10 and Radeon VII support"})
+        assert not is_active({**base, "title": "Arcturus LDS fix"})
+        assert not is_active({**base, "title": "Strix Halo and Krackan support"})
+    finally:
+        sys.path.remove(scripts_dir)
 
 
 def test_active_synthesis_has_no_unsupported_architecture_prose():
@@ -368,13 +443,200 @@ def test_grep_and_implementation_links_obey_scope():
     assert "pr-aiter-3228" in retained_pr.stdout
 
 
+def test_linker_removes_inactive_and_cross_arch_pr_backlinks():
+    with tempfile.TemporaryDirectory() as workspace:
+        workspace = Path(workspace)
+        (workspace / "data").mkdir()
+        (workspace / "wiki/kernels").mkdir(parents=True)
+        (workspace / "sources/prs/example").mkdir(parents=True)
+        (workspace / "data/tags.yaml").write_text("{}\n", encoding="utf-8")
+        (workspace / "data/aliases.yaml").write_text("{}\n", encoding="utf-8")
+        (workspace / "data/scope.yaml").write_text(
+            "in_scope_architectures: [gfx942, gfx950]\n"
+            "quarantined_architectures: [gfx1201]\n"
+            "quarantined_pages: []\n"
+            "quarantined_query_terms: []\n",
+            encoding="utf-8",
+        )
+        (workspace / "wiki/kernels/foo.md").write_text(
+            "---\n"
+            "id: kernel-foo\n"
+            "title: Foo GEMM\n"
+            "type: kernel\n"
+            "architectures: [gfx950]\n"
+            "kernel_types: [gemm]\n"
+            "---\n"
+            "Foo.\n",
+            encoding="utf-8",
+        )
+        active_pr = workspace / "sources/prs/example/PR-1.md"
+        active_pr.write_text(
+            "---\n"
+            "id: pr-example-1\n"
+            "title: Foo GEMM\n"
+            "status: merged\n"
+            "source_category: upstream-code\n"
+            "architectures: [gfx950]\n"
+            "kernel_types: [gemm]\n"
+            "---\n"
+            "Active PR.\n",
+            encoding="utf-8",
+        )
+        inactive_pr = workspace / "sources/prs/example/PR-2.md"
+        inactive_pr.write_text(
+            "---\n"
+            "id: pr-example-2\n"
+            "title: Foo GEMM for gfx1201\n"
+            "status: merged\n"
+            "source_category: upstream-code\n"
+            "architectures: [gfx1201]\n"
+            "kernel_types: [gemm]\n"
+            "related: [kernel-foo, source-doc]\n"
+            "---\n"
+            "Inactive PR.\n",
+            encoding="utf-8",
+        )
+        cross_arch_pr = workspace / "sources/prs/example/PR-3.md"
+        cross_arch_pr.write_text(
+            "---\n"
+            "id: pr-example-3\n"
+            "title: Foo GEMM for gfx942\n"
+            "status: merged\n"
+            "source_category: upstream-code\n"
+            "architectures: [gfx942]\n"
+            "kernel_types: [gemm]\n"
+            "related: [kernel-foo, source-doc]\n"
+            "---\n"
+            "Cross-architecture PR.\n",
+            encoding="utf-8",
+        )
+
+        env = os.environ.copy()
+        env["ROCM_WIKI_ROOT"] = str(workspace)
+        result = subprocess.run(
+            [sys.executable, str(ROOT / "scripts/link_prs.py")],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            env=env,
+        )
+        assert result.returncode == 0, result.stderr
+        active = yaml.safe_load(
+            active_pr.read_text(encoding="utf-8").split("---", 2)[1]
+        )
+        inactive = yaml.safe_load(
+            inactive_pr.read_text(encoding="utf-8").split("---", 2)[1]
+        )
+        cross_arch = yaml.safe_load(
+            cross_arch_pr.read_text(encoding="utf-8").split("---", 2)[1]
+        )
+        assert active["related"] == ["kernel-foo"]
+        assert inactive["related"] == ["source-doc"]
+        assert cross_arch["related"] == ["source-doc"]
+
+
+def test_facet_enrichment_never_skips_explicit_quarantined_architectures():
+    with tempfile.TemporaryDirectory() as workspace:
+        workspace = Path(workspace)
+        (workspace / "data").mkdir()
+        prs = workspace / "sources/prs/example"
+        prs.mkdir(parents=True)
+        (workspace / "wiki").mkdir()
+        (workspace / "data/tags.yaml").write_text(
+            "hardware_features: []\n"
+            "techniques: []\n"
+            "kernel_types: []\n"
+            "architectures: [gfx942, gfx950, gfx1100, gfx1201, gfx1250]\n",
+            encoding="utf-8",
+        )
+        (workspace / "data/aliases.yaml").write_text(
+            "gfx1100: [gfx11, Navi3x]\n"
+            "gfx1201: [gfx12, Navi4x]\n"
+            "gfx1250: [MI400, MI450, CDNA-next]\n",
+            encoding="utf-8",
+        )
+        regular_pr = prs / "PR-1.md"
+        regular_pr.write_text(
+            "---\n"
+            "id: pr-example-1\n"
+            "repo: example/repo\n"
+            "pr: 1\n"
+            "title: Add gfx950 and gfx1250 kernel paths\n"
+            "architectures: [gfx950]\n"
+            "tags: [gfx950]\n"
+            "hardware_features: []\n"
+            "techniques: []\n"
+            "kernel_types: []\n"
+            "changed_paths: [kernels/gfx1250/kernel.py]\n"
+            "---\n"
+            "Kernel PR.\n",
+            encoding="utf-8",
+        )
+        skipped_pr = prs / "PR-2.md"
+        skipped_pr.write_text(
+            "---\n"
+            "id: pr-example-2\n"
+            "repo: example/repo\n"
+            "pr: 2\n"
+            "title: CI support for MI450\n"
+            "architectures: [gfx942]\n"
+            "tags: [gfx942]\n"
+            "hardware_features: []\n"
+            "techniques: []\n"
+            "kernel_types: []\n"
+            "changed_paths: [ci/gfx1250/test.yaml]\n"
+            "---\n"
+            "Non-kernel PR.\n",
+            encoding="utf-8",
+        )
+        navi_pr = prs / "PR-3.md"
+        navi_pr.write_text(
+            "---\n"
+            "id: pr-example-3\n"
+            "repo: example/repo\n"
+            "pr: 3\n"
+            "title: Navi3x WMMA fix\n"
+            "architectures: [gfx942]\n"
+            "tags: [gfx942]\n"
+            "hardware_features: []\n"
+            "techniques: []\n"
+            "kernel_types: []\n"
+            "changed_paths: [kernels/wmma.cpp]\n"
+            "---\n"
+            "RDNA PR.\n",
+            encoding="utf-8",
+        )
+
+        env = os.environ.copy()
+        env["ROCM_WIKI_ROOT"] = str(workspace)
+        result = subprocess.run(
+            [sys.executable, str(ROOT / "scripts/enrich_facets.py")],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            env=env,
+        )
+        assert result.returncode == 0, result.stderr
+        for path in (regular_pr, skipped_pr):
+            fm = yaml.safe_load(path.read_text(encoding="utf-8").split("---", 2)[1])
+            assert "gfx1250" in fm["architectures"]
+            assert "gfx1250" in fm["tags"]
+            assert "gfx1201" not in fm["architectures"]
+        navi = yaml.safe_load(navi_pr.read_text(encoding="utf-8").split("---", 2)[1])
+        assert "gfx1100" in navi["architectures"]
+
+
 def test_scope_quarantine_query_and_indices():
     quarantined = {"hw-wmma", "lang-rocwmma", "migration-wmma-vs-mfma"}
     default = run("scripts/query.py", "wmma", "--synthesis", "--limit", "100",
                   "--compact", "--no-cache")
     recovery = run("scripts/query.py", "wmma", "--synthesis", "--limit", "100",
                    "--compact", "--no-cache", "--include-out-of-scope")
-    assert default.returncode == recovery.returncode == 0
+    assert default.returncode == 2
+    assert "unsupported architecture" in default.stderr
+    assert recovery.returncode == 0
     assert not any(page_id in default.stdout for page_id in quarantined)
     assert all(page_id in recovery.stdout for page_id in quarantined)
 
@@ -551,7 +813,9 @@ def test_amdgpu_guide_sync_regression():
     generator = (ROOT / "scripts/generate-indices.py").read_text(encoding="utf-8")
     assert ".as_posix()" in generator
     for query in (ROOT / "queries").glob("*.md"):
-        for target in re.findall(r"\]\(([^)]+)\)", query.read_text(encoding="utf-8")):
+        for target in re.findall(
+            r"(?<!\\)\]\(([^)]+)\)", query.read_text(encoding="utf-8")
+        ):
             assert "\\" not in target, f"{query.name}: non-portable link {target!r}"
             destination = (query.parent / target).resolve()
             assert destination.exists(), f"{query.name}: broken link {target!r}"

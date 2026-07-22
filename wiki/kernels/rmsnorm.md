@@ -69,14 +69,14 @@ performance_claims:
   source_id: doc-mi300x-datasheet
   utilization: memory-bound
 implemented_by:
-- pr-composable_kernel-1605
 - pr-vllm-40710
 - pr-FlyDSL-524
 - pr-composable_kernel-1604
 - pr-sglang-25898
-- pr-FlyDSL-447
 - pr-composable_kernel-2978
-- pr-composable_kernel-2594
+- pr-composable_kernel-1789
+- pr-sglang-23882
+- pr-composable_kernel-2913
 ---
 # Fused RMSNorm (+ residual / quant) on CDNA
 

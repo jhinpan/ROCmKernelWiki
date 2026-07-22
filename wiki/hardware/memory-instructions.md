@@ -46,7 +46,6 @@ aliases:
 - resource descriptor
 implemented_by:
 - pr-composable_kernel-2984
-- pr-Tensile-1521
 - pr-Tensile-1288
 ---
 # Memory Instructions — buffer (MUBUF) vs global vs flat

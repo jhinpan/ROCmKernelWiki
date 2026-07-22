@@ -40,10 +40,9 @@ implemented_by:
 - pr-composable_kernel-3098
 - pr-composable_kernel-2715
 - pr-aiter-3072
-- pr-aiter-2394
 - pr-Tensile-293
 - pr-Tensile-291
-- pr-Tensile-1521
+- pr-Tensile-1185
 ---
 # Atomics & Cross-Workgroup Sync (CDNA/RDNA)
 

@@ -44,13 +44,14 @@ sources:
 - blog-matrix-cores-cdna
 - ref-composable-kernel
 implemented_by:
-- pr-composable_kernel-2096
 - pr-composable_kernel-1838
-- pr-Tensile-1521
 - pr-Tensile-1529
-- pr-Tensile-1873
 - pr-Tensile-1656
 - pr-Tensile-1519
+- pr-Tensile-1355
+- pr-Tensile-1327
+- pr-Tensile-1214
+- pr-Tensile-299
 ---
 # LDS Swizzling — Conflict-Free A/B Tile Staging for MFMA
 

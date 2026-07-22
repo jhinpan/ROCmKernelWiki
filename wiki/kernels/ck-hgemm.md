@@ -64,9 +64,9 @@ implemented_by:
 - pr-Tensile-1155
 - pr-Tensile-1124
 - pr-Tensile-972
-- pr-Tensile-2114
-- pr-Tensile-2113
 - pr-Tensile-1702
+- pr-FlyDSL-579
+- pr-Tensile-1703
 ---
 # FP16 GEMM via Composable Kernel / MFMA on MI300X
 

@@ -44,14 +44,14 @@ aliases:
 - 128-bit global memory access
 - four L1 cache sets per workgroup
 implemented_by:
-- pr-aiter-2394
 - pr-triton-729
 - pr-composable_kernel-1430
 - pr-aiter-3072
 - pr-Tensile-293
-- pr-Tensile-1521
 - pr-Tensile-1288
 - pr-Tensile-1185
+- pr-FlyDSL-579
+- pr-composable_kernel-3098
 ---
 # Vectorized & Non-Temporal Loads (128-bit) to Saturate HBM
 

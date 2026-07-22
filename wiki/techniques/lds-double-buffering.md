@@ -44,14 +44,14 @@ sources:
 - blog-gemm-optimization
 - ref-gcnasm
 implemented_by:
-- pr-FlyDSL-346
-- pr-Tensile-1521
 - pr-composable_kernel-3098
-- pr-composable_kernel-3237
 - pr-aiter-3072
 - pr-composable_kernel-3401
 - pr-composable_kernel-2836
-- pr-composable_kernel-2528
+- pr-composable_kernel-2436
+- pr-composable_kernel-1838
+- pr-composable_kernel-1705
+- pr-Tensile-299
 ---
 # LDS Double / Multi-Buffering
 

@@ -40,10 +40,6 @@ changed_paths:
 - csrc/flash_attn_rocm/src/fmha_utils.h
 - flash_attn/flash_attn_interface.py
 facet_source: inferred
-related:
-- kernel-flash-attention-ck
-- kernel-mla-decode
-- technique-vgpr-budgeting
 ---
 # Enable both Qloop and Kloop
 

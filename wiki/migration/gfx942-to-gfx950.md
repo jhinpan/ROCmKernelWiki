@@ -29,10 +29,10 @@ cross_vendor_note: 'This is a cross-*generation* port within AMD CDNA, not a cro
   on gfx942 can compile and launch on gfx950 yet produce wrong numbers. The sharp
   edge is FP8 — CDNA3 uses AMD''s OCP-incompatible FNUZ (E4M3/E5M2) encoding while
   CDNA4 uses standard OCP FP8 — so FP8 weights/activations and their scales are NOT
-  bit-portable across the two. Native TF32/XF32 matrix support is also gone on
-  gfx950—the gfx942 intrinsic does not lower, so software must explicitly select
-  a supported datatype/path—and FP64 matrix throughput per CU is halved. Treat
-  every affected numeric path as requiring re-validation, not just recompilation.
+  bit-portable across the two. Native TF32/XF32 matrix support is also gone on gfx950—the
+  gfx942 intrinsic does not lower, so software must explicitly select a supported
+  datatype/path—and FP64 matrix throughput per CU is halved. Treat every affected
+  numeric path as requiring re-validation, not just recompilation.
 
   '
 related:
@@ -64,11 +64,11 @@ implemented_by:
 - pr-FlyDSL-191
 - pr-aiter-2136
 - pr-aiter-2491
-- pr-composable_kernel-3603
 - pr-composable_kernel-2152
 - pr-FlyDSL-554
-- pr-FlyDSL-278
 - pr-FlyDSL-153
+- pr-composable_kernel-2297
+- pr-vllm-40871
 ---
 # Migrating Kernels CDNA3 (gfx942) → CDNA4 (gfx950)
 

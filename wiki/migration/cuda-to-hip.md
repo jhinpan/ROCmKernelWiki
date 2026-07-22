@@ -46,13 +46,10 @@ cross_vendor_note: 'NVIDIA SM and AMD CDNA differ in three ways that break a nai
   regenerated, not textually translated.'
 implemented_by:
 - pr-aiter-2136
-- pr-composable_kernel-2466
 - pr-aiter-3072
-- pr-aiter-2394
 - pr-Tensile-1406
 - pr-Tensile-1288
-- pr-composable_kernel-2722
-- pr-composable_kernel-2704
+- pr-FlyDSL-388
 ---
 # CUDA → HIP Kernel Porting (CDNA3/CDNA4)
 

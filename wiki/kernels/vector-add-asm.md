@@ -66,13 +66,13 @@ performance_claims:
   confidence: inferred
 implemented_by:
 - pr-Tensile-1288
-- pr-composable_kernel-2949
-- pr-composable_kernel-3603
 - pr-composable_kernel-3208
-- pr-composable_kernel-2963
 - pr-composable_kernel-3520
 - pr-composable_kernel-2715
 - pr-aiter-3072
+- pr-FlyDSL-388
+- pr-composable_kernel-3493
+- pr-sglang-25898
 ---
 # Persistent Vector Add in GCN Assembly (async direct-to-LDS, double-buffered)
 

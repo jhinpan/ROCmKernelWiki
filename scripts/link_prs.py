@@ -39,6 +39,9 @@ SKIP_TITLE = re.compile(r"\b(revert|sync|chore|bump|typo|copyright|changelog|"
                         r"clang-format|version)\b", re.I)
 STOP = {"the", "a", "an", "on", "for", "of", "to", "and", "with", "in", "via",
         "amd", "gpu", "kernel", "kernels", "support", "add", "fix", "use", "cdna"}
+WIKI_ID_PREFIXES = (
+    "hw-", "technique-", "kernel-", "pattern-", "lang-", "migration-",
+)
 
 
 def split_fm(text):
@@ -63,6 +66,16 @@ def facets(fm):
         for v in (fm.get(k) or []):
             s.add(f"{k[0]}:{v}")          # namespace so hw 'fp8' != kt 'fp8'
     return s
+
+
+def architectures_compatible(left, right):
+    left_arches = set(left.get("architectures") or [])
+    right_arches = set(right.get("architectures") or [])
+    return (
+        not left_arches
+        or not right_arches
+        or not left_arches.isdisjoint(right_arches)
+    )
 
 
 def concept_set(fm):
@@ -108,10 +121,15 @@ def main():
         })
 
     # load PRs
+    all_prs = []
     prs = []
     for md in PRS_DIR.rglob("PR-*.md"):
         fm, body = split_fm(md.read_text(encoding="utf-8"))
-        if not fm or fm.get("status") != "merged" or not fm.get("id"):
+        if not fm or not fm.get("id"):
+            continue
+        pr = {"md": md, "fm": fm, "body": body, "id": fm["id"]}
+        all_prs.append(pr)
+        if fm.get("status") != "merged":
             continue
         if not args.include_out_of_scope and not is_active(fm):
             continue
@@ -121,7 +139,7 @@ def main():
         if not prf:                       # nothing to match on
             continue
         prs.append({
-            "md": md, "fm": fm, "body": body, "id": fm["id"],
+            **pr,
             "facets": prf,
             "concepts": concept_set(fm),
             "kw": title_keywords(fm.get("title", "")),
@@ -137,6 +155,8 @@ def main():
     for w in wikis:
         wfac, wkw, wcon = w["facets"], w["kw"], w["concepts"]
         for pr in prs:
+            if not architectures_compatible(w["fm"], pr["fm"]):
+                continue
             shared = wfac & pr["facets"]
             score = 0.0
             # Strong signal: shared typed facets (kernel_type weighed most).
@@ -183,15 +203,18 @@ def main():
         write_fm(w["md"], fm, w["body"])
 
     # write PR frontmatter: related (merge, keep unique, wiki ids only here)
-    for pr in prs:
+    for pr in all_prs:
         links = pr_top.get(pr["id"], [])
         fm = pr["fm"]
         existing = [r for r in (fm.get("related") or [])
-                    if not str(r).startswith(("hw-", "technique-", "kernel-",
-                                              "pattern-", "lang-", "migration-"))]
+                    if not str(r).startswith(WIKI_ID_PREFIXES)]
         merged = links + existing
         if merged:
-            fm["related"] = merged
+            if fm.get("related") != merged:
+                fm["related"] = merged
+                write_fm(pr["md"], fm, pr["body"])
+        elif "related" in fm:
+            del fm["related"]
             write_fm(pr["md"], fm, pr["body"])
 
     print("wrote implemented_by (wiki) + related (PR) links.")

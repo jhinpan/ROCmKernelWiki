@@ -55,14 +55,14 @@ performance_claims:
   source_id: ref-aiter
   baseline: G separate hipBLASLt launches
 implemented_by:
-- pr-composable_kernel-2466
 - pr-FlyDSL-412
 - pr-composable_kernel-2234
-- pr-composable_kernel-2821
 - pr-vllm-36286
 - pr-vllm-36022
 - pr-sglang-25540
 - pr-sglang-24816
+- pr-composable_kernel-2878
+- pr-composable_kernel-1791
 ---
 # Grouped GEMM — Variable-Size Expert GEMMs in One Launch (MoE)
 

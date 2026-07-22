@@ -38,11 +38,11 @@ implemented_by:
 - pr-triton-729
 - pr-aiter-2328
 - pr-aiter-2685
-- pr-aiter-2394
 - pr-composable_kernel-3512
 - pr-composable_kernel-2425
-- pr-Tensile-1521
 - pr-Tensile-1288
+- pr-FlyDSL-197
+- pr-FlyDSL-131
 ---
 # Branchless Boundary Handling with Buffer OOB Guards
 
