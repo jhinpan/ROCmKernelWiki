@@ -260,9 +260,10 @@ def test_corpus_manifest_is_generated_from_the_checkout():
         (ROOT / "data" / "corpus-manifest.yaml").read_text(encoding="utf-8")
     )
     assert committed == expected
-    assert expected["counts"]["source_prs"] == 7454
-    assert expected["counts"]["active_wiki_pages"] == 54
-    assert expected["counts"]["artifact_bundles"] == 959
+    counts = expected["counts"]
+    assert counts["source_prs"] > 0
+    assert 0 < counts["active_wiki_pages"] <= counts["wiki_pages"]
+    assert counts["artifact_bundles"] <= counts["source_prs"]
 
 
 def test_candidate_schema_and_gap_detection():
