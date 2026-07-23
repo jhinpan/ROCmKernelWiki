@@ -758,6 +758,97 @@ def test_mi355_worker_rejects_candidate_control_plane_changes():
             raise AssertionError(f"MI355 control-plane change accepted: {path}")
 
 
+def test_mi355_worker_rejects_fetched_sha_race():
+    from evolve.mi355_worker import require_exact_sha
+
+    approved = "a" * 40
+    require_exact_sha(approved, approved, source="test")
+    try:
+        require_exact_sha("b" * 40, approved, source="fetched PR head")
+    except ValueError as error:
+        assert str(error) == (
+            f"fetched PR head SHA {'b' * 40!r} "
+            f"does not match approved SHA {approved!r}"
+        )
+    else:
+        raise AssertionError("worker accepted a fetched SHA that was not approved")
+
+
+def test_mi355_evidence_bundle_is_content_addressed_and_immutable():
+    from evolve.mi355_worker import _copy_compact_bundle
+
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        run_output = root / "run-output"
+        evidence_root = root / "evidence"
+        run_output.mkdir()
+        evidence_root.mkdir()
+        for name, content in (
+            ("manifest.json", "{}\n"),
+            ("verdicts.json", '{"overall_status":"pass"}\n'),
+            ("summary.txt", "overall_status=pass\n"),
+            ("health-before.txt", "healthy\n"),
+            ("health-after.txt", "healthy\n"),
+        ):
+            (run_output / name).write_text(content, encoding="utf-8")
+        approval = {
+            "login": "maintainer",
+            "permission": "write",
+            "sha": "a" * 40,
+            "approved_at": "2026-07-23T00:00:00Z",
+        }
+
+        bundle, evidence = _copy_compact_bundle(
+            run_output,
+            evidence_root,
+            pr=12,
+            head_sha="a" * 40,
+            controller_sha="c" * 40,
+            approval=approval,
+            artifact_uri="s3://example/mi355",
+        )
+        assert bundle.name.endswith(f"sha256-{evidence['bundle_sha256']}")
+        assert evidence["artifact_uri"] == f"s3://example/mi355/{bundle.name}"
+        original = (bundle / "EVIDENCE.yaml").read_bytes()
+
+        try:
+            _copy_compact_bundle(
+                run_output,
+                evidence_root,
+                pr=12,
+                head_sha="a" * 40,
+                controller_sha="c" * 40,
+                approval=approval,
+                artifact_uri="s3://example/mi355",
+            )
+        except ValueError as error:
+            assert "immutable evidence bundle already exists" in str(error)
+        else:
+            raise AssertionError("worker overwrote an immutable evidence bundle")
+        assert (bundle / "EVIDENCE.yaml").read_bytes() == original
+
+
+def test_mi355_sandboxes_preserve_isolation_and_use_caller_identity():
+    for relative in (
+        "ops/mi355/run-sandbox.sh",
+        "ops/mi355/run-command-sandbox.sh",
+    ):
+        text = (ROOT / relative).read_text(encoding="utf-8")
+        for required in (
+            "--pull=never",
+            "--network=none",
+            "--read-only",
+            "--cap-drop=ALL",
+            "--security-opt=no-new-privileges",
+            "--tmpfs=/tmp:rw,exec,nosuid,nodev,size=4g",
+            '--user="${caller_uid}:${caller_gid}"',
+            '"--group-add=${device_gid}"',
+        ):
+            assert required in text, f"{relative} lacks {required}"
+        for forbidden in ("GH_TOKEN", "GITHUB_TOKEN", "SSH_AUTH_SOCK", "docker.sock"):
+            assert forbidden not in text, f"{relative} exposes {forbidden}"
+
+
 def test_scored_retrieval_eval_meets_committed_thresholds():
     from evaluate_skill import evaluate_retrieval, load_gold_cases
 
