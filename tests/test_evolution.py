@@ -258,6 +258,20 @@ def test_fixture_discovery_writes_run_ledger_and_state():
         assert page_fm["architectures"] == ["gfx950"]
         assert page_fm["scope_status"] == "active"
 
+        try:
+            run_discovery(
+                root=root,
+                source_ids=["example"],
+                fixture_path=fixture,
+                captured_at="2026-07-22",
+                run_id="20260722T000000Z",
+                dry_run=False,
+            )
+        except ValueError as error:
+            assert "immutable run_id already exists" in str(error)
+        else:
+            raise AssertionError("an immutable run directory was overwritten")
+
         second = run_discovery(
             root=root,
             source_ids=["example"],

@@ -160,12 +160,14 @@ def utc_now() -> str:
 
 
 def new_run_id() -> str:
-    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
 
 
 def validate_run_id(run_id: str) -> str:
-    if not re.fullmatch(r"\d{8}T\d{6}Z", run_id):
-        raise ValueError("run_id must use UTC YYYYMMDDTHHMMSSZ format")
+    if not re.fullmatch(r"\d{8}T\d{6}(?:\d{6})?Z", run_id):
+        raise ValueError(
+            "run_id must use UTC YYYYMMDDTHHMMSS[ffffff]Z format"
+        )
     return run_id
 
 
@@ -740,6 +742,9 @@ def run_discovery(
 
     capture_date = captured_at or date.today().isoformat()
     effective_run_id = validate_run_id(run_id or new_run_id())
+    run_root = root / "candidates" / "runs" / effective_run_id
+    if not dry_run and run_root.exists():
+        raise ValueError(f"immutable run_id already exists: {effective_run_id}")
     discovered_timestamp = utc_now()
     state_path = root / "data" / "evolution-state.yaml"
     state = _load_state(state_path)
@@ -884,7 +889,7 @@ def run_discovery(
     }
     if not dry_run:
         _write_yaml(
-            root / "candidates" / "runs" / effective_run_id / "manifest.yaml",
+            run_root / "manifest.yaml",
             manifest,
         )
         _write_yaml(state_path, state)
