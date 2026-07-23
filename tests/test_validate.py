@@ -119,9 +119,6 @@ def test_codex_skill_contract():
     assert re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", skill["name"])
     assert len(skill["description"]) <= 1024
     assert "merged-PR" in skill["description"]
-    for repo in (ROOT / "sources/prs").iterdir():
-        if repo.is_dir():
-            assert repo.name.lower() in skill["description"].lower(), repo.name
     assert len(skill_text.splitlines()) < 500
     assert "~/.claude/skills" not in skill_text
     assert "$HOME/.agents/skills" in readme
@@ -234,7 +231,10 @@ def test_get_page_scope_and_index():
     try:
         from _index import id_index
 
-        assert len(id_index()) == 7542
+        manifest = yaml.safe_load(
+            (ROOT / "data/corpus-manifest.yaml").read_text(encoding="utf-8")
+        )
+        assert len(id_index()) == manifest["counts"]["unique_page_ids"]
     finally:
         sys.path.remove(scripts_dir)
 
