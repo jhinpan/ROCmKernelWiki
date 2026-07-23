@@ -766,7 +766,10 @@ def test_mi355_worker_rejects_fetched_sha_race():
     try:
         require_exact_sha("b" * 40, approved, source="fetched PR head")
     except ValueError as error:
-        assert "does not match approved SHA" in str(error)
+        assert str(error) == (
+            f"fetched PR head SHA {'b' * 40!r} "
+            f"does not match approved SHA {approved!r}"
+        )
     else:
         raise AssertionError("worker accepted a fetched SHA that was not approved")
 
