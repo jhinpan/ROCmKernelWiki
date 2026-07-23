@@ -292,7 +292,13 @@ def test_fixture_discovery_writes_run_ledger_and_state():
             ).read_text(encoding="utf-8")
         )
         assert len(first_ledger["candidates"]) == 1
+        assert first_ledger["run_id"] == "20260722T000000Z"
+        assert first_ledger["run_date"] == "2026-07-22"
+        assert first_ledger["counts"] == {"include": 1}
         assert second_ledger["candidates"] == []
+        assert second_ledger["run_id"] == "20260722T000100Z"
+        assert second_ledger["run_date"] == "2026-07-22"
+        assert second_ledger["counts"] == {}
 
 
 def test_corpus_manifest_is_generated_from_the_checkout():
@@ -458,6 +464,7 @@ def test_final_summary_is_inside_the_enforced_budget():
         subprocess.run(["git", "init", "-q", str(root)], check=True)
         summary = {
             "schema_version": 1,
+            "run_id": "20260722T000000Z",
             "run_date": "2026-07-22",
             "discovery": {"total": 0},
             "gap_proposals": 0,
@@ -489,6 +496,7 @@ def test_final_summary_is_inside_the_enforced_budget():
         changed_files, changed_lines = _git_changes(root)
         assert finalized["changed_files"] == changed_files
         assert finalized["changed_lines"] == changed_lines
+        assert finalized["run_id"] == "20260722T000000Z"
         assert changed_files == [
             "candidates/runs/20260722T000000Z/refresh-summary.yaml"
         ]
