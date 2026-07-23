@@ -89,6 +89,13 @@ def validate_changed_paths(paths: list[str]) -> None:
             )
 
 
+def require_exact_sha(observed: str, approved: str, *, source: str) -> None:
+    if observed != approved:
+        raise ValueError(
+            f"{source} SHA {observed!r} does not match approved SHA {approved!r}"
+        )
+
+
 def _run(
     command: list[str],
     *,
@@ -164,6 +171,32 @@ def _pull(repo: str, pr: int) -> dict[str, Any]:
     )
 
 
+def _authorize_pull(
+    repo: str,
+    pr: int,
+    *,
+    required_label: str,
+    expected_head_sha: str | None = None,
+) -> tuple[dict[str, Any], str, dict[str, str]]:
+    pull = _pull(repo, pr)
+    labels = {
+        str(label.get("name"))
+        for label in (pull.get("labels") or [])
+        if isinstance(label, dict)
+    }
+    if required_label not in labels:
+        raise ValueError(f"PR lacks required label {required_label!r}")
+    head_sha = str(pull["headRefOid"])
+    if expected_head_sha is not None:
+        require_exact_sha(head_sha, expected_head_sha, source="current PR head")
+    approval = find_approval(
+        _comments(repo, pr),
+        head_sha=head_sha,
+        permission_lookup=lambda login: _permission(repo, login),
+    )
+    return pull, head_sha, approval
+
+
 def _changed_paths(repo: str, pr: int) -> list[str]:
     output = _run(
         ["gh", "pr", "diff", str(pr), "--repo", repo, "--name-only"],
@@ -193,7 +226,9 @@ def _health_snapshot(command: str | None, gpu: int, destination: Path) -> None:
         raise RuntimeError("MI355 health check failed")
 
 
-def _bundle_digest(bundle: Path) -> tuple[str, dict[str, str]]:
+def _bundle_digest(
+    bundle: Path, provenance: dict[str, Any]
+) -> tuple[str, dict[str, str]]:
     hashes = {}
     aggregate = hashlib.sha256()
     for path in sorted(bundle.rglob("*")):
@@ -203,6 +238,15 @@ def _bundle_digest(bundle: Path) -> tuple[str, dict[str, str]]:
         digest = hashlib.sha256(path.read_bytes()).hexdigest()
         hashes[relative] = digest
         aggregate.update(f"{relative}:{digest}\n".encode("utf-8"))
+    aggregate.update(
+        (
+            "provenance:"
+            + json.dumps(
+                provenance, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+            )
+            + "\n"
+        ).encode("utf-8")
+    )
     return aggregate.hexdigest(), hashes
 
 
@@ -216,35 +260,56 @@ def _copy_compact_bundle(
     approval: dict[str, str],
     artifact_uri: str | None,
 ) -> tuple[Path, dict[str, Any]]:
-    destination = evidence_root / f"pr-{pr}-{head_sha[:12]}"
-    if destination.exists():
-        shutil.rmtree(destination)
-    destination.mkdir(parents=True)
-    for name in ("manifest.json", "verdicts.json", "summary.txt"):
-        source = run_output / name
-        if not source.is_file():
-            raise RuntimeError(f"validation output is missing {name}")
-        shutil.copy2(source, destination / name)
-    for name in ("health-before.txt", "health-after.txt"):
-        source = run_output / name
-        if source.is_file():
-            shutil.copy2(source, destination / name)
-    digest, hashes = _bundle_digest(destination)
-    evidence = {
+    provenance = {
         "schema_version": 1,
-        "created_at": utc_now(),
         "pr": pr,
         "head_sha": head_sha,
         "controller_sha": controller_sha,
         "approval": approval,
-        "artifact_uri": artifact_uri,
-        "bundle_sha256": digest,
-        "files": hashes,
     }
-    (destination / "EVIDENCE.yaml").write_text(
-        yaml.safe_dump(evidence, sort_keys=False, allow_unicode=True),
-        encoding="utf-8",
-    )
+    with tempfile.TemporaryDirectory(
+        prefix=".mi355-bundle-", dir=evidence_root
+    ) as directory:
+        staging = Path(directory)
+        for name in ("manifest.json", "verdicts.json", "summary.txt"):
+            source = run_output / name
+            if not source.is_file():
+                raise RuntimeError(f"validation output is missing {name}")
+            shutil.copy2(source, staging / name)
+        for name in ("health-before.txt", "health-after.txt"):
+            source = run_output / name
+            if source.is_file():
+                shutil.copy2(source, staging / name)
+        digest, hashes = _bundle_digest(staging, provenance)
+        destination = (
+            evidence_root
+            / f"pr-{pr}-{head_sha[:12]}-sha256-{digest}"
+        )
+        if destination.exists():
+            raise ValueError(
+                f"immutable evidence bundle already exists: {destination}"
+            )
+        resolved_artifact_uri = (
+            artifact_uri.rstrip("/") + "/" + destination.name
+            if artifact_uri
+            else None
+        )
+        evidence = {
+            "schema_version": 1,
+            "created_at": utc_now(),
+            "pr": pr,
+            "head_sha": head_sha,
+            "controller_sha": controller_sha,
+            "approval": approval,
+            "artifact_uri": resolved_artifact_uri,
+            "bundle_sha256": digest,
+            "files": hashes,
+        }
+        (staging / "EVIDENCE.yaml").write_text(
+            yaml.safe_dump(evidence, sort_keys=False, allow_unicode=True),
+            encoding="utf-8",
+        )
+        staging.rename(destination)
     return destination, evidence
 
 
@@ -299,19 +364,10 @@ def _publish_check(
 
 
 def process_pr(args: argparse.Namespace, repo: str, pr_number: int) -> dict[str, Any]:
-    pull = _pull(repo, pr_number)
-    labels = {
-        str(label.get("name"))
-        for label in (pull.get("labels") or [])
-        if isinstance(label, dict)
-    }
-    if args.required_label not in labels:
-        raise ValueError(f"PR lacks required label {args.required_label!r}")
-    head_sha = str(pull["headRefOid"])
-    approval = find_approval(
-        _comments(repo, pr_number),
-        head_sha=head_sha,
-        permission_lookup=lambda login: _permission(repo, login),
+    _, head_sha, approval = _authorize_pull(
+        repo,
+        pr_number,
+        required_label=args.required_label,
     )
     changed_paths = _changed_paths(repo, pr_number)
     validate_changed_paths(changed_paths)
@@ -337,12 +393,23 @@ def process_pr(args: argparse.Namespace, repo: str, pr_number: int) -> dict[str,
                 "git",
                 "fetch",
                 "origin",
-                f"pull/{pr_number}/head:{fetch_ref}",
+                f"+pull/{pr_number}/head:{fetch_ref}",
             ],
             cwd=WIKI_ROOT,
         )
+        fetched_sha = _run(
+            ["git", "rev-parse", f"{fetch_ref}^{{commit}}"],
+            cwd=WIKI_ROOT,
+        )
+        require_exact_sha(fetched_sha, head_sha, source="fetched PR head")
+        _, _, approval = _authorize_pull(
+            repo,
+            pr_number,
+            required_label=args.required_label,
+            expected_head_sha=head_sha,
+        )
         _run(
-            ["git", "worktree", "add", "--detach", str(candidate), fetch_ref],
+            ["git", "worktree", "add", "--detach", str(candidate), head_sha],
             cwd=WIKI_ROOT,
         )
         try:
@@ -376,6 +443,12 @@ def process_pr(args: argparse.Namespace, repo: str, pr_number: int) -> dict[str,
                 args.gpu,
                 run_output / "health-after.txt",
             )
+            _, _, approval = _authorize_pull(
+                repo,
+                pr_number,
+                required_label=args.required_label,
+                expected_head_sha=head_sha,
+            )
         finally:
             _run(
                 ["git", "worktree", "remove", "--force", str(candidate)],
@@ -394,11 +467,7 @@ def process_pr(args: argparse.Namespace, repo: str, pr_number: int) -> dict[str,
             head_sha=head_sha,
             controller_sha=controller_sha,
             approval=approval,
-            artifact_uri=(
-                args.artifact_uri.rstrip("/") + "/" + f"pr-{pr_number}-{head_sha[:12]}"
-                if args.artifact_uri
-                else None
-            ),
+            artifact_uri=args.artifact_uri,
         )
         check = _publish_check(
             repo,
