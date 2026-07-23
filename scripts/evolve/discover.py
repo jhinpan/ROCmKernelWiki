@@ -159,6 +159,18 @@ def utc_now() -> str:
     )
 
 
+def new_run_id() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+
+
+def validate_run_id(run_id: str) -> str:
+    if not re.fullmatch(r"\d{8}T\d{6}(?:\d{6})?Z", run_id):
+        raise ValueError(
+            "run_id must use UTC YYYYMMDDTHHMMSS[ffffff]Z format"
+        )
+    return run_id
+
+
 def _frontmatter(content: str) -> tuple[dict[str, Any], str]:
     match = re.match(r"^---\s*\r?\n(.*?)\r?\n---\s*\r?\n(.*)", content, re.DOTALL)
     if not match:
@@ -711,6 +723,7 @@ def run_discovery(
     source_ids: list[str] | None = None,
     fixture_path: Path | None = None,
     captured_at: str | None = None,
+    run_id: str | None = None,
     since: str | None = None,
     until: str | None = None,
     max_items: int | None = None,
@@ -728,11 +741,11 @@ def run_discovery(
             raise ValueError(f"inactive sources requested: {', '.join(inactive)}")
 
     capture_date = captured_at or date.today().isoformat()
-    discovered_timestamp = (
-        f"{capture_date}T00:00:00Z"
-        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", capture_date)
-        else utc_now()
-    )
+    effective_run_id = validate_run_id(run_id or new_run_id())
+    run_root = root / "candidates" / "runs" / effective_run_id
+    if not dry_run and run_root.exists():
+        raise ValueError(f"immutable run_id already exists: {effective_run_id}")
+    discovered_timestamp = utc_now()
     state_path = root / "data" / "evolution-state.yaml"
     state = _load_state(state_path)
     fixture = (
@@ -843,6 +856,7 @@ def run_discovery(
             "source_id": source_id,
             "source_kind": source["kind"],
             "repo": source["repo"],
+            "run_id": effective_run_id,
             "run_date": capture_date,
             "watermark_before": watermark,
             "counts": dict(sorted(decision_counts.items())),
@@ -853,7 +867,7 @@ def run_discovery(
                 root
                 / "candidates"
                 / "runs"
-                / capture_date
+                / effective_run_id
                 / f"{source['short']}.yaml",
                 ledger,
             )
@@ -867,6 +881,7 @@ def run_discovery(
 
     manifest = {
         "schema_version": 1,
+        "run_id": effective_run_id,
         "run_date": capture_date,
         "registry_sha256": hashlib.sha256(registry_path.read_bytes()).hexdigest(),
         "sources": run_sources,
@@ -874,7 +889,7 @@ def run_discovery(
     }
     if not dry_run:
         _write_yaml(
-            root / "candidates" / "runs" / capture_date / "manifest.yaml",
+            run_root / "manifest.yaml",
             manifest,
         )
         _write_yaml(state_path, state)
@@ -884,6 +899,7 @@ def run_discovery(
         "excluded": totals["exclude"],
         "quarantined": totals["quarantine"],
         "total": sum(totals.values()),
+        "run_id": effective_run_id,
         "run_date": capture_date,
     }
 
@@ -893,6 +909,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--source", action="append", dest="source_ids")
     parser.add_argument("--fixture", type=Path)
     parser.add_argument("--captured-at")
+    parser.add_argument("--run-id")
     parser.add_argument("--since")
     parser.add_argument("--until")
     parser.add_argument("--max-items", type=int)
@@ -913,6 +930,7 @@ def main() -> int:
             source_ids=args.source_ids,
             fixture_path=args.fixture,
             captured_at=args.captured_at,
+            run_id=args.run_id,
             since=args.since,
             until=args.until,
             max_items=args.max_items,

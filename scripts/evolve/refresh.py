@@ -20,7 +20,11 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 from _wiki_root import WIKI_ROOT, configure_utf8_stdio  # noqa: E402
 from evolve.corpus import write_manifest  # noqa: E402
-from evolve.discover import run_discovery  # noqa: E402
+from evolve.discover import (  # noqa: E402
+    new_run_id,
+    run_discovery,
+    validate_run_id,
+)
 from evolve.gaps import (  # noqa: E402
     detect_gap_proposals,
     load_candidates,
@@ -99,8 +103,8 @@ def _git_changes(root: Path) -> tuple[list[str], int]:
     return sorted(set(files)), changed_lines
 
 
-def _write_summary(root: Path, run_date: str, summary: dict[str, Any]) -> Path:
-    path = root / "candidates" / "runs" / run_date / "refresh-summary.yaml"
+def _write_summary(root: Path, run_id: str, summary: dict[str, Any]) -> Path:
+    path = root / "candidates" / "runs" / run_id / "refresh-summary.yaml"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         yaml.safe_dump(summary, sort_keys=False, allow_unicode=True),
@@ -111,7 +115,7 @@ def _write_summary(root: Path, run_date: str, summary: dict[str, Any]) -> Path:
 
 def _finalize_summary(
     root: Path,
-    run_date: str,
+    run_id: str,
     summary: dict[str, Any],
     *,
     max_files: int,
@@ -126,7 +130,7 @@ def _finalize_summary(
     fresh measurement of the exact state that contains that summary.
     """
     for _ in range(max_passes):
-        _write_summary(root, run_date, summary)
+        _write_summary(root, run_id, summary)
         changed_files, changed_lines = _git_changes(root)
         if (
             summary.get("changed_files") == changed_files
@@ -146,6 +150,7 @@ def _finalize_summary(
 
 def run_refresh(args: argparse.Namespace, root: Path = WIKI_ROOT) -> dict[str, Any]:
     run_date = args.captured_at or date.today().isoformat()
+    run_id = validate_run_id(getattr(args, "run_id", None) or new_run_id())
     initial_files, _ = _git_changes(root)
     if initial_files and not args.allow_dirty:
         raise ValueError(
@@ -159,6 +164,7 @@ def run_refresh(args: argparse.Namespace, root: Path = WIKI_ROOT) -> dict[str, A
         "excluded": 0,
         "quarantined": 0,
         "total": 0,
+        "run_id": run_id,
         "run_date": run_date,
     }
     if not args.skip_discovery:
@@ -167,6 +173,7 @@ def run_refresh(args: argparse.Namespace, root: Path = WIKI_ROOT) -> dict[str, A
             source_ids=args.source_ids,
             fixture_path=args.fixture,
             captured_at=run_date,
+            run_id=run_id,
             since=args.since,
             until=args.until,
             max_items=args.max_items,
@@ -231,6 +238,7 @@ def run_refresh(args: argparse.Namespace, root: Path = WIKI_ROOT) -> dict[str, A
     )
     summary = {
         "schema_version": 1,
+        "run_id": run_id,
         "run_date": run_date,
         "discovery": discovery,
         "gap_proposals": len(proposals),
@@ -242,7 +250,7 @@ def run_refresh(args: argparse.Namespace, root: Path = WIKI_ROOT) -> dict[str, A
     if not args.dry_run:
         summary = _finalize_summary(
             root,
-            run_date,
+            run_id,
             summary,
             max_files=args.max_files,
             max_lines=args.max_lines,
@@ -257,6 +265,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--source", action="append", dest="source_ids")
     parser.add_argument("--fixture", type=Path)
     parser.add_argument("--captured-at")
+    parser.add_argument("--run-id")
     parser.add_argument("--since")
     parser.add_argument("--until")
     parser.add_argument("--max-items", type=int)

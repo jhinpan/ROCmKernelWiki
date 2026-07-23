@@ -240,16 +240,65 @@ def test_fixture_discovery_writes_run_ledger_and_state():
             source_ids=["example"],
             fixture_path=fixture,
             captured_at="2026-07-22",
+            run_id="20260722T000000Z",
             dry_run=False,
         )
         assert summary["included"] == 1
-        ledger = root / "candidates" / "runs" / "2026-07-22" / "example.yaml"
+        ledger = (
+            root
+            / "candidates"
+            / "runs"
+            / "20260722T000000Z"
+            / "example.yaml"
+        )
         state = root / "data" / "evolution-state.yaml"
         page = root / "sources" / "prs" / "example" / "PR-17.md"
         assert ledger.is_file() and state.is_file() and page.is_file()
         page_fm = yaml.safe_load(page.read_text(encoding="utf-8").split("---", 2)[1])
         assert page_fm["architectures"] == ["gfx950"]
         assert page_fm["scope_status"] == "active"
+
+        try:
+            run_discovery(
+                root=root,
+                source_ids=["example"],
+                fixture_path=fixture,
+                captured_at="2026-07-22",
+                run_id="20260722T000000Z",
+                dry_run=False,
+            )
+        except ValueError as error:
+            assert "immutable run_id already exists" in str(error)
+        else:
+            raise AssertionError("an immutable run directory was overwritten")
+
+        second = run_discovery(
+            root=root,
+            source_ids=["example"],
+            fixture_path=fixture,
+            captured_at="2026-07-22",
+            run_id="20260722T000100Z",
+            dry_run=False,
+        )
+        assert second["included"] == 0
+        first_ledger = yaml.safe_load(ledger.read_text(encoding="utf-8"))
+        second_ledger = yaml.safe_load(
+            (
+                root
+                / "candidates"
+                / "runs"
+                / "20260722T000100Z"
+                / "example.yaml"
+            ).read_text(encoding="utf-8")
+        )
+        assert len(first_ledger["candidates"]) == 1
+        assert first_ledger["run_id"] == "20260722T000000Z"
+        assert first_ledger["run_date"] == "2026-07-22"
+        assert first_ledger["counts"] == {"include": 1}
+        assert second_ledger["candidates"] == []
+        assert second_ledger["run_id"] == "20260722T000100Z"
+        assert second_ledger["run_date"] == "2026-07-22"
+        assert second_ledger["counts"] == {}
 
 
 def test_corpus_manifest_is_generated_from_the_checkout():
@@ -415,6 +464,7 @@ def test_final_summary_is_inside_the_enforced_budget():
         subprocess.run(["git", "init", "-q", str(root)], check=True)
         summary = {
             "schema_version": 1,
+            "run_id": "20260722T000000Z",
             "run_date": "2026-07-22",
             "discovery": {"total": 0},
             "gap_proposals": 0,
@@ -426,7 +476,7 @@ def test_final_summary_is_inside_the_enforced_budget():
         try:
             _finalize_summary(
                 root,
-                "2026-07-22",
+                "20260722T000000Z",
                 summary,
                 max_files=0,
                 max_lines=100,
@@ -438,7 +488,7 @@ def test_final_summary_is_inside_the_enforced_budget():
 
         finalized = _finalize_summary(
             root,
-            "2026-07-22",
+            "20260722T000000Z",
             summary,
             max_files=1,
             max_lines=100,
@@ -446,8 +496,9 @@ def test_final_summary_is_inside_the_enforced_budget():
         changed_files, changed_lines = _git_changes(root)
         assert finalized["changed_files"] == changed_files
         assert finalized["changed_lines"] == changed_lines
+        assert finalized["run_id"] == "20260722T000000Z"
         assert changed_files == [
-            "candidates/runs/2026-07-22/refresh-summary.yaml"
+            "candidates/runs/20260722T000000Z/refresh-summary.yaml"
         ]
 
 
