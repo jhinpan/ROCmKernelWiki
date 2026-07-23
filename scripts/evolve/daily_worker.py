@@ -159,7 +159,8 @@ def run_daily(args: argparse.Namespace) -> dict[str, str]:
             refresh.append("--bootstrap-trees")
         for source_id in args.source_ids or []:
             refresh.extend(["--source", source_id])
-        _run(refresh, cwd=clone)
+        refresh_result = json.loads(_run(refresh, cwd=clone))
+        run_id = str(refresh_result["run_id"])
 
         if args.agent_command:
             proposals = clone / "candidates" / "synthesis-proposals.yaml"
@@ -184,6 +185,8 @@ def run_daily(args: argparse.Namespace) -> dict[str, str]:
                         "scripts/evolve/refresh.py",
                         "--captured-at",
                         run_date,
+                        "--run-id",
+                        run_id,
                         "--skip-discovery",
                         "--allow-dirty",
                         "--max-files",
@@ -198,7 +201,7 @@ def run_daily(args: argparse.Namespace) -> dict[str, str]:
             clone
             / "candidates"
             / "runs"
-            / run_date
+            / run_id
             / "refresh-summary.yaml"
         )
         publish = [
@@ -217,6 +220,7 @@ def run_daily(args: argparse.Namespace) -> dict[str, str]:
         result = json.loads(output)
         return {
             "run_date": run_date,
+            "run_id": run_id,
             "branch": branch,
             "status": str(result.get("status")),
             "url": str(result.get("url") or ""),
