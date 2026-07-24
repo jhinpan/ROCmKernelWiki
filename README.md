@@ -8,9 +8,9 @@ directory so one `git pull` updates both tooling and corpus.
 
 ROCmKernelWiki couples architecture-scoped synthesis to merged-PR and
 primary-source provenance, [real-silicon validation](VERIFICATION.md),
-and a [review-gated evidence flywheel](#self-evolution-boundary). Automation can
-discover, triage, and propose evidence in Draft PRs, but it cannot approve facts
-or merge changes.
+and a [maintainer-controlled evidence flywheel](#self-evolution-boundary).
+Automation discovers, triages, and proposes evidence in Draft PRs; maintainers
+remain responsible for accepting facts and merging changes.
 
 > **Corpus freshness:** the generated
 > [`data/corpus-manifest.yaml`](data/corpus-manifest.yaml) records the last
@@ -255,7 +255,8 @@ separately on the trusted MI355 node against an exact candidate SHA.
 CI (`.github/workflows/ci.yml`) gates every push on the validator, the query-tool
 smoke tests, scored retrieval/answer evals, provenance, and index freshness.
 `main` is protected by required checks, CODEOWNER review, one human approval,
-linear history, and resolved conversations.
+linear history, and resolved conversations for non-admin merges. Repository
+administrators can bypass these protections.
 
 ```bash
 python3 -m venv .venv
@@ -268,11 +269,12 @@ python3 -m venv .venv
 ### Self-evolution boundary
 
 The system discovers, proposes, evaluates, and collects evidence; it does not
-decide its own truth. Every automated change stays in a Draft PR and the bot has
-no approval or merge capability. PR/blog text and stored diffs are rendered as
-`UNTRUSTED-UPSTREAM-*` data. The public repository is not connected to a
-persistent self-hosted runner: [`ops/mi355/`](ops/mi355/) documents the
-node-local, exact-SHA approval and sandbox contract.
+decide its own truth by design. Automated changes are published as Draft PRs and
+are not auto-approved or auto-merged; maintainers make the acceptance and merge
+decisions. PR/blog text and stored diffs are rendered as `UNTRUSTED-UPSTREAM-*`
+data. The public repository is not connected to a persistent self-hosted runner:
+[`ops/mi355/`](ops/mi355/) documents the node-local, exact-SHA approval and
+sandbox contract.
 
 ### Quality Gates
 
