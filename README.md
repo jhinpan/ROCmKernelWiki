@@ -12,10 +12,14 @@ and a [review-gated evidence flywheel](#self-evolution-boundary). Automation can
 discover, triage, and propose evidence in Draft PRs, but it cannot approve facts
 or merge changes.
 
-> **Corpus dates:** the generated
-> [`data/corpus-manifest.yaml`](data/corpus-manifest.yaml) owns the merged-PR
-> cutoff. That boundary is independent of each doc/blog page's retrieval date
-> and the guide-sync boundary below; do not infer one from another. The nod-ai
+> **Corpus freshness:** the generated
+> [`data/corpus-manifest.yaml`](data/corpus-manifest.yaml) records the last
+> complete baseline PR-harvest cutoff from
+> [`data/refresh-cutoff.yaml`](data/refresh-cutoff.yaml). Incremental refreshes
+> may add selected evidence after that date;
+> [`data/evolution-state.yaml`](data/evolution-state.yaml) records each source's
+> latest discovery position, not a complete corpus through-date. Doc/blog
+> retrieval dates and the guide-sync boundary advance independently. The nod-ai
 > AMDGPU optimization guide is synced through commit `efa471ae` on
 > **2026-07-20**. Tool versions remain pinned in
 > [`data/tool-versions.yaml`](data/tool-versions.yaml). gfx950 facts and examples
@@ -224,9 +228,10 @@ worked examples.
 ## Maintenance Tooling
 
 [`data/sources.yaml`](data/sources.yaml) is the canonical registry for the
-budgeted refresh pipeline. The daily worker updates one rolling Draft PR from a
-disposable clone; approved hardware tasks are evaluated separately on the
-trusted MI355 node against an exact candidate SHA.
+refresh pipeline. Each run caps candidates, generated source pages, and stored
+diff bytes so the rolling Draft PR remains reviewable. The daily worker updates
+that PR from a disposable clone. Approved hardware tasks are evaluated
+separately on the trusted MI355 node against an exact candidate SHA.
 
 | Script | Purpose |
 |---|---|
