@@ -129,8 +129,8 @@ When answering from this KB:
 - SHA-256-pinned upstream diffs plus gfx950-first example suites
 - **Validator** `scripts/validate.py` — schema, vocabulary, link-integrity (0 errors)
 
-`data/corpus-manifest.yaml` is the generated source of truth for inventory and
-freshness; do not duplicate those values in this skill prompt.
+`data/corpus-manifest.yaml` is the generated inventory and baseline-cutoff
+projection; do not treat it as the owner of rolling or per-page freshness.
 
 ## Quality Guarantees
 
