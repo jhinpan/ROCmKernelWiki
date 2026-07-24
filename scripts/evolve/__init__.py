@@ -1,3 +1,3 @@
-"""Bounded, review-gated evolution tooling for ROCmKernelWiki."""
+"""Bounded, maintainer-controlled evolution tooling for ROCmKernelWiki."""
 
 SCHEMA_VERSION = 1

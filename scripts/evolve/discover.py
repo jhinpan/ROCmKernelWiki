@@ -816,6 +816,16 @@ def run_discovery(
                     **newest,
                     "captured_at": capture_date,
                 }
+            elif watermark is None and since:
+                # A successful empty first scan still needs a durable baseline.
+                # Reusing the caller's lower bound is conservative: the next
+                # run may rescan the interval, but it cannot skip evidence.
+                state.setdefault("sources", {})[source_id] = {
+                    "merged_at": since,
+                    "pr": 0,
+                    "merge_sha": "",
+                    "captured_at": capture_date,
+                }
         else:
             changes = list(fixture.get(source_id) or []) if fixture_path else []
             tree_head = None

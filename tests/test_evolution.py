@@ -322,6 +322,44 @@ def test_fixture_discovery_writes_run_ledger_and_state():
         assert second_ledger["counts"] == {}
 
 
+def test_empty_initial_pr_scan_persists_safe_since_watermark():
+    from evolve.discover import run_discovery
+
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        (root / "data").mkdir()
+        (root / "data" / "sources.yaml").write_text(
+            yaml.safe_dump({"schema_version": 1, "sources": [_source()]}),
+            encoding="utf-8",
+        )
+        (root / "data" / "evolution-schemas.yaml").write_text(
+            (ROOT / "data" / "evolution-schemas.yaml").read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+        fixture = root / "fixture.json"
+        fixture.write_text(json.dumps({"example": []}), encoding="utf-8")
+
+        run_discovery(
+            root=root,
+            source_ids=["example"],
+            fixture_path=fixture,
+            captured_at="2026-07-22",
+            run_id="20260722T000200Z",
+            since="2026-05-30T00:00:00Z",
+            dry_run=False,
+        )
+
+        state = yaml.safe_load(
+            (root / "data" / "evolution-state.yaml").read_text(encoding="utf-8")
+        )
+        assert state["sources"]["example"] == {
+            "merged_at": "2026-05-30T00:00:00Z",
+            "pr": 0,
+            "merge_sha": "",
+            "captured_at": "2026-07-22",
+        }
+
+
 def test_corpus_manifest_is_generated_from_the_checkout():
     from evolve.corpus import build_manifest
 
