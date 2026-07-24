@@ -1,9 +1,9 @@
 # Daily evolution service
 
 The service creates a disposable clone, resumes the single `bot/evolution`
-branch when a Draft PR is already open, runs bounded discovery/triage/evals,
-and opens or updates that Draft PR. It never pushes to `main` and cannot approve
-or merge its own work.
+branch when its PR is already open, runs bounded discovery/triage/evals, and
+creates the PR as Draft or updates the existing PR. It never pushes to `main`
+or invokes approval or merge; maintainers make those decisions.
 
 Install the service and timer like the MI355 units, copy
 `evolution.env.example` to `/etc/rocm-kernel-wiki/evolution.env`, and use a

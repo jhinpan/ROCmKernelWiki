@@ -69,6 +69,27 @@ def test_registry_contains_current_first_party_sources():
     assert by_repo["ROCm/rocm-blogs"]["kind"] == "github-tree"
 
 
+def test_amdgpu_guide_registry_matches_canonical_source_path():
+    from evolve.discover import _tree_candidate
+    from evolve.registry import load_registry, source_by_id
+
+    registry = load_registry(ROOT / "data" / "sources.yaml")
+    source = source_by_id(registry, "amdgpu-optimization-guide")
+    candidate = _tree_candidate(
+        {
+            "filename": "docs/amdgpu_kernel_optimization_guide.md",
+            "status": "modified",
+            "sha": "a" * 40,
+            "commit": "b" * 40,
+        },
+        source,
+        "2026-07-23",
+    )
+
+    assert candidate["decision"] == "defer"
+    assert candidate["relevance_reason"] == "allowlisted source path changed"
+
+
 def test_unknown_architecture_is_quarantined_not_defaulted_to_gfx942():
     from evolve.discover import classify_pr
     from _scope import is_active
@@ -299,6 +320,44 @@ def test_fixture_discovery_writes_run_ledger_and_state():
         assert second_ledger["run_id"] == "20260722T000100Z"
         assert second_ledger["run_date"] == "2026-07-22"
         assert second_ledger["counts"] == {}
+
+
+def test_empty_initial_pr_scan_persists_safe_since_watermark():
+    from evolve.discover import run_discovery
+
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        (root / "data").mkdir()
+        (root / "data" / "sources.yaml").write_text(
+            yaml.safe_dump({"schema_version": 1, "sources": [_source()]}),
+            encoding="utf-8",
+        )
+        (root / "data" / "evolution-schemas.yaml").write_text(
+            (ROOT / "data" / "evolution-schemas.yaml").read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+        fixture = root / "fixture.json"
+        fixture.write_text(json.dumps({"example": []}), encoding="utf-8")
+
+        run_discovery(
+            root=root,
+            source_ids=["example"],
+            fixture_path=fixture,
+            captured_at="2026-07-22",
+            run_id="20260722T000200Z",
+            since="2026-05-30T00:00:00Z",
+            dry_run=False,
+        )
+
+        state = yaml.safe_load(
+            (root / "data" / "evolution-state.yaml").read_text(encoding="utf-8")
+        )
+        assert state["sources"]["example"] == {
+            "merged_at": "2026-05-30T00:00:00Z",
+            "pr": 0,
+            "merge_sha": "",
+            "captured_at": "2026-07-22",
+        }
 
 
 def test_corpus_manifest_is_generated_from_the_checkout():

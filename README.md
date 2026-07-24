@@ -2,14 +2,27 @@
 
 A structured, agent-queryable knowledge base of **AMD Instinct GPU kernel
 optimization** for CDNA3 (gfx942 / MI300) and CDNA4
-(gfx950 / MI350–MI355X), packaged as a **Codex CLI skill** (and compatible with Claude Code).
-The repository root **is** the skill directory, so the full corpus remains
-git-updatable instead of being copied into a separate wrapper.
+(gfx950 / MI350–MI355X). It is packaged as a **Codex CLI skill**, remains
+compatible with Claude Code, and uses the repository root as the skill
+directory so one `git pull` updates both tooling and corpus.
 
-> **Corpus dates:** the generated
-> [`data/corpus-manifest.yaml`](data/corpus-manifest.yaml) owns the merged-PR
-> cutoff; each doc/blog page carries its own retrieval date. The nod-ai AMDGPU optimization guide is synced
-> through commit `efa471ae` on **2026-07-20**. Tool versions remain pinned in
+ROCmKernelWiki couples architecture-scoped synthesis to merged-PR and
+primary-source provenance, [real-silicon validation](VERIFICATION.md),
+and a [maintainer-controlled evidence flywheel](#self-evolution-boundary).
+Automation discovers, triages, and proposes evidence in a rolling PR that starts
+in Draft; maintainers remain responsible for accepting facts and merging changes.
+
+> **Corpus freshness:** the generated
+> [`data/corpus-manifest.yaml`](data/corpus-manifest.yaml) records the last
+> complete baseline PR-harvest cutoff from
+> [`data/refresh-cutoff.yaml`](data/refresh-cutoff.yaml). Incremental refreshes
+> may add selected evidence after that date;
+> [`data/evolution-state.yaml`](data/evolution-state.yaml) records each source's
+> latest discovery position, not a complete corpus through-date. Doc/blog
+> retrieval dates and guide-sync boundaries advance independently. The captured
+> nod-ai AMDGPU guide commit and retrieval date live in its
+> [canonical source page](sources/blogs/blog-amdgpu-kernel-opt-guide.md). Tool
+> versions remain pinned in
 > [`data/tool-versions.yaml`](data/tool-versions.yaml). gfx950 facts and examples
 > were verified on MI350X, with guide-specific device/LDS checks repeated on
 > MI355X — see below.
@@ -208,11 +221,18 @@ Three layers (after MIT Han Lab's KernelWiki, in turn after Karpathy's LLM-wiki)
 
 Supporting files: `data/` holds the schema and controlled vocabulary
 (`schemas.yaml`, `tags.yaml`, `aliases.yaml`, `inclusion-policy.yaml`,
-`tool-versions.yaml`, `refresh-cutoff.yaml`, `hardware-verified.yaml`);
+`scope.yaml`, `sources.yaml`, `tool-versions.yaml`, `refresh-cutoff.yaml`,
+`hardware-verified.yaml`);
 `candidates/` holds per-repo PR ledgers; `references/` holds the primer, schema, and
 worked examples.
 
 ## Maintenance Tooling
+
+[`data/sources.yaml`](data/sources.yaml) is the canonical registry for the
+refresh pipeline. Each run enforces file and line budgets so the rolling PR
+remains reviewable. The daily worker creates that PR as Draft, then updates it
+from a disposable clone. Approved hardware tasks are evaluated separately on the
+trusted MI355 node against an exact candidate SHA.
 
 | Script | Purpose |
 |---|---|
@@ -221,20 +241,24 @@ worked examples.
 | `scripts/evolve/gaps.py` | Turn uncovered evidence clusters into synthesis proposals |
 | `scripts/evolve/synthesize.py` | Validate a credential-free, path-bounded synthesis adapter |
 | `scripts/evolve/refresh.py` | Run one budgeted discovery→triage→eval→validation refresh |
-| `scripts/evolve/daily_worker.py` | Update the rolling `bot/evolution` Draft PR in a disposable clone |
+| `scripts/evolve/corpus.py` | Generate or check the canonical corpus inventory and cutoffs |
+| `scripts/evolve/daily_worker.py` | Create or update the rolling `bot/evolution` PR from a disposable clone |
 | `scripts/evolve/mi355_worker.py` | Run exact-SHA approved evidence tasks on the trusted MI355 node |
 | `scripts/backfill_diffs.py` | Fetch real upstream diffs for top-ranked kernel PRs |
 | `scripts/enrich_facets.py` | Infer techniques/hardware_features/kernel_types from paths + diffs |
 | `scripts/link_prs.py` | Build the bidirectional PR↔wiki bridge |
 | `scripts/generate-indices.py` | Regenerate `queries/*.md` from frontmatter |
 | `scripts/evaluate_skill.py` | Score held-out retrieval, citations, and architecture safety |
+| `scripts/evaluate_answers.py` | Check reference-answer facts and source citations |
 | `scripts/verify_provenance.py` | Re-hash artifact bundles and backfill immutable merge SHAs |
 | `scripts/validate.py` | Validate pages, evidence, candidates, manifests, claims, and provenance |
 
-CI (`.github/workflows/ci.yml`) gates every push on the validator, the query-tool
-smoke tests, scored retrieval/answer evals, provenance, and index freshness.
+CI (`.github/workflows/ci.yml`) gates every pull request and push to `main` on
+the validator, query-tool smoke tests, scored retrieval/answer evals,
+provenance, and index freshness.
 `main` is protected by required checks, CODEOWNER review, one human approval,
-linear history, and resolved conversations.
+linear history, and resolved conversations for non-admin merges. Repository
+administrators can bypass these protections.
 
 ```bash
 python3 -m venv .venv
@@ -247,10 +271,11 @@ python3 -m venv .venv
 ### Self-evolution boundary
 
 The system discovers, proposes, evaluates, and collects evidence; it does not
-decide its own truth. Every automated change stays in a Draft PR and the bot has
-no approval or merge capability. PR/blog text and stored diffs are rendered as
-`UNTRUSTED-UPSTREAM-*` data. The public repository is not connected to a
-persistent self-hosted runner: [`ops/mi355/`](ops/mi355/) documents the
+decide its own truth by design. Automated changes are published to a rolling PR
+that is created as Draft; they are not auto-approved or auto-merged. Maintainers
+make the acceptance and merge decisions. PR/blog text and stored diffs are
+rendered as `UNTRUSTED-UPSTREAM-*` data. The public repository is not connected
+to a persistent self-hosted runner: [`ops/mi355/`](ops/mi355/) documents the
 node-local, exact-SHA approval and sandbox contract.
 
 ### Quality Gates
@@ -291,7 +316,7 @@ If you use this knowledge base, please cite both:
 
 ```bibtex
 @misc{rocmkernelwiki2026,
-  title  = {ROCmKernelWiki: An AMD CDNA/RDNA GPU Kernel Optimization Knowledge Base},
+  title  = {ROCmKernelWiki: An AMD CDNA GPU Kernel Optimization Knowledge Base},
   author = {ROCmKernelWiki contributors},
   year   = {2026},
   howpublished = {\url{https://github.com/jhinpan/ROCmKernelWiki}},
