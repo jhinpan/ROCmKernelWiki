@@ -2,9 +2,15 @@
 
 A structured, agent-queryable knowledge base of **AMD Instinct GPU kernel
 optimization** for CDNA3 (gfx942 / MI300) and CDNA4
-(gfx950 / MI350–MI355X), packaged as a **Codex CLI skill** (and compatible with Claude Code).
-The repository root **is** the skill directory, so the full corpus remains
-git-updatable instead of being copied into a separate wrapper.
+(gfx950 / MI350–MI355X). It is packaged as a **Codex CLI skill**, remains
+compatible with Claude Code, and uses the repository root as the skill
+directory so one `git pull` updates both tooling and corpus.
+
+ROCmKernelWiki couples architecture-scoped synthesis to merged-PR and
+primary-source provenance, [real-silicon validation](VERIFICATION.md),
+and a [review-gated evidence flywheel](#self-evolution-boundary). Automation can
+discover, triage, and propose evidence in Draft PRs, but it cannot approve facts
+or merge changes.
 
 > **Corpus dates:** the generated
 > [`data/corpus-manifest.yaml`](data/corpus-manifest.yaml) owns the merged-PR
@@ -214,6 +220,11 @@ worked examples.
 
 ## Maintenance Tooling
 
+[`data/sources.yaml`](data/sources.yaml) is the canonical registry for the
+budgeted refresh pipeline. The daily worker updates one rolling Draft PR from a
+disposable clone; approved hardware tasks are evaluated separately on the
+trusted MI355 node against an exact candidate SHA.
+
 | Script | Purpose |
 |---|---|
 | `scripts/evolve/discover.py` | Incrementally discover PR/tree evidence from `data/sources.yaml` |
@@ -291,7 +302,7 @@ If you use this knowledge base, please cite both:
 
 ```bibtex
 @misc{rocmkernelwiki2026,
-  title  = {ROCmKernelWiki: An AMD CDNA/RDNA GPU Kernel Optimization Knowledge Base},
+  title  = {ROCmKernelWiki: An AMD CDNA GPU Kernel Optimization Knowledge Base},
   author = {ROCmKernelWiki contributors},
   year   = {2026},
   howpublished = {\url{https://github.com/jhinpan/ROCmKernelWiki}},
