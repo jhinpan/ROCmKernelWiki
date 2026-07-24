@@ -14,8 +14,10 @@ or merge changes.
 
 > **Corpus dates:** the generated
 > [`data/corpus-manifest.yaml`](data/corpus-manifest.yaml) owns the merged-PR
-> cutoff; each doc/blog page carries its own retrieval date. The nod-ai AMDGPU optimization guide is synced
-> through commit `efa471ae` on **2026-07-20**. Tool versions remain pinned in
+> cutoff. That boundary is independent of each doc/blog page's retrieval date
+> and the guide-sync boundary below; do not infer one from another. The nod-ai
+> AMDGPU optimization guide is synced through commit `efa471ae` on
+> **2026-07-20**. Tool versions remain pinned in
 > [`data/tool-versions.yaml`](data/tool-versions.yaml). gfx950 facts and examples
 > were verified on MI350X, with guide-specific device/LDS checks repeated on
 > MI355X — see below.
@@ -214,7 +216,8 @@ Three layers (after MIT Han Lab's KernelWiki, in turn after Karpathy's LLM-wiki)
 
 Supporting files: `data/` holds the schema and controlled vocabulary
 (`schemas.yaml`, `tags.yaml`, `aliases.yaml`, `inclusion-policy.yaml`,
-`tool-versions.yaml`, `refresh-cutoff.yaml`, `hardware-verified.yaml`);
+`scope.yaml`, `sources.yaml`, `tool-versions.yaml`, `refresh-cutoff.yaml`,
+`hardware-verified.yaml`);
 `candidates/` holds per-repo PR ledgers; `references/` holds the primer, schema, and
 worked examples.
 
@@ -232,6 +235,7 @@ trusted MI355 node against an exact candidate SHA.
 | `scripts/evolve/gaps.py` | Turn uncovered evidence clusters into synthesis proposals |
 | `scripts/evolve/synthesize.py` | Validate a credential-free, path-bounded synthesis adapter |
 | `scripts/evolve/refresh.py` | Run one budgeted discovery→triage→eval→validation refresh |
+| `scripts/evolve/corpus.py` | Generate or check the canonical corpus inventory and cutoffs |
 | `scripts/evolve/daily_worker.py` | Update the rolling `bot/evolution` Draft PR in a disposable clone |
 | `scripts/evolve/mi355_worker.py` | Run exact-SHA approved evidence tasks on the trusted MI355 node |
 | `scripts/backfill_diffs.py` | Fetch real upstream diffs for top-ranked kernel PRs |
@@ -239,6 +243,7 @@ trusted MI355 node against an exact candidate SHA.
 | `scripts/link_prs.py` | Build the bidirectional PR↔wiki bridge |
 | `scripts/generate-indices.py` | Regenerate `queries/*.md` from frontmatter |
 | `scripts/evaluate_skill.py` | Score held-out retrieval, citations, and architecture safety |
+| `scripts/evaluate_answers.py` | Check reference-answer facts and source citations |
 | `scripts/verify_provenance.py` | Re-hash artifact bundles and backfill immutable merge SHAs |
 | `scripts/validate.py` | Validate pages, evidence, candidates, manifests, claims, and provenance |
 
