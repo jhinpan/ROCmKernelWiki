@@ -361,6 +361,7 @@
 - [pr-aiter-3390](../sources/prs/aiter/PR-3390.md) — Fix causal mask grid and TFLOPS for gfx950 FMHA fwd v3  `[source-pr]`
 - [pr-aiter-349](../sources/prs/aiter/PR-349.md) — Use attention customization interface LogitsMask() in aiter.paged_attention_ragged()  `[source-pr]`
 - [pr-aiter-357](../sources/prs/aiter/PR-357.md) — Add logits_soft_cap and attention customizaton interfaces  `[source-pr]`
+- [pr-aiter-3732](../sources/prs/aiter/PR-3732.md) — HD256 FMHA FP8 GFX950  `[source-pr]`
 - [pr-aiter-376](../sources/prs/aiter/PR-376.md) — \[TRITON\]: Adding Lean + Paged Attention, for decode  `[source-pr]`
 - [pr-aiter-387](../sources/prs/aiter/PR-387.md) — \[TRITON\] Causal Attention XCD balancing and MHA Scale  `[source-pr]`
 - [pr-aiter-397](../sources/prs/aiter/PR-397.md) — AITER Ruff Fixes  `[source-pr]`
@@ -2739,6 +2740,7 @@
 - [pr-aiter-3390](../sources/prs/aiter/PR-3390.md) — Fix causal mask grid and TFLOPS for gfx950 FMHA fwd v3  `[source-pr]`
 - [pr-aiter-3416](../sources/prs/aiter/PR-3416.md) — Fix causal f8 mha kernel to properly support causal mask  `[source-pr]`
 - [pr-aiter-357](../sources/prs/aiter/PR-357.md) — Add logits_soft_cap and attention customizaton interfaces  `[source-pr]`
+- [pr-aiter-3732](../sources/prs/aiter/PR-3732.md) — HD256 FMHA FP8 GFX950  `[source-pr]`
 - [pr-aiter-384](../sources/prs/aiter/PR-384.md) — Enable fa v3 bwd hd128 swa  `[source-pr]`
 - [pr-aiter-402](../sources/prs/aiter/PR-402.md) — Add gfx950 fmha bwd asm kernels  `[source-pr]`
 - [pr-aiter-406](../sources/prs/aiter/PR-406.md) — Show fmha asm kernel name while profiling  `[source-pr]`

@@ -3971,6 +3971,7 @@ Pages grouped by AMD GPU hardware feature.
 - [pr-aiter-362](../sources/prs/aiter/PR-362.md) — \[TRITON\] Add RMSNorm quant (smooth and dynamic) Triton Kernel  `[source-pr]`
 - [pr-aiter-371](../sources/prs/aiter/PR-371.md) — refine torch_fp8 define  `[source-pr]`
 - [pr-aiter-373](../sources/prs/aiter/PR-373.md) — \[Triton\] fused routing and fused quant kernels  `[source-pr]`
+- [pr-aiter-3732](../sources/prs/aiter/PR-3732.md) — HD256 FMHA FP8 GFX950  `[source-pr]`
 - [pr-aiter-377](../sources/prs/aiter/PR-377.md) — update build utility  `[source-pr]`
 - [pr-aiter-381](../sources/prs/aiter/PR-381.md) — \[TRITON\]\[GEMM\] Add support for inplace output  `[source-pr]`
 - [pr-aiter-395](../sources/prs/aiter/PR-395.md) — \[TRITON\]\[GEMM\]: GEMM A8W8 now tests all 8b types and benchmarks fp8e4 by default  `[source-pr]`
