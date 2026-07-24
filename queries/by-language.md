@@ -3188,6 +3188,7 @@
 - [pr-aiter-37](../sources/prs/aiter/PR-37.md) — Asm layernorm  `[source-pr]`
 - [pr-aiter-371](../sources/prs/aiter/PR-371.md) — refine torch_fp8 define  `[source-pr]`
 - [pr-aiter-373](../sources/prs/aiter/PR-373.md) — \[Triton\] fused routing and fused quant kernels  `[source-pr]`
+- [pr-aiter-3732](../sources/prs/aiter/PR-3732.md) — HD256 FMHA FP8 GFX950  `[source-pr]`
 - [pr-aiter-376](../sources/prs/aiter/PR-376.md) — \[TRITON\]: Adding Lean + Paged Attention, for decode  `[source-pr]`
 - [pr-aiter-377](../sources/prs/aiter/PR-377.md) — update build utility  `[source-pr]`
 - [pr-aiter-378](../sources/prs/aiter/PR-378.md) — rope update for deepseek  `[source-pr]`
@@ -6120,6 +6121,7 @@
 - [pr-FlyDSL-91](../sources/prs/FlyDSL/PR-91.md) — fix lds bug  `[source-pr]`
 - [pr-FlyDSL-92](../sources/prs/FlyDSL/PR-92.md) — \[Bug\] Fix missing stream_ptr parameter in MoeGemm2ReduceWrapper  `[source-pr]`
 - [pr-FlyDSL-98](../sources/prs/FlyDSL/PR-98.md) — fix a4w4 gemm precision  `[source-pr]`
+- [pr-aiter-3732](../sources/prs/aiter/PR-3732.md) — HD256 FMHA FP8 GFX950  `[source-pr]`
 - [ref-flydsl-kernel-profiling](../sources/refs/ref-flydsl-kernel-profiling.md) — FlyDSL Kernel Profiling — MI350X rocprofv3 ATT Sweep & Dashboard  `[source-ref]`
 - [ref-flydsl](../sources/refs/ref-flydsl.md) — FlyDSL — Flexible Layout DSL for AMD GPUs  `[source-ref]`
 - [kernel-flydsl-flash-attention](../wiki/kernels/flydsl-flash-attention.md) — FlyDSL Flash Attention — generic + gfx950 dual-wave fast path  `[wiki-kernel]`
@@ -8850,6 +8852,7 @@
 - [pr-aiter-37](../sources/prs/aiter/PR-37.md) — Asm layernorm  `[source-pr]`
 - [pr-aiter-371](../sources/prs/aiter/PR-371.md) — refine torch_fp8 define  `[source-pr]`
 - [pr-aiter-373](../sources/prs/aiter/PR-373.md) — \[Triton\] fused routing and fused quant kernels  `[source-pr]`
+- [pr-aiter-3732](../sources/prs/aiter/PR-3732.md) — HD256 FMHA FP8 GFX950  `[source-pr]`
 - [pr-aiter-376](../sources/prs/aiter/PR-376.md) — \[TRITON\]: Adding Lean + Paged Attention, for decode  `[source-pr]`
 - [pr-aiter-377](../sources/prs/aiter/PR-377.md) — update build utility  `[source-pr]`
 - [pr-aiter-378](../sources/prs/aiter/PR-378.md) — rope update for deepseek  `[source-pr]`
@@ -14563,6 +14566,7 @@
 - [pr-Tensile-996](../sources/prs/Tensile/PR-996.md) — Fix problem predicates  `[source-pr]`
 - [pr-Tensile-998](../sources/prs/Tensile/PR-998.md) — Try leaving params default due to possible bug in CI  `[source-pr]`
 - [pr-Tensile-999](../sources/prs/Tensile/PR-999.md) — Hotfix to PR #981  `[source-pr]`
+- [pr-aiter-3732](../sources/prs/aiter/PR-3732.md) — HD256 FMHA FP8 GFX950  `[source-pr]`
 - [pr-sglang-20999](../sources/prs/sglang/PR-20999.md) — Replace clamp_position with JIT kernel + platform dispatch  `[source-pr]`
 - [pr-sglang-21020](../sources/prs/sglang/PR-21020.md) — \[AMD\] Improve openai/gpt-oss performance  `[source-pr]`
 - [pr-sglang-21040](../sources/prs/sglang/PR-21040.md) — \[AMD\]\[MoRI\] Auto-select dispatch quantization type from MoE weight dtype.  `[source-pr]`
@@ -16416,6 +16420,7 @@
 - [pr-aiter-37](../sources/prs/aiter/PR-37.md) — Asm layernorm  `[source-pr]`
 - [pr-aiter-371](../sources/prs/aiter/PR-371.md) — refine torch_fp8 define  `[source-pr]`
 - [pr-aiter-373](../sources/prs/aiter/PR-373.md) — \[Triton\] fused routing and fused quant kernels  `[source-pr]`
+- [pr-aiter-3732](../sources/prs/aiter/PR-3732.md) — HD256 FMHA FP8 GFX950  `[source-pr]`
 - [pr-aiter-376](../sources/prs/aiter/PR-376.md) — \[TRITON\]: Adding Lean + Paged Attention, for decode  `[source-pr]`
 - [pr-aiter-377](../sources/prs/aiter/PR-377.md) — update build utility  `[source-pr]`
 - [pr-aiter-378](../sources/prs/aiter/PR-378.md) — rope update for deepseek  `[source-pr]`
