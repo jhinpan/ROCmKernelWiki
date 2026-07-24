@@ -69,6 +69,27 @@ def test_registry_contains_current_first_party_sources():
     assert by_repo["ROCm/rocm-blogs"]["kind"] == "github-tree"
 
 
+def test_amdgpu_guide_registry_matches_canonical_source_path():
+    from evolve.discover import _tree_candidate
+    from evolve.registry import load_registry, source_by_id
+
+    registry = load_registry(ROOT / "data" / "sources.yaml")
+    source = source_by_id(registry, "amdgpu-optimization-guide")
+    candidate = _tree_candidate(
+        {
+            "filename": "docs/amdgpu_kernel_optimization_guide.md",
+            "status": "modified",
+            "sha": "a" * 40,
+            "commit": "b" * 40,
+        },
+        source,
+        "2026-07-23",
+    )
+
+    assert candidate["decision"] == "defer"
+    assert candidate["relevance_reason"] == "allowlisted source path changed"
+
+
 def test_unknown_architecture_is_quarantined_not_defaulted_to_gfx942():
     from evolve.discover import classify_pr
     from _scope import is_active

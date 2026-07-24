@@ -5,11 +5,12 @@ description: Search and apply ROCmKernelWiki when optimizing AMD Instinct kernel
 
 # ROCmKernelWiki — AMD CDNA Kernel Optimization Wiki
 
-> **Corpus dates:** `data/corpus-manifest.yaml` is the generated source of truth
-> for the merged-PR cutoff; doc/blog pages carry individual retrieval dates.
-> The nod-ai AMDGPU optimization guide is synchronized through commit
-> `efa471ae` on **2026-07-20**. Re-run the relevant harvest or source-sync work
-> before advancing either boundary.
+> **Corpus freshness:** `data/refresh-cutoff.yaml` owns the last complete
+> baseline PR-harvest cutoff, `data/evolution-state.yaml` records per-source
+> incremental discovery positions, and `data/corpus-manifest.yaml` reports the
+> generated inventory. Doc/blog pages carry their own retrieval dates. The
+> nod-ai AMDGPU guide snapshot is recorded in
+> `sources/blogs/blog-amdgpu-kernel-opt-guide.md`.
 
 Query a structured, cross-referenced knowledge base of AMD GPU kernel
 optimization for CDNA3 (gfx942 / MI300) and CDNA4

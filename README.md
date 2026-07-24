@@ -9,8 +9,8 @@ directory so one `git pull` updates both tooling and corpus.
 ROCmKernelWiki couples architecture-scoped synthesis to merged-PR and
 primary-source provenance, [real-silicon validation](VERIFICATION.md),
 and a [maintainer-controlled evidence flywheel](#self-evolution-boundary).
-Automation discovers, triages, and proposes evidence in Draft PRs; maintainers
-remain responsible for accepting facts and merging changes.
+Automation discovers, triages, and proposes evidence in a rolling PR that starts
+in Draft; maintainers remain responsible for accepting facts and merging changes.
 
 > **Corpus freshness:** the generated
 > [`data/corpus-manifest.yaml`](data/corpus-manifest.yaml) records the last
@@ -19,9 +19,10 @@ remain responsible for accepting facts and merging changes.
 > may add selected evidence after that date;
 > [`data/evolution-state.yaml`](data/evolution-state.yaml) records each source's
 > latest discovery position, not a complete corpus through-date. Doc/blog
-> retrieval dates and the guide-sync boundary advance independently. The nod-ai
-> AMDGPU optimization guide is synced through commit `efa471ae` on
-> **2026-07-20**. Tool versions remain pinned in
+> retrieval dates and guide-sync boundaries advance independently. The captured
+> nod-ai AMDGPU guide commit and retrieval date live in its
+> [canonical source page](sources/blogs/blog-amdgpu-kernel-opt-guide.md). Tool
+> versions remain pinned in
 > [`data/tool-versions.yaml`](data/tool-versions.yaml). gfx950 facts and examples
 > were verified on MI350X, with guide-specific device/LDS checks repeated on
 > MI355X — see below.
@@ -228,10 +229,10 @@ worked examples.
 ## Maintenance Tooling
 
 [`data/sources.yaml`](data/sources.yaml) is the canonical registry for the
-refresh pipeline. Each run caps candidates, generated source pages, and stored
-diff bytes so the rolling Draft PR remains reviewable. The daily worker updates
-that PR from a disposable clone. Approved hardware tasks are evaluated
-separately on the trusted MI355 node against an exact candidate SHA.
+refresh pipeline. Each run enforces file and line budgets so the rolling PR
+remains reviewable. The daily worker creates that PR as Draft, then updates it
+from a disposable clone. Approved hardware tasks are evaluated separately on the
+trusted MI355 node against an exact candidate SHA.
 
 | Script | Purpose |
 |---|---|
@@ -241,7 +242,7 @@ separately on the trusted MI355 node against an exact candidate SHA.
 | `scripts/evolve/synthesize.py` | Validate a credential-free, path-bounded synthesis adapter |
 | `scripts/evolve/refresh.py` | Run one budgeted discovery→triage→eval→validation refresh |
 | `scripts/evolve/corpus.py` | Generate or check the canonical corpus inventory and cutoffs |
-| `scripts/evolve/daily_worker.py` | Update the rolling `bot/evolution` Draft PR in a disposable clone |
+| `scripts/evolve/daily_worker.py` | Create or update the rolling `bot/evolution` PR from a disposable clone |
 | `scripts/evolve/mi355_worker.py` | Run exact-SHA approved evidence tasks on the trusted MI355 node |
 | `scripts/backfill_diffs.py` | Fetch real upstream diffs for top-ranked kernel PRs |
 | `scripts/enrich_facets.py` | Infer techniques/hardware_features/kernel_types from paths + diffs |
@@ -252,8 +253,9 @@ separately on the trusted MI355 node against an exact candidate SHA.
 | `scripts/verify_provenance.py` | Re-hash artifact bundles and backfill immutable merge SHAs |
 | `scripts/validate.py` | Validate pages, evidence, candidates, manifests, claims, and provenance |
 
-CI (`.github/workflows/ci.yml`) gates every push on the validator, the query-tool
-smoke tests, scored retrieval/answer evals, provenance, and index freshness.
+CI (`.github/workflows/ci.yml`) gates every pull request and push to `main` on
+the validator, query-tool smoke tests, scored retrieval/answer evals,
+provenance, and index freshness.
 `main` is protected by required checks, CODEOWNER review, one human approval,
 linear history, and resolved conversations for non-admin merges. Repository
 administrators can bypass these protections.
@@ -269,12 +271,12 @@ python3 -m venv .venv
 ### Self-evolution boundary
 
 The system discovers, proposes, evaluates, and collects evidence; it does not
-decide its own truth by design. Automated changes are published as Draft PRs and
-are not auto-approved or auto-merged; maintainers make the acceptance and merge
-decisions. PR/blog text and stored diffs are rendered as `UNTRUSTED-UPSTREAM-*`
-data. The public repository is not connected to a persistent self-hosted runner:
-[`ops/mi355/`](ops/mi355/) documents the node-local, exact-SHA approval and
-sandbox contract.
+decide its own truth by design. Automated changes are published to a rolling PR
+that is created as Draft; they are not auto-approved or auto-merged. Maintainers
+make the acceptance and merge decisions. PR/blog text and stored diffs are
+rendered as `UNTRUSTED-UPSTREAM-*` data. The public repository is not connected
+to a persistent self-hosted runner: [`ops/mi355/`](ops/mi355/) documents the
+node-local, exact-SHA approval and sandbox contract.
 
 ### Quality Gates
 
